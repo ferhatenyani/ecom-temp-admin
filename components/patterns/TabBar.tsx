@@ -20,7 +20,7 @@ import { Icon, type IconName } from "@/components/primitives/Icon";
  */
 
 type Tab = {
-  key: "orders" | "products" | "dashboard" | "customers" | "more";
+  key: "orders" | "products" | "dashboard" | "inventory" | "more";
   href: string | null;
   icon: IconName;
   /**
@@ -32,11 +32,21 @@ type Tab = {
   shortKey?: "dashboardShort";
 };
 
+/**
+ * Five slots, and a built destination outranks an unbuilt one.
+ *
+ * Inventory replaces Customers here rather than joining the list: the bar holds
+ * five and a sixth crosses 70px per tab at the 390px floor, which is where the
+ * labels started wrapping and pushing the bar taller. Customers moves behind
+ * `More` with the rest of Part V until its own branch, and it was a placeholder
+ * either way — swapping a tab that navigates nowhere for one that navigates
+ * somewhere loses nothing.
+ */
 const TABS: Tab[] = [
   { key: "orders", href: "/orders", icon: "orders" },
   { key: "products", href: "/products", icon: "products" },
   { key: "dashboard", href: null, icon: "dashboard", shortKey: "dashboardShort" },
-  { key: "customers", href: null, icon: "customers" },
+  { key: "inventory", href: "/inventory", icon: "box" },
   { key: "more", href: null, icon: "more" },
 ];
 

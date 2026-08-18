@@ -183,12 +183,25 @@ export function FilterSheet({
   onOpenChange,
   onApply,
   onClear,
+  title,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onApply: () => void;
   onClear: () => void;
+  /**
+   * The sheet names what it filters — "Filtrer le stock" is not "Filtrer les
+   * produits", and a sheet that names the wrong collection is worse than one with
+   * no title. Defaults to the products wording, which is what every existing
+   * caller wants.
+   *
+   * The verbs around it — "Filtres", "Appliquer", "Tout effacer", "Retirer X" —
+   * stay on the `products` namespace where the products branch put them. They are
+   * collection-agnostic words and moving them would be a rename across two locale
+   * files for no change on screen.
+   */
+  title?: string;
   children: ReactNode;
 }) {
   const t = useTranslations("products");
@@ -197,7 +210,7 @@ export function FilterSheet({
     <Sheet
       open={open}
       onOpenChange={onOpenChange}
-      title={t("filtersTitle")}
+      title={title ?? t("filtersTitle")}
       footer={
         <div className="flex items-center gap-3">
           <Button variant="plain" onClick={onClear}>

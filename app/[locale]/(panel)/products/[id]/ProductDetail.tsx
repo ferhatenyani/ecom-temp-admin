@@ -37,7 +37,7 @@ import {
 } from "@/components/primitives/Field";
 import { Button } from "@/components/primitives/Button";
 import { StatusBadge, Dot } from "@/components/primitives/StatusBadge";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
 import { useToast } from "@/components/primitives/Toast";
 import { DeleteAction } from "./DeleteAction";
@@ -576,7 +576,7 @@ export function ProductDetail({
           </ListRow>
           <ListValueRow
             label={tDetail("modified")}
-            value={<Ltr>{formatWhen(product.date_modified, locale)}</Ltr>}
+            value={<Isolate>{formatWhen(product.date_modified, locale)}</Isolate>}
           />
           <ListValueRow
             label={tDetail("identifier")}
