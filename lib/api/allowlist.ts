@@ -32,6 +32,17 @@ const RULES: readonly Rule[] = [
   rule("/orders/\\d+/shipments", "GET"),
   rule("/orders/\\d+/payments", "GET"),
   rule("/locations/wilayas", "GET"),
+
+  // Products. `DELETE` is here because the detail screen trashes and
+  // force-deletes; `POST /products` is not, because nothing creates a product
+  // yet and a route the panel cannot reach through the UI must not be reachable
+  // by guessing a URL.
+  rule("/products", "GET"),
+  rule("/products/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/products/\\d+/variations", "GET"),
+  rule("/product-categories", "GET"),
+  rule("/attributes", "GET"),
+  rule("/attributes/\\d+/terms", "GET"),
 ];
 
 export type AllowResult =

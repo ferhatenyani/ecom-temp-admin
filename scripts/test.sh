@@ -64,6 +64,18 @@ run_e2e() {
     return 1
   fi
 
+  # The products suite asserts on facets, and a facet needs a global attribute to
+  # count. This shop had none: `GET /attributes` answered `[]`, so
+  # `meta.facets.attributes` could only ever be empty and `?attributes[…]` could
+  # only ever be a 400. The seed is idempotent and takes a few seconds; it is here
+  # rather than in a README step because the backend's own `scripts/test.sh`
+  # re-seeds the catalogue and strips the two variable products' global tags,
+  # which would quietly thin the facet rather than fail anything.
+  if ! node scripts/seed-attributes.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the global attributes the facet tests need" >&2
+    return 1
+  fi
+
   # Named explicitly rather than "every project": `phone-webkit` needs WebKit's
   # system libraries, which want root to install. Including it here would make the
   # stage red on a machine that is otherwise fine, and a stage that is always red

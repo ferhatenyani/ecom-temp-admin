@@ -10,18 +10,22 @@ cookie. No component library.
 
 ## What exists
 
-The shell, the credential boundary, and Orders end to end.
+The shell, the credential boundary, Orders end to end, and Products.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
 /[locale]/orders             list — filters in the URL, 30 s poll, five states
 /[locale]/orders/[id]        detail — summary, items, totals, customer, COD, timeline
                              plus the status transition, which renders the API's 409
+/[locale]/products           list — nine filters, facets, a filter sheet, the URL as state
+/[locale]/products/[id]      detail — the whole object as a form, variations read-only,
+                             trash and permanent delete with different confirmations
 ```
 
-`fr` and `ar` are both complete, at 390–440 px and on a desktop. Everything else in Part V is a later
-branch, and the tab bar renders those destinations as visibly not-yet-built rather than as links that
-404.
+`fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
+branch — the specification calls it the hardest component in the panel — and so is editing attributes
+and categories. Everything else in Part V is a later branch, and the tab bar renders those
+destinations as visibly not-yet-built rather than as links that 404.
 
 ## Running it
 
@@ -53,14 +57,16 @@ npm run shots -- <user> <pass>    # captures + assertions into .impeccable/revie
 
 `scripts/test.sh` mints its own credentials and clears the API's rate-limit counters first — the suite
 provokes a login failure on purpose, and the failed-login bucket would otherwise refuse the correct
-password for the next fifteen minutes.
+password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs`, because the facet
+tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
+takes a few seconds.
 
 The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest engine
 and needs `sudo npx playwright install-deps webkit` once.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 45 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 60 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -91,11 +97,34 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **Zod parses responses on the server**, where its weight is free. It cost 60 KB gzipped in the
   browser on a two-field login form.
 - **390 × 844 is the floor, not the target** — it is the narrowest iPhone Apple still sells.
+- **A facet is a set of counts, not a vocabulary.** Zero-count values are omitted, so the filter
+  sheet's choices come from `/product-categories` and `/attributes/{id}/terms` and the facet only
+  supplies the numbers. The category facet also does not exclude its own filter, unlike the attribute,
+  stock and price facets, so picking a category would otherwise hide every other category.
+- **`?category=` matches term ids; `?attributes[…]` matches term slugs.** Keying both by slug renders
+  a `0` beside every category and nothing errors.
+- **A duplicate SKU is a 409 with `details.sku`**, not a 400 with `details.fields` — and a PATCH
+  carrying only read-only fields is a 400 with no `details` at all.
+- **A trashed product still reads back as 200** with `status: "trash"`; only `?force=true` gives a 404.
+- **Product ids are not stable.** The backend's own suites recreate their fixtures, so tests and
+  scripts find a product by SKU.
 
 ## Open, and owed to the backend
 
-- `name_ar` is empty for **Algiers (16)** and **Oran (31)** in `/locations/wilayas`, the two
-  highest-traffic wilayas; the panel falls back to the Latin name, but the data should carry `الجزائر`
-  and `وهران`.
-- `name` for wilaya 16 is the English *Algiers* rather than the French *Alger*.
 - `/settings` could reasonably publish `store.timezone`.
+- **A wilaya's `name` is the English exonym for 16** — *Algiers*, not *Alger* — so the French locale
+  renders an English place name for the capital. **Not** a data fix: `data/algeria/wilayas.json` says
+  in its own `source` field that the Latin names follow ISO 3166-2 to match WooCommerce's DZ state
+  list, and `WC()->countries->get_states('DZ')['DZ-16']` is indeed `Algiers`. The slug is derived from
+  that name, so renaming it changes a join key that provider destinations are stored against, and
+  `DestinationMatcherTest` asserts the current value. A French display name would be a new field, not
+  an edit to this one.
+
+Fixed in `ecom-temp` on `fix/products-support` while building this branch:
+
+- `name_ar` was blank for **Algiers (16)** and **Oran (31)**, and the cause was the API test suite:
+  `tests/Api/locations.php` upserts those two wilayas with "real codes and real names" and no
+  `name_ar`, which the upsert writes as `''`. The fixture now carries both Arabic names and the suite
+  asserts that no wilaya lost one — the row-count check beside it passed a blanked column unchanged.
+- `orderby=price|sku|id|popularity|rating` were accepted and silently ignored, returning date order.
+- `PATCH /products/{id}` answered 500 on a variable product whenever the body carried `attributes`.

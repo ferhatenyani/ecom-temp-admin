@@ -177,6 +177,30 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["auth", "me"], "GET").allowed).toBe(true);
   });
 
+  it("permits the products routes and no more of them than the screens use", () => {
+    expect(checkAllowed(["products"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["products", "12"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["products", "12"], "PATCH").allowed).toBe(true);
+    // The detail screen trashes and force-deletes, so DELETE is on the list.
+    expect(checkAllowed(["products", "12"], "DELETE").allowed).toBe(true);
+    expect(checkAllowed(["products", "12", "variations"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["product-categories"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["attributes"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100", "terms"], "GET").allowed).toBe(true);
+
+    // Nothing creates a product yet, and a route no screen reaches must not be
+    // reachable by guessing a URL — the list grows one branch at a time.
+    expect(checkAllowed(["products"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["products", "12", "duplicate"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["products", "bulk"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["products", "12", "variations"], "POST").allowed).toBe(false);
+    // §88's writes belong to the attributes screen, on its own branch. Reading a
+    // term list is what the facet vocabulary needs; writing one is not.
+    expect(checkAllowed(["attributes"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["attributes", "100", "terms"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["attributes", "100"], "DELETE").allowed).toBe(false);
+  });
+
   it("refuses the platform routes docs/API.md opens by telling you not to touch", () => {
     // A generic proxy here is an open relay to wp/v2/users with an admin
     // credential attached.
