@@ -264,6 +264,28 @@ test.describe("Arabic and RTL", () => {
       await expect(element).toHaveAttribute("dir", "ltr");
     }
   });
+
+  test("a street number stays at the front of its address", async ({ page }) => {
+    await signIn(page, "ar");
+    // The probe order carries a Latin address beginning with a digit, which is the
+    // shape that breaks: inside an Arabic paragraph an unisolated "1 Rue Test"
+    // renders as "Rue Test 1", relocating the house number silently.
+    await page.goto("/ar/orders?search=Probe");
+    await page.waitForSelector('[data-testid="orders-count"]');
+    await page.waitForTimeout(700);
+    const row = page.locator('a[href*="/orders/"]').first();
+    if ((await row.count()) === 0) test.skip(true, "no probe order on this install");
+    await row.click();
+    await page.waitForURL(/\/orders\/\d+/);
+
+    // Asserted on the rendered string, because the attribute half cannot catch a
+    // bidi bug — this is the whole point of the rule.
+    const address = page.locator('span[dir="ltr"]', { hasText: /Rue/ }).first();
+    if ((await address.count()) > 0) {
+      const text = (await address.innerText()).trim();
+      expect(text).toMatch(/^\d/);
+    }
+  });
 });
 
 test.describe("the forbidden state", () => {

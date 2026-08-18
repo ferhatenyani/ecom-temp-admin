@@ -239,7 +239,20 @@ export default async function OrderDetailPage({
               wilaya and a street, and the labels now say which is which. */}
           {place ? <ListValueRow label={t("wilaya")} value={place} /> : null}
           {order.billing.address_1 ? (
-            <ListValueRow label={t("address")} value={order.billing.address_1} />
+            <ListValueRow
+              label={t("address")}
+              /**
+               * Isolated, like every other identifier.
+               *
+               * A street address is Latin-script content with a number in it, and
+               * inside an Arabic paragraph the bidi algorithm moves that number to
+               * the other end: `1 Rue Test` rendered as `Rue Test 1`, relocating
+               * the house number with nothing to show it happened. `numeric={false}`
+               * because an address is prose, not a column of figures — it wants
+               * direction isolation, not tabular digits.
+               */
+              value={<Ltr numeric={false}>{order.billing.address_1}</Ltr>}
+            />
           ) : null}
           {order.customer_note ? (
             <ListRow>
