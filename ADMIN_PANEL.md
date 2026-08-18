@@ -62,6 +62,19 @@ preferences to weigh against others.
 6. **Mobile first.** Every screen is designed at 390 × 844 and then allowed to grow. A layout that
    only works once there is a sidebar is not finished. The primary navigation is a bottom tab bar
    within thumb reach, not a hamburger drawer.
+
+   > **Corrected in the build: 390 is the floor, not the target.** Measured against Playwright
+   > 1.62.1's device table, 390 pt is the *narrowest* width Apple still ships — the iPhone 16e and
+   > 17e. The current lineup is 393 (iPhone 16), **402 (iPhone 17, 17 Pro)**, 420 (Air), 430 (16 Plus)
+   > and 440 (17 Pro Max). Designing at 390 stays right, because that is where a layout breaks and
+   > every truncation defect in the orders row surfaced there first. But verifying *only* at 390 would
+   > leave every current flagship unchecked, so the e2e suite runs `phone-min` (390), `phone` (402) and
+   > `phone-max` (440), and `scripts/shots.mjs` captures all three beside desktop.
+   >
+   > A device descriptor also selects a browser engine, which is a separate trap: `devices["iPhone 13"]`
+   > is WebKit, and pinning the default project to it turned a missing browser download into thirteen
+   > red tests that read as product failures. The projects keep the geometry and drop the engine;
+   > `phone-webkit` is the opt-in real-engine run.
 7. **iOS-like.** Grouped inset lists, large titles that collapse, sheets with detents, segmented
    controls, action sheets for destructive choices, 44 pt targets, spring easing. Detail in
    [Part III](#part-iii--the-design-system).
@@ -533,6 +546,28 @@ load-bearing: Query v4's positional `useQuery(key, fn)` and Tailwind 3's `tailwi
 both gone, and Zod 4 renamed enough of Zod 3's surface that a snippet written against either will not
 run here.
 
+> **Corrected in the build: four Next 16 conventions that are not Next 15's.** `AGENTS.md` warns that
+> this is not the Next.js in anyone's training data; these are the four that actually bit, all verified
+> against the shipped docs in `node_modules/next/dist/docs/`.
+>
+> 1. **`middleware.ts` is now `proxy.ts`**, and the export must be named `proxy` or be the default.
+>    The old filename is deprecated — the build prints `ƒ Proxy (Middleware)` when it is picked up.
+>    next-intl still publishes its factory at `next-intl/middleware`; the package path and the file
+>    convention are different things.
+> 2. **`next/root-params` cannot be used, despite next-intl deprecating `requestLocale` in favour of
+>    it.** The module ships as a placeholder replaced by a compiler pass, and that pass
+>    (`next-root-params-loader`) is registered only in `webpack-config.js`. Next 16 builds with
+>    Turbopack by default, where nothing substitutes it, so the import fails the build outright:
+>    *"The export locale was not found… The module has no exports at all."* `getLocale()` from
+>    `next-intl/server` works under both bundlers. It is also Server-Component-only by design — no
+>    Route Handlers — so it could not have served the proxy route anyway.
+> 3. **`params`, `searchParams` and `cookies()` are all Promises**, and `LayoutProps<'/[locale]'>` /
+>    `PageProps` / `RouteContext<'/users/[id]'>` are generated global helpers rather than imports.
+> 4. **The `eslint` key was removed from `next.config`**, and `next build` no longer runs ESLint at
+>    all. A config carrying `eslint: { ignoreDuringBuilds: false }` is a type error, and — worse — a
+>    project relying on the build to lint silently stops linting. Lint is its own stage in
+>    `scripts/test.sh`.
+
 No CSS-in-JS runtime. No component library. No `next/font/google` — the fonts are in the repository,
 because a build that fetches a font from a third party at deploy time is a build that fails when that
 third party does.
@@ -625,6 +660,20 @@ Rotate the seal on every response so the 12 hours are since last use. Clear on l
 any **401** from the API — the Application Password was revoked or the account was suspended, and
 holding a dead credential produces a panel that renders and then fails on every action.
 
+> **Corrected in the build: detect a 401 by its status, never by `error.code`.** `docs/API.md`'s error
+> table lists 401 as `unauthenticated`, and a panel keyed on that string would have missed every real
+> case. Measured 2026-08-18:
+>
+> | Request | Status | `error.code` |
+> |---|---|---|
+> | No credential | 401 | `unauthenticated` |
+> | Wrong Application Password | 401 | **`incorrect_password`** |
+> | Suspended account | 401 | **`account_suspended`** |
+>
+> The second is WordPress's own message surfacing through the envelope. `ApiError.isAuthFailure` is
+> therefore `status === 401` and nothing else; `isSuspended` reads the code only to choose the wording,
+> because signing in again will never fix a suspension and silence sends the person round the loop.
+
 A **403** is not a logout. It means this role cannot do this thing, and the correct response is the
 forbidden state described in [Part V](#every-screen-has-five-states), not a bounce to the login page.
 
@@ -696,6 +745,25 @@ navigation.
 
 **TanStack Query owns everything after.** Filters, pagination, sorting, mutations, refetching. Query
 keys mirror the URL so the two never disagree.
+
+> **Corrected in the build: there is no `wilaya` filter on `/orders`, and `status` takes one value.**
+> The example below is `?status=processing&wilaya=16&page=2`; two thirds of it is real. Measured
+> 2026-08-18 against the live router, with `?bogus_param=1` as the control for "silently ignored" and
+> `?search=Nadia` (633 → 92) as the control for "really filters":
+>
+> | Sent | Answer |
+> |---|---|
+> | `?wilaya=16` | **200, all 633 rows** — identical to `?bogus_param=1`. Ignored, not honoured. |
+> | `?status=processing,pending` | **400** `status is not one of pending, processing, on-hold, …` |
+> | `?per_page=500` | **400**, not clamped — see the note under [Part V](#orders) |
+>
+> `OrderController::collectionParams()` accepts exactly `search`, `status`, `customer_id`, `date_from`,
+> `date_to`, `orderby`, `order`, `page`, `per_page`. So the segmented control is single-select because
+> the API is, and a wilaya filter would need a backend change rather than a query parameter.
+>
+> **`push`, not `replace`, when writing the filter to the URL.** This section promises the back button
+> works, and `router.replace()` silently breaks that half of it: replacing the history entry means
+> going back from a filtered list skips the unfiltered one. Caught by the e2e test that asserts it.
 
 **Filter state lives in the URL.** `?status=processing&wilaya=16&page=2`. A support agent shares a
 link to the orders they are looking at; a refresh does not lose the filter; the back button works.
@@ -825,6 +893,22 @@ other theme manually, so **every token has a value on bare `:root`**.
 IBM Plex Sans and IBM Plex Sans Arabic, variable, self-hosted from `public/fonts`, subset to
 Latin + Latin-1 + Arabic and preloaded. `font-display: swap` with a metric-adjusted fallback so the
 swap does not reflow the list under the reader's thumb.
+
+> **Corrected in the build: IBM Plex Sans Arabic has no variable build, so the Arabic face is two
+> static weights.** Measured 2026-08-18: `@fontsource-variable/ibm-plex-sans-arabic` is a 404 on the
+> registry, and IBM's own `@ibm/plex-sans-arabic@1.1.0` ships `fonts/complete/woff2/` as eight named
+> static weights with no variable file among them. The Latin face is genuinely variable
+> (`@fontsource-variable/ibm-plex-sans@5.3.0`, 45.7 KB for the `latin` subset), so "variable" now
+> describes one of the two faces rather than both.
+>
+> The Arabic face therefore ships as **400 and 600**, 42.8 KB and 45.7 KB, and `[dir="rtl"]` maps the
+> scale's 700 steps onto 600 — Plex Arabic SemiBold is already heavy at display size, so the large
+> title keeps its hierarchy. A third file for 700 would have cost another 46 KB to make two headings
+> marginally heavier.
+>
+> `unicode-range` is what makes this affordable: a French screen never fetches an Arabic file, so
+> `fr` transfers 45.7 KB and `ar` transfers 134.2 KB. See the corrected budget in
+> [Part IX](#part-ix--performance-budgets).
 
 The scale is iOS's, which is why it will not look like a web dashboard. Note the body size: **17 px**,
 not 16.
@@ -1040,6 +1124,34 @@ the string.
 once from `/settings` and holds — not the browser's, or a manager in France sees yesterday's orders
 dated today. Relative time ("il y a 2 h" / "منذ ساعتين") for anything under 24 hours, absolute after.
 
+> **Corrected in the build: `/settings` carries no timezone, and not every date has an offset.** Two
+> separate errors in the paragraph above, both measured 2026-08-18.
+>
+> **There is nothing to read.** `GET /settings` returns `store, contact, legal, social, features,
+> providers`; the whole 630-byte response contains zero occurrences of `timezone` under any block, and
+> `store` is `name, description, locale, currency, currency_symbol, storefront_url, logo_id, logo`. So
+> the timezone is panel configuration — `NEXT_PUBLIC_SHOP_TIMEZONE`, defaulting to `Africa/Algiers`,
+> which is UTC+1 year-round with no DST. (The dev install's own `wp_timezone_string()` is `+00:00`, an
+> offset rather than a named zone, so it would not have been usable as an `Intl` time zone even if it
+> were published.) Adding `store.timezone` to the API is the better long-term fix.
+>
+> **`created_at` on an order note has no offset**, unlike `date_created` on the order:
+>
+> ```
+> order.date_created   "2026-08-18T02:52:22+00:00"   ISO 8601, offset present
+> note.created_at      "2026-08-18 02:52:22"         no offset, no T
+> ```
+>
+> `new Date()` parses the second as **local** time. Measured on a UTC+2 host, `"2026-08-18 02:52:22"`
+> became `2026-08-18T00:52:22Z` — every order note off by the server's offset, with nothing on screen
+> to show it. `lib/format/date.ts` reads an offsetless stamp as UTC explicitly, and the unit suite
+> carries the naive parse beside it as the control.
+>
+> **Money needs the region subtag.** `Intl.NumberFormat("fr", …)` with `currency: "DZD"` renders
+> `26 350,00 DZD`; `"fr-DZ"` renders `26 350,00 DA`, which is what this section asks for. A bare `fr`
+> is a bug, not a simplification. `"ar-DZ-u-nu-latn"` gives `26.350,00 د.ج.` — Latin digits as
+> required, and note that Arabic groups with `.` where French groups with U+202F.
+
 ## Copy
 
 ICU messages in `messages/fr.json` and `messages/ar.json`. No string concatenation, ever — Arabic
@@ -1102,9 +1214,55 @@ the secondary. Segmented control for the common statuses, sheet for everything e
 advance status, trailing to open the action sheet. This is the one list that polls — 30 s, paused
 when hidden.
 
+> **Corrected in the build: the wilaya is usually not there, so the row shows a place *when known* and
+> omits it otherwise.** Measured across all 633 orders on 2026-08-18: `billing.state` is filled on 41
+> and `shipping.state` on 11 — about 8 % — while `city` is filled on 172. An em dash where the wilaya
+> belongs would therefore be a column of dashes down 93 % of the panel's most-used screen.
+>
+> The row resolves `state` against `/locations/wilayas` for a bilingual name, falls back to `city`, and
+> when neither exists renders the name and the total alone. Two things fell out of doing it:
+>
+> - **`name_ar` is empty for Algiers (16) and Oran (31)** — 2 of 69 rows, and the two highest-traffic
+>   wilayas in the country, so an Arabic reader saw a blank exactly where a place was most likely to
+>   exist. The panel falls back to the other script rather than rendering `""`. The remaining 67 rows
+>   carry both names, which is the control that makes this a data gap rather than a wrong field name.
+>   **This is a backend fix, not a panel one:** `wp_algerian_wilayas` should carry `الجزائر` and
+>   `وهران`.
+> - **`name` is the English exonym for wilaya 16** — "Algiers", not "Alger" — so the French locale
+>   renders an English place name. Also a data fix.
+>
+> **Status counts, for anyone choosing which statuses earn a segment:** cancelled 266, pending 204,
+> processing 63, refunded 63, completed 35, failed 1, on-hold 1. `failed` and `on-hold` are one row
+> each, so they belong in the filter sheet rather than spending a quarter of the control's width. And
+> the labels must be short: at 390 px four segments get 89 px each, and "En traitement" does not fit —
+> the segmented control uses `statusShort`, while every badge keeps the full name.
+>
+> **`per_page` over 100 is a 400, not a clamp.** `docs/API.md`'s pagination section says "Asking for
+> more than 100 is clamped, not an error"; measured, `?per_page=500` answers 400 with
+> `details.params.per_page`. Note the envelope key: parameter errors arrive under `params`, not the
+> `fields` that Part II's error table names.
+
 **Detail.** A stack of grouped inset sections: summary, line items, customer, shipping, COD,
 payments, notes, timeline. Each section pulls from its own route and renders independently, so a
 missing shipment does not block the order.
+
+> **Corrected in the build: three things about the detail response.**
+>
+> **`GET /orders/{id}` returns the same object as the list row** — measured, the two key sets are
+> identical, with no field the list omits. A detail screen's richness comes entirely from the
+> sub-resources, which is why one Zod schema serves both and why the sections below are the screen.
+>
+> **`timeline[].summary` and `notes[].content` carry HTML entities.** Measured verbatim:
+> `"Stock levels reduced: Shipping test AC-SHIP-BOX (99&rarr;98)"`. React renders text, so those six
+> characters appear on screen as typed. They are decoded to **text** — never handed to
+> `dangerouslySetInnerHTML`, because the same fields carry note bodies a customer can influence. One
+> single-pass decoder, so `&amp;rarr;` stays the literal `&rarr;` instead of becoming an arrow.
+>
+> **The timeline already contains the notes.** `/timeline` aggregates note, stock and audit events —
+> the three notes on order 3078 are all present among its five entries — so rendering the full `/notes`
+> collection underneath reprints every one of them. The notes section keeps `customer_note: true` rows
+> only, which are the ones a support agent opened the screen for. `timeline[].actor` is `""` on
+> system-generated stock events, so it is blank rather than absent and must be treated as missing.
 
 **Status transitions are the trap.** `pending processing on-hold completed cancelled refunded failed`,
 and **not every move is legal**: `cancelled` and `refunded` are terminal, `refunded` is reachable only
@@ -1508,6 +1666,27 @@ Fails on any hit in `app/` and `components/`:
 And asserts a floor: the script must have scanned at least 40 files, or it exits non-zero. A rename
 that empties the glob otherwise reports a perfectly compliant codebase.
 
+> **Corrected in the build: the scan covers `lib/` and `i18n/` too, and it carries a second control.**
+> The 40-file floor is real but `app/` and `components/` alone reached only 30 at the end of the orders
+> branch, which would have meant either a permanently red stage or a floor lowered to whatever
+> happened to exist. Widening the net was the better answer on its own merits — a colour literal or a
+> physical property is no more acceptable in a formatter than in a component — and brings the scan to
+> 45 files, clearing the specified floor honestly.
+>
+> Two additions the section does not ask for:
+>
+> - **A positive control on the scanner itself.** Every rule is a grep, and a grep with a broken pattern
+>   reports `PASS` on a codebase full of violations. The script writes a file containing `#ff00aa` and
+>   `ml-4 text-left`, confirms its own patterns match it, and fails if they do not. Without it, twelve
+>   green checks prove only that twelve greps ran.
+> - **One named exception, with its reason.** `lib/theme-color.ts` may hold a colour literal, because
+>   `theme-color` paints the browser and iOS status-bar chrome through Next's metadata API, which is
+>   TypeScript and cannot read a custom property. Setting it from the client works only after first
+>   paint, so an installed PWA flashes the wrong status bar on every cold start. The script prints the
+>   exemption every run rather than skipping it silently, and a unit test asserts the two literals still
+>   match `--color-bg-grouped` — the backend's "refused by name with the reason" device, applied to a
+>   design rule.
+
 ## What the e2e suite must cover
 
 Each of these is a real failure mode, not a checklist item:
@@ -1528,6 +1707,31 @@ Each of these is a real failure mode, not a checklist item:
 Every negative test carries a positive control, per §65: *a refusal and an unreachable route look
 identical from outside.* A test asserting a Support Agent gets 403 proves nothing unless an
 administrator gets 200 from the same URL in the same run.
+
+> **Corrected in the build: the bad-login test poisons every test after it, and the suite has to clear
+> the bucket.** The first item on the list above asks for a login failed past the limit, and it is the
+> right test — but the failed-login bucket is **10 per 15 minutes per IP**, and a locked-out address is
+> then refused *even with the correct password*. Two deliberate failures per project across four device
+> projects is exactly ten. Measured: partway through the first full run a known-good credential answered
+> `429 too_many_requests`, with 218 `ac_rl_` rows in the options table, and eleven tests failed looking
+> precisely like a broken login.
+>
+> `scripts/reset-rate-limit.sh` clears the counters; Playwright's `globalSetup` runs it once and the
+> bad-password test runs it again in an `afterEach`, so the allowance it spends is its own. This is what
+> the backend's `scripts/test-api.sh` already does before its own assertions, for the same reason —
+> *"a lockout left by a previous run would make every assertion below meaningless."*
+>
+> **Two credentials, not one.** `scripts/mint-credential.sh <role>` issues them, and the suite needs a
+> Super Admin *and* a Support Agent, because the positive control for the forbidden state is the same
+> URL answering 200 for someone else. Measured on this install: `ac_support_agent` holds
+> `ac_manage_customers` and `ac_view_analytics` and **not** `ac_manage_orders`, so it is also the
+> natural subject for the money gate — it is the role that has `ac_view_analytics` alone.
+>
+> **A device descriptor selects a browser, not just a viewport.** `devices["iPhone 13"]` is WebKit, and
+> naming it in the default project turned a missing browser download into thirteen red tests that read
+> as product failures. The runnable projects keep the geometry and drop the engine; `phone-webkit` is
+> opt-in, and until it runs somewhere the engine-specific risks — `backdrop-filter`,
+> `env(safe-area-inset-*)`, bidi isolation — are unverified on the engine that matters.
 
 ---
 
@@ -1563,10 +1767,51 @@ On a mid-range Android over Algerian 3G, which is the honest test case:
 | Interaction to Next Paint | < 200 ms |
 | Cumulative Layout Shift | < 0.05 |
 | JS shipped to the browser, first load | < 180 KB gzipped |
-| Fonts | 2 variable files, subset, < 90 KB total, preloaded |
+| Fonts | Per locale: `fr` < 50 KB, `ar` < 140 KB, subset and preloaded |
+
+> **Corrected in the build: the JS budget is per route, and Zod does not belong in the browser.**
+> Measured against the production build on 2026-08-18, gzipped, one cold navigation per route:
+>
+> | Route | JS | Fonts |
+> |---|---|---|
+> | `/fr/login` | 158.5 KB | 44.6 KB |
+> | `/fr/orders` | 162.9 KB | 44.6 KB |
+> | `/ar/orders` | 162.9 KB | 131.1 KB |
+>
+> Two things had to be fixed to get there, and one measurement had to be corrected.
+>
+> **`/fr/login` was 222.4 KB, and 60 KB of it was Zod.** Part II pairs RHF with Zod, and Zod earns its
+> place *at the boundary* — parsing API responses, which happens on the server where its weight is
+> free. On the login form it validated two fields as "present" and shipped its whole runtime to the
+> first screen anybody loads, on Algerian 3G. RHF's own `required` rule says the same thing for
+> nothing. The rule this establishes: **Zod parses responses on the server; a client form reaches for
+> the resolver only when the validation is worth 60 KB.** The options editor probably is; a login form
+> is not.
+>
+> **A client component must not import values through a schema module.** `orderStatuses` lived beside
+> the Zod schema that validates it, so a client component needing the seven strings pulled Zod in with
+> them. The vocabulary now lives in `lib/order-status.ts`, which imports nothing.
+>
+> **And the first measurement was wrong**, which is worth recording because the mistake is easy: a
+> Playwright run that signs in and then navigates to the list accumulates *both* routes' bundles and
+> reported 242 KB for a route that ships 163. Per-route means a cold context per route.
+
+> **Corrected in the build: the font budget is per locale, and "2 variable files" was one file too
+> few.** The row above said `2 variable files, subset, < 90 KB total`. Three files ship, only one of
+> them variable, for the reason in [Part III](#type) — and the total is the wrong unit anyway, because
+> `unicode-range` means no reader ever downloads all three. Measured: `fr` transfers
+> `plex-sans-latin-var.woff2` alone at 45.7 KB, comfortably inside the original 90 KB; `ar` adds the
+> two Arabic weights for 134.2 KB and cannot be brought under 90 KB without dropping to a single
+> weight, which would leave Arabic with no typographic weight signal at all.
 
 Skeletons must match real row heights exactly — a skeleton of the wrong height is a layout shift with
-extra steps. Images through `next/image` with explicit dimensions. No chart library that ships a
+extra steps.
+
+> **Corrected in the build: an order row is 81 px, and the first skeleton was 72.** This is the exact
+> failure the sentence above warns about, committed while writing it. The fix that holds is
+> structural rather than numeric: the skeleton is built from the same paddings and line heights as the
+> real row, so it cannot drift when the row changes. `scripts/shots.mjs` measures the rendered row on
+> every run. Images through `next/image` with explicit dimensions. No chart library that ships a
 plotting engine to render six bars.
 
 ---
@@ -1637,6 +1882,24 @@ The panel-side counterpart to `docs/API.md`'s own list.
   that cannot sign anybody in.
 - **The panel cannot revoke its own session remotely.** Revoking means deleting the Application
   Password, which is why §87 mints them per device with a name.
+
+Added by the panel build, each one measured rather than anticipated:
+
+- **A 401 is detected by status, not by `error.code`.** A wrong password answers `incorrect_password`.
+- **`/orders` has no `wilaya` filter**, and an unknown query parameter is ignored with a 200 rather
+  than refused — so a filter that does nothing looks exactly like a filter that works.
+- **`?status=` takes one value.** A comma list is a 400.
+- **`per_page` over 100 is a 400**, not a clamp, and parameter errors arrive under `details.params`
+  rather than `details.fields`.
+- **`timeline[].summary` and `notes[].content` contain HTML entities.** Decode to text; never to HTML.
+- **`notes[].created_at` has no UTC offset** while `order.date_created` does. `new Date()` reads the
+  first as local time and shifts it silently.
+- **`/settings` publishes no timezone.** The panel is configured, not informed.
+- **`name_ar` is empty for Algiers and Oran**, the two busiest wilayas. Fall back to the other script.
+- **Money needs `fr-DZ`, not `fr`** — a bare `fr` renders `DZD` where the shop says `DA`.
+- **The timeline already includes the notes.** Rendering both prints everything twice.
+- **390 × 844 is the narrowest current iPhone, not the typical one.** Design there, but verify wider —
+  see [Part IX](#part-ix--performance-budgets).
 
 ---
 

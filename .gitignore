@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright and the review captures
+/test-results/
+/playwright-report/
+/.impeccable/review/
+/.impeccable/config.local.json
