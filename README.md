@@ -146,6 +146,17 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **Form controls are disabled until hydration.** A keystroke landing before React takes over changes
   the DOM and never reaches state, so the form never goes dirty — measured on WebKit, invisible on
   Chromium. `lib/use-hydrated.ts`, applied inside `Field`.
+- **`app/not-found.tsx` emits its own `<html>` and `<body>`**, and is the only file in the panel that
+  does. `app/layout.tsx` returns bare `children` on purpose — `lang` and `dir` need a locale the root
+  has not got — so anything rendering outside `app/[locale]/layout.tsx` has no document tags, and
+  Next's built-in global not-found is exactly that. Every mistyped address answered with a runtime
+  error, *"Missing `<html>` and `<body>` tags in the root layout"*, instead of a 404. An
+  `app/[locale]/not-found.tsx` does **not** fix it: measured on 16.3.1, a path that resolves to no page
+  never matches the `[locale]` segment, so Next walks straight to the root boundary.
+- **A stale `next dev` will invent this same error.** Switching branches under a running dev server
+  leaves Turbopack with a route entry for a directory that disappeared, and the route then renders as
+  unmatched — which looked exactly like the bug above on a page that was fine. `rm -rf .next` and
+  restart before believing a routing error that only one screen shows.
 
 ## Open, and owed to the backend
 

@@ -142,7 +142,8 @@
     "retry": "Réessayer",
     "offline": "Données de {time} — hors ligne",
     "offlineWrites": "Les modifications nécessitent une connexion.",
-    "loading": "Chargement"
+    "loading": "Chargement",
+    "notFoundAddress": "Cette adresse n’existe pas."
   },
   "errors": {
     "network": "Impossible de joindre le serveur.",

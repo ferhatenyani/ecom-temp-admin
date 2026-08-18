@@ -1198,6 +1198,27 @@ Not three. Build all five as part of the screen, not afterwards:
 >
 > The orders list still lacks it. Part VI generalises this, which is why `useOnline` lives in `lib/`.
 
+> **Corrected in the build: there is a sixth state, and it had no screen at all.** *Not found* is not
+> one of the five, because the five are states of a screen and this is the absence of one — but the
+> panel still has to render something, and until now it rendered a **runtime error**.
+>
+> `app/layout.tsx` returns bare `children` on purpose: `<html lang dir>` is emitted by
+> `app/[locale]/layout.tsx`, because direction comes from the locale and the root does not know it.
+> That is right, and it means anything rendering *outside* the locale layout has no document tags —
+> and Next's built-in global not-found is exactly that. Measured on 16.3.1: `/fr/nope`, `/ar/nope`,
+> `/xx/orders` and every other unmatched address answered with
+> *"Missing `<html>` and `<body>` tags in the root layout"* rather than a 404.
+>
+> Adding `app/[locale]/not-found.tsx` does **not** fix it — measured, it changed nothing, because a
+> path that resolves to no page never matches the `[locale]` segment and Next walks to the root
+> boundary. So `app/not-found.tsx` carries its own `<html>` and `<body>`, the only file in the panel
+> that does. `getLocale()` still resolves there, since the proxy has populated the request scope, so
+> `/ar/nope` is Arabic and mirrored; an unknown locale falls back to the default rather than throwing,
+> because a 404 that throws is worse than a 404 in the wrong language.
+>
+> It carries no tab bar. Those live under `(panel)` and assume a session, and this screen is reachable
+> signed out — a nav offering destinations that all bounce to the login form is worse than none.
+
 ## Dashboard
 
 `GET /analytics/overview`, `/orders`, `/products`, `/customers`, `/cod`, `/shipping`.
