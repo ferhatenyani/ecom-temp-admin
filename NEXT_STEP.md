@@ -1,4 +1,4 @@
-# Next step — `feat/products`
+# Next step — `feat/product-options`
 
 Paste this into a fresh chat.
 
@@ -11,70 +11,77 @@ finished and running at `http://localhost:8090`.
 
 - `ADMIN_PANEL.md` in this repo — Parts II–VII are the spec. Part I is backend work, already done.
   **Read the `> **Corrected in the build:**` blocks.** That is how this project records where the spec
-  was wrong, and there are now sixteen of them from the orders branch. Several will save you an hour
-  each. Keep using the convention: when the build proves the spec wrong, correct it in place with a
-  note carrying the measurement.
-- `README.md` — how to run it, the credentials, and the short list of things that will bite.
-- `~/projects/ecom-temp/docs/API.md` — the contract. "Products", "Global attributes — §88",
-  "Listing, filtering and facets — §82" and "Configurable options — §83" are the ones that matter here.
+  was wrong, and there are now twenty-four of them. The three under **Products** and the one under
+  **Configurable options — §83** are yours; several will save you an hour each. Keep the convention:
+  when the build proves the spec wrong, correct it in place with a note carrying the measurement.
+- `README.md` — how to run it, the credentials, and the list of things that will bite.
+- `~/projects/ecom-temp/docs/API.md` — the contract. "Configurable options — §83" and "Global
+  attributes — §88" are the two that matter here.
 
 ## What already exists
 
-`feat/panel-bootstrap` is merged: the shell, the credential boundary, and Orders end to end in both
-locales. Reuse it rather than rebuilding it.
+`feat/products` is merged: the products list with nine filters and facets, and the detail as a form.
 
-- `components/primitives/` — `GroupedList`, `Segmented`, `Sheet` (Radix, bottom sheet on mobile and
-  centred modal at md), `ActionSheet`, `Toast`, `StatusBadge`, `Button`, `Icon` (sprite), `Ltr`.
-- `components/patterns/` — `Scaffold` (collapsing large title), `TabBar`/`Sidebar`, `States` (all five),
-  `QueryProvider`.
-- `lib/api/` — `client`, `envelope`, `errors` (the status→behaviour mapping), `allowlist`, `schemas/`.
-- `lib/format/` — `money`, `date`, `html`. `lib/capabilities.ts` for the named predicates.
-- `scripts/` — `check-design.sh`, `test.sh`, `mint-credential.sh`, `reset-rate-limit.sh`, `shots.mjs`.
-
-Two primitives the orders screen did not need and products does: a **Field** set for forms, and a
-**filter sheet** built on the existing `Sheet`.
+- `components/primitives/` — `GroupedList`, `Segmented`, `Sheet`, `ActionSheet`, `Toast`,
+  `StatusBadge`, `Button`, `Icon` (sprite), `Ltr`, and **`Field`** (text, decimal, textarea, select,
+  switch, read-only — each binding its own error, because a 400 lists every bad field at once).
+- `components/patterns/` — `Scaffold`, `TabBar`/`Sidebar`, `States`, `QueryProvider`, and
+  **`FilterSheet`** (the pill row, the removable chips, the sheet, the value pills).
+- `lib/products.ts` — `mergeFacet` and the vocabulary helpers. **Read its docblocks before touching
+  any facet**: the facet response is a set of counts, not a vocabulary, and the reasons are measured.
+- `lib/product-status.ts` — the vocabulary with no dependencies, so client components do not pull Zod.
+- `scripts/seed-attributes.mjs` — creates the global attributes this shop shipped without. Idempotent,
+  and `scripts/test.sh` runs it before e2e.
 
 ## The task
 
-**`feat/products` — Part X step 9: the list with facets, and the detail.**
+**`feat/product-options` — the `options` editor (§83), and then the attributes screen.**
 
-Scope it to list + detail + the pieces below. **Leave the `options` editor out** and give it its own
-branch; the spec calls it the hardest component in the panel and it will otherwise swallow the whole
-branch.
+The specification calls the options editor the hardest component in the panel, which is why it was
+split out of the products branch rather than rushed at the end of it. Three group types — `choice`,
+`text`, `bundle` — with caps (20 groups, 50 choices, 20 bundle components), negative `price_delta`
+allowed, `image_id` that must already exist, and errors that name a **position**:
+`options.groups[0].choices[2].price_delta`. Map those paths onto the form's field paths exactly, or a
+validation error lands nowhere.
 
-What must be right, all of it from the spec's own warnings:
+The line above the editor is the rule that stops the whole misunderstanding: **a variation has a SKU
+and stock; an option is a modifier with neither.**
 
-- **Nine filters plus facets.** On mobile the filter bar is a horizontally scrolling row of pills that
-  opens the filter sheet; selected filters render as removable chips above the list.
-- **A facet's counts exclude its own filter.** With `pa_size=m` selected the size facet still reports
-  `l` and `xl`. Render every value in a group, zero-count ones included, so a selection never creates a
-  dead end.
-- **Counts are published-only; the list includes drafts.** Seven rows beside a count of six is correct.
-  Render `scope_note` beside the facet block, or someone will "fix" it into something wrong.
-- **Groups cap at 50** with `truncated` and `total_values`. Show "50 sur 128"; a bounded list that does
-  not say so reads as complete.
-- **GET then PATCH the whole object.** Read-only fields are dropped, not rejected. Build the form
-  around the full object rather than diffing.
-- **A 400 lists every bad field** — render `details.fields`, mapped onto the form's field paths.
-- **`DELETE` trashes; `?force=true` is permanent** and gets its own confirmation with different wording.
-- `options_problems` on a GET means the stored document has a group the API could not read — surface it
-  as a warning, because carts holding that product are already refusing to check out.
+What is already known, measured, and written up in the spec:
+
+- **`options`, `bundle` and `options_problems` are absent keys**, not nulls, on a product without an
+  option set. None of the 28 products has one, so you will be creating the first.
+- **`options_problems` names a group by 1-based position, not by id** — `"Option group 4 was dropped:
+  Must be one of: choice, text, bundle."` — because the broken group is absent from `options.groups`
+  and there is nothing to link the warning to. The products detail already renders the warning.
+- **Saving the product deletes what that warning is about.** A whole-object round trip writes back only
+  the readable groups. The warning says so; the editor must not quietly undo it.
+- **`bundle.available` is computed on every read** and refused on write.
+- Send `"options": null` to clear.
+
+Then the attributes screen, which the products branch deliberately left read-only:
+
+- A flat list for attributes with a drill-in for terms, plus the categories tree.
+- **Do not build a partial attribute editor.** Replacing a variable product's `attributes` drops its
+  variation attribute and WooCommerce clears every variation's attribute map — measured on products 12
+  and 21. Whatever writes `attributes` has to write the whole list.
+- §88's two warnings belong on screen: a newly created attribute's facet counts are zero until the next
+  request, and changing a term slug breaks saved filters and storefront links.
 
 ## Method — it is what produced everything good so far
 
 1. **Measure, don't remember.** Hit the real API before designing against its shapes. Every shape
-   assumption in the orders branch that came from the spec rather than from a request was wrong at
-   least once. Sweep the whole collection, not one row: "8 % of orders carry a wilaya" is the fact that
-   changed the design, and one row would have shown the opposite.
-2. **Every negative test carries a positive control.** A refusal and an unreachable route look identical
-   from outside. `?wilaya=16` returning 200 looked like a working filter until `?bogus_param=1` returned
-   the same 200.
+   assumption that came from the spec rather than from a request has been wrong at least once. Sweep
+   the whole collection, not one row.
+2. **Every negative test carries a positive control.** A refusal and an unreachable route look
+   identical from outside.
 3. **Every sweep carries a floor.** A grep that matches nothing must not report success.
-4. **Look at the render, not the code.** Four defects in the orders branch were invisible in the source
-   and obvious in a screenshot: a segmented thumb that did not line up, a skeleton 9 px short, two rows
-   labelled "Adresse", and a house number the bidi algorithm had moved.
-5. **Invoke `/impeccable` before any UI and `/apple-design` for the platform grammar.** The spec
-   constrains those skills; it does not replace them.
+4. **Look at the render, not the code.** The products branch shipped three defects that were invisible
+   in the source and obvious in a screenshot: every category counted `0` because the facet keys by slug
+   and the vocabulary by term id; the first filter pill sat flush against the viewport edge because
+   scroll-snap aligns to the scrollport rather than to its padding; and the desktop sheet rendered
+   544 × 0 because `inset-block: 50%` is not centring.
+5. **Invoke `/impeccable` before any UI and `/apple-design` for the platform grammar.**
 
 ## Before you write a line of UI
 
@@ -82,7 +89,7 @@ What must be right, all of it from the spec's own warnings:
 `node_modules/next/dist/docs/`. The four that already bit:
 
 - `middleware.ts` is `proxy.ts`, and the export must be named `proxy`.
-- `next/root-params` **cannot be used** — it is a webpack-only compiler pass and Next 16 builds with
+- `next/root-params` **cannot be used** — webpack-only compiler pass, and Next 16 builds with
   Turbopack. Use `getLocale()` from `next-intl/server`.
 - `params`, `searchParams` and `cookies()` are all Promises.
 - The `eslint` key is gone from `next.config`, and `next build` no longer lints.
@@ -91,26 +98,28 @@ What must be right, all of it from the spec's own warnings:
 
 `./scripts/test.sh` green — types, design, unit, e2e — plus:
 
-- Both locales, at 390 and 440 px and on a desktop. 390 is the design floor; it is the *narrowest*
-  current iPhone, not the typical one.
+- Both locales, at 390 and 440 px and on a desktop. 390 is the design floor, not the typical width.
 - `scripts/check-design.sh` still passes with its floor raised to match the new file count.
 - The five states built as part of each screen, not afterwards.
-- Every new identifier on screen wrapped in `<Ltr>`. A SKU is exactly the case that breaks.
+- Every new identifier on screen wrapped in `<Ltr>`.
 - New rows measured against the skeleton, so the list does not shift when data lands.
+- The proxy allowlist grows by exactly the routes the new screens call, with a unit test asserting
+  both the additions and what stays refused.
 
-## Housekeeping worth doing first — both are small
+## Still open, and worth an hour
 
-1. **Two backend data fixes**, in `~/projects/ecom-temp`: `name_ar` is empty for Algiers (16) and Oran
-   (31) in `/locations/wilayas` — the two busiest wilayas — and wilaya 16's `name` is the English
-   "Algiers" rather than "Alger". The panel falls back, but the data is wrong.
-2. **`sudo npx playwright install-deps webkit`.** One command, and it closes the only unverified risk
-   the panel is carrying: `backdrop-filter`, `env(safe-area-inset-*)` and bidi isolation have never run
-   on WebKit, which is the engine iOS Safari actually uses. Then
-   `npx playwright test --project=phone-webkit`.
+- **WebKit has never run.** `backdrop-filter`, `env(safe-area-inset-*)` and bidi isolation are the
+  three things this design leans on hardest, and Chromium is not the engine iOS Safari uses.
+  `playwright.config.ts` keeps a `phone-webkit` project for it. It needs
+  `sudo npx playwright install-deps webkit` — 17 system libraries, root required — which no session so
+  far has had. One command closes the only unverified risk the panel carries.
+- **A wilaya's French name.** `name` for wilaya 16 is the English *Algiers*, deliberately, because the
+  dataset matches WooCommerce's DZ state list and the slug derived from it is a join key. A French
+  display name would be a new field on `wp_ac_geo_wilayas`, not an edit to that one. See README.
 
 ## Git
 
-Branch `feat/products`, commit, merge into `main` locally with `--no-ff`. **Never push.**
+Branch `feat/product-options`, commit, merge into `main` locally with `--no-ff`. **Never push.**
 
-Ask before building if anything is ambiguous — three sessions running, asking up front has materially
+Ask before building if anything is ambiguous — four sessions running, asking up front has materially
 improved the result.

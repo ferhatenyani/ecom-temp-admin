@@ -14,10 +14,9 @@ import { Icon, type IconName } from "@/components/primitives/Icon";
  *
  * A role holding fewer than five of the primary destinations gets its tabs
  * backfilled from `More` in a fixed order, so a Marketing Manager's tab bar is
- * coherent rather than three tabs and two gaps. Only Orders is built in this
- * step, so the others render as disabled-looking placeholders rather than links
- * that 404 — a tab that navigates nowhere is worse than one that says it is not
- * ready.
+ * coherent rather than three tabs and two gaps. Orders and Products are built;
+ * the rest render as disabled-looking placeholders rather than links that 404 —
+ * a tab that navigates nowhere is worse than one that says it is not ready.
  */
 
 type Tab = {
@@ -35,7 +34,7 @@ type Tab = {
 
 const TABS: Tab[] = [
   { key: "orders", href: "/orders", icon: "orders" },
-  { key: "products", href: null, icon: "products" },
+  { key: "products", href: "/products", icon: "products" },
   { key: "dashboard", href: null, icon: "dashboard", shortKey: "dashboardShort" },
   { key: "customers", href: null, icon: "customers" },
   { key: "more", href: null, icon: "more" },

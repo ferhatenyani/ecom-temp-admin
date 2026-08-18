@@ -1182,6 +1182,22 @@ Not three. Build all five as part of the screen, not afterwards:
 5. **Offline / stale** — see [Part VI](#part-vi--pwa-and-offline). A visible marker with the age of
    the data, not silent staleness.
 
+> **Corrected in the build: the fifth state was a component nobody rendered.** `StaleBanner` has
+> existed since the shell branch and, through the orders branch, was wired to **nothing** — a state
+> that exists as a component and is reachable from no screen is a state the panel does not have. The
+> products list renders it from `navigator.onLine` and TanStack Query's `dataUpdatedAt`, which is
+> everything available before Part VI's service worker exists and enough to keep the rule: staleness is
+> never silent.
+>
+> `navigator.onLine` reports the interface rather than reachability, so it is only trusted in one
+> direction — when it is **false** the browser is certain. A failed fetch is the signal for the other
+> direction, which is why `lib/api/client.ts` throws `NetworkError` instead of consulting it. It is
+> also read in an effect rather than during render: reading `navigator` while rendering differs between
+> the server and the first client paint, and a hydration error on every phone in a warehouse basement
+> is two problems where there was one.
+>
+> The orders list still lacks it. Part VI generalises this, which is why `useOnline` lives in `lib/`.
+
 ## Dashboard
 
 `GET /analytics/overview`, `/orders`, `/products`, `/customers`, `/cod`, `/shipping`.
@@ -1297,6 +1313,84 @@ Facets are **opt-in** (`?facets=…`) and arrive in `meta.facets`. Three things 
 - **Groups are capped at 50** with `truncated` and `total_values` beside them. Show "50 sur 128" when
   truncated; a bounded list that does not say so reads as complete.
 
+> **Corrected in the build: the shop had no global attributes, the facet is not a vocabulary, and one
+> of the three rules above is the panel's to keep rather than the API's.**
+>
+> **`GET /attributes` answered `[]`.** Measured 2026-08-18, before anything was built: this shop had
+> **zero** global attributes, so `meta.facets.attributes` was `{facetable: [], groups: []}` and
+> `?attributes[pa_size]=m` was a 400 — `No global attribute named "pa_size"`. Both variable products
+> carried *local* attributes (`id: 0`, "Taille" and "Finition"), and §82 is explicit that a local
+> attribute has no shared vocabulary and no term to count. The headline example above was therefore
+> unbuildable and untestable against real data. §88's routes exist for exactly this, and
+> `scripts/seed-attributes.mjs` uses them to create Matière and Couleur and tag ten products; it runs
+> from `scripts/test.sh` before the e2e stage because the backend's own suite re-seeds the catalogue
+> and strips the two variable products' global tags.
+>
+> **A facet omits its zero-count values, so "render every value" is the panel's job.** `pa_matiere`
+> carries six terms, one of which ("Cuir") no product uses; the group reports five values and
+> `total_values: 5`. `?search=tapis` cut the category group from six values to two — the other four
+> were *dropped*, not reported as zero. The single exception is `stock_status`, which sends
+> `onbackorder: 0` because it is a closed enum rather than a taxonomy. So the vocabulary comes from
+> `/product-categories` and `/attributes/{id}/terms` — both unfiltered, both publishing a `count` —
+> and `lib/products.ts`'s `mergeFacet` puts the two together. **`total_values` is the number of
+> counted values, not the size of the vocabulary**: six terms, `total_values: 5`.
+>
+> **The category facet does *not* exclude its own filter.** The rule holds for the attribute groups,
+> for `stock_status` and for `price` — with `?attributes[pa_matiere]=laine` the matiere group still
+> reports all five of its counted values while every other group narrows. With `?category=16` the
+> category group collapses to `tapis=3` and `total_values: 1`, and the other five categories vanish.
+> Rendering that group from the facet alone produces exactly the dead end this section forbids: pick a
+> category and no other category is visible or reachable. The panel falls back to the vocabulary's own
+> unfiltered count for whichever group is currently filtered, which is what `mergeFacet`'s
+> `selfNarrowed` decides.
+>
+> **The cap is real and its shape is as documented.** Measured with a throwaway 60-term attribute:
+> 50 values, `total_values: 60`, `truncated: true`. Deleted afterwards.
+>
+> **The counts are published-only, and here that is 27 against 28.** One draft in a 28-product
+> catalogue, so the list shows 28 rows beside facet counts that sum over 27. `scope` is the
+> machine-readable half and `scope_note` the English sentence; the panel renders a localised line
+> keyed on `scope` and falls back to `scope_note` for a scope it has no wording for — rendering the
+> raw note always would put an English sentence at the foot of an Arabic sheet.
+>
+> **Nine filters is eleven.** `/products` accepts `search`, `sku`, `status`, `category`, `tag`,
+> `min_price`, `max_price`, `attributes[…]`, `stock_status`, `on_sale`, `featured` and `rating_min`.
+> The panel carries nine: `rating_min` is omitted because no product in this shop has a review and the
+> rating facet is always `[]`, and `tag` renders only when the tag facet has values because all 28
+> products carry `tag_ids: []`. A control that cannot change the result is not a filter.
+>
+> **`?status=` takes one value**, as on `/orders`: `?status=draft,publish` is a 400. `?category=` does
+> take a comma list, but of **term ids** — `?category=tapis` is a 400 naming the pattern
+> `^$|^[0-9]+(,[0-9]+)*$`, while `?attributes[pa_matiere]=` matches term **slugs**. Keying both by slug
+> compiled, typechecked, ran, and put a `0` beside all six categories in a shop that had just reported
+> 15, 3, 3, 3, 2 and 2. Nothing failed; only the screenshot showed it. `?category=99999` is a 200 with
+> zero rows rather than a refusal, so a stale saved filter empties the list quietly.
+>
+> **`?per_page=500` is a 400, not a clamp**, and parameter errors arrive under `details.params` — with
+> one exception that matters here: **the `attributes` filter reports under `details.fields.attributes`,
+> with `details.facetable_attributes` beside it at the `details` level.** A panel mapping only
+> `details.params` renders nothing for the one filter most likely to be wrong.
+>
+> **`orderby` accepted five values it did not honour.** Comparing each one's full 28-row id sequence
+> against `orderby=date`: `id`, `price`, `sku`, `popularity` and `rating` returned **byte-identical**
+> order to `date`, in both directions. Only `date`, `title` and `menu_order` sorted. Same cause
+> `ProductRepository` already documents for `meta_query` — `WC_Product_Data_Store_CPT` drops the
+> vocabulary it does not recognise, so the sort does not fail, it silently does not sort. Repaired in
+> the backend through `posts_clauses` against `wc_product_meta_lookup`; the panel offers `date`,
+> `title` and `price`, and omits `popularity` and `rating` because `total_sales` is 0–2 across the
+> whole catalogue and there are no ratings — a sort whose keys are all equal is the same defect wearing
+> a different hat.
+>
+> **No product has an image.** All 28 carry `image_id: 0`, `image: null` and an empty gallery; the
+> media library holds 30 fixtures and not one is attached. So the row has no thumbnail column — 28
+> placeholder squares would read as photography that failed to load rather than as a catalogue that
+> has none.
+>
+> **A price can be absent, and absent is not zero.** `AC-SEO-NOPRICE` is published with `price: ""` and
+> `regular_price: ""`. WooCommerce's lookup table stores its `min_price` as `0.0000`, which is why the
+> price facet's floor reads `0.00` — but the row says "Sans prix" rather than "0,00 DA". On a variable
+> product it is the other way round: `price` carries the resolved figure and `regular_price` is `""`.
+
 **Detail.** Grouped sections: identity and pricing, inventory, images, categories and attributes,
 variations, options (§83), SEO (§62).
 
@@ -1311,11 +1405,76 @@ misunderstanding: **a variation has a SKU and stock; an option is a modifier wit
 appearing at all means the stored document has a group the API could not read — surface it as a
 warning on the product, because carts holding that product are already refusing to check out.
 
+> **Corrected in the build: `options_problems` names a position, not a group — and saving deletes what
+> it warns about.** Provoked deliberately by writing an unreadable group straight into `_ac_option_set`
+> and reading it back, the field is a list of English strings naming the group by its **1-based
+> position**: `"Option group 4 was dropped: Must be one of: choice, text, bundle."` The position is all
+> there is to go on precisely because the broken group is absent from `options.groups`, so nothing can
+> link the warning to a row in an editor.
+>
+> Worse, and the reason the warning carries a third line of copy: **PATCHing the whole GET body back
+> silently repairs the document by discarding the unreadable groups.** Measured — after one round trip
+> `options_problems` was gone and so were both broken groups. A screen that says "carts are refusing to
+> check out" beside a save button that quietly destroys the evidence has to say so, so the panel's
+> warning does.
+>
+> `options`, `bundle` and `options_problems` are all **absent keys** on a product without an option
+> set — not null, absent. None of the 28 products had one, so a required field here would fail the
+> panel at its own boundary on every ordinary product.
+
 **GET then PATCH the whole object works.** Read-only fields are dropped, not rejected. Build the form
 around the full object rather than diffing — it is what the API is designed for and it removes a
 whole class of partial-update bug.
 
 `DELETE` trashes; `?force=true` is permanent and gets its own confirmation with different wording.
+
+> **Corrected in the build: four things about the write path.**
+>
+> **GET then PATCH the whole object does work** — verified, all 32 keys of a product carrying an option
+> set round-tripped with a 200. But **a PATCH whose every key is read-only answers 400 `"No supported
+> fields were provided."` with no `details` at all.** So "drop what is read-only" cannot be the only
+> rule a client follows: if it drops everything, the request is refused with a message that names
+> nothing and the panel's own 400 handling has no field list to render. The form sends an explicit
+> named subset instead.
+>
+> Measured writable: `name`, `slug`, `type`, `status`, `featured`, `catalog_visibility`, `sku`,
+> `description`, `short_description`, `regular_price`, `sale_price`, `manage_stock`, `stock_quantity`,
+> `stock_status`, `weight`, `category_ids`, `seo`, `options`, `attributes`, `tag_ids`, `image_id`,
+> `gallery_image_ids`. Measured dropped: `price`, `on_sale`, `permalink`, `image`, `gallery`,
+> `variations`, `id`, `date_created`, `date_modified`, `bundle`, `options_problems`. An unknown field
+> is a 400 `"Unknown field."` — read-only and unknown are different answers. **`stock_quantity` is
+> silently dropped when `manage_stock` is false**, a 200 with the field ignored, which looks exactly
+> like a save that worked.
+>
+> **A duplicate SKU is a 409, not a 400**, and it names the SKU under `details.sku` rather than under
+> `details.fields`: `{"code":"conflict","message":"That SKU is already in use.","details":{"sku":"AC-TAP-001"}}`.
+> It has to be mapped onto the SKU field, because that is the field the person has to change.
+>
+> **A 400's field messages are English** — "Must be a number.", "Cannot be negative.", "A product name
+> cannot be emptied." — while the panel is French and Arabic. They are rendered verbatim anyway: they
+> name the problem precisely, and a translated generic ("Ce champ est invalide") throws away the only
+> actionable part. The *label* beside them is localised, so a row reads as a French label with the
+> API's reason under it.
+>
+> **A trashed product still reads back.** `DELETE` answers `200 {"id":…,"deleted":true}` and a
+> following `GET /products/{id}` answers **200 with `status: "trash"`**, not 404 — so the schema has to
+> accept a status that no filter may send, and the detail screen renders a banner rather than an
+> absence. Trashing is idempotent: a second `DELETE` answers 200 again and does *not* escalate to
+> permanent. `?force=true` answers the **identical body** and the next GET is a 404, so nothing in the
+> response distinguishes the reversible act from the irreversible one — the panel knows only because it
+> knows what it asked for, which is why the permanent path is behind a typed confirmation of the
+> product's own name.
+>
+> **Replacing `attributes` on a variable product is destructive, and it 500'd.** Sending an
+> `attributes` list that drops the variation attribute makes WooCommerce clear every variation's
+> attribute map — measured on products 12 and 21, whose three and two variations came back with
+> `attributes: {}` and could no longer be told apart. It also answered **500, `Call to a member
+> function is_taxonomy() on null`**: `WC_Product_Variable::save()` nulls the dropped key in the
+> in-memory array rather than unsetting it, and `ProductPresenter::attributes()` iterated the object the
+> write returned. Fixed in the backend by re-reading after the write, so a write response is what a
+> subsequent GET returns — which is what "a read body can be written back" requires. The panel's form
+> does not send `attributes` at all; that belongs with the attributes screen, which can build the whole
+> list rather than a partial one.
 
 ## Categories and attributes
 
@@ -1840,7 +1999,14 @@ mirroring §47's slicing.
  7. feat/patterns       grouped list, large title, sheet, segmented control,
                         action sheet, swipe row, toast, filter bar, date range
  8. feat/orders         the hardest real screen, and the one that proves the patterns
- 9. feat/products       list with facets, detail, variations, the options editor
+ 9. feat/products       list with facets, detail, read-only variations   DONE
+                        — the options editor is its own branch. §83's three group
+                        types, their caps and their positional error paths are the
+                        hardest component in the panel and would have swallowed this
+                        one. Editing attributes and categories goes with the
+                        attributes screen, which can build a whole attribute list
+                        rather than the partial one that clears a variable product's
+                        variations.
 10. feat/inventory      low stock, adjust, the movements ledger
 11. feat/customers      + coupons
 12. feat/shipping       + payments + COD
@@ -1900,6 +2066,35 @@ Added by the panel build, each one measured rather than anticipated:
 - **The timeline already includes the notes.** Rendering both prints everything twice.
 - **390 × 844 is the narrowest current iPhone, not the typical one.** Design there, but verify wider —
   see [Part IX](#part-ix--performance-budgets).
+
+Added by the products build:
+
+- **A facet is a set of counts, not a vocabulary.** Zero-count values are omitted — six terms,
+  `total_values: 5`. The complete list comes from `/product-categories` and `/attributes/{id}/terms`.
+- **The category facet does not exclude its own filter**, though the attribute, stock and price facets
+  all do. Rendering it from the facet alone deletes every other category the moment one is picked.
+- **`?category=` matches term ids and `?attributes[…]` matches term slugs.** Keying both by slug puts
+  a silent `0` beside every category and nothing errors.
+- **`orderby` accepted five values it did not honour** — `id`, `price`, `sku`, `popularity`, `rating`
+  all returned date order. Fixed in the backend; verify a sort by comparing sequences, never counts.
+- **A PATCH of only read-only fields is a 400 with no `details`.** Send a named subset, not "the GET
+  body minus what looks read-only".
+- **A duplicate SKU is a 409 with `details.sku`**, not a 400 with `details.fields`.
+- **The `attributes` filter's 400 arrives under `details.fields`**, not `details.params` like every
+  other query parameter, with `details.facetable_attributes` beside it.
+- **Field-error messages are English.** Render them anyway; localise the label, not the reason.
+- **A trashed product still GETs as 200 with `status: "trash"`.** Only `?force=true` produces a 404.
+- **Replacing `attributes` on a variable product clears its variations' attribute maps.** Do not send
+  a partial attribute list.
+- **`options`, `bundle` and `options_problems` are absent keys**, not nulls, on a product with no
+  option set — and saving the product deletes the groups `options_problems` is warning about.
+- **`stock_quantity` is silently dropped when `manage_stock` is false.** A 200 that ignored the field.
+- **No product carries an image.** A thumbnail column would be a column of placeholders.
+- **A published product can have no price at all**, and the price facet floors at `0.00` because of it.
+- **Product ids are not stable**: the backend's own suites delete and recreate their fixtures, so a
+  test or a script must find a product by SKU.
+- **`Sheet` had never been opened at `md`.** `inset-block: 50%` is not centring — with `block-size:
+  auto` it resolves the height to zero, and the desktop sheet rendered 544 × 0.
 
 ---
 

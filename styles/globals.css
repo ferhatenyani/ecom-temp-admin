@@ -226,7 +226,21 @@
   }
   @media (min-width: 48rem) {
     .sheet-content {
-      inset-block: 50%;
+      /*
+       * `inset-block-start` alone, never the `inset-block` shorthand.
+       *
+       * The shorthand sets *both* block insets to 50%, and with `block-size:
+       * auto` that is not a centring instruction — it is `height: 100% − 50% −
+       * 50%`, which is zero. Measured at 1440 × 900: the sheet came out
+       * 544 × 0 at top 450, `data-state="open"`, `visibility: visible`, and
+       * Playwright reported it as hidden for sixty-three consecutive polls.
+       *
+       * Nothing caught it until now because this is the first sheet the panel
+       * has ever opened at `md`: the orders branch used `ActionSheet`, which is
+       * bottom-anchored at every width and carries its own positioning.
+       */
+      inset-block-start: 50%;
+      inset-block-end: auto;
       inset-inline-start: 50%;
       transform: translate(-50%, -50%);
       inline-size: min(34rem, calc(100vw - 4rem));
@@ -248,6 +262,77 @@
   .place-cap {
     max-inline-size: 45%;
     flex: 0 1 auto;
+  }
+
+  /*
+   * The switch. iOS's proportions — 51 × 31 with a 27px knob — because a switch
+   * drawn at web defaults is the tell that this is a web form wearing an iOS
+   * costume. The knob moves with a transform so it composites, and
+   * `inset-inline-start` puts it on the leading edge in both directions with only
+   * the sign of the translate mirrored.
+   */
+  .switch {
+    inline-size: 3.1875rem; /* 51 */
+    block-size: 1.9375rem; /* 31 */
+    transition: background-color var(--dur-fast) var(--ease-ios);
+  }
+  /*
+   * No shadow under the knob, though iOS has one. Part III's rule is that
+   * elevation is a surface step and that a shadow belongs to a sheet and a
+   * popover only — and the knob does not need it: white on a filled track is
+   * already a 4.5:1 boundary in both themes.
+   */
+  .switch-knob {
+    inset-block-start: 2px;
+    inset-inline-start: 2px;
+    inline-size: 1.6875rem; /* 27 */
+    block-size: 1.6875rem;
+    transition: transform var(--dur-fast) var(--ease-ios);
+  }
+  .switch[aria-checked="true"] .switch-knob {
+    transform: translateX(1.25rem); /* 51 − 27 − 4 */
+  }
+  [dir="rtl"] .switch[aria-checked="true"] .switch-knob {
+    transform: translateX(-1.25rem);
+  }
+
+  /*
+   * The filter pill row scrolls horizontally and must not show a scrollbar over
+   * a 44px control. Snap, so a pill never comes to rest half off the screen —
+   * at 390px the row is genuinely wider than the viewport and a half-pill reads
+   * as a clipped layout rather than as more content.
+   */
+  .pill-row {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    scroll-snap-type: inline proximity;
+    overscroll-behavior-inline: contain;
+    /*
+     * Without this the snap eats the gutter. `scroll-snap-align: start` aligns a
+     * pill's leading edge with the *scrollport's* leading edge, which is the
+     * padding box — so the 1rem below was applied, the browser snapped straight
+     * past it, and the first pill sat flush against the viewport edge at x=0
+     * while the search field above it started at 16. Measured before the fix:
+     * `firstPillLeft: 0`, `paddingInlineStart: 16px`.
+     */
+    scroll-padding-inline: 1rem;
+  }
+  .pill-row::-webkit-scrollbar {
+    display: none;
+  }
+  .pill-row > * {
+    scroll-snap-align: start;
+  }
+  /*
+   * The row is padded to the page gutter with its own inline padding rather than
+   * the parent's, so the first and last pill sit flush with the content column
+   * and the scroll still runs edge to edge. A pill clipped by the viewport edge
+   * is the affordance; a fade over it would be a gradient, which Part III bans
+   * and which this row does not need.
+   */
+  .pill-row {
+    padding-inline: 1rem;
+    margin-inline: -1rem;
   }
 
   /* The refresh control, while a refetch is in flight. */
@@ -303,6 +388,27 @@
   .title-collapsed.is-collapsed {
     opacity: 1;
     transform: translateY(0);
+  }
+
+  /*
+   * The save bar on the product form, anchored above the tab bar.
+   *
+   * The form is nine grouped sections tall at 390px; a save button at the foot of
+   * it is a save button that has to be hunted for, and the one thing a person
+   * came to this screen to do should not require scrolling past everything they
+   * did not change. It appears only when there is something to save, so an
+   * unedited product keeps the full viewport.
+   */
+  .save-bar {
+    inset-block-end: calc(3.25rem + env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 48rem) {
+    /* At md the tab bar becomes a sidebar and the bar drops to the bottom edge,
+       inset by the sidebar's width so it does not run underneath it. */
+    .save-bar {
+      inset-block-end: 0;
+      inset-inline-start: 15rem;
+    }
   }
 
   /*

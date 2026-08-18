@@ -1,7 +1,7 @@
 /**
- * Signs in with a real Application Password and captures the orders list and one
- * order detail, in both locales, at the phone width the panel is designed for and
- * at a desktop width.
+ * Signs in with a real Application Password and captures the orders list, one
+ * order detail, the products list, its filter sheet and one product detail — in
+ * both locales, at the three current iPhone widths and at a desktop width.
  *
  * It also asserts the handful of things a screenshot cannot show: that the Arabic
  * face actually loaded rather than falling back, that `dir` is right, and that an
@@ -200,6 +200,122 @@ for (const [name, options] of TARGETS) {
     // contains a raw `&rarr;` the decoder is not wired in.
     const body = await page.locator("body").innerText();
     check(`${name}/${locale}: no raw HTML entities`, body.includes("&rarr;"), false);
+
+    // ----------------------------------------------------------- products ---
+    await page.goto(`${BASE}/${locale}/products`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="products-count"]');
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/products-${name}-${locale}.png` });
+
+    const productOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: products no horizontal overflow`, productOverflow, (v) => v <= 1);
+
+    /*
+     * Every row the same height. The status badge is 24px and a name's line box is
+     * 22, so a row carrying a badge was two pixels taller than one without until
+     * the primary line was given the badge's height as a floor — invisible per row
+     * and a visible stutter down a scrolling list. The last row is legitimately a
+     * hairline shorter, because `.list-row:last-child` drops its separator.
+     */
+    const productRows = await page
+      .locator('a[href*="/products/"]')
+      .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().height)));
+    check(
+      `${name}/${locale}: product rows are one height`,
+      `${[...new Set(productRows)].join("/")} (n=${productRows.length})`,
+      () => {
+        const distinct = [...new Set(productRows)].sort((a, b) => b - a);
+        return (
+          productRows.length > 1 &&
+          distinct.length <= 2 &&
+          (distinct.length === 1 || distinct[0] - distinct[1] <= 1)
+        );
+      },
+    );
+
+    // The first filter pill keeps the page gutter. `scroll-snap-align: start`
+    // aligns to the scrollport, not to its padding, so without
+    // `scroll-padding-inline` the row snapped past the gutter and the first pill
+    // sat flush against the viewport edge while the search field above it did not.
+    const gutters = await page.evaluate(() => {
+      const row = document.querySelector(".pill-row");
+      const search = document.querySelector('form[role="search"]');
+      const rtl = document.documentElement.dir === "rtl";
+      const pill = row.firstElementChild.getBoundingClientRect();
+      const field = search.getBoundingClientRect();
+      return rtl
+        ? { pill: Math.round(innerWidth - pill.right), field: Math.round(innerWidth - field.right) }
+        : { pill: Math.round(pill.left), field: Math.round(field.left) };
+    });
+    check(
+      `${name}/${locale}: the first pill keeps the page gutter`,
+      `pill ${gutters.pill} vs field ${gutters.field}`,
+      () => Math.abs(gutters.pill - gutters.field) <= 1,
+    );
+
+    // A SKU inside Arabic text keeps its direction. Asserted on the rendered
+    // string: the `dir` attribute alone cannot catch a bidi reorder.
+    const sku = await page
+      .locator('a[href*="/products/"] span[dir="ltr"]')
+      .first()
+      .innerText();
+    check(`${name}/${locale}: SKU keeps its direction`, sku.trim(), (v) =>
+      /^[A-Z0-9][A-Z0-9-]*$/.test(v.trim()),
+    );
+
+    // The filter sheet, with its facet counts and the scope note.
+    await page.locator(".pill-row > button").first().click();
+    await page.waitForSelector('[role="dialog"]');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/filters-${name}-${locale}.png` });
+
+    const sheetOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: filter sheet no horizontal overflow`, sheetOverflow, (v) => v <= 1);
+
+    /*
+     * The counts have to be the API's, not zeroes. The first implementation keyed
+     * the category facet by slug against a vocabulary keyed by term id, and
+     * rendered `0` beside all six categories in a shop that had just reported 15,
+     * 3, 3, 3, 2 and 2. It compiled and typechecked; only the screenshot showed it.
+     */
+    const counts = await page.evaluate(() =>
+      [...document.querySelectorAll('[role="dialog"] [role="checkbox"]')]
+        .map((el) => el.textContent.trim())
+        .filter((t) => /\d/.test(t))
+        .map((t) => Number(t.match(/(\d+)\s*$/)?.[1] ?? -1)),
+    );
+    check(
+      `${name}/${locale}: facet counts are not all zero`,
+      `${counts.filter((c) => c > 0).length} of ${counts.length} above zero`,
+      () => counts.length > 0 && counts.some((c) => c > 0),
+    );
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+
+    // The product detail, on a variable product so the variations section renders.
+    // By SKU, never by id: the backend's suites recreate their fixtures and an id
+    // is stable only until the next run over there.
+    await page.goto(`${BASE}/${locale}/products?sku=AC-BUR-010`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="products-count"]');
+    await page.locator('a[href*="/products/"]').first().click();
+    await page.waitForURL(/\/products\/\d+/, { timeout: 20000 });
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/product-${name}-${locale}.png`, fullPage: true });
+
+    const detailProductOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(
+      `${name}/${locale}: product detail no horizontal overflow`,
+      detailProductOverflow,
+      (v) => v <= 1,
+    );
 
     await context.close();
   }

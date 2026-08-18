@@ -14,7 +14,11 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-FLOOR=40
+# Raised with each branch, and deliberately just under the real count rather than
+# at it: the floor exists to catch a rename or a moved directory that empties the
+# glob, not to fail on one deleted file. 47 files at the orders branch, floor 40;
+# 61 at the products branch, floor 56.
+FLOOR=56
 failures=0
 checks=0
 
