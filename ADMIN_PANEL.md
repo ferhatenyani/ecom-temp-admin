@@ -32,7 +32,7 @@ changing this document first.
 | Staff sign-in | **Per-user WordPress Application Password** | The audit trail names a real person and `/auth/me` drives what each role sees. A shared service credential collapses §45's whole matrix into one account. |
 | Languages | **French and Arabic, full RTL** | The staff who use this are Algerian. Retrofitting RTL means touching every component, so it is direction-agnostic from line one. |
 | Missing routes | **Built in this repository first** | PLAN §52 says routine administration must not require wp-admin. Four of its areas have no API; Part I is that work. |
-| Styling | **Tailwind v4 with a token-only theme** | Fast to write, and the arbitrary-value escape hatch is closed by a CI check rather than by good intentions. |
+| Styling | **Tailwind CSS v4 (4.3) with a token-only theme** | Fast to write, and the arbitrary-value escape hatch is closed by a CI check rather than by good intentions. |
 | Typeface | **IBM Plex Sans + IBM Plex Sans Arabic** | One designed system across both scripts. Open licence, self-hostable, variable. SF Pro cannot be self-hosted for the web outside Apple platforms, and the system stack is generic by definition. |
 | Offline | **Installable PWA, read-cached** | Staff use this on mobile data in warehouses and vans. Writes still need a connection and say so. No offline write queue — see [Part VI](#part-vi--pwa-and-offline). |
 
@@ -512,16 +512,26 @@ fails the build otherwise, which is the point of it.
 
 | Concern | Choice | Note |
 |---|---|---|
-| Framework | Next.js 15+, App Router, TypeScript `strict` | Server Components for first paint, Route Handlers as the credential boundary. |
-| Styling | Tailwind CSS v4, `@theme` tokens only | [Part III](#part-iii--the-design-system). Arbitrary values fail CI. |
-| i18n | `next-intl` | ICU messages, `/[locale]/…` routing, `dir` from the locale. |
-| Server state | TanStack Query v5 | For lists, filters and mutations. RSC renders the first screen; the client owns everything after it. |
-| Forms | React Hook Form + Zod | Zod schemas are also what parse API responses at the boundary. |
+| Framework | Next.js 16.3, App Router, React 19.2, TypeScript 5.9 `strict` | Server Components for first paint, Route Handlers as the credential boundary. |
+| Styling | Tailwind CSS 4.3, `@theme` tokens only | [Part III](#part-iii--the-design-system). Arbitrary values fail CI. |
+| i18n | `next-intl` 4.13 | ICU messages, `/[locale]/…` routing, `dir` from the locale. |
+| Server state | TanStack Query v5 (5.101) | For lists, filters and mutations. RSC renders the first screen; the client owns everything after it. |
+| Forms | React Hook Form 7.85 + Zod 4 | Zod schemas are also what parse API responses at the boundary. |
 | Behaviour primitives | Radix (or Ark) — unstyled only | Dialog, popover, select, tabs. Every visual property ours. |
-| Charts | `visx` or hand-rolled SVG, per the `dataviz` skill | Flat fills only. No gradient area charts. |
+| Charts | `visx` 4 or hand-rolled SVG, per the `dataviz` skill | Flat fills only. No gradient area charts. |
 | Icons | One set, outline, 1.5 px stroke, self-hosted SVG sprite | Never an icon font. |
-| Session sealing | `jose` (JWE, A256GCM) | [below](#the-session-is-a-sealed-cookie). |
-| Tests | Vitest + Testing Library, Playwright | Plus `scripts/check-design.sh`. |
+| Session sealing | `jose` 6.2 (JWE, A256GCM) | [below](#the-session-is-a-sealed-cookie). |
+| Tests | Vitest 4.1 + Testing Library 16.3, Playwright 1.62 | Plus `scripts/check-design.sh`. |
+
+Versions are the ones this repository resolves — `package.json` and `package-lock.json` are the
+authority, and each is npm's current `latest` with **one exception: TypeScript**, where the range is
+`^5` and 5.9.3 installs while 7.0.2 is published. That upgrade is a decision, not a version bump, and
+it is not made here.
+
+A major named here (**Zod 4**, **Query v5**, **Vitest 4**, **jose 6**, **Tailwind 4**) is
+load-bearing: Query v4's positional `useQuery(key, fn)` and Tailwind 3's `tailwind.config.js` are
+both gone, and Zod 4 renamed enough of Zod 3's surface that a snippet written against either will not
+run here.
 
 No CSS-in-JS runtime. No component library. No `next/font/google` — the fonts are in the repository,
 because a build that fetches a font from a third party at deploy time is a build that fails when that
@@ -674,8 +684,9 @@ error; no component ever writes `response.data.data`.
 
 **Parse, don't trust.** Zod schemas at the boundary for every resource the panel renders. When the
 API changes shape, the panel fails at the boundary with a legible message instead of rendering
-`undefined` three components deep. The schemas are `.passthrough()` so an added field is not a
-breaking change — only a *missing* or *retyped* one is.
+`undefined` three components deep. The schemas are **loose** — `z.looseObject({…})`, which is Zod 4's
+name for what Zod 3 called `.passthrough()` and what Zod 4 still accepts under that name with a
+deprecation — so an added field is not a breaking change; only a *missing* or *retyped* one is.
 
 ## Data fetching
 
