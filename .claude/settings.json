@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash",
+      "PowerShell",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Agent",
+      "Skill",
+      "Task",
+      "TodoWrite",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Artifact"
+    ]
+  }
+}
