@@ -5,8 +5,14 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start -p 3001",
+    "lint": "eslint",
+    "test": "./scripts/test.sh",
+    "test:types": "tsc --noEmit",
+    "test:design": "./scripts/check-design.sh",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "shots": "node scripts/shots.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
@@ -31,6 +37,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "jsdom": "^30.0.1",

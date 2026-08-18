@@ -1,0 +1,490 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/*
+ * Both faces load under one family name; unicode-range routes each codepoint to
+ * the right file automatically. An Arabic wilaya name inside a French sentence —
+ * `Alger / الجزائر` — therefore sets correctly with no per-element font
+ * switching, which matters because the geography data carries both names on
+ * every row.
+ *
+ * IBM Plex Sans Arabic has no variable build. Measured 2026-08-18:
+ * @fontsource-variable/ibm-plex-sans-arabic is a 404 and IBM's own
+ * @ibm/plex-sans-arabic@1.1.0 ships static weights only. So the Latin face is
+ * variable and the Arabic face is two static weights, and [dir="rtl"] maps the
+ * 700 steps of the type scale onto 600. See docs/ADMIN_PANEL.md Part III.
+ */
+@font-face {
+  font-family: "Plex";
+  src: url("/fonts/plex-sans-latin-var.woff2") format("woff2-variations");
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074, U+20AC;
+}
+@font-face {
+  font-family: "Plex";
+  src: url("/fonts/plex-arabic-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF;
+}
+@font-face {
+  font-family: "Plex";
+  src: url("/fonts/plex-arabic-600.woff2") format("woff2");
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-bg-grouped);
+    color: var(--color-label);
+    font-family: var(--font-sans);
+    /* Nothing holding text is sized in px, so 200 % zoom and Dynamic Type both
+     * work. This is the one place a root size is set. */
+    font-size: 100%;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /*
+   * Arabic is set slightly larger. Plex Sans Arabic's x-height sits lower than
+   * the Latin's, so at 17px it reads smaller. This is a typographic fact, not a
+   * preference — and Apple's own RTL guidance says the same thing, that Arabic
+   * beside Latin often wants about 2 points more.
+   */
+  [dir="rtl"] {
+    font-size: 106.25%;
+    line-height: calc(1em + 0.08em);
+  }
+
+  body {
+    background-color: var(--color-bg-grouped);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* A phone has no hover and a tap with no feedback gets tapped again. */
+  button,
+  a,
+  [role="button"],
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+
+  /* Browser surfaces ship with defaults that belong to no design system. */
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-accent) 24%, transparent);
+    color: var(--color-label);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  /* Never outline:none without a replacement — the ring above is the
+   * replacement, and it is applied globally so a new component inherits it. */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+    caret-color: var(--color-accent);
+  }
+
+  /* Numbers in a column are tabular everywhere they appear. A right-aligned
+   * price column with proportional figures is the single most common tell of an
+   * interface nobody tuned. */
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-fill);
+    border-radius: var(--radius-full);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-label-tertiary);
+  }
+  * {
+    scrollbar-color: var(--color-fill) transparent;
+    scrollbar-width: thin;
+  }
+}
+
+@layer utilities {
+  /*
+   * The navigation material. A blur samples what is behind it; a gradient
+   * invents a colour ramp — which is why this is permitted and a gradient is
+   * not.
+   */
+  /*
+   * 88 %, not the 72 % first written: measured at 390px, list rows scrolling under
+   * the tab bar stayed legible through it and collided with the tab labels. iOS's
+   * own bars are closer to opaque than a "subtle" wash, and the blur is doing the
+   * work either way.
+   */
+  .material-bar {
+    background-color: color-mix(in srgb, var(--color-bg) 88%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .material-bar {
+      background-color: var(--color-bg);
+    }
+  }
+  /* Reduced transparency replaces the blur with an opaque surface, never with
+   * a gradient. */
+  @media (prefers-reduced-transparency: reduce) {
+    .material-bar {
+      background-color: var(--color-bg);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  /*
+   * Status without an accent bar. The banned pattern needs a named replacement
+   * or it comes back, so this is it: a tonal badge, and a leading dot for rows
+   * too dense to carry one.
+   *
+   * One `--tone` indirection rather than five copies of the color-mix. The label
+   * stays at full strength — a badge whose text is also tinted fails contrast,
+   * which is the specific risk Part VIII names.
+   */
+  .tone-neutral {
+    --tone: var(--color-label-secondary);
+  }
+  .tone-info {
+    --tone: var(--color-info);
+  }
+  .tone-warning {
+    --tone: var(--color-warning);
+  }
+  .tone-success {
+    --tone: var(--color-success);
+  }
+  .tone-danger {
+    --tone: var(--color-danger);
+  }
+  .tone-accent {
+    --tone: var(--color-accent);
+  }
+
+  .tonal {
+    background-color: color-mix(in srgb, var(--tone) 14%, transparent);
+    color: var(--tone);
+  }
+  .tonal-dot {
+    background-color: var(--tone);
+  }
+  .tonal-fg {
+    color: var(--tone);
+  }
+
+  /*
+   * The sheet. A bottom sheet with detents on a phone, a centred modal at md and
+   * up — the same component, positioned differently, rather than two components
+   * that drift apart.
+   *
+   * The medium detent is ~55vh; a sheet whose content exceeds it grows to large.
+   * `max-block-size` rather than a fixed height, so a short filter sheet does not
+   * leave two thirds of the screen empty.
+   */
+  .sheet-content {
+    inset-inline: 0;
+    inset-block-end: 0;
+    max-block-size: 92vh;
+    min-block-size: 55vh;
+    border-start-start-radius: var(--radius-xl);
+    border-start-end-radius: var(--radius-xl);
+    padding-block-end: env(safe-area-inset-bottom, 0px);
+    animation: sheet-up var(--dur-base) var(--ease-ios);
+  }
+  @media (min-width: 48rem) {
+    .sheet-content {
+      inset-block: 50%;
+      inset-inline-start: 50%;
+      transform: translate(-50%, -50%);
+      inline-size: min(34rem, calc(100vw - 4rem));
+      min-block-size: 0;
+      max-block-size: 80vh;
+      border-radius: var(--radius-xl);
+      animation: sheet-in var(--dur-base) var(--ease-ios);
+    }
+    [dir="rtl"] .sheet-content {
+      transform: translate(50%, -50%);
+    }
+  }
+  .sheet-overlay {
+    animation: fade-in var(--dur-base) var(--ease-ios);
+  }
+
+  /* The place on an order row: at most 45 % of the line, so the customer's name
+   * always keeps the larger half. */
+  .place-cap {
+    max-inline-size: 45%;
+    flex: 0 1 auto;
+  }
+
+  /* The refresh control, while a refetch is in flight. */
+  .spin {
+    animation: spin 900ms linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /*
+   * A skeleton block. The shimmer is a transform on a pseudo-element rather than
+   * an animated background-position, so it composites; and under reduced motion
+   * the global rule already collapses it to a still fill.
+   */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--color-fill-tertiary);
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-color: var(--color-fill-secondary);
+    animation: skeleton-sweep 1.4s var(--ease-ios) infinite;
+  }
+  @keyframes skeleton-sweep {
+    from {
+      opacity: 0;
+    }
+    50% {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+  /*
+   * The collapsed nav-bar title. Opacity and a small translate only — a title
+   * that animates its font-size relayouts the bar on every frame of the scroll.
+   */
+  .title-collapsed {
+    opacity: 0;
+    transform: translateY(0.375rem);
+    transition:
+      opacity var(--dur-slow) var(--ease-ios),
+      transform var(--dur-slow) var(--ease-ios);
+  }
+  .title-collapsed.is-collapsed {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /*
+   * The toast sits above the tab bar, not behind it, and inside the safe area.
+   * The tab bar is 3.25rem plus its own safe inset, so the toast clears both.
+   */
+  .toast-anchor {
+    inset-inline: 0;
+    inset-block-end: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 48rem) {
+    /* At md the tab bar becomes a sidebar, so the toast drops to the bottom. */
+    .toast-anchor {
+      inset-block-end: 1.5rem;
+    }
+  }
+  .toast {
+    border: var(--hairline) solid var(--color-separator);
+    animation: toast-in var(--dur-base) var(--ease-ios);
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+  }
+
+  /*
+   * The action sheet sits inset from the screen edges, the way iOS does it, and
+   * respects the home indicator. It stays bottom-anchored at every width: an
+   * action sheet is a response to a control the thumb just touched, and moving it
+   * to the centre of a desktop window loses that connection.
+   */
+  .action-sheet {
+    inset-inline: 0.5rem;
+    inset-block-end: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    max-inline-size: 26rem;
+    margin-inline: auto;
+    animation: sheet-up var(--dur-base) var(--ease-ios);
+  }
+
+  @keyframes sheet-up {
+    from {
+      transform: translateY(100%);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /*
+   * The desktop sheet is centred with a transform, so its entrance cannot also be
+   * a transform without fighting the centring. Opacity only, and the RTL variant
+   * keeps its own translate.
+   */
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /*
+   * The segmented control's sliding thumb.
+   *
+   * `inset-inline-start` puts it on the leading edge in both directions, so the
+   * only thing that mirrors is the sign of the translate. Transform only — moving
+   * `inset-inline-start` itself would animate layout and jank the list behind it.
+   */
+  .seg-thumb {
+    inset-block: 2px;
+    inset-inline-start: 2px;
+    inline-size: calc((100% - 4px) / var(--seg-count));
+    transform: translateX(calc(var(--seg-index) * 100%));
+    transition: transform var(--dur-fast) var(--ease-ios);
+  }
+  [dir="rtl"] .seg-thumb {
+    transform: translateX(calc(var(--seg-index) * -100%));
+  }
+
+  /*
+   * A grouped-list row's separator. In CSS rather than a Tailwind arbitrary value
+   * because the hairline is a token whose value changes with pixel density, and
+   * because `:last-child` is the honest way to drop the final rule — the rounded
+   * corner is otherwise crossed by a line.
+   */
+  .list-row {
+    border-block-end: var(--hairline) solid var(--color-separator);
+  }
+  .list-row:last-child {
+    border-block-end: 0;
+  }
+
+  .hairline-b {
+    border-block-end: var(--hairline) solid var(--color-separator);
+  }
+  .hairline-t {
+    border-block-start: var(--hairline) solid var(--color-separator);
+  }
+
+  /*
+   * The press state. A phone has no hover, so a tap with no feedback gets tapped
+   * again — this is immediate and visible. Transform and opacity only; animating
+   * background-color would jank the list under the reader's thumb.
+   *
+   * A utility rather than `active:scale-[0.97]` at each call site, because
+   * arbitrary values are exactly what scripts/check-design.sh fails on.
+   */
+  .press {
+    transition:
+      transform var(--dur-fast) var(--ease-ios),
+      opacity var(--dur-fast) var(--ease-ios);
+  }
+  .press:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+  /* A full-width row scales less; 0.97 on a 390px-wide row reads as a lurch. */
+  .press-row:active:not(:disabled) {
+    transform: scale(0.995);
+    background-color: var(--color-fill-tertiary);
+  }
+  .press-row {
+    transition:
+      transform var(--dur-fast) var(--ease-ios),
+      background-color var(--dur-fast) var(--ease-ios);
+  }
+
+  /* A chevron or a back arrow points the way the reader reads. A clock, a
+   * checkmark and a box do not, which is why this is opt-in per icon rather than
+   * applied to every svg. */
+  [dir="rtl"] svg[data-flip] {
+    transform: scaleX(-1);
+  }
+
+  /* Pulling a sheet's list must not drag the page behind it. */
+  .scroll-area {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .safe-b {
+    padding-block-end: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-t {
+    padding-block-start: env(safe-area-inset-top, 0px);
+  }
+
+  /* A 20px icon gets a 44px hit area via a pseudo-element, not by growing the
+   * icon. */
+  .tap-44 {
+    position: relative;
+  }
+  .tap-44::after {
+    content: "";
+    position: absolute;
+    inset-inline: 50%;
+    inset-block: 50%;
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+    transform: translate(50%, -50%);
+  }
+  [dir="rtl"] .tap-44::after {
+    transform: translate(-50%, -50%);
+  }
+}
+
+/*
+ * A correctness requirement, not a courtesy: vestibular disorders are common
+ * and the panel is used on a phone in motion. Every transform animation
+ * collapses to a short opacity fade.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 120ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+    transition-property: opacity !important;
+    scroll-behavior: auto !important;
+  }
+}

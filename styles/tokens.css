@@ -1,0 +1,192 @@
+/*
+ * The only place in this repository that may contain a colour literal.
+ *
+ * scripts/check-design.sh greps app/ and components/ for hex, rgb( and oklch(
+ * and fails on any hit, so a component that wants a colour has to come here and
+ * name one. Part III of docs/ADMIN_PANEL.md is the specification.
+ *
+ * Three theme states, not two: explicit light, explicit dark, and the default
+ * where nothing is stamped and only prefers-color-scheme decides. Every token
+ * therefore has a value on bare :root — a colour whose only definition lives
+ * inside a media query disappears the moment someone picks the other theme by
+ * hand.
+ */
+
+@theme {
+  /* ---------------------------------------------------------- surfaces ---
+   * Elevation is a surface step, never a shadow. Three steps is the whole
+   * vocabulary: surface → surface-2 → surface-3.
+   */
+  --color-bg: #ffffff;
+  --color-bg-grouped: #f2f2f7; /* the ground behind inset lists */
+  --color-surface: #ffffff;
+  --color-surface-2: #f2f2f7;
+  --color-surface-3: #e5e5ea;
+
+  /* -------------------------------------------------------------- text --- */
+  --color-label: rgb(0 0 0 / 1);
+  --color-label-secondary: rgb(60 60 67 / 0.6);
+  --color-label-tertiary: rgb(60 60 67 / 0.3);
+
+  /* -------------------------------------------------------- separators ---
+   * The hairline is structural, not decorative.
+   */
+  --color-separator: rgb(60 60 67 / 0.29);
+  --color-separator-opaque: #c6c6c8;
+
+  /* --------------------------------------------------------- semantics ---
+   * Semantic colour is never the only signal — every status carries an icon
+   * or a word beside it. 7 % of male users cannot separate red from green,
+   * and a warehouse phone in sunlight flattens both.
+   */
+  --color-accent: #007aff; /* the one token a client rebrands */
+  --color-success: #34c759;
+  --color-warning: #ff9500;
+  --color-danger: #ff3b30;
+  --color-info: #5856d6;
+
+  /* the scrim behind a sheet — a token, so no component names a colour */
+  --color-scrim: rgb(0 0 0 / 0.4);
+
+  /* fill colours, for tracks and pressed states */
+  --color-fill: rgb(120 120 128 / 0.2);
+  --color-fill-secondary: rgb(120 120 128 / 0.16);
+  --color-fill-tertiary: rgb(118 118 128 / 0.12);
+
+  /* ------------------------------------------------------------- type ---
+   * iOS's scale. Note the body size: 17px, not 16.
+   *
+   * One family name, two files; unicode-range routes each codepoint to the
+   * right face, so `Alger / الجزائر` sets correctly with no per-element font
+   * switching. The fallback stack exists only to cover the milliseconds
+   * before the font loads.
+   */
+  --font-sans: "Plex", "Segoe UI", Roboto, sans-serif;
+
+  --text-large-title: 2.125rem; /* 34 */
+  --text-large-title--line-height: 2.5625rem; /* 41 */
+  --text-large-title--font-weight: 700;
+  --text-large-title--letter-spacing: 0.00919rem;
+
+  --text-title-1: 1.75rem; /* 28 */
+  --text-title-1--line-height: 2.125rem; /* 34 */
+  --text-title-1--font-weight: 700;
+
+  --text-title-2: 1.375rem; /* 22 */
+  --text-title-2--line-height: 1.75rem; /* 28 */
+  --text-title-2--font-weight: 600;
+
+  --text-title-3: 1.25rem; /* 20 */
+  --text-title-3--line-height: 1.5625rem; /* 25 */
+  --text-title-3--font-weight: 600;
+
+  --text-headline: 1.0625rem; /* 17 */
+  --text-headline--line-height: 1.375rem; /* 22 */
+  --text-headline--font-weight: 600;
+
+  --text-body: 1.0625rem; /* 17 */
+  --text-body--line-height: 1.375rem; /* 22 */
+  --text-body--font-weight: 400;
+
+  --text-callout: 1rem; /* 16 */
+  --text-callout--line-height: 1.3125rem; /* 21 */
+
+  --text-subhead: 0.9375rem; /* 15 */
+  --text-subhead--line-height: 1.25rem; /* 20 */
+
+  --text-footnote: 0.8125rem; /* 13 */
+  --text-footnote--line-height: 1.125rem; /* 18 */
+
+  --text-caption: 0.75rem; /* 12 */
+  --text-caption--line-height: 1rem; /* 16 */
+
+  /* ------------------------------------------------------------ space ---
+   * An 8pt grid with a 4pt half-step. Nothing between.
+   */
+  --spacing: 0.25rem; /* Tailwind's multiplier: 4px */
+
+  /* ----------------------------------------------------------- radius ---
+   * iOS radii are larger than web defaults, and this is most of why a
+   * screenshot reads as iOS.
+   */
+  --radius-sm: 8px; /* badges, inputs */
+  --radius-md: 12px; /* buttons */
+  --radius-lg: 14px; /* cards, grouped list containers */
+  --radius-xl: 20px; /* sheets, top corners only */
+  --radius-full: 9999px;
+
+  /* --------------------------------------------------------- elevation ---
+   * Shadow exists for exactly two things — a sheet and a popover — because
+   * those float over content and need to say so. Nothing else in the panel
+   * casts a shadow.
+   */
+  --shadow-overlay: 0 8px 32px rgb(0 0 0 / 0.16);
+
+  /* ------------------------------------------------------------ motion ---
+   * One easing curve, iOS's. Three durations.
+   */
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 180ms; /* state changes, toggles */
+  --dur-base: 280ms; /* sheets, navigation */
+  --dur-slow: 420ms; /* the large-title collapse */
+}
+
+/* The hairline is a real token because it is a real thing. A 1px separator on
+ * a phone is a rule; a 0.5px separator is a hairline. */
+:root {
+  --hairline: 1px;
+}
+@media (min-resolution: 2dppx) {
+  :root {
+    --hairline: 0.5px;
+  }
+}
+
+/*
+ * The dark palette, written once as a custom-property group that both
+ * selectors apply, rather than two copies that drift.
+ */
+@layer theme {
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-bg: #000000;
+      --color-bg-grouped: #000000;
+      --color-surface: #1c1c1e;
+      --color-surface-2: #2c2c2e;
+      --color-surface-3: #3a3a3c;
+      --color-label: rgb(255 255 255 / 1);
+      --color-label-secondary: rgb(235 235 245 / 0.6);
+      --color-label-tertiary: rgb(235 235 245 / 0.3);
+      --color-separator: rgb(84 84 88 / 0.6);
+      --color-separator-opaque: #38383a;
+      --color-accent: #0a84ff;
+      --color-success: #30d158;
+      --color-warning: #ff9f0a;
+      --color-danger: #ff453a;
+      --color-info: #5e5ce6;
+      --color-fill: rgb(120 120 128 / 0.36);
+      --color-fill-secondary: rgb(120 120 128 / 0.32);
+      --color-fill-tertiary: rgb(118 118 128 / 0.24);
+    }
+  }
+  :root[data-theme="dark"] {
+    --color-bg: #000000;
+    --color-bg-grouped: #000000;
+    --color-surface: #1c1c1e;
+    --color-surface-2: #2c2c2e;
+    --color-surface-3: #3a3a3c;
+    --color-label: rgb(255 255 255 / 1);
+    --color-label-secondary: rgb(235 235 245 / 0.6);
+    --color-label-tertiary: rgb(235 235 245 / 0.3);
+    --color-separator: rgb(84 84 88 / 0.6);
+    --color-separator-opaque: #38383a;
+    --color-accent: #0a84ff;
+    --color-success: #30d158;
+    --color-warning: #ff9f0a;
+    --color-danger: #ff453a;
+    --color-info: #5e5ce6;
+    --color-fill: rgb(120 120 128 / 0.36);
+    --color-fill-secondary: rgb(120 120 128 / 0.32);
+    --color-fill-tertiary: rgb(118 118 128 / 0.24);
+  }
+}
