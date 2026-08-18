@@ -61,8 +61,11 @@ password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs
 tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
 takes a few seconds.
 
-The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest engine
-and needs `sudo npx playwright install-deps webkit` once.
+The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest
+engine, verified 34/34 on WebKit 26.0 (2026-08-18) and kept out of the default run because its system
+libraries are 231 apt packages behind root. Install them once with
+`sudo env "PATH=$PATH" npx playwright install-deps webkit` — plain `sudo npx` cannot see an
+nvm-installed node — then run the project by name.
 
 ## The rules that are enforced, not just written down
 

@@ -108,11 +108,12 @@ Then the attributes screen, which the products branch deliberately left read-onl
 
 ## Still open, and worth an hour
 
-- **WebKit has never run.** `backdrop-filter`, `env(safe-area-inset-*)` and bidi isolation are the
-  three things this design leans on hardest, and Chromium is not the engine iOS Safari uses.
-  `playwright.config.ts` keeps a `phone-webkit` project for it. It needs
-  `sudo npx playwright install-deps webkit` — 17 system libraries, root required — which no session so
-  far has had. One command closes the only unverified risk the panel carries.
+- ~~**WebKit has never run.**~~ Closed 2026-08-18: `npx playwright test --project=phone-webkit` is
+  34/34 on WebKit 26.0. `backdrop-filter`, `env(safe-area-inset-*)` and bidi isolation all hold. It is
+  still not in the default run — the deps are 231 apt packages and root — so run it deliberately after
+  any change to the sheet, the safe-area padding or the bidi isolation. Install with
+  `sudo env "PATH=$PATH" npx playwright install-deps webkit`; plain `sudo npx` cannot see an
+  nvm-installed node.
 - **A wilaya's French name.** `name` for wilaya 16 is the English *Algiers*, deliberately, because the
   dataset matches WooCommerce's DZ state list and the slug derived from it is a join key. A French
   display name would be a new field on `wp_ac_geo_wilayas`, not an edit to that one. See README.

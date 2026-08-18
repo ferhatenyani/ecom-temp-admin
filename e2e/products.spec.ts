@@ -232,8 +232,23 @@ test.describe("the product detail and its write path", () => {
     await page.reload();
     await expect(page.locator("input[type=text]").first()).toHaveValue(`${original} ✓`);
 
-    // Put it back, so the suite is re-runnable.
-    await page.locator("input[type=text]").first().fill(original);
+    /*
+     * Put it back, so the suite is re-runnable.
+     *
+     * Retried, because this is the one place the suite types into a form it
+     * reached by a hard reload rather than a client-side navigation, and a
+     * keystroke that lands before the client component hydrates changes the DOM
+     * without changing React's state — measured on WebKit, where the input read
+     * back as reverted while the <h1> still carried the saved name, so the form
+     * was never dirty and the save bar never appeared. Chromium hydrates faster
+     * and hides it. Asserting the bar inside the retry keeps the positive
+     * control: a form that genuinely refuses to go dirty still fails here.
+     */
+    await expect(async () => {
+      await page.locator("input[type=text]").first().fill(original);
+      await expect(page.locator(".save-bar")).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
+
     await page.getByRole("button", { name: "Enregistrer" }).click();
     await expect(page.getByText("Produit enregistré.")).toBeVisible();
   });
