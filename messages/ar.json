@@ -11,7 +11,8 @@
     "more": "المزيد",
     "skipToContent": "الانتقال إلى المحتوى",
     "dashboardShort": "الرئيسية",
-    "nav": "التنقّل الرئيسي"
+    "nav": "التنقّل الرئيسي",
+    "inventory": "المخزون"
   },
   "login": {
     "title": "تسجيل الدخول",
@@ -319,5 +320,176 @@
     "title-asc": "الاسم (أ → ي)",
     "price-asc": "السعر تصاعديًا",
     "price-desc": "السعر تنازليًا"
+  },
+  "inventory": {
+    "title": "المخزون",
+    "viewLabel": "عرض المخزون",
+    "view": {
+      "low": "منخفض",
+      "all": "الكل",
+      "moves": "الحركات"
+    },
+    "refresh": "تحديث",
+    "count": "{total, plural, =0 {لا توجد عناصر} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}",
+    "lowCount": "{total, plural, =0 {لا شيء تحت العتبة} one {عنصر واحد تحت عتبته} two {عنصران تحت عتبتهما} few {# عناصر تحت عتبتها} many {# عنصرًا تحت عتبته} other {# عنصر تحت عتبته}}",
+    "movesCount": "{total, plural, =0 {لا توجد حركات} one {حركة واحدة} two {حركتان} few {# حركات} many {# حركة} other {# حركة}}",
+    "previousPage": "الصفحة السابقة",
+    "nextPage": "الصفحة التالية",
+    "lookup": {
+      "label": "البحث برمز SKU",
+      "placeholder": "امسح أو أدخل رمز SKU",
+      "submit": "فتح",
+      "searching": "جارٍ البحث…",
+      "notFound": "لا يوجد منتج بهذا الرمز:",
+      "notFoundHint": "تحقق من الرمز؛ البحث مطابق تمامًا، بما في ذلك المسافات والشرطات المائلة.",
+      "clear": "مسح"
+    },
+    "untracked": "غير متتبّع",
+    "untrackedHint": "لا كمية لهذا المنتج؛ تُسجّل حالة المخزون فقط.",
+    "threshold": "العتبة {threshold}",
+    "unit": "{count, plural, =0 {0 في المخزون} one {# في المخزون} two {# في المخزون} few {# في المخزون} many {# في المخزون} other {# في المخزون}}",
+    "noSku": "بدون SKU",
+    "delegated": "الكمية يديرها المنتج {id}",
+    "delegatedShort": "يديرها المنتج الأصل",
+    "filters": "المرشّحات",
+    "filtersTitle": "ترشيح المخزون",
+    "movesFiltersTitle": "ترشيح الحركات",
+    "clearFilters": "مسح الكل",
+    "apply": "تطبيق",
+    "removeFilter": "إزالة {filter}",
+    "searchLabel": "البحث عن عنصر",
+    "searchPlaceholder": "الاسم أو رمز SKU…",
+    "clearSearch": "مسح البحث",
+    "lowHasNoFilters": "المرشّحات موجودة في «الكل»؛ هذا التقرير لا يقبل أيًّا منها.",
+    "filter": {
+      "stockStatus": "حالة المخزون",
+      "manageStock": "تتبّع المخزون",
+      "reason": "السبب",
+      "dateFrom": "من",
+      "dateTo": "إلى",
+      "actor": "الفاعل",
+      "mine": "حركاتي",
+      "product": "المنتج",
+      "any": "الكل"
+    },
+    "manageStock": {
+      "true": "متتبّع",
+      "false": "غير متتبّع"
+    },
+    "empty": {
+      "low": "لا شيء تحت عتبته. كل المخزون المتتبّع فوقها.",
+      "all": "لا توجد عناصر في المخزون.",
+      "moves": "لا توجد حركات مسجّلة.",
+      "noResults": "لا توجد نتائج لهذه المرشّحات.",
+      "clear": "مسح المرشّحات"
+    },
+    "ledger": {
+      "arrow": "{before} → {after}",
+      "product": "المنتج {id}",
+      "order": "الطلب {id}",
+      "you": "أنت",
+      "colleague": "زميل",
+      "unknown": "فاعل غير معروف",
+      "whoUnavailable": "يسجّل السجل معرّف الفاعل لا اسمه. تحويله إلى اسم يتطلب صلاحية المستخدمين، وهي غير متاحة لثلاثة من الأدوار الأربعة التي تدير المخزون؛ لذلك تعرض اللوحة ما يمكنها إثباته.",
+      "summaryTitle": "الحصيلة حسب السبب",
+      "net": "الصافي",
+      "movements": "{count, plural, one {حركة واحدة} two {حركتان} few {# حركات} many {# حركة} other {# حركة}}",
+      "summaryScope": "ضمن الفترة والمرشّحات الحالية.",
+      "summaryOmits": "الأسباب بلا أي حركة غائبة عن الحصيلة، وتبقى قابلة للاختيار.",
+      "openProduct": "عرض العنصر",
+      "openOrder": "عرض الطلب"
+    },
+    "detail": {
+      "notFound": "هذا العنصر لم يعد موجودًا.",
+      "quantity": "الكمية",
+      "onShelf": "على الرف",
+      "settings": "إعدادات المخزون",
+      "settingsFootnote": "لا تُعدّل الكمية هنا؛ تمرّ عبر تعديل حتّى يترك كلّ تغيير أثرًا في السجل.",
+      "manageStock": "تتبّع المخزون",
+      "manageStockHint": "بدون تتبّع، لا تُسجّل أي كمية ويُرفض التعديل.",
+      "stockStatus": "حالة المخزون",
+      "backorders": "الطلبات المؤجّلة",
+      "backordersHint": "«مسموح» تتيح النزول تحت الصفر.",
+      "lowStockAmount": "عتبة التنبيه",
+      "lowStockAmountHint": "خاصة بهذا المنتج. إذا تُركت فارغة يُطبّق إعداد المتجر العام.",
+      "identity": "العنصر",
+      "sku": "رمز SKU",
+      "type": "النوع",
+      "parent": "المنتج الأصل",
+      "movements": "آخر الحركات",
+      "allMovements": "كل سجل هذا العنصر",
+      "noMovements": "لا توجد حركات لهذا العنصر.",
+      "save": "حفظ",
+      "saved": "حُفظت الإعدادات",
+      "discard": "إلغاء",
+      "unsaved": "تغييرات غير محفوظة",
+      "saving": "جارٍ الحفظ…"
+    },
+    "backorders": {
+      "no": "مرفوضة",
+      "notify": "مسموحة مع إشعار",
+      "yes": "مسموحة"
+    },
+    "adjust": {
+      "title": "تعديل الكمية",
+      "open": "تعديل",
+      "modeLabel": "نوع التعديل",
+      "mode": {
+        "set": "تحديد",
+        "increase": "إضافة",
+        "decrease": "إنقاص"
+      },
+      "modeHint": {
+        "set": "الجردِ : الرف يحوي هذه الكمية بالضبط.",
+        "increase": "استلامْ : تُضاف هذه الكمية إلى الموجود.",
+        "decrease": "إخراجْ : تُطرح هذه الكمية من الموجود."
+      },
+      "quantity": "الكمية",
+      "quantitySet": "الكمية الجديدة",
+      "minus": "واحد أقل",
+      "plus": "واحد أكثر",
+      "reason": "السبب",
+      "reasonPlaceholder": "اختر سببًا",
+      "note": "ملاحظة",
+      "noteHint": "اختيارية، 255 حرفًا كحدّ أقصى.",
+      "preview": "{before} → {after}",
+      "previewLabel": "بعد التعديل",
+      "unchanged": "لا تغيير",
+      "submit": "حفظ التعديل",
+      "cancel": "إلغاء",
+      "done": "{delta} مسجّل · {before} → {after}",
+      "target": "سيُطبّق التعديل على المنتج {id}، صاحب الكمية.",
+      "invalid": {
+        "required": "الكمية مطلوبة.",
+        "whole": "عدد صحيح بلا كسور.",
+        "negative": "لا يمكن أن تكون سالبة.",
+        "positive": "يجب أن تكون أكبر من صفر."
+      },
+      "belowZero": "سينزل هذا التعديل إلى {projected}، وهذا المنتج لا يقبل الطلبات المؤجّلة.",
+      "notManaging": "هذا المنتج لا يتتبّع مخزونه. فعّل التتبّع أدناه قبل تعديل الكمية.",
+      "notManagingShort": "تتبّع المخزون معطّل",
+      "offline": "التعديل يتطلب اتصالًا."
+    },
+    "type": {
+      "simple": "بسيط",
+      "variable": "متغيّر",
+      "variation": "تنويعة"
+    }
+  },
+  "movementReason": {
+    "correction": "تصحيح",
+    "restock": "إعادة تموين",
+    "damage": "تلف",
+    "loss": "فقد",
+    "customer_return": "إرجاع عميل",
+    "other": "أخرى",
+    "order_reduced": "طلب",
+    "order_restored": "طلب مُلغى",
+    "product_edit": "بطاقة المنتج"
+  },
+  "movementReasonHint": {
+    "order_reduced": "تكتبها المتجر عندما يحجز طلب مخزونًا.",
+    "order_restored": "تكتبها المتجر عندما يعيد طلب المخزون.",
+    "product_edit": "كمية تغيّرت من بطاقة المنتج، خارج التعديل."
   }
 }

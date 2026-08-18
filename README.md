@@ -10,7 +10,7 @@ cookie. No component library.
 
 ## What exists
 
-The shell, the credential boundary, Orders end to end, and Products.
+The shell, the credential boundary, Orders end to end, Products, and Inventory.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -20,6 +20,10 @@ The shell, the credential boundary, Orders end to end, and Products.
 /[locale]/products           list — nine filters, facets, a filter sheet, the URL as state
 /[locale]/products/[id]      detail — the whole object as a form, variations read-only,
                              trash and permanent delete with different confirmations
+/[locale]/inventory          low stock by default, then the full list, then the ledger —
+                             one route, three views, plus the SKU lookup
+/[locale]/inventory/[id]     the quantity, the adjustment, the stock settings,
+                             and this item's own movements
 ```
 
 `fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
@@ -62,10 +66,16 @@ tests need a global attribute to count and this shop shipped with none; the seed
 takes a few seconds.
 
 The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest
-engine, verified 34/34 on WebKit 26.0 (2026-08-18) and kept out of the default run because its system
-libraries are 231 apt packages behind root. Install them once with
-`sudo env "PATH=$PATH" npx playwright install-deps webkit` — plain `sudo npx` cannot see an
-nvm-installed node — then run the project by name.
+engine, kept out of the default run because its system libraries are 231 apt packages behind root.
+Install them once with `sudo env "PATH=$PATH" npx playwright install-deps webkit` — plain `sudo npx`
+cannot see an nvm-installed node — then run the project by name.
+
+**`mint-credential.sh` deletes the account's previous Application Passwords**, by design: one
+credential per account, because an old one left behind is a working key nobody is tracking. So
+`scripts/test.sh` minting its own invalidates any `AC_STAFF_PASS` you exported earlier, and a WebKit
+run started with the stale one fails at the login form with *"Nom d'utilisateur ou mot de passe
+d'application incorrect"* — which reads exactly like a broken sign-in. Mint immediately before the
+run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
@@ -111,10 +121,51 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **A trashed product still reads back as 200** with `status: "trash"`; only `?force=true` gives a 404.
 - **Product ids are not stable.** The backend's own suites recreate their fixtures, so tests and
   scripts find a product by SKU.
+- **`GET /inventory` hides variations by default.** `include_variations` defaults to `false` — 28 rows
+  against 33 — while `/inventory/low-stock` always includes them, so with the default the low-stock
+  screen shows a row the full list denies exists.
+- **`null` stock is not zero stock.** 8 of 28 rows are untracked; rendering both as `0` is how someone
+  reorders what they already have. `low_stock_amount` is per product (2 on 27 rows, 5 on one) — there
+  is no shop-wide threshold anywhere.
+- **An adjustment targets `stock_managed_by_id`, not the row that was tapped.** They are equal on every
+  row in this shop today and would diverge the moment a variable product tracked stock at the parent.
+- **The stock ledger cannot name its actor.** `GET /users/{id}` is Super Admin only and `/audit-logs`
+  stops at Admin, carries no movement id, and covers 13 rows of 1154. The row renders *an order*, *you*,
+  *a colleague* or *unknown* — never a bare id — and `?actor_id=` survives as a filter.
+- **The movement reason vocabulary is the union of two endpoints**, nine values; the adjust endpoint
+  accepts six of them and the summary reports seven. Built from either alone, a picker 400s or a legend
+  goes missing. `lib/movement-reason.ts`.
+- **`Ltr` is for identifiers; `Isolate` is for formatted dates.** `Intl` puts U+200F marks in an Arabic
+  date, and forcing `dir="ltr"` over them renders `17ص 12:03 .2026/08/`. Eight pre-existing date sites
+  on the orders and products screens had it.
+- **`truncate` clips from the wrong end when the text's language is not the page's.** A French product
+  name in the Arabic list read *"…eau en bois d'olivier, 40 cm"* — `text-overflow` clips at the
+  paragraph's end, which in RTL is the left. `dir="auto"` on the text element fixes it and moves
+  nothing when the text fits. Applied on the inventory rows; **still owed on every other `truncate`
+  holding user content** — the orders and products lists and `Scaffold`'s collapsed title all have it.
+- **Form controls are disabled until hydration.** A keystroke landing before React takes over changes
+  the DOM and never reaches state, so the form never goes dirty — measured on WebKit, invisible on
+  Chromium. `lib/use-hydrated.ts`, applied inside `Field`.
 
 ## Open, and owed to the backend
 
 - `/settings` could reasonably publish `store.timezone`.
+- **A movement has no readable actor for most of the staff who can read it.** `ac_manage_inventory` is
+  held by four roles; `GET /users/{id}` is Super Admin only and `/audit-logs` stops at Admin. Either a
+  movement could carry `actor_login` the way an audit row already does, or a narrow
+  `GET /users/{id}/display-name` could sit behind `ac_manage_inventory`. Until then the ledger shows
+  what it can prove, which is documented in `movementActor()`.
+- **`inventory.adjusted` audit rows carry no movement id**, so the two records of the same event cannot
+  be joined except by heuristic.
+
+## Not built on the inventory branch, and why
+
+- **`POST /inventory/bulk`.** A batch stocktake is its own screen — 100 items, per-item results in a
+  200 that can be entirely failures — and the proxy allowlist refuses the route with a unit test
+  saying so, because a route no screen reaches must not be reachable by guessing a URL.
+- **A summary over a *chosen* window.** `/movements/summary` takes `date_from`/`date_to` and the ledger
+  passes whatever the filter sheet holds, but there is no month-picker or comparison; the strip states
+  its own scope instead of implying a period nobody set.
 - **A wilaya's `name` is the English exonym for 16** — *Algiers*, not *Alger* — so the French locale
   renders an English place name for the capital. **Not** a data fix: `data/algeria/wilayas.json` says
   in its own `source` field that the Latin names follow ISO 3166-2 to match WooCommerce's DZ state

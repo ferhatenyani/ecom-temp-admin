@@ -2,6 +2,7 @@
 
 import { useId, type ReactNode } from "react";
 import { Icon } from "./Icon";
+import { useHydrated } from "@/lib/use-hydrated";
 
 /**
  * The form field set.
@@ -23,6 +24,19 @@ import { Icon } from "./Icon";
  * ("Ce champ est invalide") throws away the only actionable part. The *label*
  * beside them is localised, so the row reads as a French label with the API's
  * reason under it rather than as an untranslated screen.
+ *
+ * **Every control here is inert until React has hydrated it.** A keystroke
+ * landing in the window between first paint and hydration changes the DOM and
+ * never reaches React, so the value looks accepted, the form never goes dirty and
+ * the save bar never appears — measured on WebKit on the product detail, hidden
+ * by Chromium, and left unhandled for two branches while the e2e suite retried
+ * around it. `useHydrated()` carries the full account.
+ *
+ * Refusing the keystroke is the point. The alternative — reading the DOM back on
+ * mount and adopting whatever was typed — loses nothing and shows nothing, and a
+ * window a person cannot see is a window they cannot work around. `disabled`
+ * dims the row through the styling every field already has, so the control looks
+ * as unavailable as it is, and it is the state a screen reader is told about.
  */
 
 function rowClass(hasError: boolean): string {
@@ -91,6 +105,7 @@ export function TextField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
@@ -102,7 +117,8 @@ export function TextField({
         name={name}
         type="text"
         value={value}
-        disabled={disabled}
+        disabled={disabled || !hydrated}
+        aria-busy={!hydrated || undefined}
         inputMode={inputMode}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -149,6 +165,7 @@ export function TextAreaField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
@@ -159,7 +176,8 @@ export function TextAreaField({
         id={id}
         rows={rows}
         value={value}
-        disabled={disabled}
+        disabled={disabled || !hydrated}
+        aria-busy={!hydrated || undefined}
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
@@ -189,6 +207,7 @@ export function SelectField<T extends string>({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
@@ -202,7 +221,8 @@ export function SelectField<T extends string>({
         <select
           id={id}
           value={value}
-          disabled={disabled}
+          disabled={disabled || !hydrated}
+          aria-busy={!hydrated || undefined}
           onChange={(event) => onChange(event.target.value as T)}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
@@ -245,6 +265,7 @@ export function SwitchField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
@@ -265,7 +286,8 @@ export function SwitchField({
           type="button"
           role="switch"
           aria-checked={checked}
-          disabled={disabled}
+          disabled={disabled || !hydrated}
+          aria-busy={!hydrated || undefined}
           onClick={() => onChange(!checked)}
           aria-describedby={error ? errorId : undefined}
           className={[

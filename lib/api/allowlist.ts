@@ -43,6 +43,37 @@ const RULES: readonly Rule[] = [
   rule("/product-categories", "GET"),
   rule("/attributes", "GET"),
   rule("/attributes/\\d+/terms", "GET"),
+
+  /*
+   * Inventory. The literal segments are listed before `/inventory/\d+` for
+   * readability only — `\d+` cannot match `low-stock`, `lookup`, `movements` or
+   * `bulk`, so no ordering is load-bearing here the way it is in the backend's
+   * own route registration.
+   *
+   * Two absences are deliberate and each is asserted by a unit test:
+   *
+   * `POST /inventory/bulk` — a batch stocktake is a screen nobody has built.
+   * The route exists, takes up to 100 items and inherits every single-item rule,
+   * and it stays unreachable until something in the panel calls it.
+   *
+   * `GET /users/{id}` — the one route that would turn a movement's `actor_id`
+   * into a name. It is Super Admin only (measured: 403 for Admin, Manager and
+   * Product Manager, the other three roles holding `ac_manage_inventory`), so
+   * the ledger cannot be built on it; see `movementActor()` for what the row
+   * shows instead. Allowing it "just for Super Admins" would put a user-directory
+   * route behind the panel's proxy for the sake of a label three quarters of the
+   * staff would never see.
+   */
+  rule("/inventory", "GET"),
+  rule("/inventory/low-stock", "GET"),
+  rule("/inventory/lookup", "GET"),
+  rule("/inventory/movements", "GET"),
+  rule("/inventory/movements/summary", "GET"),
+  // PATCH is the settings — tracking, backorders, the low-stock threshold. The
+  // quantity is not settable there and answers 400 naming the adjust endpoint,
+  // which is what keeps the movement ledger gapless.
+  rule("/inventory/\\d+", "GET", "PATCH"),
+  rule("/inventory/\\d+/adjust", "POST"),
 ];
 
 export type AllowResult =

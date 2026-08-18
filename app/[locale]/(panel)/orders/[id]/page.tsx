@@ -27,7 +27,7 @@ import {
   ListValueRow,
 } from "@/components/primitives/GroupedList";
 import { StatusBadge, Dot } from "@/components/primitives/StatusBadge";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
 import { StatusAction } from "./StatusAction";
 
@@ -123,22 +123,22 @@ export default async function OrderDetailPage({
           </ListRow>
           <ListValueRow
             label={t("created")}
-            value={<Ltr>{formatDate(order.date_created, locale)}</Ltr>}
+            value={<Isolate>{formatDate(order.date_created, locale)}</Isolate>}
           />
           <ListValueRow
             label={t("modified")}
-            value={<Ltr>{formatWhen(order.date_modified, locale)}</Ltr>}
+            value={<Isolate>{formatWhen(order.date_modified, locale)}</Isolate>}
           />
           {order.date_paid ? (
             <ListValueRow
               label={t("paid")}
-              value={<Ltr>{formatDate(order.date_paid, locale)}</Ltr>}
+              value={<Isolate>{formatDate(order.date_paid, locale)}</Isolate>}
             />
           ) : null}
           {order.date_completed ? (
             <ListValueRow
               label={t("completed")}
-              value={<Ltr>{formatDate(order.date_completed, locale)}</Ltr>}
+              value={<Isolate>{formatDate(order.date_completed, locale)}</Isolate>}
             />
           ) : null}
           <ListValueRow
@@ -294,7 +294,7 @@ export default async function OrderDetailPage({
                 label={t("codAttempts", { count: cod.attempts })}
                 value={
                   cod.last_attempt_at ? (
-                    <Ltr>{formatWhen(cod.last_attempt_at, locale)}</Ltr>
+                    <Isolate>{formatWhen(cod.last_attempt_at, locale)}</Isolate>
                   ) : (
                     "—"
                   )
@@ -327,7 +327,7 @@ export default async function OrderDetailPage({
                     {decodeEntities(event.summary)}
                   </span>
                   <span className="text-caption text-label-secondary">
-                    <Ltr>{formatWhen(event.at, locale)}</Ltr>
+                    <Isolate>{formatWhen(event.at, locale)}</Isolate>
                     {event.actor ? (
                       <>
                         <span aria-hidden="true"> · </span>
@@ -362,7 +362,7 @@ export default async function OrderDetailPage({
                   <span className="text-caption text-label-secondary">
                     {/* `created_at` has no offset, so it is read as UTC rather
                         than as the host's local time. */}
-                    <Ltr>{formatWhen(note.created_at, locale)}</Ltr>
+                    <Isolate>{formatWhen(note.created_at, locale)}</Isolate>
                     <span aria-hidden="true"> · </span>
                     {note.added_by === "system" ? t("system") : note.added_by}
                   </span>

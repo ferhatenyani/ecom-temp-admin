@@ -1490,15 +1490,151 @@ changing a term slug breaks saved filters and storefront links — the confirm d
 `GET /inventory`, `/inventory/{id}`, `/lookup?sku=`, `/low-stock`, `POST /adjust`, `/bulk`,
 `GET /movements`, `/movements/summary`. `ac_manage_inventory`.
 
+> **Corrected in the build: the route list is shorthand, and it is wrong in three places.** Measured
+> 2026-08-18 against the live router. The paths are all under `/inventory`, adjust is **per product**,
+> and `PATCH` is missing from this list entirely:
+>
+> ```
+> GET   /inventory                      the list — 28 rows, or 33 with variations
+> GET   /inventory/{id}
+> PATCH /inventory/{id}                 ← absent above
+> GET   /inventory/lookup?sku=
+> GET   /inventory/low-stock            3 rows
+> POST  /inventory/{id}/adjust          ← not a bare /adjust
+> POST  /inventory/bulk
+> GET   /inventory/movements            1154 rows
+> GET   /inventory/movements/summary
+> ```
+>
+> The `PATCH`/`POST` split is not decoration: settings go to `PATCH /inventory/{id}` and the *quantity*
+> is refused there with a 400 naming the adjust route, which is what guarantees the ledger has no gaps.
+> The panel builds every route above except `/inventory/bulk`, which no screen calls and which the
+> proxy allowlist therefore refuses.
+
 Built for a phone in a warehouse. The default screen is **low stock**, not the full list.
+
+> **Corrected in the build: `GET /inventory` hides variations by default, and `/low-stock` does not.**
+> `include_variations` defaults to **false** — measured, 28 rows against 33 with it on — while the
+> low-stock report always includes them. So the default screen shows "Burnous en laine – L" and the
+> full list, on the same shorthand, says that row does not exist. A stock list that omits the rows
+> actually holding the stock is not a stock list, so the panel sends `include_variations=true`.
+>
+> `/inventory` also takes `search`, `sku`, `status`, `category`, `stock_status`, `manage_stock`,
+> `orderby` and `order`, none of which this section mentions; `/inventory/low-stock` takes **pagination
+> and `status` only**, so the low view renders no filter controls at all. An unknown parameter is
+> ignored with a 200 — `?nonsense=zzz` returns all 33 rows — so a filter that does nothing looks
+> identical to one that works. A *known* parameter with a bad value does refuse: `?stock_status=zzz`
+> and `?reason=zzz` are both 400.
+
+> **Corrected in the build: a row is not a quantity, and `null` is not `0`.** Every row carries three
+> stock flags that disagree on purpose — `manage_stock` (WooCommerce's raw value, and the *string*
+> `"parent"` for a variation that inherits), `managing_stock` (the plain yes/no, and the one that
+> decides whether a quantity exists), and `stock_managed_by_id` (whose shelf actually moves). **An
+> adjustment must target the id that manages the stock, not the row that was tapped**, or it 400s or
+> moves the wrong shelf — and that is also the id the movement is recorded against.
+>
+> `stock_quantity` is `null` for untracked products — **8 of the 28 top-level rows**, not the 13 an
+> earlier note claimed — and `null` and `0` are different facts. Rendering both as `0` is what gets
+> someone to reorder something they already have. Measured: `/low-stock` contains a genuine `0`
+> (product 26) and never a `null`; the full list contains both.
+>
+> `low_stock_amount` is **per product** — 2 on 27 rows, 5 on one — so there is no shop-wide threshold
+> to display anywhere. A row's own figure is the only honest number to put beside it. `backorders`
+> exists on every row and is not described here; it decides whether an adjustment may go below zero.
 
 `/inventory/lookup?sku=` behind a search field is the fastest path from a barcode to an adjustment —
 give it a large input, `inputmode="text"`, autofocus off, and no debounce below 300 ms.
+
+> **Corrected in the build: there is no debounce, because the lookup is exact.** `?sku=` is an exact
+> match — `?sku=AC/BUR 010` is a 404 and nothing fuzzy exists — so every keystroke before the last one
+> is a request that can only 404. The field searches on submit, which is what a hardware scanner sends
+> anyway. An unknown SKU is `404 not_found` and is rendered as an **empty state at the field**, keeping
+> the typed value: it is the single most common thing that will ever happen there, and a toast that
+> vanishes in four seconds is the wrong place for it. Scanning a *variable parent's* SKU resolves to a
+> product that cannot be adjusted at all, so the item screen has to handle that arrival.
 
 **Every stock change writes a movement.** There is no path that changes stock without one, and the
 movements ledger is the screen that proves it. Adjustments take a reason; the ledger shows who, when,
 how much and why. An imported change writes a movement too — two thousand rows write two thousand
 movements, and the ledger's pagination has to expect that.
+
+> **Corrected in the build: the ledger cannot show *who*, and this is what it shows instead.** A
+> movement carries `actor_id: 475` and no name. Measured across all four roles holding
+> `ac_manage_inventory`:
+>
+> | | Super Admin | Admin | Manager | Product Manager |
+> |---|---|---|---|---|
+> | `GET /users/{id}` — resolves a name | 200 | **403** | **403** | **403** |
+> | `GET /audit-logs` — carries `actor_login` | 200 | 200 | **403** | **403** |
+> | `GET /auth/me` — the reader's own name | 200 | 200 | 200 | 200 |
+>
+> `/audit-logs` looked like a way out for Admin and is not: it holds **no movement id**, so a join
+> would be a heuristic on product, before, after and a timestamp, and it only records
+> `inventory.adjusted` and `inventory.settings_updated` — 13 rows against the ledger's 1154. A ledger
+> that reads differently depending on who opens it is worse than one that reads the same for everyone,
+> so neither route is behind the panel's proxy.
+>
+> **The row says what it can prove**, from the movement plus `/auth/me`: *an order* (with its number,
+> which is a real referent the reader can open — 692 of 1154 rows), *you*, *a colleague*, or *unknown*
+> for `actor_id: 0`. Never a bare numeric id. `?actor_id=` genuinely filters (1154 → 17), so identity
+> survives as something to pivot on — "my movements" — even though it cannot be printed.
+>
+> `order_reduced` and `order_restored` are attributed to the order and not to `actor_id`, because on a
+> storefront checkout that id is the *customer*. `product_edit` is attributed to a person despite being
+> system-written: someone did change a quantity, through the product form, and that is the one thing
+> that reason exists to reveal.
+
+> **Corrected in the build: the reason vocabulary is a union of two endpoints, and neither is
+> complete.** This is the facet lesson in a new place. `POST /inventory/{id}/adjust` accepts six —
+> `correction, restock, damage, loss, customer_return, other`. `GET /movements/summary` returns seven —
+> the four they share plus `order_reduced, order_restored, product_edit`, which are system-written and
+> which the adjust endpoint rejects with the *same message as an unknown reason*, deliberately, so a
+> caller cannot probe which forgeries exist. And `customer_return` and `other` have zero movements
+> today, so the summary omits them entirely.
+>
+> A picker built from the summary offers three reasons that answer 400; a legend built from it is
+> missing two a person can create at any moment. **The vocabulary is the union of nine**, it lives in
+> `lib/movement-reason.ts` with no dependencies, and the summary supplies only the numbers. The ledger
+> filter offers all nine — `?reason=order_reduced` returns 480 rows — and the adjust picker offers
+> exactly the six.
+
+> **Corrected in the build: `set`, `increase` and `decrease` are one control only because of the
+> preview.** They are three different mental operations, and the difference is not convenience:
+> WooCommerce applies the two relative modes as a relative SQL update, so concurrent decrements
+> compose, while two concurrent `set`s are last-writer-wins. A stocktake states an absolute; a
+> warehouse thumb states a movement. What makes them one control is a line under the field reading
+> **`3 → 5`**, recomputed on every keystroke and identical in all three modes — without it, `decrease`
+> is a subtraction the person does in their head against a figure that has scrolled off the top.
+>
+> The 400 is a well-formed field list (`mode`, `quantity`, `reason`, `note`) that `Field` already
+> renders. There are **two** distinct 409s and they are different screens: `{stock_quantity, projected,
+> backorders}` when the adjustment would go below zero on a product that takes no backorders — refused,
+> never clamped — and `{id, manage_stock}` when the product tracks no stock at all, which the panel
+> catches before sending and resolves with the settings form one card below.
+
+> **Corrected in the build: `created_at` has no UTC offset**, exactly like `notes[].created_at` on an
+> order — `"2026-08-18 10:29:37"`. `new Date()` reads it as local time and shifts it silently.
+> `parseApiDate()` is the only thing that may touch it, and `/settings` still publishes no timezone.
+>
+> A second bidi trap surfaced beside it, and it is the *opposite* of the usual one: `Intl` annotates an
+> Arabic date with **U+200F RIGHT-TO-LEFT MARKs** — `17‏/08‏/2026، 12:07 ص` — and wrapping that in the
+> panel's `Ltr` helper turns those marks into RTL runs inside an LTR paragraph, rendering
+> `17ص 12:03 .2026/08/`. Nothing errors. The rule is now explicit: **`Ltr` for something the shop
+> assigned** — a SKU, an order number, a movement id — **and `Isolate` for something `Intl` formatted**,
+> which isolates without forcing a direction. Eight existing date sites on the orders and products
+> screens carried the same defect and are fixed.
+
+> **Corrected in the build: the ledger's product ids are not resolvable to names.** 1154 movements name
+> **155 distinct products, of which only 23 appear in `/inventory` at all** — the rest were created and
+> deleted by the backend's own fixtures. A ledger is an archive and a catalogue is not, so the row
+> renders an id, tapping one is a real path to a 404, and that 404 is a built screen rather than a
+> defensive branch. Resolving 20 ids per page would also be 20 requests to produce a label missing six
+> times out of seven.
+>
+> Pagination is as warned: 1154 rows, `per_page` caps at 100 and **101 is a 400, not a clamp**;
+> `?page=999` answers 200 with an empty array. `/movements/summary` takes `date_from`/`date_to` and the
+> window is real — `correction` is −1540 over 166 movements unfiltered and −141 over 15 for today — so
+> the summary strip always states its own scope.
 
 ## Customers
 
@@ -2007,7 +2143,13 @@ mirroring §47's slicing.
                         attributes screen, which can build a whole attribute list
                         rather than the partial one that clears a variable product's
                         variations.
-10. feat/inventory      low stock, adjust, the movements ledger
+10. feat/inventory      low stock, adjust, the movements ledger              DONE
+                        — one route, three views, plus the item screen. `PATCH
+                        /inventory/{id}` came in with it: the "enable manage_stock"
+                        409 names an action the panel could not otherwise perform.
+                        `POST /inventory/bulk` did not — a batch stocktake is its
+                        own screen and the allowlist refuses the route until one
+                        exists.
 11. feat/customers      + coupons
 12. feat/shipping       + payments + COD
 13. feat/analytics      dashboard, the seven reports, the money gate
@@ -2093,6 +2235,18 @@ Added by the products build:
   name, so the form was never dirty and the save bar never appeared. Chromium hydrates fast enough to
   hide it. It is a real hazard for a real thumb, not only for a test — the mitigation on the test side
   is a retry, and the reason to keep the note is that no Chromium run will ever reproduce it.
+
+  > **Corrected in the build: solved at `Field`, by refusing the keystroke rather than catching it.**
+  > Every control in `components/primitives/Field.tsx` — and the adjust form's quantity field and the
+  > SKU lookup — now renders `disabled` in the server's HTML and enables on mount, through
+  > `useHydrated()`. The alternative was to render uncontrolled and adopt the DOM's value on mount,
+  > which loses nothing and *shows* nothing; a window a person cannot see is a window they cannot work
+  > around, so the honest version is the one where the control visibly cannot be typed into yet. The
+  > hook is `useSyncExternalStore`, not `useState` + `useEffect`: only the former is specified to
+  > return the server snapshot during SSR and the client snapshot from the first client render, and
+  > the effect version leaves a paint of the same window it exists to close. The e2e suite asserts the
+  > attribute in the server's HTML rather than racing a keystroke, because a race is exactly what
+  > Chromium wins and WebKit loses.
 - **`stock_quantity` is silently dropped when `manage_stock` is false.** A 200 that ignored the field.
 - **No product carries an image.** A thumbnail column would be a column of placeholders.
 - **A published product can have no price at all**, and the price facet floors at `0.00` because of it.

@@ -201,6 +201,51 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["attributes", "100"], "DELETE").allowed).toBe(false);
   });
 
+  it("permits the inventory routes the screens call, and only those", () => {
+    // Positive controls: the four reads and the two writes this branch built.
+    expect(checkAllowed(["inventory"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "low-stock"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "lookup"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "movements"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "movements", "summary"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "20"], "GET").allowed).toBe(true);
+    // The stock settings — tracking, backorders, the per-product threshold.
+    expect(checkAllowed(["inventory", "20"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["inventory", "20", "adjust"], "POST").allowed).toBe(true);
+
+    // A batch stocktake is a screen nobody has built, so the route stays
+    // unreachable even though the API answers it.
+    expect(checkAllowed(["inventory", "bulk"], "POST").allowed).toBe(false);
+    // The quantity moves through `adjust` and nowhere else; a POST to the item
+    // itself is not a route the panel has any use for.
+    expect(checkAllowed(["inventory"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["inventory", "20"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["inventory", "20", "adjust"], "GET").allowed).toBe(false);
+    // Literal segments are paths, not ids: `\d+` must not have swallowed them.
+    expect(checkAllowed(["inventory", "low-stock"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["inventory", "movements"], "PATCH").allowed).toBe(false);
+  });
+
+  it("refuses the routes that would have named a movement's actor", () => {
+    /*
+     * The ledger carries `actor_id: 475` and no name. Both routes that could
+     * resolve one are refused here on purpose, and the decision is measured
+     * rather than cautious:
+     *
+     *   GET /users/{id}   403 for Admin, Manager and Product Manager — three of
+     *                     the four roles holding `ac_manage_inventory`
+     *   GET /audit-logs   403 for Manager and Product Manager, and carries no
+     *                     movement id to join on even where it is readable
+     *
+     * So neither could produce a ledger that reads the same for everyone, and
+     * putting a user-directory route behind the panel's proxy to label rows for
+     * a quarter of the staff is not a trade worth making. `movementActor()`
+     * documents what the row shows instead.
+     */
+    expect(checkAllowed(["users", "475"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["audit-logs"], "GET").allowed).toBe(false);
+  });
+
   it("refuses the platform routes docs/API.md opens by telling you not to touch", () => {
     // A generic proxy here is an open relay to wp/v2/users with an admin
     // credential attached.

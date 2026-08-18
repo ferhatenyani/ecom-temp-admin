@@ -11,7 +11,8 @@
     "more": "Plus",
     "skipToContent": "Aller au contenu",
     "dashboardShort": "Accueil",
-    "nav": "Navigation principale"
+    "nav": "Navigation principale",
+    "inventory": "Stock"
   },
   "login": {
     "title": "Connexion",
@@ -319,5 +320,176 @@
     "title-asc": "Nom (A → Z)",
     "price-asc": "Prix croissant",
     "price-desc": "Prix décroissant"
+  },
+  "inventory": {
+    "title": "Stock",
+    "viewLabel": "Vue du stock",
+    "view": {
+      "low": "Stock faible",
+      "all": "Tout",
+      "moves": "Mouvements"
+    },
+    "refresh": "Actualiser",
+    "count": "{total, plural, =0 {Aucun article} one {# article} other {# articles}}",
+    "lowCount": "{total, plural, =0 {Rien sous le seuil} one {# article sous son seuil} other {# articles sous leur seuil}}",
+    "movesCount": "{total, plural, =0 {Aucun mouvement} one {# mouvement} other {# mouvements}}",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "lookup": {
+      "label": "Chercher un SKU",
+      "placeholder": "Scannez ou saisissez un SKU",
+      "submit": "Ouvrir",
+      "searching": "Recherche…",
+      "notFound": "Aucun produit avec ce SKU :",
+      "notFoundHint": "Vérifiez le code : la recherche est exacte, espaces et barres obliques compris.",
+      "clear": "Effacer"
+    },
+    "untracked": "Non suivi",
+    "untrackedHint": "Ce produit n’a pas de quantité : seul son état de stock est enregistré.",
+    "threshold": "Seuil {threshold}",
+    "unit": "{count, plural, =0 {0 en stock} one {# en stock} other {# en stock}}",
+    "noSku": "Sans SKU",
+    "delegated": "Quantité gérée par le produit {id}",
+    "delegatedShort": "Géré par le parent",
+    "filters": "Filtres",
+    "filtersTitle": "Filtrer le stock",
+    "movesFiltersTitle": "Filtrer les mouvements",
+    "clearFilters": "Tout effacer",
+    "apply": "Appliquer",
+    "removeFilter": "Retirer {filter}",
+    "searchLabel": "Rechercher un article",
+    "searchPlaceholder": "Nom ou SKU…",
+    "clearSearch": "Effacer la recherche",
+    "lowHasNoFilters": "Les filtres sont dans « Tout » : ce rapport n’en accepte aucun.",
+    "filter": {
+      "stockStatus": "État du stock",
+      "manageStock": "Suivi du stock",
+      "reason": "Motif",
+      "dateFrom": "Du",
+      "dateTo": "Au",
+      "actor": "Auteur",
+      "mine": "Mes mouvements",
+      "product": "Produit",
+      "any": "Tous"
+    },
+    "manageStock": {
+      "true": "Suivi",
+      "false": "Non suivi"
+    },
+    "empty": {
+      "low": "Rien sous son seuil. Tout le stock suivi est au-dessus.",
+      "all": "Aucun article dans le stock.",
+      "moves": "Aucun mouvement enregistré.",
+      "noResults": "Aucun résultat pour ces filtres.",
+      "clear": "Effacer les filtres"
+    },
+    "ledger": {
+      "arrow": "{before} → {after}",
+      "product": "Produit {id}",
+      "order": "Commande {id}",
+      "you": "Vous",
+      "colleague": "Un·e collègue",
+      "unknown": "Auteur inconnu",
+      "whoUnavailable": "Le journal enregistre un identifiant d’auteur, pas un nom. Résoudre ce nom demande la permission Utilisateurs, que trois des quatre rôles gérant le stock n’ont pas ; le panneau montre donc ce qu’il peut prouver.",
+      "summaryTitle": "Bilan par motif",
+      "net": "Net",
+      "movements": "{count, plural, one {# mouvement} other {# mouvements}}",
+      "summaryScope": "Sur la période et les filtres actuels.",
+      "summaryOmits": "Les motifs sans aucun mouvement sont absents du bilan ; ils restent proposables.",
+      "openProduct": "Voir l’article",
+      "openOrder": "Voir la commande"
+    },
+    "detail": {
+      "notFound": "Cet article n’existe plus.",
+      "quantity": "Quantité",
+      "onShelf": "En rayon",
+      "settings": "Réglages du stock",
+      "settingsFootnote": "La quantité ne se modifie pas ici : elle passe par un ajustement, pour que chaque changement laisse une ligne au journal.",
+      "manageStock": "Suivre le stock",
+      "manageStockHint": "Sans suivi, aucune quantité n’est enregistrée et l’ajustement est refusé.",
+      "stockStatus": "État du stock",
+      "backorders": "Commandes en attente",
+      "backordersHint": "« Autorisées » permet de descendre sous zéro.",
+      "lowStockAmount": "Seuil d’alerte",
+      "lowStockAmountHint": "Propre à ce produit. Vide : le réglage général de la boutique s’applique.",
+      "identity": "Article",
+      "sku": "SKU",
+      "type": "Type",
+      "parent": "Produit parent",
+      "movements": "Derniers mouvements",
+      "allMovements": "Tout le journal de cet article",
+      "noMovements": "Aucun mouvement pour cet article.",
+      "save": "Enregistrer",
+      "saved": "Réglages enregistrés",
+      "discard": "Annuler",
+      "unsaved": "Modifications non enregistrées",
+      "saving": "Enregistrement…"
+    },
+    "backorders": {
+      "no": "Refusées",
+      "notify": "Autorisées, avec avis",
+      "yes": "Autorisées"
+    },
+    "adjust": {
+      "title": "Ajuster la quantité",
+      "open": "Ajuster",
+      "modeLabel": "Type d’ajustement",
+      "mode": {
+        "set": "Définir",
+        "increase": "Ajouter",
+        "decrease": "Retirer"
+      },
+      "modeHint": {
+        "set": "L’inventaire dit : le rayon contient exactement cette quantité.",
+        "increase": "Réception : cette quantité s’ajoute à ce qu’il y a déjà.",
+        "decrease": "Sortie : cette quantité se retire de ce qu’il y a déjà."
+      },
+      "quantity": "Quantité",
+      "quantitySet": "Nouvelle quantité",
+      "minus": "Un de moins",
+      "plus": "Un de plus",
+      "reason": "Motif",
+      "reasonPlaceholder": "Choisir un motif",
+      "note": "Note",
+      "noteHint": "Facultative, 255 caractères au plus.",
+      "preview": "{before} → {after}",
+      "previewLabel": "Après l’ajustement",
+      "unchanged": "Aucun changement",
+      "submit": "Enregistrer l’ajustement",
+      "cancel": "Annuler",
+      "done": "{delta} enregistré · {before} → {after}",
+      "target": "L’ajustement portera sur le produit {id}, qui détient la quantité.",
+      "invalid": {
+        "required": "Une quantité est requise.",
+        "whole": "Un nombre entier, sans décimale.",
+        "negative": "Ne peut pas être négative.",
+        "positive": "Doit être supérieure à zéro."
+      },
+      "belowZero": "Cet ajustement descendrait à {projected}, et ce produit n’accepte pas les commandes en attente.",
+      "notManaging": "Ce produit ne suit pas son stock. Activez le suivi ci-dessous avant d’ajuster une quantité.",
+      "notManagingShort": "Suivi du stock désactivé",
+      "offline": "Un ajustement demande une connexion."
+    },
+    "type": {
+      "simple": "Simple",
+      "variable": "Variable",
+      "variation": "Déclinaison"
+    }
+  },
+  "movementReason": {
+    "correction": "Correction",
+    "restock": "Réapprovisionnement",
+    "damage": "Casse",
+    "loss": "Perte",
+    "customer_return": "Retour client",
+    "other": "Autre",
+    "order_reduced": "Commande",
+    "order_restored": "Commande annulée",
+    "product_edit": "Fiche produit"
+  },
+  "movementReasonHint": {
+    "order_reduced": "Écrit par la boutique quand une commande réserve du stock.",
+    "order_restored": "Écrit par la boutique quand une commande le rend.",
+    "product_edit": "Quantité changée depuis la fiche produit, hors ajustement."
   }
 }
