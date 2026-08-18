@@ -2088,6 +2088,11 @@ Added by the products build:
   a partial attribute list.
 - **`options`, `bundle` and `options_problems` are absent keys**, not nulls, on a product with no
   option set — and saving the product deletes the groups `options_problems` is warning about.
+- **A keystroke before hydration changes the DOM and not React.** Measured on WebKit, on a form
+  reached by a hard reload: the input read back as typed while the `<h1>` still showed the stored
+  name, so the form was never dirty and the save bar never appeared. Chromium hydrates fast enough to
+  hide it. It is a real hazard for a real thumb, not only for a test — the mitigation on the test side
+  is a retry, and the reason to keep the note is that no Chromium run will ever reproduce it.
 - **`stock_quantity` is silently dropped when `manage_stock` is false.** A 200 that ignored the field.
 - **No product carries an image.** A thumbnail column would be a column of placeholders.
 - **A published product can have no price at all**, and the price facet floors at `0.00` because of it.

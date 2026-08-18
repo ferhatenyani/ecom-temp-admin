@@ -81,8 +81,10 @@ run_e2e() {
   # stage red on a machine that is otherwise fine, and a stage that is always red
   # is a stage nobody reads. Run it deliberately:
   #
-  #   sudo npx playwright install-deps webkit
+  #   sudo env "PATH=$PATH" npx playwright install-deps webkit
   #   npx playwright test --project=phone-webkit
+  #
+  # Last run 2026-08-18: 34/34.
   npx playwright test --project=phone --project=phone-min --project=phone-max --project=desktop
 }
 

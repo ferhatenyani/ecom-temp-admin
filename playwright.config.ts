@@ -24,15 +24,20 @@ import { defineConfig, devices } from "@playwright/test";
  * and the two engines disagree about exactly the things this design leans on —
  * `backdrop-filter`, `env(safe-area-inset-*)` and bidi isolation. WebKit's binary
  * installs fine, but its system libraries (libwebp, libavif, libharfbuzz-icu, …)
- * need root, and this development environment has no passwordless sudo. So
- * `phone-webkit` is a real project, kept unlisted in the default run, for a
- * machine that can do:
+ * need root — 231 apt packages, and no passwordless sudo here. So `phone-webkit`
+ * is a real project, kept unlisted in the default run so the stage stays green on
+ * a machine without them, for anyone who can do:
  *
- *   sudo npx playwright install-deps webkit
+ *   sudo env "PATH=$PATH" npx playwright install-deps webkit
  *   npx playwright test --project=phone-webkit
  *
- * Until that runs somewhere, the engine-specific risks above are unverified, and
- * saying so is the point of this paragraph.
+ * (`sudo npx` alone fails when node came from nvm: it lives under $HOME, which
+ * sudo's secure_path drops.)
+ *
+ * Run 2026-08-18 on WebKit 26.0: 34/34. `backdrop-filter`, the safe-area insets
+ * and the bidi isolation all hold. It found one real difference — WebKit hydrates
+ * slowly enough that a keystroke can land on server-rendered HTML and never reach
+ * React; see the retry at the end of `products.spec.ts`'s save test.
  *
  * The suite needs real staff credentials, because the per-user Application
  * Password decision leaves no service account to fall back on — and two of them,
