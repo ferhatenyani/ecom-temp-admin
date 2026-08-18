@@ -96,7 +96,20 @@ export default async function LocaleLayout({
           </>
         ) : null}
       </head>
-      <body className="min-h-full bg-bg-grouped text-label">
+      {/*
+        `suppressHydrationWarning` covers browser extensions that stamp attributes
+        on <body> before React hydrates — ColorZilla's `cz-shortcut-listen` is the
+        one seen here, Grammarly and password managers do the same.
+        Measured: a clean browser reports zero hydration errors, and injecting that
+        one attribute before hydration reproduces the warning exactly, so the
+        markup is not at fault and there is nothing else to fix.
+
+        It is deliberately on <body> and not on <html>: React applies this one
+        level deep — the element's own attributes and text, never its children — so
+        a real mismatch anywhere inside the app still fails loudly, and `lang` and
+        `dir` on <html> stay checked, which is what the RTL tests depend on.
+      */}
+      <body className="min-h-full bg-bg-grouped text-label" suppressHydrationWarning>
         <IconSprite />
         <NextIntlClientProvider>
           <ToastProvider>{children}</ToastProvider>
