@@ -11,7 +11,7 @@ finished and running at `http://localhost:8090`.
 
 - `ADMIN_PANEL.md` in this repo — Parts II–VII are the spec. Part I is backend work, already done.
   **Read the `> **Corrected in the build:**` blocks.** That is how this project records where the spec
-  was wrong, and there are now twenty-four of them. The three under **Products** and the one under
+  was wrong, and there are now twenty-five of them. The three under **Products** and the one under
   **Configurable options — §83** are yours; several will save you an hour each. Keep the convention:
   when the build proves the spec wrong, correct it in place with a note carrying the measurement.
 - `README.md` — how to run it, the credentials, and the list of things that will bite.
@@ -114,6 +114,14 @@ Then the attributes screen, which the products branch deliberately left read-onl
   any change to the sheet, the safe-area padding or the bidi isolation. Install with
   `sudo env "PATH=$PATH" npx playwright install-deps webkit`; plain `sudo npx` cannot see an
   nvm-installed node.
+- **A keystroke before hydration is lost, and nothing says so.** Measured on WebKit, on the product
+  detail reached by a hard reload: the typed value was in the DOM and not in React's state, so the
+  form never went dirty and the save bar never appeared. Chromium hydrates fast enough to hide it, so
+  no default test run will ever catch it. The e2e test retries around it; the app does not handle it.
+  Every form the panel has and every form it will have shares the hazard, which makes the options
+  editor — a much longer form than the detail — the right place to solve it once, at the level of
+  `Field`, rather than per screen. Whatever you do, it must be visible on screen: a save bar that
+  cannot appear yet is better than one that silently will not.
 - **A wilaya's French name.** `name` for wilaya 16 is the English *Algiers*, deliberately, because the
   dataset matches WooCommerce's DZ state list and the slug derived from it is a join key. A French
   display name would be a new field on `wp_ac_geo_wilayas`, not an edit to that one. See README.
@@ -122,5 +130,5 @@ Then the attributes screen, which the products branch deliberately left read-onl
 
 Branch `feat/product-options`, commit, merge into `main` locally with `--no-ff`. **Never push.**
 
-Ask before building if anything is ambiguous — four sessions running, asking up front has materially
+Ask before building if anything is ambiguous — five sessions running, asking up front has materially
 improved the result.
