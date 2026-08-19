@@ -15,7 +15,7 @@ import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
 import { SelectField, SwitchField, TextField } from "@/components/primitives/Field";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Button } from "@/components/primitives/Button";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
 import { AdjustForm } from "./AdjustForm";
 import { MovementRow } from "../MovementRow";
@@ -240,7 +240,7 @@ export function ItemDetail({
                   {quantity.value}
                 </Ltr>
                 <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>{t("threshold", { threshold: quantity.threshold })}</Ltr>
+                  <Isolate numeric>{t("threshold", { threshold: quantity.threshold })}</Isolate>
                 </span>
               </>
             ) : (
@@ -258,7 +258,7 @@ export function ItemDetail({
 
           {isDelegated(item) ? (
             <p className="mt-3 text-footnote text-label-secondary">
-              <Ltr numeric>{t("delegated", { id: item.stock_managed_by_id })}</Ltr>
+              <Isolate numeric>{t("delegated", { id: item.stock_managed_by_id })}</Isolate>
             </p>
           ) : null}
 

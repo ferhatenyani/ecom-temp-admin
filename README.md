@@ -10,7 +10,7 @@ cookie. No component library.
 
 ## What exists
 
-The shell, the credential boundary, Orders end to end, Products, and Inventory.
+The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and Coupons.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -24,12 +24,23 @@ The shell, the credential boundary, Orders end to end, Products, and Inventory.
                              one route, three views, plus the SKU lookup
 /[locale]/inventory/[id]     the quantity, the adjustment, the stock settings,
                              and this item's own movements
+/[locale]/customers          list — search, two sorts, and what the API cannot filter
+/[locale]/customers/[id]     detail — identity, the statistics report, the consent
+                             record, addresses, and this customer's orders
+/[locale]/coupons            list — search, status, and the zero-amount case
+/[locale]/coupons/[id]       the whole coupon as a form, with the restriction picker
+/[locale]/coupons/new        the same form against an empty coupon
+/[locale]/more               the tab bar holds five; this is the overflow
 ```
 
 `fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
 branch — the specification calls it the hardest component in the panel — and so is editing attributes
-and categories. Everything else in Part V is a later branch, and the tab bar renders those
-destinations as visibly not-yet-built rather than as links that 404.
+and categories. Everything else in Part V is a later branch, and `/more` renders those destinations
+as visibly not-yet-built rather than as links that 404.
+
+Five things were fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch,
+because the screens were not buildable as specified. They are listed under **Owed to the backend, and
+paid** below.
 
 ## Running it
 
@@ -65,8 +76,17 @@ password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs
 tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
 takes a few seconds.
 
-The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest
-engine, kept out of the default run because its system libraries are 231 apt packages behind root.
+The e2e suite runs on Chromium at current iPhone widths — **364 tests** across four widths and both
+locales. `--project=phone-webkit` is the honest engine and is **91/91** (verified 2026-08-19), kept out
+of the default run because its system libraries are 231 apt packages behind root.
+
+Two operator errors are worth naming, because both invalidated a run and both looked like code
+defects. **Minting a credential while a suite is running** kills that suite's credential — the same
+hazard the note below describes, from the other direction. And **editing a spec or a component while a
+suite runs against `next dev`** changes the code under the test: it produced twenty failures across
+orders and products that vanished on a clean run. WebKit's own finding was real and is fixed: it
+hydrates slowly enough that a click can land on a still-disabled control, which is why the picker
+tests assert `toBeEnabled()` first.
 Install them once with `sudo env "PATH=$PATH" npx playwright install-deps webkit` — plain `sudo npx`
 cannot see an nvm-installed node — then run the project by name.
 
@@ -153,10 +173,63 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
   error, *"Missing `<html>` and `<body>` tags in the root layout"*, instead of a 404. An
   `app/[locale]/not-found.tsx` does **not** fix it: measured on 16.3.1, a path that resolves to no page
   never matches the `[locale]` segment, so Next walks straight to the root boundary.
+- **The forbidden fixture is per screen, not per branch.** A **Support Agent reads customers** — they
+  hold `ac_manage_customers`, the thinnest role in the system holding anything — and is 403 on
+  coupons; a **Marketing Manager** is the exact inverse. `scripts/test.sh` mints three credentials.
+- **`?search=` on customers matches login, email and display name — never the name.** Proven with a
+  positive control: a customer given the names `Zqxwvu Plmokn` returned 0 rows for `Zqxwvu` and 1 for
+  their username. Amina Benali cannot be found by typing her name, so the field says what it matches.
+- **12 of the 16 customers have no name at all**, and `orderby=display_name` sorts by a key the
+  payload never carries.
+- **The customer detail is the list row plus `statistics`.** The first collection here where the two
+  routes differ, so `CustomerDetail` is its own type. Two of the report's figures do not divide:
+  revenue and the average count only *completed* orders against a `total_orders` that counts all.
+- **`total_revenue` is not gated by the API** — a Support Agent reads it with a 200. The panel gates
+  it anyway, because `canSeeMoney()` needs `ac_manage_orders` and that role cannot open one of the
+  orders behind the figure.
+- **A coupon's `amount: "0.00"` is real** (zero off, free shipping) **while a threshold's zero is
+  not** — the API folds it to null. Null-versus-zero running both directions on one object.
+- **`date_expires` is written `Y-m-d` and read back as ISO.** A date input bound to the response
+  renders empty and then clears the field on the next save.
+- **A duplicate coupon code is a 409 with `details.code`**, carrying the lower-cased form that
+  actually collided.
+- **`Ltr` is for a bare identifier only.** Wrapped around a *translated sentence* it forces the
+  direction too, and sixteen call sites laid an Arabic count out from the left. `Isolate` for
+  anything sharing an element with a translated word. Money and percentages render identically under
+  both — measured by glyph position — so those stay `Ltr`.
+- **A `fixed bottom-0` save bar lands under the tab bar** and the save button becomes untappable.
+  `.save-bar` already exists for this.
+- **`/settings` does publish `store.currency`** (`DZD`), unlike the timezone. `SHOP_CURRENCY` is a
+  constant until a screen needs `/settings` for its own sake.
 - **A stale `next dev` will invent this same error.** Switching branches under a running dev server
   leaves Turbopack with a route entry for a directory that disappeared, and the route then renders as
   unmatched — which looked exactly like the bug above on a page that was fine. `rm -rf .next` and
   restart before believing a routing error that only one screen shows.
+
+## Owed to the backend, and paid
+
+Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch. Each one is here
+because the panel could not be built honestly without it.
+
+- **The consent row was not buildable as specified.** ADMIN_PANEL.md asks for "a read-only row with
+  the date and the reason"; there was no date, the refusal was a generic `"Unknown field."`, and 0 of
+  16 customers had ever consented. `marketing_consent_at` turned out to be **stored since §85 and
+  never presented**. Now emitted with `marketing_consent_source`, refused by name with the shopper's
+  own route, and one seeded shopper consents. Written on a withdrawal too, and only on an actual
+  change.
+- **The restriction picker needed two routes.** `/products` and `/product-categories` are
+  `ac_manage_products`, which a Marketing Manager does not hold — so the role whose job coupons are
+  could not see what a coupon applied to. `GET /coupons/eligible-products` and
+  `/coupons/eligible-categories` sit behind `ac_manage_coupons` and carry id, name, SKU and status
+  only: strictly less than the catalogue, rather than the catalogue behind a second capability.
+- **A single coupon carries its restrictions resolved**, with `missing: true` on an id that no longer
+  resolves rather than dropping the row — a client that dropped it would delete the restriction on
+  the next save.
+- **Restriction ids were stored unchecked.** `{"product_ids": [999999]}` answered 200 and the coupon
+  applied to nothing while looking exactly like one that worked. Now a 400 per field.
+- **A negative threshold silently erased a real one.** `{"minimum_amount": "-1"}` answered 200 and
+  cleared a 15 000 DA minimum, because the clearing arm read `<= 0.0` and swallowed every negative
+  before the "Must not be negative." check could see it.
 
 ## Open, and owed to the backend
 

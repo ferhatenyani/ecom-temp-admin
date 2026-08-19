@@ -41,16 +41,28 @@ run_unit() { npx vitest run; }
 
 run_e2e() {
   # The per-user credential decision means there is no service account: the suite
-  # needs a real Application Password, and two of them, because several tests
-  # prove a Super Admin and a Support Agent are treated differently.
+  # needs real Application Passwords, and **three** of them.
+  #
+  # Two was enough while every screen refused the same role. It stopped being
+  # enough on the customers branch, where the roles invert: a **Support Agent can
+  # read customers** — they hold `ac_manage_customers`, the thinnest role in the
+  # system holding anything — and is refused coupons, while a **Marketing Manager**
+  # is exactly the other way round. One branch, two screens, opposite fixtures.
+  #
+  # The Marketing Manager also earns its place positively rather than only as a
+  # refusal: `/products` and `/product-categories` are `ac_manage_products` and
+  # answer 403 to them, so they are the role the coupon restriction picker could
+  # not have been built for, and the one whose success proves it was.
   if [[ -z "${AC_STAFF_USER:-}" ]]; then
     if [[ -x ./scripts/mint-credential.sh ]]; then
       echo "minting credentials against the dev stack…"
-      local cred limited
+      local cred limited marketing
       cred=$(./scripts/mint-credential.sh ac_super_admin) || return 1
       limited=$(./scripts/mint-credential.sh ac_support_agent) || return 1
+      marketing=$(./scripts/mint-credential.sh ac_marketing_manager) || return 1
       export AC_STAFF_USER="${cred%%:*}" AC_STAFF_PASS="${cred#*:}"
       export AC_LIMITED_USER="${limited%%:*}" AC_LIMITED_PASS="${limited#*:}"
+      export AC_MARKETING_USER="${marketing%%:*}" AC_MARKETING_PASS="${marketing#*:}"
     else
       echo "no credential available and no way to mint one" >&2
       return 1

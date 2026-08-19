@@ -502,7 +502,13 @@ export function ProductDetail({
                 <ListRow key={v.id}>
                   <span className="flex min-w-0 flex-1 flex-col gap-1 py-1">
                     <span className="flex min-h-6 min-w-0 items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-body text-label">
+                      {/* Attribute values are user content — "Bois d'olivier",
+                          "قطن" — so the ellipsis follows the string's own
+                          direction rather than the page's. */}
+                      <span
+                        dir="auto"
+                        className="min-w-0 flex-1 truncate text-body text-label"
+                      >
                         {variationLabel(v, product, termMap).join(" · ") ||
                           tDetail("variationNoAttributes")}
                       </span>
@@ -524,7 +530,7 @@ export function ProductDetail({
                       <span className="flex shrink-0 items-center gap-1 text-subhead text-label-secondary">
                         <Dot tone={STOCK_TONE[v.stock_status as StockStatus] ?? "warning"} />
                         {v.manage_stock && v.stock_quantity !== null ? (
-                          <Ltr numeric>{t("inStock", { count: v.stock_quantity })}</Ltr>
+                          <Isolate numeric>{t("inStock", { count: v.stock_quantity })}</Isolate>
                         ) : (
                           <span>{tStock(v.stock_status)}</span>
                         )}

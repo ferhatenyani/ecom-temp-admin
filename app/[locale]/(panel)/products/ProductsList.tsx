@@ -30,7 +30,7 @@ import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
 import { Icon } from "@/components/primitives/Icon";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { ProductRow } from "./ProductRow";
 import { FacetGroups } from "./Facets";
 import {
@@ -415,7 +415,7 @@ export function ProductsList({
           className="mb-2 px-1 text-footnote text-label-secondary"
           data-testid="products-count"
         >
-          <Ltr numeric>{t("count", { total })}</Ltr>
+          <Isolate numeric>{t("count", { total })}</Isolate>
         </p>
 
         {isPending && products.length === 0 ? (

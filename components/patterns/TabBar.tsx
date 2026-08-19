@@ -14,9 +14,10 @@ import { Icon, type IconName } from "@/components/primitives/Icon";
  *
  * A role holding fewer than five of the primary destinations gets its tabs
  * backfilled from `More` in a fixed order, so a Marketing Manager's tab bar is
- * coherent rather than three tabs and two gaps. Orders and Products are built;
- * the rest render as disabled-looking placeholders rather than links that 404 —
- * a tab that navigates nowhere is worse than one that says it is not ready.
+ * coherent rather than three tabs and two gaps. Everything except `Dashboard` is
+ * built; it renders as a disabled-looking placeholder rather than a link that
+ * 404s — a tab that navigates nowhere is worse than one that says it is not
+ * ready. `More` stopped being one of those when customers and coupons shipped.
  */
 
 type Tab = {
@@ -47,7 +48,10 @@ const TABS: Tab[] = [
   { key: "products", href: "/products", icon: "products" },
   { key: "dashboard", href: null, icon: "dashboard", shortKey: "dashboardShort" },
   { key: "inventory", href: "/inventory", icon: "box" },
-  { key: "more", href: null, icon: "more" },
+  // `More` was a placeholder until customers and coupons existed. It now leads to
+  // a real screen listing them, which is the iOS answer to a tab bar that holds
+  // five: `UITabBarController` overflows rather than shrinking.
+  { key: "more", href: "/more", icon: "more" },
 ];
 
 export function TabBar({ locale }: { locale: string }) {

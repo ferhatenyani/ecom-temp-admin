@@ -5,7 +5,7 @@ import type { InventoryItem } from "@/lib/api/schemas/inventory";
 import { displayQuantity, isDelegated, itemLabel } from "@/lib/inventory";
 import { STOCK_TONE, type StockStatus } from "@/lib/product-status";
 import { Dot, StatusBadge } from "@/components/primitives/StatusBadge";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 
 /**
  * One row of stock.
@@ -92,7 +92,7 @@ export function StockRow({ item }: { item: InventoryItem }) {
                 only place it means anything is beside the quantity it judges. */}
             {quantity.low ? (
               <span className="text-caption text-label-secondary">
-                <Ltr numeric>{t("threshold", { threshold: quantity.threshold })}</Ltr>
+                <Isolate numeric>{t("threshold", { threshold: quantity.threshold })}</Isolate>
               </span>
             ) : (
               <span className="text-caption text-label-tertiary">

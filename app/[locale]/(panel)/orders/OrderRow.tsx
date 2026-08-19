@@ -60,7 +60,13 @@ export function OrderRow({
         a separator pointing at nothing.
       */}
       <span className="flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 flex-1 truncate text-subhead text-label-secondary">
+        {/* `dir="auto"` so the ellipsis lands at the *name's* own end. A French
+            name in the Arabic list is an LTR run inside an RTL paragraph, and
+            `text-overflow` clips at the paragraph's end — the left — so the row
+            read "…dia Haddad". Measured on the inventory branch and owed on every
+            other truncate holding user content; this is one of them. It moves
+            nothing when the text fits. */}
+        <span dir="auto" className="min-w-0 flex-1 truncate text-subhead text-label-secondary">
           {name}
         </span>
         {place ? (
@@ -73,7 +79,11 @@ export function OrderRow({
           */
           <span className="place-cap flex min-w-0 items-center gap-0.5 text-subhead text-label-secondary">
             <Icon name="pin" className="size-3 shrink-0" />
-            <span className="truncate">{place}</span>
+            {/* A wilaya name, in whichever script the data carries — the same
+                clipping rule as the customer name beside it. */}
+            <span dir="auto" className="truncate">
+              {place}
+            </span>
           </span>
         ) : null}
         <Ltr className="shrink-0 text-subhead text-label">

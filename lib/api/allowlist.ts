@@ -74,6 +74,42 @@ const RULES: readonly Rule[] = [
   // which is what keeps the movement ledger gapless.
   rule("/inventory/\\d+", "GET", "PATCH"),
   rule("/inventory/\\d+/adjust", "POST"),
+
+  /*
+   * Customers. Three routes, which is every route the API has for them.
+   *
+   * `POST /customers` is absent because it does not exist: measured 2026-08-19,
+   * it answers **404 `no_route`**, not 403. Staff cannot create a shopper — an
+   * account comes from `POST /account/register`, which is the shopper's own — so
+   * the panel has no create screen and there is nothing here to allow.
+   *
+   * `DELETE` is likewise not a route. Deleting a WordPress user reassigns or
+   * destroys their orders, and that is `ac_manage_users` territory.
+   */
+  rule("/customers", "GET"),
+  rule("/customers/\\d+", "GET", "PATCH"),
+  rule("/customers/\\d+/orders", "GET"),
+
+  /*
+   * Coupons. `POST` is here, unlike products, because this screen does create:
+   * a coupon has no counterpart to a product's variations, media or option sets,
+   * so a create form is the same form as the edit form with an empty object
+   * behind it. `DELETE` covers both the trash and `?force=true`.
+   *
+   * The two `eligible-*` routes are the restriction picker's sources and are the
+   * reason the picker exists at all. `/products` and `/product-categories` are
+   * already on this list from the products branch, so labelling a coupon's
+   * restrictions through *those* would have cost nothing — except that a
+   * Marketing Manager is **403** on both while holding `ac_manage_coupons`
+   * (measured), and they are one of the three roles that can manage coupons.
+   * These two sit behind `ac_manage_coupons` and carry id, name and SKU only.
+   *
+   * Ordering is not load-bearing: `\d+` cannot match `eligible-products`.
+   */
+  rule("/coupons", "GET", "POST"),
+  rule("/coupons/eligible-products", "GET"),
+  rule("/coupons/eligible-categories", "GET"),
+  rule("/coupons/\\d+", "GET", "PATCH", "DELETE"),
 ];
 
 export type AllowResult =

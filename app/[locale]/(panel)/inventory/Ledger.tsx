@@ -18,7 +18,7 @@ import {
 import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Icon } from "@/components/primitives/Icon";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
 import { MovementRow } from "./MovementRow";
@@ -199,7 +199,7 @@ export function Ledger({
         className="mb-2 px-1 text-footnote text-label-secondary"
         data-testid="movements-count"
       >
-        <Ltr numeric>{t("movesCount", { total })}</Ltr>
+        <Isolate numeric>{t("movesCount", { total })}</Isolate>
       </p>
 
       <Summary data={summary.data} />
@@ -412,7 +412,7 @@ function Summary({ data }: { data: Record<string, { net: number; movements: numb
               {value.net > 0 ? `+${value.net}` : value.net < 0 ? `−${Math.abs(value.net)}` : "0"}
             </Ltr>
             <span className="text-caption text-label-tertiary">
-              <Ltr numeric>{t("ledger.movements", { count: value.movements })}</Ltr>
+              <Isolate numeric>{t("ledger.movements", { count: value.movements })}</Isolate>
             </span>
           </div>
         ))}

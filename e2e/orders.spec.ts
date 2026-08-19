@@ -99,8 +99,18 @@ test.describe("the credential boundary", () => {
     const allowed = await page.request.get("/api/ac/orders?per_page=1");
     expect(allowed.status()).toBe(200);
 
-    // A generic proxy would relay this with an admin credential attached.
-    for (const path of ["users", "settings", "customers"]) {
+    /*
+     * A generic proxy would relay these with an admin credential attached.
+     *
+     * `customers` used to be in this list and is not any more — a screen calls it
+     * as of the customers branch, and the allowlist grows one screen at a time.
+     * What replaces it is the storefront's half of the same subject: `/account/*`
+     * is the *shopper's* identity, authenticated by a customer token, and this
+     * panel holds a staff credential. A staff credential against `/account` is
+     * either a 401 or, worse, the staff member's own account — never the customer
+     * whose screen is open.
+     */
+    for (const path of ["users", "settings", "account", "account/orders"]) {
       const refused = await page.request.get(`/api/ac/${path}`);
       expect(refused.status()).toBe(404);
     }
