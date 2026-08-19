@@ -63,12 +63,17 @@ export const RESTRICTION_FIELDS = [
 ] as const;
 export type RestrictionField = (typeof RESTRICTION_FIELDS)[number];
 
-/** Which of the four name products, and which name categories. */
-export const PRODUCT_RESTRICTION_FIELDS = ["product_ids", "excluded_product_ids"] as const;
-export const CATEGORY_RESTRICTION_FIELDS = [
-  "product_categories",
-  "excluded_product_categories",
-] as const;
+/**
+ * Which of the four name products and which name categories — as a lookup rather
+ * than two lists, because every caller wants the answer for one field and not the
+ * membership of a set. Two lists meant one of them was never read.
+ */
+export const RESTRICTION_KIND: Record<RestrictionField, "products" | "categories"> = {
+  product_ids: "products",
+  excluded_product_ids: "products",
+  product_categories: "categories",
+  excluded_product_categories: "categories",
+};
 
 /** Which of the four exclude rather than include — the pair rendered as a warning tone. */
 export function isExclusion(field: RestrictionField): boolean {

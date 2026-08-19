@@ -12,7 +12,7 @@ import {
   customerName,
   hasAddress,
   hasNoOrders,
-  searchMatchesName,
+  looksLikeAName,
   statFigures,
   statusBreakdown,
 } from "@/lib/customers";
@@ -139,37 +139,32 @@ describe("the search box cannot find a name", () => {
    * and `display_name` — never `first_name` or `last_name`.
    *
    * So Amina Benali, the one richly-populated customer in this shop, cannot be
-   * found by typing her name, and the empty state has to say so.
+   * found by typing her name, and the empty state has to say so rather than
+   * reporting "no results" for a field that never had a chance.
    */
-  it("detects a term that matches the name but nothing searchable", () => {
-    const amina = customer({
-      first_name: "Amina",
-      last_name: "Benali",
-      username: "ac_cus_shopper",
-      email: "ac_cus_shopper@example.test",
-    });
-
-    expect(searchMatchesName(amina, "Benali")).toBe(true);
-    expect(searchMatchesName(amina, "amina")).toBe(true);
+  it("recognises a term typed as a person's name", () => {
+    for (const term of ["Benali", "Amina Benali", "Nadia Chérif", "Ould-Kaci", "O'Brien"]) {
+      expect(looksLikeAName(term)).toBe(true);
+    }
   });
 
   /**
-   * The positive control, and the reason this is not simply "the term looks like
-   * a word". `sofiane.benali@example.test` *is* findable by "Benali", because the
-   * email carries it — so the same term is a real search for one customer and a
-   * dead end for another, and only the fields decide which.
+   * The negative half, and the one that keeps the hint from firing on every
+   * fruitless search: a login, an email or a code is not a name, and for those the
+   * ordinary "no results" is the honest message.
    */
-  it("is false when the term is in the email or the username", () => {
-    const sofiane = customer({
-      first_name: "Sofiane",
-      last_name: "Benali",
-      username: "sofiane.benali",
-      email: "sofiane.benali@example.test",
-    });
-
-    expect(searchMatchesName(sofiane, "Benali")).toBe(false);
-    expect(searchMatchesName(customer(), "cus_fresh")).toBe(false);
-    expect(searchMatchesName(customer(), "")).toBe(false);
+  it("does not fire on a login, an email or a code", () => {
+    for (const term of [
+      "ac_cus_shopper",
+      "sofiane.benali@example.test",
+      "cus_fresh",
+      "24",
+      "AC-BIJ-005",
+      "",
+      "   ",
+    ]) {
+      expect(looksLikeAName(term)).toBe(false);
+    }
   });
 });
 

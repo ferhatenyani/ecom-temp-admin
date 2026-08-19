@@ -46,6 +46,25 @@ async function openCoupons(page: Page, locale: string, query = "") {
   await page.waitForSelector('[data-testid="coupons-count"]');
 }
 
+/**
+ * Open one of the four restriction rows.
+ *
+ * `toBeEnabled()` first, and it is not defensive padding. Every control on this
+ * form renders `disabled` until React owns it — the hydration hazard the products
+ * branch measured, where a keystroke before hydration changes the DOM and never
+ * reaches state — and **WebKit hydrates slowly enough for that window to be
+ * real**. Chromium closed it before the click every time; WebKit did not, and the
+ * click landed on a disabled button and silently did nothing until the
+ * actionability check timed out at 25s. Exactly the engine difference the project
+ * keeps a `phone-webkit` project for.
+ */
+async function openPicker(page: Page, name: RegExp) {
+  const row = page.getByRole("button", { name });
+  await expect(row).toBeEnabled();
+  await row.click();
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+}
+
 async function openByCode(page: Page, locale: string, code: string) {
   await openCoupons(page, locale, `?search=${encodeURIComponent(code)}`);
   const row = page.locator(ROW).first();
@@ -171,8 +190,7 @@ test.describe("the restriction picker", () => {
     await signIn(page, "fr");
     await openByCode(page, "fr", "tapis15");
 
-    await page.getByRole("button", { name: /Catégories concernées/ }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    await openPicker(page, /Catégories concernées/);
 
     // The rows are real categories with names, not ids.
     await expect(page.locator('[role="dialog"]')).toContainText("Tapis et Textiles");
@@ -194,10 +212,11 @@ test.describe("the restriction picker", () => {
     await signIn(page, "fr");
     await openByCode(page, "fr", "tapis15");
 
-    await page.getByRole("button", { name: /Produits concernés/ }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    await openPicker(page, /Produits concernés/);
 
-    await page.locator('[role="dialog"] input[type="search"]').fill("AC-SEO-TAPIS");
+    const search = page.locator('[role="dialog"] input[type="search"]');
+    await expect(search).toBeEnabled();
+    await search.fill("AC-SEO-TAPIS");
     await expect(page.locator('[role="dialog"] [role="checkbox"]')).toHaveCount(1);
   });
 });
@@ -223,8 +242,7 @@ test.describe("the capability boundary", () => {
     await expect(page.locator("body")).toContainText("Tapis et Textiles");
 
     // And the picker, which is the part that needed a route of its own.
-    await page.getByRole("button", { name: /Produits concernés/ }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    await openPicker(page, /Produits concernés/);
     await expect(page.locator('[role="dialog"] [role="checkbox"]').first()).toBeVisible();
   });
 

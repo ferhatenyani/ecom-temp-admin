@@ -43,31 +43,29 @@ export function customerName(customer: Customer): CustomerName {
 }
 
 /**
- * Whether the search box can find this customer by the name on their row.
+ * Whether a search term looks like a person's name — which this endpoint cannot
+ * match.
  *
- * **It cannot, and the measurement is unambiguous.** `?search=` matches
- * `user_login`, `user_email` and `display_name` — not `first_name` or
- * `last_name`. Proven with a positive control on 2026-08-19: customer 26 was
- * given the names `Zqxwvu Plmokn`, `?search=Zqxwvu` returned 0 rows, and
- * `?search=cus_fresh` returned 1. `?search=Chérif` appearing to work is MySQL's
- * accent-insensitive collation matching the *email* `nadia.cherif@…`.
+ * **`?search=` matches `user_login`, `user_email` and `display_name`, and never
+ * `first_name` or `last_name`.** Proven with a positive control on 2026-08-19:
+ * customer 26 was given the names `Zqxwvu Plmokn`, `?search=Zqxwvu` returned 0
+ * rows, and `?search=cus_fresh` returned 1. `?search=Chérif` appearing to work is
+ * MySQL's accent-insensitive collation matching the *email* `nadia.cherif@…`.
  *
- * So Amina Benali — the shop's one richly-populated customer — cannot be found by
- * typing her name, and a search box labelled "search customers" is a lie a person
- * discovers by failing to find someone. The field says what it matches instead.
+ * So Amina Benali — the one richly-populated customer in this shop — cannot be
+ * found by typing her name, and the failure is silent: an unmatched search is an
+ * ordinary empty list. The empty state uses this to say *why* rather than "no
+ * results", and it takes the term rather than a row because at the moment it is
+ * needed there are no rows.
  *
- * Exported as a predicate rather than left as a comment because the empty state
- * uses it: when a search returns nothing and the term looks like a personal name,
- * the screen says why rather than "no results".
+ * Letters, spaces, apostrophes and hyphens, and no `@`. A login or an email
+ * carries a digit, a dot or an at-sign somewhere; a name typed by a person
+ * looking for a person does not.
  */
-export function searchMatchesName(customer: Customer, term: string): boolean {
-  const needle = term.trim().toLowerCase();
-  if (needle === "") return false;
+export function looksLikeAName(term: string): boolean {
+  const trimmed = term.trim();
 
-  const name = `${customer.first_name} ${customer.last_name}`.toLowerCase();
-  const searchable = `${customer.username} ${customer.email}`.toLowerCase();
-
-  return name.includes(needle) && !searchable.includes(needle);
+  return trimmed !== "" && !trimmed.includes("@") && /^[\p{L}\s'-]+$/u.test(trimmed);
 }
 
 /* --------------------------------------------------------- the consent --- */

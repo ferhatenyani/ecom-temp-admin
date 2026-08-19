@@ -8,7 +8,7 @@ import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import {
   COUPON_STATUSES,
   DISCOUNT_TYPES,
-  PRODUCT_RESTRICTION_FIELDS,
+  RESTRICTION_KIND,
   RESTRICTION_FIELDS,
   isExclusion,
   type CouponStatus,
@@ -747,11 +747,7 @@ export function CouponForm({
           onOpenChange={(open) => {
             if (!open) setPicker(null);
           }}
-          kind={
-            (PRODUCT_RESTRICTION_FIELDS as readonly string[]).includes(picker)
-              ? "products"
-              : "categories"
-          }
+          kind={RESTRICTION_KIND[picker]}
           title={t(`restriction.${picker}`)}
           selected={draft[picker]}
           onCommit={(ids) => set(picker, ids)}

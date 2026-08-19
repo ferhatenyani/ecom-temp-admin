@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { Customer } from "@/lib/api/schemas/customer";
 import { acRead } from "@/lib/api/browser";
-import { customerName } from "@/lib/customers";
+import { customerName, looksLikeAName } from "@/lib/customers";
 import { Scaffold } from "@/components/patterns/Scaffold";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
 import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
@@ -112,8 +112,7 @@ export function CustomersList({
    * label names the two fields that work, and the empty state repeats it, because
    * the person who needs that sentence is the one already looking at no results.
    */
-  const searchIsName =
-    filtered && /^[\p{L}\s'-]+$/u.test(query.search) && !query.search.includes("@");
+  const searchIsName = filtered && looksLikeAName(query.search);
 
   return (
     <Scaffold
