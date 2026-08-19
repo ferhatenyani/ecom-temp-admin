@@ -76,8 +76,17 @@ password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs
 tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
 takes a few seconds.
 
-The e2e suite runs on Chromium at current iPhone widths. `--project=phone-webkit` is the honest
-engine, kept out of the default run because its system libraries are 231 apt packages behind root.
+The e2e suite runs on Chromium at current iPhone widths — **364 tests** across four widths and both
+locales. `--project=phone-webkit` is the honest engine and is **91/91** (verified 2026-08-19), kept out
+of the default run because its system libraries are 231 apt packages behind root.
+
+Two operator errors are worth naming, because both invalidated a run and both looked like code
+defects. **Minting a credential while a suite is running** kills that suite's credential — the same
+hazard the note below describes, from the other direction. And **editing a spec or a component while a
+suite runs against `next dev`** changes the code under the test: it produced twenty failures across
+orders and products that vanished on a clean run. WebKit's own finding was real and is fixed: it
+hydrates slowly enough that a click can land on a still-disabled control, which is why the picker
+tests assert `toBeEnabled()` first.
 Install them once with `sudo env "PATH=$PATH" npx playwright install-deps webkit` — plain `sudo npx`
 cannot see an nvm-installed node — then run the project by name.
 
