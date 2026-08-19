@@ -35,6 +35,29 @@ export function moneyLocale(locale: string): string {
   return MONEY_LOCALE[locale] ?? MONEY_LOCALE.fr;
 }
 
+/**
+ * The shop's currency, for the figures that do not carry one.
+ *
+ * An **order** carries `currency` and is always formatted with its own — an order
+ * placed under a different currency must not be re-denominated by a later
+ * setting. A **product** does not, and the products list reads it from
+ * `meta.facets.price.currency`. A customer's `statistics` block carries neither:
+ * `total_revenue` and `average_order_value` are bare decimal strings.
+ *
+ * So there has to be a shop-level default, and it was already being written as a
+ * `"DZD"` literal in two components before this was the third. Named here with
+ * what is actually known about it.
+ *
+ * **`/settings` does publish it** — measured 2026-08-19, `store.currency: "DZD"`
+ * and `store.currency_symbol: "د.ج"`, which is a better source than a constant
+ * and unlike the timezone is genuinely there. It is not read yet because
+ * `/settings` is on no screen's route list and the proxy allowlist grows one
+ * screen at a time; putting a route behind the proxy for a fallback that is
+ * correct today would be the wrong order to do it in. When a screen needs
+ * `/settings` for its own sake, this becomes its fallback rather than its source.
+ */
+export const SHOP_CURRENCY = "DZD";
+
 const cache = new Map<string, Intl.NumberFormat>();
 
 function formatter(locale: string, currency: string): Intl.NumberFormat {
@@ -65,6 +88,43 @@ export function formatMoney(
   const n = Number(amount);
   if (!Number.isFinite(n)) return "—";
   return formatter(locale, currency).format(n);
+}
+
+const percentCache = new Map<string, Intl.NumberFormat>();
+
+/**
+ * A percentage discount, formatted rather than concatenated.
+ *
+ * The API sends `"10.00"`, and `` `${amount} %` `` put **`10.00 %`** on the French
+ * coupon list — a raw `.` where French writes `,`, and two decimals nobody
+ * writes on a discount. Measured on the rendered row, which is the only place a
+ * template literal like that ever looks wrong.
+ *
+ * `maximumFractionDigits: 2` keeps a genuine `12.5 %` intact while dropping the
+ * trailing zeros on the whole numbers every coupon in this shop actually uses.
+ * The locale tag is `moneyLocale`'s, so the digits stay Western in Arabic for the
+ * same reason money does — and `style: "percent"` places the sign where each
+ * locale puts it rather than gluing it to the end.
+ */
+export function formatPercent(amount: string | null | undefined, locale: string): string {
+  if (amount === null || amount === undefined || amount === "") return "—";
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "—";
+
+  const tag = moneyLocale(locale);
+  let made = percentCache.get(tag);
+
+  if (!made) {
+    made = new Intl.NumberFormat(tag, {
+      style: "percent",
+      maximumFractionDigits: 2,
+    });
+    percentCache.set(tag, made);
+  }
+
+  // `style: "percent"` multiplies by 100, and the API's `"10.00"` already means
+  // ten percent rather than ten thousand.
+  return made.format(n / 100);
 }
 
 /**

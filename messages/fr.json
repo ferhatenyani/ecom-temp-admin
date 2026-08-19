@@ -12,7 +12,17 @@
     "skipToContent": "Aller au contenu",
     "dashboardShort": "Accueil",
     "nav": "Navigation principale",
-    "inventory": "Stock"
+    "inventory": "Stock",
+    "coupons": "Codes promo",
+    "moreTitle": "Plus",
+    "built": "Disponible",
+    "notBuilt": "Pas encore disponible",
+    "notBuiltNote": "Ces sections font partie de la spécification et ne sont pas encore construites. Elles apparaissent ici plutôt que d’être masquées, pour que la navigation dise ce qui existe.",
+    "shipping": "Livraison",
+    "payments": "Paiements",
+    "analytics": "Analyses",
+    "content": "Contenu",
+    "settings": "Réglages"
   },
   "login": {
     "title": "Connexion",
@@ -492,5 +502,219 @@
     "order_reduced": "Écrit par la boutique quand une commande réserve du stock.",
     "order_restored": "Écrit par la boutique quand une commande le rend.",
     "product_edit": "Quantité changée depuis la fiche produit, hors ajustement."
+  },
+  "customers": {
+    "title": "Clients",
+    "refresh": "Actualiser",
+    "count": "{total, plural, =0 {Aucun client} one {# client} other {# clients}}",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "paying": "Client payant",
+    "noName": "Nom non renseigné",
+    "noAddress": "Aucune adresse enregistrée.",
+    "notFound": "Ce client n’existe pas, ou l’identifiant appartient à un compte du personnel — ceux-ci ne figurent pas ici.",
+    "searchLabel": "Rechercher par e-mail ou identifiant",
+    "searchPlaceholder": "E-mail ou identifiant",
+    "clearSearch": "Effacer la recherche",
+    "sortLabel": "Trier les clients",
+    "sort": {
+      "registered": "Inscription",
+      "user_email": "E-mail"
+    },
+    "tabLabel": "Section du client",
+    "tab": {
+      "profile": "Profil",
+      "orders": "Commandes"
+    },
+    "section": {
+      "identity": "Identité",
+      "statistics": "Activité",
+      "byStatus": "Commandes par statut",
+      "span": "Première et dernière",
+      "consent": "Consentement marketing",
+      "addresses": "Adresses",
+      "billing": "Facturation",
+      "shipping": "Livraison"
+    },
+    "field": {
+      "name": "Nom",
+      "email": "E-mail",
+      "username": "Identifiant",
+      "id": "Numéro client",
+      "phone": "Téléphone",
+      "registered": "Inscrit le",
+      "company": "Société",
+      "address": "Adresse",
+      "country": "Pays"
+    },
+    "stats": {
+      "total_orders": "Commandes passées",
+      "completed_orders": "Commandes terminées",
+      "total_revenue": "Chiffre d’affaires terminé",
+      "average_order_value": "Panier moyen terminé",
+      "scopeNote": "Le chiffre d’affaires et le panier moyen ne comptent que les commandes terminées. Ils ne se divisent pas par le nombre total de commandes.",
+      "neverOrdered": "Ce client n’a jamais commandé.",
+      "neverOrderedNote": "Il a un compte, mais aucune commande n’y est rattachée.",
+      "firstOrder": "Première commande",
+      "lastOrder": "Dernière commande",
+      "onlyOrder": "Seule commande"
+    },
+    "consent": {
+      "label": "Consentement marketing",
+      "granted": "Accordé",
+      "withdrawn": "Retiré",
+      "never": "Jamais demandé",
+      "on": "le {date}",
+      "neverDetail": "Ce client n’a jamais accepté ni refusé. L’absence de réponse vaut refus.",
+      "reason": "Le client donne et retire ce consentement depuis son compte. Le personnel ne peut pas le modifier ici.",
+      "sourceLabel": "Origine",
+      "source": {
+        "registration": "À l’inscription",
+        "account": "Depuis son compte",
+        "unsubscribe_link": "Lien de désinscription"
+      },
+      "question": "Ce client peut-il recevoir des e-mails marketing ?"
+    },
+    "orders": {
+      "count": "{total, plural, =0 {Aucune commande} one {# commande} other {# commandes}}",
+      "never": "Ce client n’a jamais commandé.",
+      "none": "Aucune commande sur cette page.",
+      "previous": "Précédent",
+      "next": "Suivant"
+    },
+    "empty": {
+      "none": "Aucun client pour le moment.",
+      "noResults": "Aucun client ne correspond.",
+      "searchIsName": "Aucun résultat. La recherche porte sur l’e-mail et l’identifiant, jamais sur le nom — un client nommé « Amina Benali » ne se trouve pas en tapant son nom.",
+      "clear": "Effacer la recherche"
+    }
+  },
+  "coupons": {
+    "title": "Codes promo",
+    "createTitle": "Nouveau code promo",
+    "refresh": "Actualiser",
+    "create": "Créer",
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "revert": "Rétablir",
+    "saved": "Code promo enregistré.",
+    "created": "Code promo créé.",
+    "trashed": "Code promo mis à la corbeille.",
+    "deleted": "Code promo supprimé définitivement.",
+    "trash": "Mettre à la corbeille",
+    "deleteForever": "Supprimer définitivement",
+    "count": "{total, plural, =0 {Aucun code promo} one {# code promo} other {# codes promo}}",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "searchLabel": "Rechercher un code",
+    "searchPlaceholder": "Code promo",
+    "clearSearch": "Effacer la recherche",
+    "statusLabel": "Filtrer par statut",
+    "expired": "Expiré",
+    "freeShipping": "Livraison offerte",
+    "percentValue": "{amount} %",
+    "noDescription": "Sans description",
+    "minimumShort": "À partir de {amount}",
+    "restrictedShort": "{count, plural, one {# restriction} other {# restrictions}}",
+    "notFound": "Ce code promo n’existe pas. Une suppression définitive est irréversible ; une mise à la corbeille, non.",
+    "trashedBanner": "Ce code promo est à la corbeille. Il ne s’applique plus, mais il garde son code — recréer le même code renverra un conflit.",
+    "staleRestrictions": "{count, plural, one {# restriction pointe vers un élément supprimé} other {# restrictions pointent vers des éléments supprimés}}. Le code promo ne s’applique donc à rien.",
+    "duplicateCode": "Le code « {code} » est déjà utilisé. Les codes sont enregistrés en minuscules, donc la casse ne les distingue pas.",
+    "usageOf": "{count} sur {limit}",
+    "status": {
+      "all": "Tous",
+      "publish": "Publié",
+      "draft": "Brouillon",
+      "trash": "Corbeille"
+    },
+    "type": {
+      "percent": "Pourcentage",
+      "fixed_cart": "Montant sur le panier",
+      "fixed_product": "Montant par produit"
+    },
+    "section": {
+      "basics": "Le code et la remise",
+      "validity": "Validité",
+      "limits": "Limites d’utilisation",
+      "behaviour": "Comportement",
+      "restrictions": "Produits et catégories",
+      "emails": "Adresses autorisées",
+      "record": "Enregistrement",
+      "danger": "Suppression"
+    },
+    "field": {
+      "code": "Code",
+      "discount_type": "Type de remise",
+      "amount": "Montant",
+      "amountPercent": "Pourcentage",
+      "description": "Description",
+      "status": "Statut",
+      "date_expires": "Expire le",
+      "minimum_amount": "Panier minimum",
+      "maximum_amount": "Panier maximum",
+      "usage_limit": "Utilisations au total",
+      "usage_limit_per_user": "Utilisations par client",
+      "limit_usage_to_x_items": "Articles concernés au maximum",
+      "usage_count": "Utilisations",
+      "free_shipping": "Livraison offerte",
+      "individual_use": "Non cumulable",
+      "exclude_sale_items": "Exclure les articles en promotion",
+      "email_restrictions": "Adresses e-mail",
+      "id": "Identifiant",
+      "created": "Créé le",
+      "modified": "Modifié le"
+    },
+    "hint": {
+      "code": "Enregistré en minuscules. Ce que vous voyez est ce qui sera stocké.",
+      "amount": "Le montant retiré. 0 est valide : c’est un code qui n’offre que la livraison.",
+      "percent": "Entre 0 et 100.",
+      "status": "Un brouillon apparaît dans cette liste mais ne s’applique à aucun panier.",
+      "expiry": "Le code reste valable pendant toute la journée indiquée. Laissez vide pour aucune expiration.",
+      "threshold": "Laissez vide s’il n’y a pas de minimum. Ce n’est pas la même chose que 0.",
+      "maximumAmount": "Plafonne le panier sur lequel le code peut être utilisé, pas la remise elle-même. WooCommerce n’a pas de plafond de remise.",
+      "unlimited": "Laissez vide pour illimité.",
+      "usageCount": "Compté au moment où un client applique le code en boutique. Le panneau ne peut ni le modifier, ni dire qui l’a utilisé.",
+      "freeShipping": "S’applique en plus de la remise.",
+      "individualUse": "Empêche d’utiliser un autre code en même temps.",
+      "excludeSaleItems": "Le code ne s’applique pas aux articles déjà soldés.",
+      "perProduct": "Un montant par produit : la remise s’applique à chaque article correspondant.",
+      "perCart": "Ce type de remise s’applique au panier. Les produits et catégories choisis sont une condition, pas la cible de la remise.",
+      "emails": "Une adresse par ligne. Un joker comme *@exemple.dz est accepté."
+    },
+    "restriction": {
+      "product_ids": "Produits concernés",
+      "excluded_product_ids": "Produits exclus",
+      "product_categories": "Catégories concernées",
+      "excluded_product_categories": "Catégories exclues",
+      "any": "Tous",
+      "excludes": "Exclusion",
+      "selected": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
+      "missingOne": "Élément supprimé (#{id})"
+    },
+    "picker": {
+      "description": "Touchez une ligne pour l’ajouter ou la retirer.",
+      "searchProducts": "Rechercher un produit",
+      "searchCategories": "Rechercher une catégorie",
+      "skuHint": "La recherche porte aussi sur la référence (SKU).",
+      "productCount": "{count, plural, =0 {aucun produit} one {# produit} other {# produits}}",
+      "noSku": "Sans référence",
+      "none": "Rien à sélectionner.",
+      "noResults": "Aucun résultat.",
+      "apply": "Appliquer ({count})",
+      "cancel": "Annuler",
+      "previous": "Précédent",
+      "next": "Suivant"
+    },
+    "confirm": {
+      "trashTitle": "Mettre ce code à la corbeille ?",
+      "trashBody": "Il cesse de s’appliquer mais garde son code, et peut être restauré.",
+      "deleteTitle": "Supprimer définitivement ?",
+      "deleteBody": "Irréversible. Le code redeviendra disponible pour un nouveau code promo."
+    },
+    "empty": {
+      "none": "Aucun code promo pour le moment.",
+      "noResults": "Aucun code promo ne correspond.",
+      "clear": "Effacer les filtres"
+    }
   }
 }

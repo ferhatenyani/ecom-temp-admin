@@ -246,12 +246,78 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["audit-logs"], "GET").allowed).toBe(false);
   });
 
+  it("permits the customer routes the screens call, and only those", () => {
+    expect(checkAllowed(["customers"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["customers", "24"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["customers", "24"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["customers", "24", "orders"], "GET").allowed).toBe(true);
+
+    /*
+     * `POST /customers` is refused because **it is not a route** — measured
+     * 2026-08-19, it answers 404 `no_route` rather than 403. Staff do not create
+     * shoppers; `POST /account/register` is the shopper's own. Asserting it here
+     * keeps that fact written down where a future create screen would have to
+     * read it before adding the rule.
+     */
+    expect(checkAllowed(["customers"], "POST").allowed).toBe(false);
+    // Deleting a WordPress user reassigns or destroys their orders. That is
+    // `ac_manage_users` territory and §87's screen, not this one.
+    expect(checkAllowed(["customers", "24"], "DELETE").allowed).toBe(false);
+    // The orders sub-resource is a read. Nothing places an order for a customer.
+    expect(checkAllowed(["customers", "24", "orders"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["customers", "24", "notes"], "GET").allowed).toBe(false);
+  });
+
+  it("permits the coupon routes, including the two the picker needs", () => {
+    expect(checkAllowed(["coupons"], "GET").allowed).toBe(true);
+    // Unlike products, this branch does create: a coupon has no variations, no
+    // media and no option set, so the create form is the edit form.
+    expect(checkAllowed(["coupons"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["coupons", "30"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["coupons", "30"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["coupons", "30"], "DELETE").allowed).toBe(true);
+
+    /*
+     * The restriction picker's two sources.
+     *
+     * `/products` and `/product-categories` are already allowed from the products
+     * branch, so labelling a coupon's restrictions through those would have cost
+     * nothing here — except that a **Marketing Manager is 403 on both** while
+     * holding `ac_manage_coupons`, and they are one of the three roles that can
+     * manage coupons. These two sit behind `ac_manage_coupons` instead and carry
+     * id, name and SKU only.
+     */
+    expect(checkAllowed(["coupons", "eligible-products"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["coupons", "eligible-categories"], "GET").allowed).toBe(true);
+
+    // Literal segments are paths, not ids — `\d+` must not have swallowed them,
+    // and they are reads.
+    expect(checkAllowed(["coupons", "eligible-products"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["coupons", "eligible-categories"], "DELETE").allowed).toBe(false);
+    // A coupon's redemptions are not a route the API has; `used_by` is emitted by
+    // nothing, so nothing may go looking for it.
+    expect(checkAllowed(["coupons", "30", "usage"], "GET").allowed).toBe(false);
+  });
+
   it("refuses the platform routes docs/API.md opens by telling you not to touch", () => {
     // A generic proxy here is an open relay to wp/v2/users with an admin
     // credential attached.
     expect(checkAllowed(["users"], "GET").allowed).toBe(false);
     expect(checkAllowed(["settings"], "PATCH").allowed).toBe(false);
-    expect(checkAllowed(["customers"], "GET").allowed).toBe(false);
+    /*
+     * `/customers` used to be in this list and has moved up to its own case now
+     * that a screen calls it. What stays refused is the storefront's half of the
+     * same subject: `/account/*` is the *shopper's* identity, authenticated by a
+     * customer token, and the panel holds a staff credential. A staff credential
+     * against `/account` is either a 401 or, worse, the staff member's own
+     * account — never the customer whose screen is open.
+     *
+     * `POST /account/marketing-consent` is the specific one the consent row names
+     * in its explanation, and naming a route is not a reason to proxy it.
+     */
+    expect(checkAllowed(["account"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["account", "marketing-consent"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["account", "orders"], "GET").allowed).toBe(false);
   });
 
   it("refuses a permitted path with an unpermitted method", () => {

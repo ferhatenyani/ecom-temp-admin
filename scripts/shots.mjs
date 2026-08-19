@@ -1,7 +1,8 @@
 /**
  * Signs in with a real Application Password and captures the orders list, one
- * order detail, the products list, its filter sheet and one product detail — in
- * both locales, at the three current iPhone widths and at a desktop width.
+ * order detail, the products list, its filter sheet, one product detail, the
+ * customers list and detail, and the coupons list and form — in both locales, at
+ * the three current iPhone widths and at a desktop width.
  *
  * It also asserts the handful of things a screenshot cannot show: that the Arabic
  * face actually loaded rather than falling back, that `dir` is right, and that an
@@ -316,6 +317,161 @@ for (const [name, options] of TARGETS) {
       detailProductOverflow,
       (v) => v <= 1,
     );
+
+    // --------------------------------------------------------- customers ---
+    await page.goto(`${BASE}/${locale}/customers`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="customers-count"]');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/customers-${name}-${locale}.png` });
+
+    const customersOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: customers no horizontal overflow`, customersOverflow, (v) => v <= 1);
+
+    /*
+     * **A translated count sentence must start where its language starts.**
+     *
+     * Sixteen call sites wrapped one of these in `Ltr`, reaching for the tabular
+     * figures and taking the forced direction with them: the Arabic list laid
+     * "16 عميلًا" out beginning at the left, so the number an Arabic reader sees
+     * first was the one furthest from where they start. French was unaffected,
+     * which is how it survived three branches.
+     *
+     * Asserted on the *rendered glyph positions*, because a `dir` attribute
+     * cannot catch a reorder and this is exactly the class of bug that ships.
+     */
+    const countOrder = await page.getByTestId("customers-count").evaluate((el) => {
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      const glyphs = [];
+      let node;
+      while ((node = walk.nextNode())) {
+        const text = node.textContent ?? "";
+        for (let i = 0; i < text.length; i++) {
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const box = range.getBoundingClientRect();
+          if (box.width > 0) glyphs.push([box.x, text[i]]);
+        }
+      }
+      return glyphs.sort((a, b) => a[0] - b[0]).map(([, c]) => c).join("");
+    });
+    check(
+      `${name}/${locale}: count sentence reads from its own side`,
+      countOrder,
+      // Visually left-to-right: French leads with the digits, Arabic ends with
+      // them — which in a right-to-left reading is where the eye lands first.
+      (v) => (locale === "ar" ? /\d\s*$/.test(v) : /^\s*\d/.test(v)),
+    );
+
+    // A customer with no name at all — 12 of the 16 — must not render a blank row.
+    const firstCustomer = await page
+      .locator('a[href*="/customers/"]')
+      .first()
+      .innerText();
+    check(
+      `${name}/${locale}: a nameless customer still has a label`,
+      firstCustomer.split("\n")[0].trim(),
+      (v) => v.length > 0,
+    );
+
+    // The detail, on the one customer carrying statistics and an address.
+    await page.goto(`${BASE}/${locale}/customers?search=ac_cus_shopper`, {
+      waitUntil: "networkidle",
+    });
+    await page.waitForSelector('[data-testid="customers-count"]');
+    await page.locator('a[href*="/customers/"]').first().click();
+    await page.waitForURL(/\/customers\/\d+/, { timeout: 20000 });
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/customer-${name}-${locale}.png`, fullPage: true });
+
+    const customerOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: customer detail no overflow`, customerOverflow, (v) => v <= 1);
+
+    // ----------------------------------------------------------- coupons ---
+    await page.goto(`${BASE}/${locale}/coupons`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="coupons-count"]');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/coupons-${name}-${locale}.png` });
+
+    const couponsOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: coupons no horizontal overflow`, couponsOverflow, (v) => v <= 1);
+
+    /*
+     * A percentage is formatted, not concatenated. `${amount} %` put `10.00 %`
+     * on the French list — a raw decimal point where French writes a comma, and
+     * two decimals nobody writes on a discount. Only the rendered row shows it.
+     */
+    const couponBody = await page.locator("body").innerText();
+    check(`${name}/${locale}: no unformatted percentage`, couponBody.includes("10.00"), false);
+
+    // The coupon form, on the one fixture that carries a restriction.
+    await page.goto(`${BASE}/${locale}/coupons?search=tapis15`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="coupons-count"]');
+    await page.locator('a[href*="/coupons/"]:not([href$="/new"])').first().click();
+    await page.waitForURL(/\/coupons\/\d+/, { timeout: 20000 });
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/coupon-${name}-${locale}.png`, fullPage: true });
+
+    /*
+     * `product_categories: [16]` resolved to a name. The whole reason two routes
+     * were added to the API: a Marketing Manager is 403 on `/product-categories`
+     * and would otherwise see a bare id on the one screen that is their job.
+     */
+    const couponForm = await page.locator("body").innerText();
+    check(
+      `${name}/${locale}: a restriction shows a name, not an id`,
+      couponForm.includes("Tapis et Textiles"),
+      true,
+    );
+
+    /*
+     * **A French description inside the Arabic form.** A control inherits the
+     * page's direction, so this string was an LTR run in an RTL paragraph and
+     * rendered ".sur les tapis et textiles % 15" — the leading figure thrown to
+     * the far end. `dir="auto"` resolves it from the value's own first strong
+     * character.
+     */
+    const descriptionDirection = await page
+      .locator("textarea")
+      .first()
+      .evaluate((el) => getComputedStyle(el).direction);
+    check(
+      `${name}/${locale}: a French description reads left to right`,
+      descriptionDirection,
+      "ltr",
+    );
+
+    const couponOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: coupon form no overflow`, couponOverflow, (v) => v <= 1);
+
+    /*
+     * **The save bar must not sit under the tab bar.** Both are `fixed … z-20`
+     * and the tab bar comes later in the document, so a hand-rolled `bottom-0`
+     * put the save button physically out of reach of a thumb at phone widths.
+     * Asserted geometrically: nothing may cover the button's centre.
+     */
+    await page.locator("textarea").first().fill("Vérification de la barre.");
+    await page.waitForTimeout(300);
+    const saveReachable = await page.evaluate(() => {
+      const bar = document.querySelector(".save-bar");
+      if (!bar) return "no save bar";
+      const button = bar.querySelectorAll("button")[1];
+      if (!button) return "no save button";
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return bar.contains(hit) ? "reachable" : `covered by ${hit?.tagName ?? "nothing"}`;
+    });
+    check(`${name}/${locale}: the save button is reachable`, saveReachable, "reachable");
 
     await context.close();
   }

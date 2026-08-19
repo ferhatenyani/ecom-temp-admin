@@ -31,6 +31,8 @@ export const ICON_NAMES = [
   "box",
   "note",
   "lock",
+  "plus",
+  "tag",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -156,6 +158,17 @@ export function IconSprite() {
         <symbol id="ac-icon-lock" viewBox="0 0 24 24">
           <rect x="5.5" y="10.5" width="13" height="9.5" rx="2" />
           <path d="M8.75 10.5V8a3.25 3.25 0 0 1 6.5 0v2.5" />
+        </symbol>
+        {/* Never mirrored: a plus is a universal mark, and the HIG is explicit
+            that those keep one appearance in every direction. */}
+        <symbol id="ac-icon-plus" viewBox="0 0 24 24">
+          <path d="M12 5.5v13M5.5 12h13" />
+        </symbol>
+        {/* Coupons. Drawn rather than borrowed from `box`, so a coupon in the
+            navigation does not read as a parcel. */}
+        <symbol id="ac-icon-tag" viewBox="0 0 24 24">
+          <path d="M4.75 11.4V5.5a.75.75 0 0 1 .75-.75h5.9a.75.75 0 0 1 .53.22l7.1 7.1a.75.75 0 0 1 0 1.06l-5.9 5.9a.75.75 0 0 1-1.06 0l-7.1-7.1a.75.75 0 0 1-.22-.53Z" />
+          <circle cx="8.75" cy="8.75" r="1.15" />
         </symbol>
       </defs>
     </svg>
