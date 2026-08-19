@@ -227,8 +227,14 @@ export default async function OrderDetailPage({
           {email ? (
             <ListRow>
               <span className="text-body text-label-secondary">{t("email")}</span>
+              {/* `Ltr` isolates the address; the clipping is on the anchor,
+                  which inherits the *page's* direction — so in Arabic the
+                  ellipsis landed at the anchor's left and ate the start of the
+                  address. The container needs its own resolved direction too, or
+                  the isolation inside it is clipped from the wrong end. */}
               <a
                 href={`mailto:${email}`}
+                dir="auto"
                 className="ms-auto min-w-0 truncate text-body text-accent"
               >
                 <Ltr numeric={false}>{email}</Ltr>

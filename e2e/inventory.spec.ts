@@ -469,10 +469,7 @@ test.describe("Arabic", () => {
     const twoDaysAgo = new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 10);
     await openMoves(page, "ar", `&date_to=${twoDaysAgo}`);
 
-    const stamp = await page
-      .locator('[dir="auto"]', { hasText: /\d{4}/ })
-      .first()
-      .innerText();
+    const stamp = await page.getByTestId("movement-time").first().innerText();
 
     // The RLMs ICU inserted are still there — stripping them would be the other
     // wrong fix — and the components are in their formatted order.

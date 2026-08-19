@@ -15,7 +15,7 @@ import { Segmented } from "@/components/primitives/Segmented";
 import { SelectField, TextAreaField } from "@/components/primitives/Field";
 import { Button } from "@/components/primitives/Button";
 import { Icon } from "@/components/primitives/Icon";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
 import { useOnline } from "@/lib/use-online";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -357,7 +357,7 @@ export function AdjustForm({
           would mean an adjustment quietly landing on a different product. */}
       {isDelegated(item) ? (
         <p className="mt-2 px-4 text-footnote text-label-secondary">
-          <Ltr numeric>{t("target", { id: adjustTarget(item) })}</Ltr>
+          <Isolate numeric>{t("target", { id: adjustTarget(item) })}</Isolate>
         </p>
       ) : null}
 

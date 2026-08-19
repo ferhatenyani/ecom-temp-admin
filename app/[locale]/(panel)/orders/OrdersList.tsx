@@ -11,7 +11,7 @@ import { EmptyState, ErrorState, SkeletonRows } from "@/components/patterns/Stat
 import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
 import { Segmented, type Segment } from "@/components/primitives/Segmented";
 import { Icon } from "@/components/primitives/Icon";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { OrderRow } from "./OrderRow";
 import { PER_PAGE, fetchOrders, ordersKey, type OrdersQuery } from "./query";
 
@@ -181,7 +181,7 @@ export function OrdersList({
           className="mb-2 px-1 text-footnote text-label-secondary"
           data-testid="orders-count"
         >
-          <Ltr numeric>{t("count", { total })}</Ltr>
+          <Isolate numeric>{t("count", { total })}</Isolate>
         </p>
 
         {isPending && orders.length === 0 ? (

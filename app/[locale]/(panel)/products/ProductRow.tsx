@@ -8,7 +8,7 @@ import {
 } from "@/lib/product-status";
 import { effectivePrice, isDiscounted, stockQuantity } from "@/lib/products";
 import { formatMoney } from "@/lib/format/money";
-import { Ltr } from "@/components/primitives/Ltr";
+import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { StatusBadge, Dot } from "@/components/primitives/StatusBadge";
 
 /**
@@ -67,7 +67,12 @@ export function ProductRow({
         skeleton that precedes it.
       */}
       <span className="flex min-h-6 min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-headline text-label">
+        {/* `dir="auto"` so a French product name in the Arabic list is clipped
+            at its own end rather than the paragraph's. This is the exact string
+            the inventory branch measured reading "…eau en bois d'olivier, 40 cm"
+            — eaten from the front, which is unscannable, because a catalogue is
+            scanned by the beginnings of its names. */}
+        <span dir="auto" className="min-w-0 flex-1 truncate text-headline text-label">
           {product.name}
         </span>
         {/* The badge carries the word, so colour is never the only signal. */}
@@ -104,7 +109,7 @@ export function ProductRow({
             nothing. The dot always sits beside a word or a number, never alone.
           */}
           {quantity !== null ? (
-            <Ltr numeric>{t("inStock", { count: quantity })}</Ltr>
+            <Isolate numeric>{t("inStock", { count: quantity })}</Isolate>
           ) : (
             <span>{tStock(stock)}</span>
           )}

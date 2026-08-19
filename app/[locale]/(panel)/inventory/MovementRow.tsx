@@ -140,7 +140,18 @@ export function MovementRow({
         >
           {signed}
         </Ltr>
-        <span className="text-caption whitespace-nowrap text-label-tertiary">
+        {/* Addressed by test id, not by `[dir="auto"]`. The Arabic-timestamp
+            assertion used to pick "the first `dir=auto` element containing four
+            digits", which was unambiguous only by accident: the moment the
+            ledger's own count line stopped being `Ltr` — it is a translated
+            sentence, not an identifier — it became a `dir="auto"` element with
+            four digits sitting above every row. A selector that depends on
+            nothing else on the page ever matching is a selector that will break
+            for an unrelated reason. */}
+        <span
+          data-testid="movement-time"
+          className="text-caption whitespace-nowrap text-label-tertiary"
+        >
           <Isolate>{formatWhen(movement.created_at, locale)}</Isolate>
         </span>
       </div>

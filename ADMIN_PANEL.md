@@ -1668,6 +1668,85 @@ explanation gets raised as a bug every few months.
 
 Staff accounts do not appear here; they are §87's `/users`.
 
+> **Corrected in the build: the consent row was not buildable, and the API was changed rather than
+> the row.** Three things were wrong at once. There was **no date** — the payload carried a bare
+> `marketing_consent: false` and nothing else. The refusal was **not by name**: it answered
+> `"Unknown field."`, the same message a misspelling gets, which reads as "no such field" when the
+> truth is "it exists and it is somebody else's". And **0 of 16 customers had ever consented**, so the
+> affirmative branch had no data that could reach it and no test that had ever seen it render.
+>
+> A bare boolean also cannot tell *declined* from *never asked*, and those are different answers to
+> the one question this row exists for. The fix went into `ecom-temp`:
+> `marketing_consent_at` and `marketing_consent_source` are emitted beside the flag, the refusal names
+> the shopper's own route, and one seeded shopper consents. The timestamp turned out to have been
+> **stored since §85 was written and never presented**; the source was in the audit log, which stops
+> at Admin while a customer record is read by Support Agent.
+>
+> The date carries a UTC offset the meta behind it does not, because `notes[].created_at` and
+> `movements[].created_at` both ship a naive instant that `new Date()` shifts silently — and a consent
+> date off by an hour is a date in the wrong day. It is written on a **withdrawal** as well as a grant,
+> and only on an actual change: a one-click unsubscribe clicked twice from two devices must not restate
+> the record.
+>
+> The row is a value with its reason, never a switch — `ReadOnlyField`, which already existed for
+> exactly this.
+
+> **Corrected in the build: the detail is not the list row, and this is the first collection where
+> that is true.** `GET /customers/{id}` carries a `statistics` block that `GET /customers` omits.
+> Verified by comparing key sets across all 16 rows and every shared value on customer 24: they are
+> identical, so the detail is the row *plus a report*. Every previous branch's "one schema serves
+> both" note stops here, and `CustomerDetail` is its own type rather than the row with an optional
+> field — a component handed a list row must not be able to reach `statistics` and find `undefined`.
+>
+> **Two of the report's numbers do not divide into each other.** `total_orders: 5` beside
+> `average_order_value: "1050.00"` and `total_revenue: "2100.00"` — and 2100 ÷ 5 is 420, which is the
+> arithmetic a reader performs when the figures sit side by side. The API is self-consistent: revenue
+> is the sum of the *completed* orders (1500 + 600, checked against that customer's own order list)
+> and the average is over those same two. Only labelling can make it visible, so every figure carries
+> its scope and the card states the relationship. `by_status` sums to `total_orders` exactly and is
+> what explains the gap.
+>
+> `total_revenue` is **not behind the money gate at the API** — a Support Agent reads `2100.00` with a
+> 200. The panel gates it anyway, and the reason is specific rather than cautious: `canSeeMoney()`
+> needs `ac_view_analytics` **and** `ac_manage_orders`, all six roles hold the first, and of the four
+> that can read a customer the Support Agent alone lacks the second. They cannot open one of this
+> customer's orders, so a lifetime-revenue figure would be the only money in the panel they can see and
+> the only one they cannot check. The counts and both order links stay.
+
+> **Corrected in the build: `?search=` does not match a customer's name.** It matches `user_login`,
+> `user_email` and `display_name` — never `first_name` or `last_name`. Proven with a positive control:
+> customer 26 was given the names `Zqxwvu Plmokn`, `?search=Zqxwvu` returned **0 rows** and
+> `?search=cus_fresh` returned 1. `?search=Chérif` appearing to work is MySQL's accent-insensitive
+> collation matching the *email*.
+>
+> So **Amina Benali cannot be found by typing her name**, and a box labelled "search customers" is a
+> promise the endpoint breaks silently — an unmatched search is an ordinary empty list. The field names
+> the two things it matches, and the empty state repeats it, because the person who needs that sentence
+> is the one already looking at no results.
+>
+> Two more consequences of the same three-filter reality. **12 of the 16 customers have no name at
+> all**, so the list falls back to the username and then the email and *styles* the fallback — a login
+> at a name's weight reads as a person called ac_cus_shopper. And `orderby=display_name` sorts by a key
+> the payload never carries: it returned a byte-identical sequence to `user_email` across all 16 rows,
+> because every display name here is the username. The panel offers `registered` and `user_email` and
+> leaves the other two out rather than shipping a sort nobody can explain.
+
+> **Corrected in the build: the roles invert between this screen and coupons.** Measured across all six
+> panel roles — a **Support Agent reads customers** (they hold `ac_manage_customers`, the thinnest role
+> in the system holding anything) and is **403 on coupons**, while a **Marketing Manager** is exactly
+> the other way round. The ready-made forbidden fixture of the last two branches works for neither
+> screen alone, so `scripts/test.sh` now mints three credentials.
+>
+> A staff id is a **404** here, not a leak: `GET /customers/1` — the administrator — answers
+> `"No customer with that id."`, because the repository filters on the role. `?role=administrator` is
+> ignored with a 200 and the same 16 rows, which is this API's usual trap and worth knowing before
+> trusting any parameter that is not in the list of three.
+>
+> **`POST /customers` does not exist** — 404 `no_route`, not 403. Staff do not create shoppers.
+> `billing` and `shipping` **merge on a partial PATCH**, unlike products: `{"billing":{"city":"Oran"}}`
+> left country and phone intact. An unknown sub-key is refused as a **dotted path**,
+> `details.fields["billing.nonsense"]`, so a form binding errors by field name needs to resolve one.
+
 ## Coupons
 
 `GET/POST /coupons`, `GET/PATCH/DELETE /coupons/{id}`. `ac_manage_coupons`.
@@ -1679,6 +1758,57 @@ the field as the user types, so what they see is what is stored.
 WooCommerce has no such field and `maximum_amount` caps the cart, not the discount.
 
 Absent thresholds come back as `null`, not `"0.00"` — an empty field, not a zero.
+
+> **Corrected in the build: the restriction picker needed two new routes, because the role whose job
+> coupons are could not read a product's name.** `product_ids` and `product_categories` are id arrays,
+> and turning `[16]` into *Tapis et Textiles* needs `/products` and `/product-categories` — both
+> `ac_manage_products`, which a **Marketing Manager does not hold** while holding `ac_manage_coupons`.
+> One of the three coupon-capable roles, and no client work could fix it.
+>
+> `GET /coupons/eligible-products` and `/coupons/eligible-categories` were added to `ecom-temp` behind
+> `ac_manage_coupons`. A row is id, name, SKU and status and nothing else — no price, no stock, no
+> cost — which is **strictly less than the catalogue discloses**; widening `ac_manage_products` would
+> have handed this role the whole catalogue in order to give it a label. Products search by name *or*
+> SKU, because WordPress's own `s` reads the title and the content and a shop that knows a product by
+> `AC-SEO-TAPIS` would otherwise get an empty picker. A single coupon also carries a `restrictions`
+> block with the ids resolved; the list does not, because resolving 100 rows populates a column no list
+> shows.
+>
+> **The ids were stored blind.** `{"product_ids": [999999]}` answered 200 and the coupon then applied
+> to nothing while looking, in every response and on every screen, exactly like a coupon that worked.
+> Now a 400 per field, naming the ids. Reads stay tolerant — a product deleted afterwards leaves a real
+> stale id, reported as `{id, name: null, missing: true}` rather than dropped, because a client that
+> dropped it would delete the restriction the next time the form saved.
+>
+> One measurement to distrust in the original brief: `product_ids: [24]` looked like a *customer* id
+> being accepted, and is not. **User ids and post ids are separate sequences that collide** — customer
+> 24 is also product 24, and customer 13 is a variation. Only `999999` was genuinely unchecked, and the
+> test uses a page id, which cannot be a product by construction.
+
+> **Corrected in the build: `date_expires` is asymmetric, and it silently deletes itself.** Written as
+> `Y-m-d`, read back as full ISO — `PATCH {"date_expires":"2026-12-31"}` → `"2026-12-31T00:00:00+00:00"`.
+> An `<input type="date">` bound to the response renders **empty**, and the next save posts an empty
+> string, which the API accepts as "clear the expiry". The round trip deletes a date nobody touched.
+> `expiryInputValue()` is the only thing allowed to fill that control. A past date is accepted with a
+> 200, so an expired coupon is an ordinary row that reads as `publish`; `31/12/2026` and `2026-02-30`
+> are refused with *different* messages.
+>
+> **Zero and null run in opposite directions on the same object.** `amount: "0.00"` is a real coupon —
+> the `livraison` fixture is a zero discount with `free_shipping: true` — while a threshold of zero is
+> folded to null on write and can never be read back. Rendering the two the same way is the inventory
+> null-vs-0 lesson in a third place, and the row says *Livraison offerte* rather than `0,00 DA`.
+>
+> A **negative** threshold used to be the worst of both: the clearing arm read `<= 0.0`, so
+> `{"minimum_amount": "-1"}` answered 200 and **erased a real minimum spend of 15 000 DA** while
+> `amount: "-5"` was refused by name. Fixed in `ecom-temp`; clearing stays expressible as `null`, `""`
+> and `0`.
+>
+> Three more, each measured: **`amount` is required on `POST`** and validation runs before the
+> uniqueness check, so a duplicate code with a missing amount reports only the amount. The default list
+> carries **publish *and* draft** — no `?status=` returns both, and `?status=trash` is a 400 while a
+> trashed coupon GETs as 200, so the readable set is wider than the filterable one. And `used_by` is
+> emitted by nothing, so *who* redeemed a coupon is unanswerable; `usage_count` is 0 on every fixture
+> and no panel route can move it.
 
 ## Shipping
 
@@ -2171,7 +2301,15 @@ mirroring §47's slicing.
                         `POST /inventory/bulk` did not — a batch stocktake is its
                         own screen and the allowlist refuses the route until one
                         exists.
-11. feat/customers      + coupons
+11. feat/customers      + coupons                                    DONE
+                        — two collections sharing no field, no capability and no
+                        reader, and the branch where the forbidden fixtures
+                        invert: a Support Agent reads customers and is refused
+                        coupons; a Marketing Manager is the reverse. Five things
+                        were fixed in `ecom-temp` rather than worked around here,
+                        because the screens were not buildable as specified: the
+                        consent record, and the two picker routes a Marketing
+                        Manager needs to see what a coupon applies to.
 12. feat/shipping       + payments + COD
 13. feat/analytics      dashboard, the seven reports, the money gate
 14. feat/content        CMS, media, marketing, campaigns, notifications
@@ -2275,6 +2413,41 @@ Added by the products build:
   test or a script must find a product by SKU.
 - **`Sheet` had never been opened at `md`.** `inset-block: 50%` is not centring — with `block-size:
   auto` it resolves the height to zero, and the desktop sheet rendered 544 × 0.
+
+Added by the customers and coupons build:
+
+- **The forbidden fixture is per screen, not per branch.** A Support Agent reads customers and is
+  refused coupons; a Marketing Manager is the exact inverse. `scripts/test.sh` mints three
+  credentials, and the Marketing Manager earns its place positively as well: it is the role the
+  restriction picker could not have been built for.
+- **`?search=` on customers does not match a name**, only login, email and display name. Proven with
+  a positive control, because an unmatched search and an unsearchable field look identical.
+- **12 of 16 customers have no name at all.** A list that renders `first_name` as the row's identity
+  renders twelve blank rows.
+- **The customer detail is the list row plus `statistics`** — the first collection here where the two
+  routes disagree, so "one schema serves both" stops being true.
+- **`total_orders` and `average_order_value` do not divide.** Revenue and the average count only
+  completed orders. Label the scope or do not put them adjacent.
+- **`POST /customers` is a 404, not a 403.** Staff do not create shoppers.
+- **A customer address merges on a partial PATCH**, unlike a product, and an unknown sub-key is
+  refused as a dotted path — `details.fields["billing.nonsense"]`.
+- **User ids and post ids collide.** Customer 24 is also product 24. An id from one table is not a
+  usable negative fixture for the other.
+- **A coupon's `amount: "0.00"` is real while a threshold's zero is not** — the null-versus-zero rule
+  running in opposite directions on one object.
+- **`date_expires` is written `Y-m-d` and read back as ISO.** Bound straight to a date input it
+  renders empty and then clears itself on the next save.
+- **A default coupon list carries drafts.** No `?status=` means publish *and* draft; `?status=trash`
+  is a 400 while a trashed coupon still GETs 200.
+- **`Ltr` around a translated sentence forces the wrong direction.** Sixteen call sites reached for
+  `numeric`'s tabular figures and took the forced direction with them, laying an Arabic count out
+  from the left. `Ltr` is for a bare identifier only; the moment a translated word shares the
+  element, it is `Isolate`. Money and percentages measured *identically* under both, so those stay.
+- **A `fixed bottom-0` save bar lands under the tab bar.** Both are `z-20` and the tab bar comes
+  later in the document, so the save button was physically untappable at phone widths. `.save-bar`
+  already existed and solves it.
+- **A native date input follows the browser's locale**, not the page's, and `lang` does not override
+  it on Chromium. The Arabic form shows `mm/dd/yyyy` and the value is echoed underneath instead.
 
 ---
 

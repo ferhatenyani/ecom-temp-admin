@@ -60,6 +60,32 @@ export function Ltr({
  *
  * The rule, in one line: **`Ltr` for something the shop assigned, `Isolate` for
  * something `Intl` formatted.**
+ *
+ * ## A third case, found on the customers branch: a translated sentence
+ *
+ * `t("count", { total })` produces `"16 clients"` in French and `"16 عميلًا"` in
+ * Arabic. Sixteen call sites across five screens wrapped one of these in `Ltr`,
+ * reaching for the tabular figures `numeric` gives — and took the forced
+ * direction along with them.
+ *
+ * Measured on the Arabic customers list: the count line computed
+ * `direction: ltr`, so an Arabic sentence was laid out beginning at the *left*.
+ * An Arabic reader starts at the right, so the number they read first was the one
+ * furthest from where they start. French was unaffected, which is why it survived
+ * three branches — the locale nobody was looking at was the only one wrong.
+ *
+ * `t("usageOf", { count, limit })` was the same defect with the numerals swapped:
+ * `"0 من 50"` forced to LTR rendered `0` and `50` on either side of a preposition
+ * pointing the wrong way.
+ *
+ * **A pluralised UI string is neither an identifier nor a formatted value.** It is
+ * prose in the page's own language, and `Isolate` is right for it: `dir="auto"`
+ * resolves from the first strong character — the translated word, since a digit is
+ * not strong — so French resolves LTR and Arabic RTL, each the way its own
+ * sentence is read. `numeric` still gives the tabular figures.
+ *
+ * So: **`Ltr` only for a bare identifier.** The moment a translated word shares
+ * the element, it is `Isolate`.
  */
 export function Isolate({
   children,

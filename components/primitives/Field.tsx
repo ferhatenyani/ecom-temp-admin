@@ -124,7 +124,23 @@ export function TextField({
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
-        {...(isolate ? { dir: "ltr" as const, "data-numeric": "" } : {})}
+        /*
+         * `dir="auto"` when the field is not an identifier, and it is not
+         * cosmetic. A control inherits the *page's* direction, so a French
+         * description typed into the Arabic panel is an LTR run inside an RTL
+         * paragraph: measured on the coupon form, "15 % sur les tapis et
+         * textiles." rendered as ".sur les tapis et textiles % 15" — the leading
+         * figure thrown to the far end and the full stop to the other. Nothing
+         * errors; the text is simply wrong, and only in the locale the author
+         * was not looking at.
+         *
+         * `auto` resolves from the value's own first strong character, so French
+         * types left-to-right and Arabic right-to-left in the same control, and
+         * an empty field falls back to the page's direction.
+         */
+        {...(isolate
+          ? { dir: "ltr" as const, "data-numeric": "" }
+          : { dir: "auto" as const })}
         className={`${CONTROL} ${isolate ? "text-start" : ""} disabled:opacity-40`}
         style={isolate ? { unicodeBidi: "isolate" } : undefined}
       />
@@ -179,6 +195,9 @@ export function TextAreaField({
         disabled={disabled || !hydrated}
         aria-busy={!hydrated || undefined}
         onChange={(event) => onChange(event.target.value)}
+        // See `TextField`: a description is user content in whichever language it
+        // was typed, and the control otherwise inherits the page's direction.
+        dir="auto"
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         className={`${CONTROL} resize-y py-1 disabled:opacity-40`}

@@ -68,8 +68,13 @@ export function FilterPill({
       ].join(" ")}
     >
       <span>{label}</span>
+      {/* A filter's *value* is vocabulary — a category or attribute term,
+          user-typed — while its label is translated UI. Only the value needs its
+          own direction, so only the value carries `dir="auto"`. */}
       {active ? (
-        <span className="max-w-32 truncate font-normal opacity-80">{value}</span>
+        <span dir="auto" className="max-w-32 truncate font-normal opacity-80">
+          {value}
+        </span>
       ) : null}
       <Icon name="chevron" className="size-3.5 shrink-0 rotate-90 opacity-60" />
     </button>
@@ -142,7 +147,13 @@ export function FilterChips({
           key={chip.key}
           className="tone-accent tonal flex min-h-8 items-center gap-1 rounded-full ps-3 pe-1 text-footnote"
         >
-          <span className="min-w-0 max-w-48 truncate">
+          {/* A chip is a translated label and a user-content value joined into
+              one truncating run, so its direction cannot be resolved from either
+              half alone. `dir="auto"` takes the first strong character — the
+              label, which is the page's language — and that is the right answer:
+              the label leads, so clipping at the paragraph's end clips the value,
+              which is what should give way. */}
+          <span dir="auto" className="min-w-0 max-w-48 truncate">
             {chip.label} : {chip.value}
           </span>
           <button
@@ -296,7 +307,10 @@ export function FilterValue({
       ].join(" ")}
     >
       {selected ? <Icon name="check" className="size-3.5 shrink-0" /> : null}
-      <span className="max-w-44 truncate">{label}</span>
+      {/* A choice in the filter sheet: a category or term name, user content. */}
+      <span dir="auto" className="max-w-44 truncate">
+        {label}
+      </span>
       {count !== null ? (
         <Ltr numeric className="text-caption opacity-60">
           {count}

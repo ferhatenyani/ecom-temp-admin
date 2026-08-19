@@ -67,9 +67,17 @@ export function Scaffold({
           )}
 
           {/* The collapsed title. Opacity only — a title that slides while the
-              list scrolls fights the list. */}
+              list scrolls fights the list.
+
+              `dir="auto"` because on every detail screen this is user content: a
+              product name, a coupon code, a customer's name. It is the one string
+              in the chrome that is not in the page's own language, and it is
+              centred and truncating, so in Arabic it was clipped from its front.
+              `back.label` beside it is deliberately *not* marked — that is always
+              a translated section name and always in the page's direction. */}
           <h1
             aria-hidden={!collapsed}
+            dir="auto"
             className={`title-collapsed min-w-0 flex-1 truncate text-center text-headline text-label ${
               collapsed ? "is-collapsed" : ""
             }`}
