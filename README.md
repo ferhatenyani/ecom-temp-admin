@@ -10,13 +10,15 @@ cookie. No component library.
 
 ## What exists
 
-The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and Coupons.
+The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
+Coupons, and Shipping with Payments and cash on delivery.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
 /[locale]/orders             list — filters in the URL, 30 s poll, five states
-/[locale]/orders/[id]        detail — summary, items, totals, customer, COD, timeline
-                             plus the status transition, which renders the API's 409
+/[locale]/orders/[id]        detail — summary, items, totals, customer, parcels, payments,
+                             COD with its attempt log, and the timeline, plus the status
+                             transition, which renders the API's 409
 /[locale]/products           list — nine filters, facets, a filter sheet, the URL as state
 /[locale]/products/[id]      detail — the whole object as a form, variations read-only,
                              trash and permanent delete with different confirmations
@@ -30,6 +32,8 @@ The shell, the credential boundary, Orders end to end, Products, Inventory, Cust
 /[locale]/coupons            list — search, status, and the zero-amount case
 /[locale]/coupons/[id]       the whole coupon as a form, with the restriction picker
 /[locale]/coupons/new        the same form against an empty coupon
+/[locale]/shipping           the tariff with its own resolver, and the parcels
+/[locale]/payments           the transactions ledger, and the COD funnel beside it
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
@@ -70,15 +74,26 @@ npm run test:e2e                  # four device widths × both locales
 npm run shots -- <user> <pass>    # captures + assertions into .impeccable/review/
 ```
 
-`scripts/test.sh` mints its own credentials and clears the API's rate-limit counters first — the suite
+`scripts/test.sh` mints **four** credentials and clears the API's rate-limit counters first — the suite
 provokes a login failure on purpose, and the failed-login bucket would otherwise refuse the correct
 password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs`, because the facet
 tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
-takes a few seconds.
+takes a few seconds. `scripts/seed-shipping-rules.mjs` runs beside it for the same reason —
+`GET /shipping/rules` answered `[]`, so `/shipping/rates` could only ever answer `[]` too and the
+resolver had nothing to resolve. Three rules (national 800, wilaya 16 at 500, commune 484 at 350)
+make commune-beats-wilaya-beats-national observable, and the suite asserts those figures.
 
-The e2e suite runs on Chromium at current iPhone widths — **364 tests** across four widths and both
-locales. `--project=phone-webkit` is the honest engine and is **91/91** (verified 2026-08-19), kept out
-of the default run because its system libraries are 231 apt packages behind root.
+The fourth credential is a **Manager**, and it is the only one of the four that still describes a
+live account: the two-tier collapse retired `ac_support_agent` and `ac_marketing_manager`, which
+still mint (`set_role()` bypasses the API) and whose suites still pass, but which now name a
+configuration production does not have. A Manager is 200 on shipping and COD and **403 on
+payments** — one credential carrying a real refusal and a real success.
+
+The e2e suite runs on Chromium at current iPhone widths — **420 tests** across four widths and both
+locales. `--project=phone-webkit` is the honest engine and is **105/105** (verified 2026-08-20), kept out
+of the default run because its system libraries are 231 apt packages behind root. Export all
+**four** credentials before running it by hand — with only two, nine forbidden-fixture tests skip
+and the run reports 96 passed, which is not the same thing as green.
 
 Two operator errors are worth naming, because both invalidated a run and both looked like code
 defects. **Minting a credential while a suite is running** kills that suite's credential — the same
@@ -99,7 +114,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 60 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 123 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -216,6 +231,34 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
   leaves Turbopack with a route entry for a directory that disappeared, and the route then renders as
   unmatched — which looked exactly like the bug above on a page that was fine. `rm -rf .next` and
   restart before believing a routing error that only one screen shows.
+
+- **The shipment label is `metadata.label`** (and `metadata.labels`), not a top-level field, and no
+  shipment in this shop carries one — `manual` is the only configured provider and issues none. But
+  `metadata` is emitted verbatim, so a courier adapter puts a credential to a customer's name, phone
+  and address into the panel's JSON the day it is switched on. `stripLabelUrls()` runs server-side
+  and passes the *names* of the stripped keys so a button can exist without the URL;
+  `/api/label/[id]` re-reads the shipment and streams the bytes.
+- **A shipment's 409 carries no `allowed` list**, unlike an order's — `is_live` is the whole rule.
+  The one place the panel cannot render what the server would have said.
+- **`?is_live=` is accepted and ignored.** *Live parcels only* is not a request the API can answer.
+- **`sync` is a 409 while the parcel is live and a 200 once it is finished** — the terminal check
+  short-circuits before the provider is asked.
+- **There is no `PATCH` on a payment.** `paid → refunded` cannot be triggered or observed from here.
+  `verify` answers `{report, transaction}`, and `report.amount` can be `""`.
+- **`POST /orders/{id}/payments` opens a real checkout** and returns a live `pay.chargily.dz` link.
+  Off the allowlist deliberately, with the reason in a unit test.
+- **`PATCH /orders/{id}/cod` takes the whole GET object back.** Read-only fields are dropped
+  silently. Three collections, three rules — a coupon's `{}` is a no-op, a customer's address merges.
+- **`allowed_outcomes` cannot see the order's status**, which is checked first and refuses on its own.
+- **`by_status.confirmed` is 74 and `confirmed_orders` is 111 in one payload**, both correct. Scope
+  every figure or the reader concludes one is broken.
+- **`Omit` on a Zod `looseObject` erases every known field** — the index signature makes `keyof`
+  swallow the exclusion. Intersect instead.
+- **A row's action can render on top of the figure beside it.** `Button` sets no width; a long label
+  at 390 px covered the money. `shots.mjs` asserts it geometrically now.
+- **A `Field`'s `hint` is inside its `<label>`**, so it becomes part of the accessible name and
+  changes as the hint does — while `FieldError` uses `aria-describedby`. Shared by every form; noted
+  rather than changed.
 
 ## Owed to the backend, and paid
 

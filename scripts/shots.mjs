@@ -1,8 +1,10 @@
 /**
  * Signs in with a real Application Password and captures the orders list, one
  * order detail, the products list, its filter sheet, one product detail, the
- * customers list and detail, and the coupons list and form — in both locales, at
- * the three current iPhone widths and at a desktop width.
+ * customers list and detail, the coupons list and form, the shipping tariff and
+ * its parcels, the payments ledger with the COD funnel, and an order detail
+ * carrying all three new sections — in both locales, at the three current iPhone
+ * widths and at a desktop width.
  *
  * It also asserts the handful of things a screenshot cannot show: that the Arabic
  * face actually loaded rather than falling back, that `dir` is right, and that an
@@ -472,6 +474,136 @@ for (const [name, options] of TARGETS) {
       return bar.contains(hit) ? "reachable" : `covered by ${hit?.tagName ?? "nothing"}`;
     });
     check(`${name}/${locale}: the save button is reachable`, saveReachable, "reachable");
+
+    // ---------------------------------------------------------- shipping ---
+    await page.goto(`${BASE}/${locale}/shipping`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/shipping-${name}-${locale}.png`, fullPage: true });
+
+    const shippingOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: shipping no horizontal overflow`, shippingOverflow, (v) => v <= 1);
+
+    /*
+     * **The scope badge must not be the destination as well.** A national rule
+     * rendered "National · National" — the badge printed twice — because the
+     * destination label fell back to the scope word. Nothing failed; only the
+     * screenshot showed it.
+     */
+    const tariff = await page.locator("body").innerText();
+    check(
+      `${name}/${locale}: the national rule names the country, not its own badge`,
+      /National\s*·?\s*National|وطني\s*·?\s*وطني/.test(tariff),
+      false,
+    );
+
+    /*
+     * **A rule row's secondary line stays on one line.** In Arabic — a step
+     * larger than French — it wrapped and split the isolated "1 ي", leaving the
+     * unit orphaned under its own number. Measured on the rendered box.
+     */
+    const ruleLines = await page.evaluate(() => {
+      const row = document.querySelector("section .list-row span.truncate");
+      if (!row) return -1;
+      const style = getComputedStyle(row);
+      return Math.round(row.getBoundingClientRect().height / parseFloat(style.lineHeight));
+    });
+    check(`${name}/${locale}: a rule's secondary line does not wrap`, ruleLines, (v) => v <= 1);
+
+    // ----------------------------------------------------------- parcels ---
+    await page.goto(`${BASE}/${locale}/shipping?view=parcels`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/parcels-${name}-${locale}.png` });
+
+    const parcelsOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: parcels no horizontal overflow`, parcelsOverflow, (v) => v <= 1);
+
+    /*
+     * A tracking number keeps its digit order inside Arabic text. The rendered
+     * string, not the `dir` attribute — the attribute half cannot catch a bidi
+     * bug, and a reordered tracking number is a different tracking number.
+     */
+    const tracking = await page
+      .locator("text=/MAN-\\d+-\\d+/")
+      .first()
+      .innerText()
+      .catch(() => "");
+    check(`${name}/${locale}: a tracking number keeps its order`, tracking.trim(), (v) =>
+      /^MAN-\d+-\d+$/.test(v),
+    );
+
+    // ---------------------------------------------------------- payments ---
+    await page.goto(`${BASE}/${locale}/payments`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/payments-${name}-${locale}.png`, fullPage: true });
+
+    const paymentsOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: payments no horizontal overflow`, paymentsOverflow, (v) => v <= 1);
+
+    /*
+     * **Every figure in the COD funnel carries its scope.** Two counts of
+     * "confirmed" sit on this screen — the current state and the cumulative
+     * total — and printing either bare is how a reader concludes one is broken.
+     * Counted structurally: as many scope lines as figures.
+     */
+    const scoped = await page.evaluate(() => {
+      const section = [...document.querySelectorAll("section")].find((el) =>
+        /Contre-remboursement, toute la boutique|الدفع عند الاستلام، على مستوى المتجر/.test(
+          el.querySelector("h2")?.textContent ?? "",
+        ),
+      );
+      if (!section) return "no funnel";
+      const rows = section.querySelectorAll(".list-row");
+      const withScope = [...rows].filter((r) => r.querySelector(".text-caption"));
+      return `${withScope.length}/${rows.length}`;
+    });
+    check(`${name}/${locale}: every COD figure names its scope`, scoped, (v) => {
+      const [a, b] = String(v).split("/");
+      return a !== undefined && a === b && Number(a) > 0;
+    });
+
+    // ------------------------------------------- the order detail sections ---
+    await page.goto(`${BASE}/${locale}/orders/3939`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/order-sections-${name}-${locale}.png`, fullPage: true });
+
+    /*
+     * **A row's action must not overrun the row.** "Vérifier auprès du
+     * fournisseur" beside a money figure at 390 px rendered *on top of* the
+     * amount — `Button` sets no width and the flex let it overflow. Asserted
+     * geometrically: no action may cover the figure beside it.
+     */
+    const actionsClear = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".list-row")];
+      for (const row of rows) {
+        const button = row.querySelector("button");
+        const figure = row.querySelector("[data-numeric]");
+        if (!button || !figure) continue;
+        const a = button.getBoundingClientRect();
+        const b = figure.getBoundingClientRect();
+        if (a.width === 0 || b.width === 0) continue;
+        const overlap =
+          Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
+          Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+        if (overlap) return `overlap: ${button.textContent?.trim().slice(0, 30)}`;
+      }
+      return "clear";
+    });
+    check(`${name}/${locale}: a row action does not cover its figure`, actionsClear, "clear");
+
+    const orderSectionsOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(
+      `${name}/${locale}: order detail sections no overflow`,
+      orderSectionsOverflow,
+      (v) => v <= 1,
+    );
 
     await context.close();
   }

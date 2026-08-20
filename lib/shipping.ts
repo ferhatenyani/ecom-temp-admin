@@ -45,10 +45,37 @@ import type { Shipment, ShippingProvider, ShippingRule } from "@/lib/api/schemas
  * component can be trusted to remember, because the component would have to know
  * the key was there.
  */
-export const LABEL_METADATA_KEYS = ["label", "labels", "signature_url"] as const;
+/**
+ * Named individually as well as listed, so a reader can be addressed by name.
+ *
+ * `/api/label/[id]` needs *these two specifically* — `label` is a URL and
+ * `labels` is a list of them — and reaching them as `LABEL_METADATA_KEYS[0]` and
+ * `[1]` would make reordering this array silently change which keys the handler
+ * reads. A stripper that removes all three is order-independent; a reader that
+ * wants two of them is not.
+ */
+export const LABEL_KEY = "label";
+export const LABELS_KEY = "labels";
+export const SIGNATURE_URL_KEY = "signature_url";
 
-export type SafeShipment = Omit<Shipment, "metadata"> & {
-  metadata: Record<string, unknown>;
+export const LABEL_METADATA_KEYS = [LABEL_KEY, LABELS_KEY, SIGNATURE_URL_KEY] as const;
+
+/**
+ * `Shipment & {…}` rather than `Omit<Shipment, "metadata"> & {…}`, and the
+ * difference is not stylistic.
+ *
+ * `Shipment` comes from `z.looseObject`, which infers an index signature so that
+ * an added API field is not a breaking change. `Omit` is `Pick<T, Exclude<keyof
+ * T, K>>`, and `keyof` on a type with an index signature is `string | number` —
+ * so `Exclude<…, "metadata">` removes nothing and `Pick` collapses every known
+ * field to `unknown`. Every property read off the result then typechecks as
+ * `unknown` and fails at the call site, which is how this was caught: thirteen
+ * errors on `tracking_number`, `status` and `id` at once.
+ *
+ * Intersecting instead keeps the known fields. `metadata` is already
+ * `Record<string, unknown>` on the schema, which is what the stripper returns.
+ */
+export type SafeShipment = Shipment & {
   /**
    * Which credential keys were present, by name and never by value.
    *
