@@ -176,6 +176,17 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **The forbidden fixture is per screen, not per branch.** A **Support Agent reads customers** — they
   hold `ac_manage_customers`, the thinnest role in the system holding anything — and is 403 on
   coupons; a **Marketing Manager** is the exact inverse. `scripts/test.sh` mints three credentials.
+- **Staff roles are now two tiers — Super Admin and Manager** (`ecom-temp`, `feat/two-tier-roles`,
+  2026-08-20). The other five are *retired*: still defined, still published by `GET /roles` with an
+  `assignable` flag, never granted. Deleting them would have stranded 43 live accounts on **zero
+  capabilities**, because `remove_role()` does not touch `wp_capabilities` usermeta. The panel needed
+  no change — every gate is a capability, never a role — and pre-collapse Application Passwords still
+  authenticate. But **both compound rules stopped discriminating**: Manager holds `ac_view_analytics`
+  and `ac_manage_orders`, so `canSeeMoney()` is true for everyone and `meta.money_visible` is never
+  false; Manager holds no marketing capability, so the draft-but-cannot-send state has no role. The
+  live forbidden fixture is a **Manager** — 403 on payments, campaigns, marketing, settings, users and
+  audit logs. `mint-credential.sh` still assigns retired roles because `set_role()` bypasses the API,
+  so the old fixtures keep passing while describing a configuration production no longer has.
 - **`?search=` on customers matches login, email and display name — never the name.** Proven with a
   positive control: a customer given the names `Zqxwvu Plmokn` returned 0 rows for `Zqxwvu` and 1 for
   their username. Amina Benali cannot be found by typing her name, so the field says what it matches.
