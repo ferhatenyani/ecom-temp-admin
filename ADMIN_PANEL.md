@@ -710,6 +710,45 @@ Encode this once, in `lib/capabilities.ts`, as named predicates — `canSeeMoney
 `canSendCampaigns(me)` — never as capability strings compared inline in a component. There are two
 compound rules today and the third will be added in one place.
 
+> **Corrected in the build: staff roles collapsed to two tiers, and both compound rules stopped
+> discriminating.** Shipped in `ecom-temp` on `feat/two-tier-roles`, 2026-08-20. §45's seven roles are
+> now **Super Admin** (all 13 capabilities) and **Manager** (`ac_manager`'s existing seven: products,
+> inventory, orders, customers, coupons, shipping, analytics). The other five —
+> `ac_admin`, `ac_product_manager`, `ac_order_manager`, `ac_marketing_manager`, `ac_support_agent` —
+> are **retired, not deleted**: still defined, still installed, still published by `GET /roles` with a
+> new `assignable` flag, still valid in `?role=`, no longer granted. 54 accounts moved; 25 Super Admin,
+> 43 Manager, 2 `administrator` untouched.
+>
+> Deleting them would have been the obvious move and was the dangerous one: `remove_role()` never
+> touches `wp_capabilities` usermeta, so a live account left pointing at a removed role resolves to
+> **zero capabilities** — it authenticates normally and answers 403 on every route. Retiring avoids the
+> failure rather than sequencing around it.
+>
+> **Nothing in the panel's authorization changed, and that is the point.** Every guard in the API is
+> `current_user_can()`; across all 182 guard sites not one checks a role name, and `lib/capabilities.ts`
+> reads `/auth/me`'s capability list. Pre-collapse Application Passwords still authenticate — they are
+> per account, not per role — so no credential was re-minted and no session broke.
+>
+> **What did change is that neither compound rule gates anything any more.** Measured against the live
+> API the same day, both tiers:
+>
+> | | Super Admin | Manager |
+> |---|---|---|
+> | `/analytics/revenue` | 200 | **200** |
+> | `meta.money_visible` on `/analytics/overview` | `true` | **`true`** |
+> | `/campaigns`, `/marketing/config` | 200 | 403 |
+> | `/settings`, `/users`, `/audit-logs` | 200 | 403 |
+>
+> `canSeeMoney()` is `ac_view_analytics` **and** `ac_manage_orders`, and Manager holds both — so
+> **every staff account now sees money**, and the money-gated dashboard has no role that can exercise
+> it. `canSendCampaigns()` is `ac_manage_marketing` **and** `ac_manage_customers`, and Manager holds
+> neither half of marketing — so campaigns is now a plain single-capability 403 and **"drafts but
+> cannot send" is a state no role reaches**.
+>
+> Both predicates stay in `lib/capabilities.ts`, correct and unchanged. They are the right encoding of
+> rules the API still enforces, and a third tier or a widened Manager would make them bite again. What
+> they can no longer do is supply a test fixture — see [Part VII](#what-the-e2e-suite-must-cover).
+
 ## The API client
 
 One typed client in `lib/api/`. Three jobs:
@@ -1595,6 +1634,11 @@ movements, and the ledger's pagination has to expect that.
 > that reads differently depending on who opens it is worse than one that reads the same for everyone,
 > so neither route is behind the panel's proxy.
 >
+> **After the two-tier collapse (2026-08-20) the table is two rows, and the conclusion is unchanged.**
+> `ac_manage_inventory` is held by Super Admin and Manager; `GET /users/{id}` is 200 for the first and
+> 403 for the second, `/audit-logs` likewise. So a name is still unresolvable for one of the two roles
+> that can open the ledger, and `movementActor()` still shows what it can prove.
+>
 > **The row says what it can prove**, from the movement plus `/auth/me`: *an order* (with its number,
 > which is a real referent the reader can open — 692 of 1154 rows), *you*, *a colleague*, or *unknown*
 > for `actor_id: 0`. Never a bare numeric id. `?actor_id=` genuinely filters (1154 → 17), so identity
@@ -1712,6 +1756,11 @@ Staff accounts do not appear here; they are §87's `/users`.
 > that can read a customer the Support Agent alone lacks the second. They cannot open one of this
 > customer's orders, so a lifetime-revenue figure would be the only money in the panel they can see and
 > the only one they cannot check. The counts and both order links stay.
+>
+> **Superseded by the two-tier collapse (2026-08-20):** both tiers now hold `ac_manage_orders`, so the
+> gate passes for every staff account and the figure always renders. The gate stays in the code — it is
+> still the correct rule and a third tier would make it bite again — but the case it was written for no
+> longer exists on this install.
 
 > **Corrected in the build: `?search=` does not match a customer's name.** It matches `user_login`,
 > `user_email` and `display_name` — never `first_name` or `last_name`. Proven with a positive control:
@@ -1736,6 +1785,13 @@ Staff accounts do not appear here; they are §87's `/users`.
 > in the system holding anything) and is **403 on coupons**, while a **Marketing Manager** is exactly
 > the other way round. The ready-made forbidden fixture of the last two branches works for neither
 > screen alone, so `scripts/test.sh` now mints three credentials.
+>
+> **Superseded by the two-tier collapse (2026-08-20): the inversion is gone, because both roles are.**
+> Manager holds `ac_manage_customers` *and* `ac_manage_coupons`, so one tier now reads both screens and
+> the other reads everything. The fixtures still mint — `set_role()` bypasses the API — so these tests
+> keep passing while describing a configuration production no longer has. The measurement above stays
+> because it is why the panel gates each screen on its own capability rather than on a role, which is
+> what made the collapse a no-op here.
 >
 > A staff id is a **404** here, not a leak: `GET /customers/1` — the administrator — answers
 > `"No customer with that id."`, because the repository filters on the role. `?role=administrator` is
@@ -2140,9 +2196,13 @@ Each of these is a real failure mode, not a checklist item:
 - Login with a valid Application Password; login with a bad one **twice more than the limit** and
   assert the 429 with its `Retry-After` rendered.
 - A Support Agent's session renders a coherent dashboard with **no money** and no empty
-  currency-shaped elements.
+  currency-shaped elements. *(Unreachable since the two-tier collapse — both tiers hold
+  `ac_view_analytics` and `ac_manage_orders`. Build the state; do not assert it.)*
 - A Marketing Manager can create a campaign (201) and is **refused** at send (403), with the reason
-  visible.
+  visible. *(Also unreachable: Manager holds neither marketing capability, so campaigns is a plain 403
+  and no role reaches the draft-but-cannot-send state.)*
+- A **Manager** is refused payments, campaigns, marketing, settings, users and audit logs, each with a
+  Super Admin answering 200 from the same URL in the same run. This is the live forbidden fixture.
 - A 409 on an order status transition renders the allowed moves from the response body.
 - A 400 renders **every** field error, not the first — assert two simultaneously bad fields.
 - The Arabic locale renders `dir="rtl"`, and a tracking number inside Arabic text keeps its digit
@@ -2172,6 +2232,24 @@ administrator gets 200 from the same URL in the same run.
 > URL answering 200 for someone else. Measured on this install: `ac_support_agent` holds
 > `ac_manage_customers` and `ac_view_analytics` and **not** `ac_manage_orders`, so it is also the
 > natural subject for the money gate — it is the role that has `ac_view_analytics` alone.
+>
+> **Corrected after the two-tier collapse (2026-08-20): the fixture roles are retired, and one of them
+> was load-bearing for a test that can no longer be written.** `mint-credential.sh` assigns with
+> `WP_User::set_role()`, which is WordPress core and bypasses the API's `assignable()` narrowing — so
+> **every existing fixture still mints and every existing test still passes**. What changed is what
+> they prove.
+>
+> A Support Agent credential now describes a role no live account holds, so "a Support Agent is refused
+> `/coupons`" tests a configuration production does not have. The honest replacement is a **Manager**,
+> which is a real tier: it is 403 on payments, campaigns, marketing, settings, users and audit logs,
+> and 200 on everything else — five genuine refusals with a Super Admin positive control beside each.
+>
+> The money-gate test has no replacement and should be deleted rather than rewritten. Both tiers hold
+> `ac_view_analytics` and `ac_manage_orders`, so `meta.money_visible` is `true` for every staff account
+> and no credential can render the moneyless dashboard. The *screen* must still be built — a third tier
+> would bring the state back, and `canSeeMoney()` still encodes the rule correctly — but it is
+> unreachable by any fixture and a test asserting it would be asserting nothing. Say so where it is
+> deleted; a silently removed test reads as coverage that was never needed.
 >
 > **A device descriptor selects a browser, not just a viewport.** `devices["iPhone 13"]` is WebKit, and
 > naming it in the default project turned a missing browser download into thirteen red tests that read
@@ -2420,6 +2498,23 @@ Added by the customers and coupons build:
   refused coupons; a Marketing Manager is the exact inverse. `scripts/test.sh` mints three
   credentials, and the Marketing Manager earns its place positively as well: it is the role the
   restriction picker could not have been built for.
+
+Added by the two-tier role collapse (`ecom-temp`, `feat/two-tier-roles`, 2026-08-20):
+
+- **Seven roles are two tiers: Super Admin and Manager.** The other five are *retired* — still defined,
+  still published by `GET /roles` with an `assignable` flag, still valid in `?role=`, never granted.
+- **Retiring, not deleting, is the whole safety property.** `remove_role()` does not touch
+  `wp_capabilities` usermeta, so a live account pointing at a deleted role resolves to **zero
+  capabilities**: it authenticates and then 403s everywhere, which reads as a permissions bug.
+- **The panel needed no change.** Every gate is a capability, not a role name. Pre-collapse Application
+  Passwords still authenticate — they are per account, not per role.
+- **Both compound capability rules stopped discriminating.** Manager holds `ac_view_analytics` and
+  `ac_manage_orders`, so `canSeeMoney()` is true for every staff account and `meta.money_visible` is
+  never false. Manager holds neither marketing capability, so `canSendCampaigns()`'s draft-but-cannot-
+  send state has no role. Keep both predicates; retire the tests that depended on them.
+- **`set_role()` bypasses the API's narrowing**, so `mint-credential.sh` and the backend's own
+  `tests/Api/*` fixtures still assign retired roles freely — and a full backend suite puts ~50 accounts
+  back onto them. On a dev stack the collapse needs re-running; on a real install nothing calls it.
 - **`?search=` on customers does not match a name**, only login, email and display name. Proven with
   a positive control, because an unmatched search and an unsearchable field look identical.
 - **12 of 16 customers have no name at all.** A list that renders `first_name` as the row's identity
