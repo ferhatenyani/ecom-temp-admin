@@ -299,6 +299,76 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["coupons", "30", "usage"], "GET").allowed).toBe(false);
   });
 
+  it("permits the shipping routes the screens call, and only those", () => {
+    expect(checkAllowed(["shipping", "providers"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rates"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rules"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rules"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rules", "162"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rules", "162"], "DELETE").allowed).toBe(true);
+
+    expect(checkAllowed(["shipments"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["shipments", "220"], "GET").allowed).toBe(true);
+    // The only writable field is `status`; an empty body is a 400 asking for it.
+    expect(checkAllowed(["shipments", "220"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["shipments", "220", "cancel"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["shipments", "220", "sync"], "POST").allowed).toBe(true);
+
+    // A parcel is created against an order, never at the collection.
+    expect(checkAllowed(["orders", "3939", "shipments"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["shipments"], "POST").allowed).toBe(false);
+    // Neither is a shipment deletable — the API has no such route, and history
+    // accumulating is what makes "one *live* shipment per order" the constraint.
+    expect(checkAllowed(["shipments", "220"], "DELETE").allowed).toBe(false);
+
+    // The commune picker the rule form and the rate tester both need.
+    expect(checkAllowed(["locations", "wilayas", "16", "communes"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["locations", "communes", "484"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["locations", "coverage"], "GET").allowed).toBe(false);
+  });
+
+  it("permits reading and verifying a payment, and never starting one", () => {
+    expect(checkAllowed(["payments"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["payments", "methods"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["payments", "37"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["payments", "37", "verify"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["orders", "3939", "payments"], "GET").allowed).toBe(true);
+
+    /*
+     * `POST /orders/{id}/payments` is the one write on this subject the API
+     * offers and it is deliberately refused.
+     *
+     * It opens a checkout at the provider and returns a `checkout_url` for the
+     * customer to pay through — measured, with `provider: "chargily"` it reached
+     * the live sandbox and handed back a real `pay.chargily.dz` link. That is a
+     * shopper action taken by the storefront, and a staff member who could mint
+     * payment links against an order is a fraud surface with no screen behind it.
+     */
+    expect(checkAllowed(["orders", "3939", "payments"], "POST").allowed).toBe(false);
+
+    // There is no PATCH on a payment at all — `paid → refunded` is enforced
+    // inside verification, not through a route the panel could reach.
+    expect(checkAllowed(["payments", "37"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["payments", "37"], "DELETE").allowed).toBe(false);
+    // `methods` is a literal segment, not an id, and it is a read.
+    expect(checkAllowed(["payments", "methods"], "POST").allowed).toBe(false);
+  });
+
+  it("permits the COD writes the order detail makes, and the statistics read", () => {
+    expect(checkAllowed(["orders", "3939", "cod"], "GET").allowed).toBe(true);
+    // Toggles `enabled` and nothing else; the whole GET body PATCHes back
+    // because every other field is dropped as read-only.
+    expect(checkAllowed(["orders", "3939", "cod"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["orders", "3939", "cod", "attempts"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["cod", "statistics"], "GET").allowed).toBe(true);
+
+    // An attempt is recorded, never listed or unrecorded: the history lives in
+    // the order timeline as audit rows, which the detail already reads.
+    expect(checkAllowed(["orders", "3939", "cod", "attempts"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["orders", "3939", "cod"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["cod", "statistics"], "POST").allowed).toBe(false);
+  });
+
   it("refuses the platform routes docs/API.md opens by telling you not to touch", () => {
     // A generic proxy here is an open relay to wp/v2/users with an admin
     // credential attached.

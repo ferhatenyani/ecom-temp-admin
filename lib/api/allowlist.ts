@@ -28,8 +28,12 @@ const RULES: readonly Rule[] = [
   rule("/orders/\\d+", "GET", "PATCH"),
   rule("/orders/\\d+/notes", "GET"),
   rule("/orders/\\d+/timeline", "GET"),
-  rule("/orders/\\d+/cod", "GET"),
-  rule("/orders/\\d+/shipments", "GET"),
+  // The order detail's own sub-resources. `PATCH /cod` and `POST /shipments`
+  // arrived with the shipping branch, which is what turned three read-only
+  // sections into two that write; see the shipping block below for both.
+  rule("/orders/\\d+/cod", "GET", "PATCH"),
+  rule("/orders/\\d+/cod/attempts", "POST"),
+  rule("/orders/\\d+/shipments", "GET", "POST"),
   rule("/orders/\\d+/payments", "GET"),
   rule("/locations/wilayas", "GET"),
 
@@ -110,6 +114,70 @@ const RULES: readonly Rule[] = [
   rule("/coupons/eligible-products", "GET"),
   rule("/coupons/eligible-categories", "GET"),
   rule("/coupons/\\d+", "GET", "PATCH", "DELETE"),
+
+  /*
+   * Shipping. The tariff, the resolver, and the parcels.
+   *
+   * `/shipping/rates` is a read that takes `wilaya_id` and `commune_id` and is
+   * the authority the rules editor previews against — the panel resolves its own
+   * winner for the live preview and shows the server's answer beside it.
+   *
+   * `/locations/wilayas/\d+/communes` joins this list here rather than with the
+   * orders branch: the rule form and the rate tester both need a commune picker,
+   * and `/locations/wilayas` alone cannot fill one. Both are public routes on the
+   * API — an address form needs them before anyone signs in — so this widens the
+   * proxy's surface by nothing that was not already reachable without a
+   * credential.
+   *
+   * `DELETE /shipping/rules/{id}` is here because the rules table deletes. There
+   * is no `POST /shipments` — a parcel is created against an order, and the
+   * order-scoped route below is the only way in.
+   */
+  rule("/shipping/providers", "GET"),
+  rule("/shipping/rates", "GET"),
+  rule("/shipping/rules", "GET", "POST"),
+  rule("/shipping/rules/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/shipments", "GET"),
+  rule("/shipments/\\d+", "GET", "PATCH"),
+  rule("/shipments/\\d+/cancel", "POST"),
+  rule("/shipments/\\d+/sync", "POST"),
+  rule("/locations/wilayas/\\d+/communes", "GET"),
+
+  /*
+   * Payments. Read and verify, and nothing that starts one.
+   *
+   * **`POST /orders/{id}/payments` is deliberately absent**, and it is the only
+   * write on this subject the API offers. It opens a checkout at the provider and
+   * returns a `checkout_url` for the *customer* to pay through — measured, with
+   * `provider: "chargily"` it reached the live sandbox and handed back a real
+   * `pay.chargily.dz` link. That is a shopper action taken by the storefront, not
+   * an operator action taken from an admin panel, and a staff member who could
+   * mint payment links for an order is a fraud surface the panel has no reason to
+   * open. It also answers a shape that is not a payment — `{provider_payment_id,
+   * status, checkout_url, metadata}`, with no id and no amount — so nothing on
+   * this screen could even render the result.
+   *
+   * `verify` is a POST because it asks the gateway a question and writes down the
+   * answer, which may settle an order and reduce stock.
+   */
+  rule("/payments", "GET"),
+  rule("/payments/methods", "GET"),
+  rule("/payments/\\d+", "GET"),
+  rule("/payments/\\d+/verify", "POST"),
+
+  /*
+   * Cash on delivery. `/orders/{id}/cod` and its `attempts` are listed with the
+   * order's other sub-resources above, because that is the screen they belong to.
+   *
+   * `PATCH /orders/{id}/cod` toggles `enabled` and nothing else — every other
+   * field is read-only and dropped silently, so the whole GET body PATCHes back.
+   *
+   * `/cod/statistics` is `ac_view_analytics`, which both tiers hold, unlike
+   * `ac_manage_orders` on the two routes above — so this is the one place on the
+   * branch where a figure can render for a reader who cannot open the orders
+   * behind it.
+   */
+  rule("/cod/statistics", "GET"),
 ];
 
 export type AllowResult =
