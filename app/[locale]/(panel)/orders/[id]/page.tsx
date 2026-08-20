@@ -14,7 +14,19 @@ import {
   type TimelineEntry,
   type Wilaya,
 } from "@/lib/api/schemas/order";
-import { canManageOrders } from "@/lib/capabilities";
+import {
+  shipments as shipmentsSchema,
+  shippingProviders as providersSchema,
+  type ShippingProvider,
+} from "@/lib/api/schemas/shipping";
+import {
+  paymentMethods,
+  payments as paymentsSchema,
+  type Payment,
+  type PaymentMethod,
+} from "@/lib/api/schemas/payment";
+import { stripLabelUrlsFrom } from "@/lib/shipping";
+import { canManageOrders, has } from "@/lib/capabilities";
 import { STATUS_TONE, customerName, customerPhone, orderPlace } from "@/lib/orders";
 import { formatMoney } from "@/lib/format/money";
 import { formatDate, formatWhen } from "@/lib/format/date";
@@ -26,10 +38,13 @@ import {
   ListRow,
   ListValueRow,
 } from "@/components/primitives/GroupedList";
-import { StatusBadge, Dot } from "@/components/primitives/StatusBadge";
+import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
 import { StatusAction } from "./StatusAction";
+import { CodSection } from "./CodSection";
+import { ParcelsSection } from "./ParcelsSection";
+import { PaymentsSection } from "./PaymentsSection";
 
 /**
  * The order detail: a stack of grouped inset sections.
@@ -49,7 +64,6 @@ export default async function OrderDetailPage({
   const t = await getTranslations("orders.detail");
   const tOrders = await getTranslations("orders");
   const tStatus = await getTranslations("status");
-  const tCod = await getTranslations("codStatus");
 
   if (!canManageOrders(me)) {
     return (
@@ -77,8 +91,26 @@ export default async function OrderDetailPage({
    * The sub-resources, in parallel, each failing alone. `null` means "this
    * section could not load" and renders as such — distinct from an empty array,
    * which means "there is nothing here", a different and legitimate answer.
+   *
+   * The shipping and payment reads are conditional on the capability rather than
+   * fired-and-caught. A Manager is 403 on every payments route — measured — and
+   * spending two requests per order detail to be refused would cost every
+   * Manager two of a 600/min budget shared across their open tabs, to render
+   * nothing.
    */
-  const [notesResult, timelineResult, codResult, geography] = await Promise.all([
+  const canShip = has(me, "ac_manage_shipping");
+  const canPay = has(me, "ac_manage_payments");
+
+  const [
+    notesResult,
+    timelineResult,
+    codResult,
+    geography,
+    shipmentsResult,
+    providersResult,
+    paymentsResult,
+    methodsResult,
+  ] = await Promise.all([
     acFetch(orderNotes, session, `/orders/${numericId}/notes`)
       .then((r) => r.data)
       .catch(() => null),
@@ -91,6 +123,26 @@ export default async function OrderDetailPage({
     acFetch(wilayasSchema, session, "/locations/wilayas")
       .then((r) => r.data)
       .catch(() => [] as Wilaya[]),
+    canShip
+      ? acFetch(shipmentsSchema, session, `/orders/${numericId}/shipments`)
+          .then((r) => r.data)
+          .catch(() => null)
+      : Promise.resolve(null),
+    canShip
+      ? acFetch(providersSchema, session, "/shipping/providers")
+          .then((r) => r.data)
+          .catch(() => [] as ShippingProvider[])
+      : Promise.resolve([] as ShippingProvider[]),
+    canPay
+      ? acFetch(paymentsSchema, session, `/orders/${numericId}/payments`)
+          .then((r) => r.data)
+          .catch(() => null)
+      : Promise.resolve(null),
+    canPay
+      ? acFetch(paymentMethods, session, "/payments/methods")
+          .then((r) => r.data)
+          .catch(() => [] as PaymentMethod[])
+      : Promise.resolve([] as PaymentMethod[]),
   ]);
 
   const notes: OrderNote[] | null = notesResult;
@@ -270,45 +322,41 @@ export default async function OrderDetailPage({
           ) : null}
         </ListGroup>
 
+        {/* ---------------------------------------------------------- parcels --- */}
+        {canShip ? (
+          <ParcelsSection
+            orderId={order.id}
+            // Stripped on the server, before these become props: an RSC payload
+            // is in the document, so an unstripped shipment would put a courier's
+            // credential there whether or not anything rendered it.
+            shipments={stripLabelUrlsFrom(shipmentsResult ?? [])}
+            failed={shipmentsResult === null}
+            providers={providersResult ?? []}
+            wilayas={geography ?? []}
+            canWrite={canShip}
+            locale={locale}
+          />
+        ) : null}
+
+        {/* --------------------------------------------------------- payments --- */}
+        {canPay ? (
+          <PaymentsSection
+            payments={(paymentsResult ?? []) as Payment[]}
+            methods={methodsResult ?? []}
+            failed={paymentsResult === null}
+            canWrite={canPay}
+            locale={locale}
+          />
+        ) : null}
+
         {/* ------------------------------------------------------------ COD --- */}
-        <ListGroup
-          title={t("cod")}
-          footnote={cod?.enabled ? t("codNotAStatus") : undefined}
-        >
-          {cod === null ? (
-            <ListRow>
-              <SectionError>{t("sectionFailed")}</SectionError>
-            </ListRow>
-          ) : !cod.enabled ? (
-            <ListRow>
-              <span className="text-body text-label-secondary">{t("codDisabled")}</span>
-            </ListRow>
-          ) : (
-            <>
-              <ListRow>
-                <span className="text-body text-label-secondary">{t("codStatus")}</span>
-                <span className="ms-auto flex items-center gap-2">
-                  <Dot tone={cod.status === "confirmed" ? "success" : "warning"} />
-                  <span className="text-body text-label">
-                    {/* An outcome the panel has no label for still renders as
-                        itself rather than as a blank row. */}
-                    {tCod.has(cod.status as "pending") ? tCod(cod.status as "pending") : cod.status}
-                  </span>
-                </span>
-              </ListRow>
-              <ListValueRow
-                label={t("codAttempts", { count: cod.attempts })}
-                value={
-                  cod.last_attempt_at ? (
-                    <Isolate>{formatWhen(cod.last_attempt_at, locale)}</Isolate>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-            </>
-          )}
-        </ListGroup>
+        <CodSection
+          orderId={order.id}
+          orderStatus={order.status}
+          record={cod}
+          canWrite={canManageOrders(me)}
+          locale={locale}
+        />
 
         {/* ------------------------------------------------------- timeline --- */}
         <ListGroup title={t("timeline")}>

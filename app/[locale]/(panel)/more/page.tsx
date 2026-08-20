@@ -35,8 +35,19 @@ type Destination = {
 const DESTINATIONS: Destination[] = [
   { key: "customers", href: "/customers", icon: "customers", capability: "ac_manage_customers" },
   { key: "coupons", href: "/coupons", icon: "tag", capability: "ac_manage_coupons" },
-  { key: "shipping", href: null, icon: "box", capability: "ac_manage_shipping" },
-  { key: "payments", href: null, icon: "note", capability: "ac_manage_payments" },
+  { key: "shipping", href: "/shipping", icon: "box", capability: "ac_manage_shipping" },
+  /*
+   * Payments is `ac_manage_payments`, which after the two-tier collapse is the
+   * Super Admin tier alone — 25 of the 70 staff accounts on this install.
+   *
+   * That was a real design question while it was one role in six: a destination
+   * five of six roles see refused is a navigation that mostly lies. Two tiers
+   * make it ordinary. The filter below already omits a destination the person
+   * cannot use, so a Manager's More list simply does not carry this row — the
+   * same treatment Coupons gets for a role without `ac_manage_coupons`, rather
+   * than a special case.
+   */
+  { key: "payments", href: "/payments", icon: "note", capability: "ac_manage_payments" },
   { key: "analytics", href: null, icon: "dashboard", capability: "ac_view_analytics" },
   { key: "content", href: null, icon: "note", capability: "ac_manage_content" },
   { key: "settings", href: null, icon: "lock", capability: "ac_manage_settings" },

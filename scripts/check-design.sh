@@ -18,8 +18,8 @@ cd "$(dirname "$0")/.." || exit 2
 # at it: the floor exists to catch a rename or a moved directory that empties the
 # glob, not to fail on one deleted file. 47 files at the orders branch, floor 40;
 # 61 at the products branch, floor 56; 77 at the inventory branch, floor 72; 101 at
-# the customers branch, floor 95.
-FLOOR=95
+# the customers branch, floor 95; 123 at the shipping branch, floor 117.
+FLOOR=117
 failures=0
 checks=0
 

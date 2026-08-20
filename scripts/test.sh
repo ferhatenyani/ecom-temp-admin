@@ -53,16 +53,27 @@ run_e2e() {
   # refusal: `/products` and `/product-categories` are `ac_manage_products` and
   # answer 403 to them, so they are the role the coupon restriction picker could
   # not have been built for, and the one whose success proves it was.
+  #
+  # A **fourth** arrived with the shipping branch, and it is the only one of the
+  # four that still describes a live account. The two-tier collapse in `ecom-temp`
+  # retired the five intermediate roles, so `ac_support_agent` and
+  # `ac_marketing_manager` now name configurations production does not have —
+  # they still mint, because `set_role()` is WordPress core and bypasses the API's
+  # narrowing, and the suites that use them still pass. `ac_manager` is the live
+  # forbidden fixture: 200 on shipping and COD, **403 on payments**, which is one
+  # credential carrying a real refusal and a real success on the same branch.
   if [[ -z "${AC_STAFF_USER:-}" ]]; then
     if [[ -x ./scripts/mint-credential.sh ]]; then
       echo "minting credentials against the dev stack…"
-      local cred limited marketing
+      local cred limited marketing manager
       cred=$(./scripts/mint-credential.sh ac_super_admin) || return 1
       limited=$(./scripts/mint-credential.sh ac_support_agent) || return 1
       marketing=$(./scripts/mint-credential.sh ac_marketing_manager) || return 1
+      manager=$(./scripts/mint-credential.sh ac_manager) || return 1
       export AC_STAFF_USER="${cred%%:*}" AC_STAFF_PASS="${cred#*:}"
       export AC_LIMITED_USER="${limited%%:*}" AC_LIMITED_PASS="${limited#*:}"
       export AC_MARKETING_USER="${marketing%%:*}" AC_MARKETING_PASS="${marketing#*:}"
+      export AC_MANAGER_USER="${manager%%:*}" AC_MANAGER_PASS="${manager#*:}"
     else
       echo "no credential available and no way to mint one" >&2
       return 1
@@ -85,6 +96,17 @@ run_e2e() {
   # which would quietly thin the facet rather than fail anything.
   if ! node scripts/seed-attributes.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
     echo "could not seed the global attributes the facet tests need" >&2
+    return 1
+  fi
+
+  # And the three shipping rules the resolver tests assert against. Same
+  # argument as the attributes above: this shop shipped with `GET
+  # /shipping/rules` answering `[]`, so `/shipping/rates` could only ever answer
+  # `[]` too — a 200 with nothing in it — and the rules editor had nothing to
+  # resolve. Idempotent, and it repairs a drifted price rather than only
+  # creating a missing rule.
+  if ! node scripts/seed-shipping-rules.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the shipping rules the resolver tests need" >&2
     return 1
   fi
 

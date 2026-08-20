@@ -1889,6 +1889,104 @@ prefetch, never log it, and never let the service worker cache a response contai
 opens a label through a server-side handler that fetches it with the staff credential and streams the
 PDF back — the URL never reaches the browser at all.
 
+> **Corrected in the build: the field is `metadata.label`, and there are two of them.** The rule above
+> is right and the field it names does not exist. Measured 2026-08-20 across all 111 shipments: there
+> is **no top-level `label`** on any of them, and no `metadata.label` either — the only configured
+> provider is `manual` / *In-house delivery*, which issues no labels.
+>
+> It is not hypothetical, though, and the backend states its shape precisely. `Core/Logger.php` masks
+> three keys by **exact** name, with this beside them:
+>
+> > *A Yalidine parcel comes back with `label` and `labels`: URLs that carry an access token, so
+> > anyone holding one can fetch the shipping label and with it the customer's name, phone and full
+> > address, without a credential of their own. They belong in `ac_shipments.metadata` — an operator
+> > has to print the label — but never in a log, where they outlive the parcel and cannot be revoked.*
+>
+> Exact rather than substring, deliberately: `provider_status_label` is ZR Express's wording for a
+> parcel state, and a shipping **rate** carries a plain display `label` that is not a URL at all. The
+> two fields share a name and nothing else.
+>
+> **`Shipment::toArray()` emits `metadata` verbatim** — measured, no filtering — so the moment a
+> courier adapter is switched on, every one of these arrives in the panel's JSON. That is what turns
+> the rule into code rather than a note: `stripLabelUrls()` runs server-side and returns the shipment
+> with `label`, `labels` and `signature_url` removed, plus the *names* of what it removed, so a screen
+> can know a label exists without receiving the URL. In the App Router the props boundary is the one
+> that matters — an RSC payload is in the document — so stripping happens in the Server Component,
+> before anything becomes a prop, and again on every client-side refetch.
+>
+> The handler was built anyway, against a field no shipment carries, and it is testable because its
+> reachable answer today is the **404**: *"This shipment carries no label. The configured provider
+> does not issue one."* The stripper is tested against a synthesised Yalidine-shaped shipment, and the
+> assertion that matters is that the token appears nowhere in what survives, under any key.
+>
+> `/api/label/[id]` re-reads the shipment with the staff credential (which is also the authorization
+> check — `GET /shipments/{id}` is `ac_manage_shipping`, so a caller without it gets the API's 403
+> rather than a label), refuses anything that is not `https`, does **not** follow redirects — a 302
+> into `169.254.169.254` would turn the handler into a request forge with the server's own network
+> position — and streams the bytes back under `no-store`. No log line in it contains the URL.
+
+> **Corrected in the build: eight measurements about parcels, and one of them breaks the panel's usual
+> rule.** All 2026-08-20, against the live API.
+>
+> **A shipment has no transition matrix, and its 409 carries no `allowed` list.** A *live* parcel
+> moves to any status including backwards — `in_transit` → `pending` answered **200** — while a
+> finished one moves nowhere: `delivered` → `in_transit` is a 409 with `{from, to, is_live}` and
+> **nothing to render**. Every other refusal in this panel names what is legal; this one does not, so
+> the status picker is the panel's only client-side transition rule. It is a one-liner rather than a
+> table because the server's rule is one too: `is_live` decides, and `ShipmentStatus` says outright
+> that refusing a courier's report to defend a diagram would put the shop's record at odds with the
+> physical world.
+>
+> **`POST /orders/{id}/shipments` requires `wilaya_id` and `commune_id` in the body** and does not read
+> them off the order — `POST {}` is a 400 naming both, and so is a body carrying only a provider,
+> because the destination is validated first. Note the shape: **`details.fields` here, an object of
+> messages**, while `/shipping/rates` reports its missing parameters as `details.params`, an array of
+> *names*. Two shapes for the same problem on one subject.
+>
+> **The one-live-shipment 409 names the parcel blocking it**: `{"code":"conflict","details":
+> {"shipment_id":220,"provider":"manual","status":"created"}}`. So "the create button is absent with
+> the reason" can say *which* parcel, rather than describing the rule.
+>
+> **`PATCH /shipments/{id}` accepts `status` and nothing else.** `tracking_number` is `"Unknown
+> field."` and an empty `{}` is a 400 asking for a status — so a manual shipment is walked through its
+> statuses by hand, which is the actual workflow in a shop whose only provider is in-house.
+>
+> **`POST /shipments/{id}/sync` answers differently depending on whether it can do anything.** On a
+> *live* manual shipment it is a **409 `sync_unsupported`** — *"In-house delivery reports no status of
+> its own; update this shipment directly."* — and on a *finished* one it is **200 unchanged**, because
+> the terminal check short-circuits before the provider is asked. The refusal is the more useful of
+> the two answers and is rendered as the API's own sentence.
+>
+> **`?is_live=` is not a filter.** It is accepted and ignored — 111 rows, identical to
+> `?bogus_param=1` — while `?status=`, `?provider=` and `?order_id=` are all real (`?status=zzz` is a
+> 400 naming all ten). So *live parcels only*, the one question an operator most wants to ask, is not
+> a request the server can answer, and the panel filters by status rather than offering a control that
+> would silently return everything.
+>
+> **A shipment's `provider` is not constrained to `/shipping/providers`.** Shipment 213 carries
+> `acfake`, registered at runtime by the backend's webhook suite, while the providers route reports
+> only `manual`. A label lookup falls back to the raw name.
+>
+> **A parcel really never moves the order.** Order 3939 went through five shipments — created,
+> in_transit, delivered, cancelled — and stayed `processing` with `date_modified` untouched throughout.
+
+> **Corrected in the build: the shop had no shipping rules, so the resolver had nothing to resolve.**
+> `GET /shipping/rules` answered `[]`, and with no rule `GET /shipping/rates?wilaya_id=16&commune_id=484`
+> answers **200 with `[]`** — not an error, just nothing. The rules editor's entire specified value is
+> showing which rule would win, and it could not have been built or tested against this shop.
+>
+> `scripts/seed-shipping-rules.mjs` creates three, on the same argument `seed-attributes.mjs` was
+> written for: national 800, wilaya 16 at 500, commune 484 at 350. Alger Centre is covered by all
+> three, Ain Taya by two and Adrar by one, so one shop exercises every arm. Measured with them in
+> place: **350 / 500 / 800**, resolved server-side. Idempotent, and it repairs a drifted price rather
+> than only creating a missing rule, because a rule at the right destination with the wrong figure
+> fails the suite in a way that reads like a panel bug.
+>
+> **`specificity` is server-computed** — 3 national, 7 wilaya, 15 commune — and the table sorts by it
+> rather than deriving a ranking of its own. The panel resolves locally as well, so the preview moves
+> with the picker, and shows the server's answer beside it; they agreed on all three, and the screen
+> says so if they ever stop agreeing.
+
 ## Payments
 
 `GET /payments`, `/payments/{id}`, `/payments/methods`, `GET/POST /orders/{id}/payments`,
@@ -1901,6 +1999,56 @@ calls the provider, and the answer it returns is the truth.
 Several transactions per order is the design, not a duplicate — a duplicated checkout link is a link
 nobody clicks. Do not deduplicate them in the UI.
 
+> **Corrected in the build: the panel cannot move a payment at all, and `verify` does not answer with
+> one.** Measured 2026-08-20.
+>
+> **There is no `PATCH` on a payment.** The routes are `GET /payments`, `GET /payments/{id}`,
+> `/payments/methods`, `GET/POST /orders/{id}/payments` and `POST /payments/{id}/verify` — that is the
+> whole surface. So *"from `paid` the only permitted move is `refunded`"* is enforced inside
+> verification and **never surfaces as a 409 the panel could render**. The rule is real and correct;
+> it is simply not a rule this client can exercise or observe. `paid` is also not terminal, which is
+> the one real difference from a shipment: a delivered parcel is the end of the story, money that has
+> arrived can still go back.
+>
+> **`POST /payments/{id}/verify` returns `{report, transaction}`, not a payment.** On payment 37 — a
+> `cod` transaction — the report came back `{"status":"pending","provider_status":"awaiting_delivery",
+> "amount":"","currency":"","metadata":{…}}`. **`amount` and `currency` are empty strings**, so the
+> report is never formatted as money; `transaction` is the authority for every figure on screen and
+> `provider_status` is the report's useful half, because a mis-mapped adapter shows up there and
+> nowhere else.
+>
+> **`POST /orders/{id}/payments` is a real checkout and is deliberately not on the allowlist.** With
+> no body it is a **409** — *"Chargily needs a success URL"* — and with `{"provider":"chargily",
+> "return_url":…}` it reached the live sandbox and handed back a working `pay.chargily.dz` link. That
+> is a shopper action taken by the storefront, and a staff member who could mint payment links against
+> an order is a fraud surface with no screen behind it. It also answers a shape that is not a payment
+> (`{provider_payment_id, status, checkout_url, metadata}` — no id, no amount), so nothing on this
+> screen could render the result. `details` on a bad provider carries **`available: ["chargily","cod"]`
+> beside `fields`**, which is a third `details` shape on this API.
+>
+> **A payment carries its own `currency`**, like an order and unlike a product, and every row is
+> formatted with it. All 37 payments are `pending`, so `?status=paid` is a real filter returning zero
+> rows — the control that proves the filter works is `?status=zzz`, a 400 naming all six.
+
+> **Corrected in the build: `ac_manage_payments` has one reader, and the two-tier collapse is what
+> made that ordinary.** This was the open design question on the branch. Measured before the collapse,
+> `ac_manage_payments` was held by Super Admin and Admin — two of §45's seven — so a Payments
+> destination was something most of the staff would meet as a refusal.
+>
+> After `ecom-temp`'s `feat/two-tier-roles` it is the **Super Admin tier**, one of the panel's two:
+> 25 of 70 accounts. That is not a special case any more, it is the same shape as Coupons for a role
+> without `ac_manage_coupons`, and `/more` already omits a destination the reader cannot use rather
+> than showing it disabled. So payments is built **twice**, deliberately:
+>
+> - **Inside the order detail**, which Part V's section list already specified and which is where the
+>   person who can read it is already looking — and where *several transactions per order* means
+>   something, because they are all attempts at the same money.
+> - **As `/payments` in More**, which answers the question the order detail cannot: *show me every
+>   pending transaction*. A Manager reaching that URL sees the forbidden state for the ledger and
+>   **still sees the COD funnel**, because `/cod/statistics` is `ac_view_analytics` and refusing them a
+>   report they are entitled to, in order to keep one screen tidy, would be the panel inventing a rule
+>   the API does not have. It is the only screen on the branch with two readerships.
+
 ## Cash on delivery
 
 `GET/PATCH /orders/{id}/cod`, `POST /orders/{id}/cod/attempts`, `GET /cod/statistics`.
@@ -1910,6 +2058,60 @@ order metadata and audit events, **never a status** — a COD outcome does not m
 section must not offer anything that looks like it does.
 
 `/cod/statistics` needs only `ac_view_analytics` and belongs on the dashboard as a success-rate card.
+
+> **Corrected in the build: the PATCH is not a named subset — it takes the whole GET object back.**
+> `CodSettingsInput` drops the read-only fields **silently** and refuses only *unknown* ones, so a
+> client can GET the state, flip `enabled` and PATCH the entire object: measured, the full nine-key
+> body answers 200. What looked like "it validates `enabled` before anything else" is really
+> `{"status":"zzz"}` having `status` stripped as read-only, leaving `{}`, which is then missing
+> `enabled`. `{"zzz":1}` is a 400 `"Unknown field."` and `{"enabled":"true"}` — the string — is
+> `"Must be true or false."`, because this is JSON and a shop that reads `"false"` as true stops
+> calling customers it should be calling.
+>
+> Three collections, three rules, and now stated precisely: a **coupon**'s `{}` is a 200 no-op, a
+> **customer**'s address merges, an **order's COD** round-trips whole.
+
+> **Corrected in the build: `allowed_outcomes` is not sufficient to decide whether the form may open.**
+> This is the trap in the section. The record is server-supplied and the buttons come from it — the
+> panel carries no outcome table, exactly as it carries no order transition table — but there is a
+> **second gate the record cannot express**: the order's own status.
+>
+> Measured on order 3879: `allowed_outcomes: []` *and* a cancelled order, and the 409 blamed the
+> **order** — `{"order_status":"cancelled"}` — because that check runs first. So a record can report
+> outcomes the order will refuse anyway. `codAttemptGate()` runs the API's three checks in the API's
+> order, so the sentence on screen is the one the server would have given:
+>
+> | Refusal | 409 details | What the panel says |
+> |---|---|---|
+> | COD switched off | `{order_id}` | *Activez le contre-remboursement…* |
+> | order cancelled or refunded | `{order_status}` | *Cette commande est {statut}…* |
+> | nothing reachable | `{from, to, allowed}` | *Ce dossier est clos…* |
+>
+> An **outcome outside the vocabulary** is a different answer again: a **400** with
+> `details.fields.outcome`, and two different messages for missing (*"Required. One of: …"*) versus
+> invalid (*"Must be one of: …"*). `pending` and `cancelled` are both refused — the first is where an
+> order starts, the second happens to the *order* and is carried across by the API.
+>
+> **`confirmed_at` does not move on a re-confirmation while `last_attempt_at` does.** Re-confirming
+> order 3876 took attempts 4 → 5 and left `confirmed_at` at its original value: the first confirmation
+> is when the customer said yes, and every call after it is just another call. Both are shown when
+> they differ.
+>
+> **Recording an attempt writes into the order's timeline**, which the same screen already renders —
+> *"COD confirmation attempt 5 — confirmed — …"*, with the staff login as its actor. Two sections move
+> on one write, so the write refreshes the server component rather than patching local state.
+
+> **Corrected in the build: two "confirmed" counts in one payload, and only labelling separates them.**
+> `by_status.confirmed` is **74** while `confirmed_orders` is **111**, measured in a single response.
+> `by_status` sums exactly to `total_orders` (192 + 74 + 37 + 0 + 224 = 527) and describes the shop
+> *now*; `confirmed_orders` is what `rates.confirmation` divides by 527 to reach `0.2106`, so it counts
+> every order that was **ever** confirmed, including the 224 later cancelled. Both are right.
+>
+> This is the customers-statistics lesson arriving intact, in the clearest case the API offers. `lib/cod.ts`'s
+> `CodFigure` makes `scope` non-optional the way `StatFigure` does — there is no constructor that omits
+> it — and the note between the two figures states the relationship rather than leaving a reader to
+> infer that one of them is broken. The French label for the first was *"Confirmées aujourd'hui"* until
+> a screenshot showed it: the figure has no time window in it at all.
 
 ## Analytics
 
@@ -2515,6 +2717,45 @@ Added by the two-tier role collapse (`ecom-temp`, `feat/two-tier-roles`, 2026-08
 - **`set_role()` bypasses the API's narrowing**, so `mint-credential.sh` and the backend's own
   `tests/Api/*` fixtures still assign retired roles freely — and a full backend suite puts ~50 accounts
   back onto them. On a dev stack the collapse needs re-running; on a real install nothing calls it.
+
+Added by the shipping, payments and COD build:
+
+- **The shipment label is `metadata.label` and `metadata.labels`**, not a top-level `label`, and no
+  shipment in this shop carries either. `metadata` is emitted verbatim, so a courier adapter puts a
+  credential in the panel's JSON the day it is switched on. Strip server-side; pass the *names* of the
+  keys, never the URLs.
+- **A shipment's 409 carries no `allowed` list**, unlike an order's. `is_live` is the whole rule: a
+  live parcel moves anywhere including backwards, a finished one moves nowhere. The panel's only
+  client-side transition rule, and deliberately a one-liner.
+- **`POST /orders/{id}/shipments` needs the destination in the body.** It does not read it off the
+  order — and it reports missing fields as `details.fields` while `/shipping/rates` reports missing
+  parameters as `details.params`, an array of names.
+- **`sync` refuses the parcel you would want to sync and succeeds on the one you would not**: 409
+  `sync_unsupported` while live on `manual`, 200 unchanged once terminal.
+- **`?is_live=` is accepted and ignored.** The most useful filter on the parcels list is not a filter.
+- **There is no `PATCH` on a payment**, so `paid → refunded` is a rule the panel can neither trigger
+  nor observe. `verify` answers `{report, transaction}` and `report.amount` can be an empty string.
+- **`POST /orders/{id}/payments` opens a real checkout at the provider** and returns a live payment
+  link. Off the allowlist on purpose.
+- **`PATCH /orders/{id}/cod` round-trips the whole GET object** — read-only fields dropped silently.
+  Three collections, three write rules: a coupon's `{}` is a no-op, a customer's address merges, COD
+  takes the object back whole.
+- **`allowed_outcomes` does not know about the order's status**, which is checked first and refuses
+  independently. Gate on both or ship a button whose only answer is a 409.
+- **`by_status.confirmed` (74) and `confirmed_orders` (111) are both correct** and answer different
+  questions. Never print either without its scope.
+- **`Omit<T, K>` on a Zod `looseObject` silently erases every known field.** The index signature makes
+  `keyof T` collapse to `string`, `Exclude` removes nothing, and `Pick` returns `unknown` for
+  everything — thirteen type errors at the call sites and none at the definition. Intersect instead.
+- **A row's action can overrun the row.** `Button` sets no width, so *"Vérifier auprès du
+  fournisseur"* rendered **on top of** the money figure beside it at 390 px. Valid markup, green
+  types, passing tests; only the screenshot showed it. `shots.mjs` now asserts it geometrically.
+- **A scope badge is not a destination.** The national tariff row read *"National · National"* because
+  the label fell back to the scope word.
+- **A `Field`'s `hint` renders inside its `<label>`**, so it joins the control's accessible *name* —
+  which changes as the hint appears and disappears. `FieldError` uses `aria-describedby` for its
+  message, so the primitive describes errors and names hints. Found by a `getByLabel` that passed in
+  one state and failed in the other; not changed here, because it is shared by every form in the panel.
 - **`?search=` on customers does not match a name**, only login, email and display name. Proven with
   a positive control, because an unmatched search and an unsearchable field look identical.
 - **12 of 16 customers have no name at all.** A list that renders `first_name` as the row's identity
