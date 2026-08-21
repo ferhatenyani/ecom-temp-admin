@@ -101,10 +101,11 @@ in both directions, that every figure names its scope, and that none of the API'
 reached the screen.
 
 The e2e suite runs on Chromium at current iPhone widths — **492 tests** across four widths and both
-locales. `--project=phone-webkit` is the honest engine and is **105/105** (verified 2026-08-20), kept out
+locales. `--project=phone-webkit` is the honest engine and is **123/123** (verified 2026-08-21), kept out
 of the default run because its system libraries are 231 apt packages behind root. Export all
 **four** credentials before running it by hand — with only two, nine forbidden-fixture tests skip
-and the run reports 96 passed, which is not the same thing as green.
+and the run reports fewer passes, which is not the same thing as green. A run that reports any skips
+is a run that did not test what you think it did.
 
 Two operator errors are worth naming, because both invalidated a run and both looked like code
 defects. **Minting a credential while a suite is running** kills that suite's credential — the same
