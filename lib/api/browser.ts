@@ -184,6 +184,32 @@ export async function acWrite<T>(
   path: string,
   payload?: unknown,
 ): Promise<T> {
+  return (await acWriteWithMeta<T>(method, path, payload)).data;
+}
+
+/**
+ * The same write, with the envelope's `meta` beside the data.
+ *
+ * **`acWrite` drops `meta`, and on one route that is where the entire answer
+ * lives.** `POST /notifications/{id}/retry` answers 202 with the row in `data`
+ * and `{queued, already_pending, drain}` in `meta` — whether the row was
+ * actually requeued or was already in the queue, and the name of the command
+ * that will send it. A caller holding only `data` cannot tell those two apart,
+ * and both are 202.
+ *
+ * Added rather than changing `acWrite`'s return shape, which twenty-odd call
+ * sites depend on, and `acWrite` now delegates here so there is still exactly
+ * one place that decides whether a request succeeded. This is the same reason
+ * `acRead` returns `meta` whole: `/products` puts facet counts there and the
+ * analytics routes put `money_visible` there, and the fetcher that needed one
+ * more key than the reader gave it kept its own copy of the whole reader for
+ * three branches.
+ */
+export async function acWriteWithMeta<T>(
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  payload?: unknown,
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   const body = await request(path, {
     method,
     headers: {
@@ -193,5 +219,5 @@ export async function acWrite<T>(
     body: payload !== undefined ? JSON.stringify(payload) : undefined,
   });
 
-  return body.data as T;
+  return { data: body.data as T, meta: body.meta ?? {} };
 }

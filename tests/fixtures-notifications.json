@@ -1,0 +1,537 @@
+{
+  "list": {
+    "success": true,
+    "data": [
+      {
+        "id": 4382,
+        "channel": "sms",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:4579",
+        "audience": "customer",
+        "recipient": "+213661234567",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "pending",
+        "attempts": 0,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:23+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4381,
+        "channel": "email",
+        "event": "order.cancelled",
+        "dedupe_key": "order.cancelled:4559",
+        "audience": "customer",
+        "recipient": "ac_pay_customer@example.test",
+        "subject_type": "order",
+        "subject_id": 4559,
+        "status": "pending",
+        "attempts": 0,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4380,
+        "channel": "email",
+        "event": "payment.received",
+        "dedupe_key": "payment.received:31",
+        "audience": "customer",
+        "recipient": "amina.belkacem@example.test",
+        "subject_type": "order",
+        "subject_id": 31,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      },
+      {
+        "id": 4379,
+        "channel": "email",
+        "event": "order.refunded",
+        "dedupe_key": "order.refunded:37",
+        "audience": "customer",
+        "recipient": "amina.belkacem@example.test",
+        "subject_type": "order",
+        "subject_id": 37,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "Not a deliverable email address.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4378,
+        "channel": "email",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:41",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 41,
+        "status": "pending",
+        "attempts": 0,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4377,
+        "channel": "email",
+        "event": "admin.new_order",
+        "dedupe_key": "admin.new_order:4579",
+        "audience": "admin",
+        "recipient": "admin@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      },
+      {
+        "id": 4376,
+        "channel": "email",
+        "event": "shipment.delivered",
+        "dedupe_key": "shipment.delivered:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "The stored payload is not readable.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4375,
+        "channel": "email",
+        "event": "shipment.shipped",
+        "dedupe_key": "shipment.shipped:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4374,
+        "channel": "email",
+        "event": "payment.received",
+        "dedupe_key": "payment.received:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "pending",
+        "attempts": 1,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4373,
+        "channel": "email",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      }
+    ],
+    "meta": {
+      "total": 10,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "detail": {
+    "success": true,
+    "data": {
+      "id": 4380,
+      "channel": "email",
+      "event": "payment.received",
+      "dedupe_key": "payment.received:31",
+      "audience": "customer",
+      "recipient": "amina.belkacem@example.test",
+      "subject_type": "order",
+      "subject_id": 31,
+      "status": "sent",
+      "attempts": 1,
+      "last_error": null,
+      "created_at": "2026-08-21T14:34:14+00:00",
+      "sent_at": "2026-08-21T14:34:23+00:00",
+      "message": {
+        "readable": true,
+        "subject": "Algerian Commerce — payment received for order 31",
+        "body": "Bonjour Amina,\n\nWe have received your payment of 27700.00 DZD for order 31.\n\nAlgerian Commerce",
+        "context": {
+          "order_number": "31",
+          "total": "27700.00",
+          "currency": "DZD",
+          "customer_name": "Amina"
+        }
+      }
+    }
+  },
+  "detailFailed": {
+    "success": true,
+    "data": {
+      "id": 4379,
+      "channel": "email",
+      "event": "order.refunded",
+      "dedupe_key": "order.refunded:37",
+      "audience": "customer",
+      "recipient": "amina.belkacem@example.test",
+      "subject_type": "order",
+      "subject_id": 37,
+      "status": "failed",
+      "attempts": 2,
+      "last_error": "Not a deliverable email address.",
+      "created_at": "2026-08-21T14:34:14+00:00",
+      "sent_at": null,
+      "message": {
+        "readable": true,
+        "subject": "Algerian Commerce — order 37 refunded",
+        "body": "Bonjour Amina,\n\nOrder 37 has been refunded.\n\nAlgerian Commerce",
+        "context": {
+          "order_number": "37",
+          "total": "5200.00",
+          "currency": "DZD",
+          "customer_name": "Amina"
+        }
+      }
+    }
+  },
+  "detailUnreadable": {
+    "success": true,
+    "data": {
+      "id": 4376,
+      "channel": "email",
+      "event": "shipment.delivered",
+      "dedupe_key": "shipment.delivered:4579",
+      "audience": "customer",
+      "recipient": "karim.mansouri@example.test",
+      "subject_type": "order",
+      "subject_id": 4579,
+      "status": "failed",
+      "attempts": 2,
+      "last_error": "The stored payload is not readable.",
+      "created_at": "2026-08-21T14:34:14+00:00",
+      "sent_at": null,
+      "message": {
+        "readable": false,
+        "subject": "",
+        "body": "",
+        "context": []
+      }
+    }
+  },
+  "detailSms": {
+    "success": true,
+    "data": {
+      "id": 4382,
+      "channel": "sms",
+      "event": "order.placed",
+      "dedupe_key": "order.placed:4579",
+      "audience": "customer",
+      "recipient": "+213661234567",
+      "subject_type": "order",
+      "subject_id": 4579,
+      "status": "pending",
+      "attempts": 0,
+      "last_error": null,
+      "created_at": "2026-08-21T14:34:23+00:00",
+      "sent_at": null,
+      "message": {
+        "readable": true,
+        "subject": "Algerian Commerce — commande 4579",
+        "body": "Bonjour Karim, votre commande 4579 est confirmee. Total 14800.00 DZD.",
+        "context": {
+          "order_number": "4579",
+          "total": "14800.00",
+          "currency": "DZD",
+          "customer_name": "Karim"
+        }
+      }
+    }
+  },
+  "retryRequeued": {
+    "success": true,
+    "data": {
+      "id": 4379,
+      "channel": "email",
+      "event": "order.refunded",
+      "dedupe_key": "order.refunded:37",
+      "audience": "customer",
+      "recipient": "amina.belkacem@example.test",
+      "subject_type": "order",
+      "subject_id": 37,
+      "status": "pending",
+      "attempts": 0,
+      "last_error": null,
+      "created_at": "2026-08-21T14:34:14+00:00",
+      "sent_at": null
+    },
+    "meta": {
+      "queued": true,
+      "already_pending": false,
+      "drain": "wp algerian-commerce send-notifications"
+    }
+  },
+  "retryAlreadyPending": {
+    "success": true,
+    "data": {
+      "id": 4381,
+      "channel": "email",
+      "event": "order.cancelled",
+      "dedupe_key": "order.cancelled:4559",
+      "audience": "customer",
+      "recipient": "ac_pay_customer@example.test",
+      "subject_type": "order",
+      "subject_id": 4559,
+      "status": "pending",
+      "attempts": 0,
+      "last_error": null,
+      "created_at": "2026-08-21T14:34:14+00:00",
+      "sent_at": null
+    },
+    "meta": {
+      "queued": true,
+      "already_pending": true,
+      "drain": "wp algerian-commerce send-notifications"
+    }
+  },
+  "retrySent": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That notification has already been sent. Re-sending would deliver a message frozen when it was queued.",
+      "details": {
+        "status": "sent",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      }
+    }
+  },
+  "byRecipient": {
+    "success": true,
+    "data": [
+      {
+        "id": 4378,
+        "channel": "email",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:41",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 41,
+        "status": "pending",
+        "attempts": 0,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4376,
+        "channel": "email",
+        "event": "shipment.delivered",
+        "dedupe_key": "shipment.delivered:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "The stored payload is not readable.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4375,
+        "channel": "email",
+        "event": "shipment.shipped",
+        "dedupe_key": "shipment.shipped:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4374,
+        "channel": "email",
+        "event": "payment.received",
+        "dedupe_key": "payment.received:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "pending",
+        "attempts": 1,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4373,
+        "channel": "email",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      }
+    ],
+    "meta": {
+      "total": 5,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "bySubject": {
+    "success": true,
+    "data": [
+      {
+        "id": 4382,
+        "channel": "sms",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:4579",
+        "audience": "customer",
+        "recipient": "+213661234567",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "pending",
+        "attempts": 0,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:23+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4377,
+        "channel": "email",
+        "event": "admin.new_order",
+        "dedupe_key": "admin.new_order:4579",
+        "audience": "admin",
+        "recipient": "admin@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      },
+      {
+        "id": 4376,
+        "channel": "email",
+        "event": "shipment.delivered",
+        "dedupe_key": "shipment.delivered:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "The stored payload is not readable.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4375,
+        "channel": "email",
+        "event": "shipment.shipped",
+        "dedupe_key": "shipment.shipped:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "failed",
+        "attempts": 2,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4374,
+        "channel": "email",
+        "event": "payment.received",
+        "dedupe_key": "payment.received:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "pending",
+        "attempts": 1,
+        "last_error": "wp_mail() did not accept the message.",
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": null
+      },
+      {
+        "id": 4373,
+        "channel": "email",
+        "event": "order.placed",
+        "dedupe_key": "order.placed:4579",
+        "audience": "customer",
+        "recipient": "karim.mansouri@example.test",
+        "subject_type": "order",
+        "subject_id": 4579,
+        "status": "sent",
+        "attempts": 1,
+        "last_error": null,
+        "created_at": "2026-08-21T14:34:14+00:00",
+        "sent_at": "2026-08-21T14:34:23+00:00"
+      }
+    ],
+    "meta": {
+      "total": 6,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "invalidStatus": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): status",
+      "details": {
+        "params": {
+          "status": "status is not one of pending, sent, and failed."
+        }
+      }
+    }
+  },
+  "notFound": {
+    "success": false,
+    "error": {
+      "code": "not_found",
+      "message": "No notification with that id."
+    }
+  }
+}

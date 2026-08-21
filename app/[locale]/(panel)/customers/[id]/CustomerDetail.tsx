@@ -30,6 +30,7 @@ import { ReadOnlyField } from "@/components/primitives/Field";
 import { Dot, StatusBadge } from "@/components/primitives/StatusBadge";
 import { Segmented } from "@/components/primitives/Segmented";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
+import { NotificationsSection } from "./NotificationsSection";
 import { ORDERS_PER_PAGE, customerOrdersKey, customerOrdersParams } from "../query";
 
 /**
@@ -64,7 +65,15 @@ export function CustomerDetail({
 }) {
   const t = useTranslations("customers");
   const tOrder = useTranslations("status");
-  const [tab, setTab] = useState<"profile" | "orders">("profile");
+  /*
+   * **A third tab rather than a card on the profile**, and for the same reason
+   * the orders tab is one: it is a second request against a 600/min budget
+   * shared across every tab this person has open, and most customers have
+   * nothing in it. Unlike orders, though, there is no `statistics` block to
+   * answer "does this person have any" without asking — so the tab is where the
+   * asking happens, and it only happens when somebody opens it.
+   */
+  const [tab, setTab] = useState<"profile" | "orders" | "notifications">("profile");
 
   const name = customerName(customer);
   const consent = consentRecord(customer);
@@ -75,10 +84,11 @@ export function CustomerDetail({
       title={name.text}
       back={{ href: `/${locale}/customers`, label: t("title") }}
       toolbar={
-        <Segmented<"profile" | "orders">
+        <Segmented<"profile" | "orders" | "notifications">
           segments={[
             { value: "profile", label: t("tab.profile") },
             { value: "orders", label: t("tab.orders") },
+            { value: "notifications", label: t("tab.notifications") },
           ]}
           value={tab}
           onChange={setTab}
@@ -99,13 +109,22 @@ export function CustomerDetail({
             <ConsentCard consent={consent} locale={locale} />
             <AddressCards customer={customer} />
           </>
-        ) : (
+        ) : tab === "orders" ? (
           <OrdersTab
             locale={locale}
             customerId={customer.id}
             currency={currency}
             noOrders={hasNoOrders(statistics)}
           />
+        ) : (
+          /*
+           * **The same capability, which is why this is here at all.**
+           * `/notifications` is `ac_manage_customers` — §90 gates it on the
+           * capability that already reads a customer's record rather than
+           * inventing one — so anybody who can open this screen can read this
+           * tab, and no second capability check is needed or honest.
+           */
+          <NotificationsSection locale={locale} email={customer.email} />
         )}
       </div>
     </Scaffold>

@@ -375,19 +375,65 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["cms", "menus"], "GET").allowed).toBe(false);
 
     /*
-     * The rest of Part X's step 14, which this branch scoped out and split into
-     * `feat/notifications` and `feat/campaigns`. Each is a different capability
-     * with no screen behind it yet, and a route no screen calls must not be
-     * reachable by guessing a URL.
+     * The rest of Part X's step 14. `feat/notifications` has since taken
+     * `/notifications` off this list and onto the allowed one — see the
+     * notifications block below — and `feat/campaigns` is what remains. Each is
+     * a different capability with no screen behind it yet, and a route no screen
+     * calls must not be reachable by guessing a URL.
      */
     for (const path of [
       ["campaigns"],
       ["segments"],
       ["email-templates"],
-      ["notifications"],
       ["marketing", "config"],
     ]) {
       expect(checkAllowed(path, "GET").allowed).toBe(false);
+    }
+  });
+
+  it("allows the three notification routes and nothing beside them", () => {
+    /*
+     * **This assertion used to say the opposite**, and it was moved rather than
+     * deleted: `/notifications` sat in the refused list above from the content
+     * branch until a screen existed to call it. That is the list's whole
+     * purpose — a route becomes reachable when something in the panel reaches
+     * for it, never before.
+     */
+    expect(checkAllowed(["notifications"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["notifications", "4342"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["notifications", "4342", "retry"], "POST").allowed).toBe(true);
+
+    // The queue is read and retried and nothing else. A row is written by an
+    // order save, and a sent notification is a record that is never deleted.
+    expect(checkAllowed(["notifications"], "POST")).toEqual({ allowed: false, reason: "method" });
+    expect(checkAllowed(["notifications", "4342"], "DELETE")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+    expect(checkAllowed(["notifications", "4342"], "PATCH")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+    // Retry is a POST. A GET on it is a method refusal, not a path one — the
+    // distinction the proxy reports and the screens render differently.
+    expect(checkAllowed(["notifications", "4342", "retry"], "GET")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+
+    // Guessed neighbours. The CLI drain is not a route and must not become one
+    // by URL: nothing on a request path in this API sends mail, by design.
+    for (const path of [
+      ["notifications", "drain"],
+      ["notifications", "summary"],
+      ["notifications", "send"],
+      ["notifications", "4342", "send"],
+      ["notifications", "abc"],
+    ]) {
+      expect(checkAllowed(path, "GET"), path.join("/")).toEqual({
+        allowed: false,
+        reason: "path",
+      });
     }
   });
 

@@ -12,7 +12,7 @@ cookie. No component library.
 
 The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
 Coupons, Shipping with Payments and cash on delivery, the Dashboard with the six analytics
-reports, and the CMS with its media library.
+reports, the CMS with its media library, and the notification queue.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -52,6 +52,11 @@ reports, and the CMS with its media library.
                              that has no menu until you save one
 /[locale]/media              the library — a grid, an upload with a percentage,
                              and five distinguishable refusals
+/[locale]/notifications      the queue — did it send? four states derived from three
+                             fields, a channel and date filter, and no sort control
+                             because the API has none
+/[locale]/notifications/[id] the frozen message quoted as a record, and a retry that
+                             is a 202 saying what it did *not* do
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
@@ -66,9 +71,13 @@ third and Part X now records the split with its reasoning:
 
 - **14a `feat/content`** — the CMS and media. `ac_manage_content`, which after the two-tier collapse
   is Super Admin alone, so a **Manager is a genuine forbidden fixture for every screen on the branch**.
-- **14b `feat/notifications`** — the queue. **`ac_manage_customers`**, not content: a notification row
-  holds a customer's address and the frozen body of their order confirmation, and §90 gates it there
-  deliberately. A Manager is **200** on `/notifications`, so 14a's fixture does not transfer.
+- **14b `feat/notifications`** — the queue. **DONE.** **`ac_manage_customers`**, not content: a
+  notification row holds a customer's address and the frozen body of their order confirmation, and §90
+  gates it there deliberately. A Manager is **200** on `/notifications`, so 14a's fixture does not
+  transfer — the live refusal is a **Marketing Manager**, 403 on all three notification routes and on
+  `/customers` besides, while a Support Agent reads both. Two things had to exist first: a backend
+  branch for the two filters the customer tab needs, and a seed, because every row in the queue was
+  `pending`.
 - **14c `feat/campaigns`** — marketing, segments, templates, the composer. `ac_manage_marketing`, and
   last on purpose: all three collections answered **0 rows**, so it needs its own seed before an
   assertion means anything, and the specification calls the composer the second-hardest screen here.
@@ -127,6 +136,30 @@ that all answered to `ac-unpublished` and 27 to `conditions`, because `wp_unique
 run for a draft. A path is the only address `/cms/pages/{path}` has, so `get_page_by_path()` reached
 one of each and the rest could not be read, written or deleted at all.
 
+`scripts/seed-notifications.mjs` is the fourth, and it is the one that is **not optional on a
+repeat run**. Measured before it existed, `GET /notifications` was 39 rows of which **every single
+one was `pending`** — no `sent`, no `failed`, `last_error` and `sent_at` null on all of them, one
+channel. A screen whose entire purpose is "did it send?" had nothing that had ever sent, so retry,
+the failure state and the channel filter were all unassertable. And `tests/Api/notifications.php` on
+the backend `DELETE`s the whole table before it asserts anything, so any backend suite run empties
+the queue completely; re-running this is how the rows come back.
+
+Most of what it produces is produced by **running the system**, not by writing rows. The attempts and
+their errors come from the real drain — this stack has no SMTP service and `EmailChannel` is
+registered unconditionally, so `wp algerian-commerce send-notifications` fails honestly and leaves
+`attempts: 1` with `last_error: "wp_mail() did not accept the message."`, which `EmailChannel`'s own
+docblock states is correct behaviour rather than a test failure. `sent`, `failed` and the clean
+`pending` rows are set with `markSent()`, `markFailed()` and `requeue()`, which are the drain's and
+the retry's own methods. Only **two** things go underneath: a payload that will not decode (nothing
+running can write one — `notify()` uses `wp_json_encode()`) and an `sms` row (there is no `sms`
+channel to queue one, and without it `?channel=` is a control with one value).
+
+The drain takes the oldest pending rows **globally**, so it cannot be aimed at this script's own
+rows. It therefore carries the ids it created between its two steps and `requeue()`s everything
+pending that is not one of them — putting the rest of the shop back exactly as found, which is what
+makes running it on every `test.sh` harmless rather than a slow march towards marking the whole queue
+failed.
+
 The fourth credential is a **Manager**, and it is the only one of the four that still describes a
 live account: the two-tier collapse retired `ac_support_agent` and `ac_marketing_manager`, which
 still mint (`set_role()` bypasses the API) and whose suites still pass, but which now name a
@@ -139,9 +172,16 @@ in both directions, that every figure names its scope, and that none of the API'
 reached the screen.
 
 The e2e suite runs on Chromium at current iPhone widths — **492 tests** across four widths and both
-locales. `--project=phone-webkit` is the honest engine and is **123/123** (verified 2026-08-21), kept out
-of the default run because its system libraries are 231 apt packages behind root. Export all
-**four** credentials before running it by hand — with only two, nine forbidden-fixture tests skip
+locales as of the content branch, plus `e2e/notifications.spec.ts`, which is **8 tests verified on
+`--project=phone` only**. That file is deliberately small and the four-width total is deliberately
+**not** re-verified on this branch: everything about the queue that a schema can answer is answered
+in `tests/notification-schema.test.ts` against captured payloads, and what is left for a browser is
+the capability refusal, the allowlist, the retry reaching the screen and the customer tab rendering.
+The unit suite is at **307**. `--project=phone-webkit` is the honest engine and is **123/123**
+(verified 2026-08-21), kept out of the default run because its system libraries are 231 apt packages
+behind root.
+
+Export all **four** credentials before running it by hand — with only two, nine forbidden-fixture tests skip
 and the run reports fewer passes, which is not the same thing as green. A run that reports any skips
 is a run that did not test what you think it did.
 
@@ -164,7 +204,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 167 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 179 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -215,6 +255,21 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **A trashed product still reads back as 200** with `status: "trash"`; only `?force=true` gives a 404.
 - **Product ids are not stable.** The backend's own suites recreate their fixtures, so tests and
   scripts find a product by SKU.
+- **A notification's `status` does not say what happened to it.** A retryable failure leaves the row
+  **`pending`** with the attempt counted and the error recorded, so a queue read as three statuses
+  shows a row the drain has already choked on as though nothing had touched it. Four states are
+  derived from `status`, `attempts` and `last_error`; see `queueState()`.
+- **`last_error` is our sentence, not the mail server's**, despite what `NotificationPresenter`'s
+  docblock says: `EmailChannel` only ever sees `wp_mail()` return a boolean. It is still quoted rather
+  than translated, because a plugin filtering `wp_mail` can return anything.
+- **A notification's `created_at` and `sent_at` both carry `+00:00`**, unlike `notes[].created_at`
+  above — `NotificationPresenter::time()` is `gmdate('c')` for both.
+- **The frozen message is bilingual and renders verbatim.** A French salutation over an English
+  sentence, out of `NotificationMessages`. It is a record of what was queued, not panel copy, so it is
+  framed as a quotation with `dir="auto"` and never translated.
+- **`?orderby=` and `?order=` are not parameters on `/notifications`**, and `?orderby=nonsense` is a
+  200 rather than a 400. `?event=` and `?audience=` are likewise accepted and ignored, which is why
+  the queue offers no sort control and no event filter.
 - **`GET /inventory` hides variations by default.** `include_variations` defaults to `false` — 28 rows
   against 33 — while `/inventory/low-stock` always includes them, so with the default the low-stock
   screen shows a row the full list denies exists.
@@ -464,6 +519,23 @@ Fixed in `ecom-temp` on **`feat/cms-page-index`** while building the content bra
   than a broken setting. The refusal is on the API rather than in this panel, so it holds for every
   caller. `tests/Api/cms.php` grew 155 → **169** assertions, each with its positive control.
 
+Fixed in `ecom-temp` on **`feat/notification-filters`** while building the notifications branch:
+
+- **A customer's own notifications were not readable in one request.** §90 shipped four filters and
+  argued for `dedupe_key` as the one that matters — correctly, since the key is `event:subject_id` by
+  construction. But it is exact-match only (`?dedupe_key=payment.received` → 0 rows) and it cannot
+  express a set, so "everything sent to this person" and "everything about this order" had no filter
+  at all. Measured before the branch, `?recipient=`, `?subject_id=`, `?event=` and `?audience=` were
+  **accepted and silently ignored** — §65's failure mode, where a filter that does not filter looks
+  exactly like a collection that all matches. The customer-detail tab would have cost one request per
+  order per event name, four guesses per order, on names the panel would have had to hard-code.
+  `?recipient=` and `?subject_id=` are two clauses in `buildWhere()` and two `args` entries, no
+  migration; `tests/Api/notifications.php` went 56 → **67**. Neither widens disclosure — both columns
+  are already on every list row and the route is `ac_manage_customers` throughout — and `recipient` is
+  deliberately *not* validated as an email, because §29's other four channels would put a phone number
+  in that column. `event` and `audience` stay unfilterable: `dedupe_key`'s left half is the event, and
+  `audience` is separated by `recipient`.
+
 Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch:
 
 - **The consent row was not buildable as specified.** ADMIN_PANEL.md asks for "a read-only row with
@@ -486,9 +558,38 @@ Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branc
   cleared a 15 000 DA minimum, because the clearing arm read `<= 0.0` and swallowed every negative
   before the "Must not be negative." check could see it.
 
+## Found on the notifications branch, and not fixed here
+
+Two defects this branch surfaced that are wider than it. Both are recorded rather than fixed, because
+fixing either means touching a dozen screens this branch has no business editing.
+
+- **`formatWhen` cannot be server-rendered, and a dozen screens call it unguarded.** It is relative
+  under 24 hours, so a row timestamped a minute ago renders "il y a une minute" on the server and
+  "il y a 2 minutes" on the client — React reports a hydration mismatch and regenerates the tree. The
+  notification queue is the only screen that shows it today, because it is the only one whose rows are
+  *minutes* old (the seed writes them at run time); everywhere else the data is hours or days old and
+  `formatWhen` falls back to the absolute form past 24 hours, so the mismatch never occurs. Fixed here
+  with `useHydrated()` — absolute on the server, relative once the client owns the DOM — in
+  `NotificationRow` alone. The other call sites are latent and would surface the day any of them shows
+  fresh data.
+
+- **A `.` in a message key is a path separator to `next-intl`, and nothing warns loudly.**
+  `t("event.order.placed")` resolves `notifications` → `event` → `order` → `placed`, so a flat
+  `"order.placed"` key never matches and the unresolved key path renders as text. All eight event
+  labels were missing in both locales while **seven of eight e2e tests passed** — every row carried a
+  plausible amount of writing and only the test matching a label exactly noticed. The dev log had
+  `MISSING_MESSAGE` sixteen times throughout. `eventMessageKey()` underscores them, and
+  `tests/notification-schema.test.ts` now asserts that no key in the namespace carries a dot and that
+  every event, state, status, channel and audience resolves in both locales — a floor that costs
+  milliseconds and needs no browser. **Any API vocabulary used as a message key has this hazard.**
+
 ## Open, and owed to the backend
 
 - `/settings` could reasonably publish `store.timezone`.
+- **`GET /notifications` has no summary.** The pending/sent/failed counts exist only on the CLI drain's
+  `--summary`, so a queue-wide breakdown would cost one request per state. The panel counts the page it
+  is holding and the label says so; a `meta.summary` block would let the screen answer "how healthy is
+  the queue" rather than "how healthy is this page of it".
 - **A movement has no readable actor for most of the staff who can read it.** `ac_manage_inventory` is
   held by four roles; `GET /users/{id}` is Super Admin only and `/audit-logs` stops at Admin. Either a
   movement could carry `actor_login` the way an audit row already does, or a narrow

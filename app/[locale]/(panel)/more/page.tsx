@@ -34,6 +34,24 @@ type Destination = {
 
 const DESTINATIONS: Destination[] = [
   { key: "customers", href: "/customers", icon: "customers", capability: "ac_manage_customers" },
+  /*
+   * Notifications sits beside Customers because it *is* Customers' capability —
+   * `ac_manage_customers`, measured, with a Manager 200 and a Marketing Manager
+   * 403 on both. §90 gates it there on purpose: a row holds a customer's address
+   * and the frozen body of their order confirmation.
+   *
+   * A top-level destination **and** a tab on the customer detail, sharing one
+   * reader. The two answer different questions — "is the queue healthy" against
+   * "was this person told" — and the second cannot be reached from the first: a
+   * queue read newest-first has no route to one customer's history without a
+   * filter, which is why `?recipient=` was added to the API on this branch.
+   */
+  {
+    key: "notifications",
+    href: "/notifications",
+    icon: "mail",
+    capability: "ac_manage_customers",
+  },
   { key: "coupons", href: "/coupons", icon: "tag", capability: "ac_manage_coupons" },
   { key: "shipping", href: "/shipping", icon: "box", capability: "ac_manage_shipping" },
   /*
