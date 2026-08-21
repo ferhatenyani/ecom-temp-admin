@@ -130,6 +130,30 @@ run_e2e() {
     return 1
   fi
 
+  # And the queue. The strongest case of the four, because without it the screen
+  # cannot be tested at all rather than merely tested thinly:
+  #
+  # Measured before it existed, `GET /notifications` was 39 rows of which
+  # **every single one was `pending`** — no `sent`, no `failed`, `last_error`
+  # null everywhere, `sent_at` null everywhere and one channel. A screen whose
+  # entire purpose is "did it send?" had nothing that had ever sent, so retry,
+  # the failure state and the channel filter were all unassertable.
+  #
+  # It is also the one seed that is **not optional for a repeat run**:
+  # `tests/Api/notifications.php` on the backend `DELETE`s the whole table
+  # before it asserts anything, so any backend suite run empties the queue
+  # completely. Those 39 rows are gone and this is how they come back.
+  #
+  # Most of what it produces is produced by running the system rather than by
+  # writing rows: the attempts and their errors come from the real drain, which
+  # fails honestly on a stack with no SMTP service. Only a `sent` row, an
+  # unreadable payload and a second channel are written underneath, and the
+  # script says why at each one.
+  if ! node scripts/seed-notifications.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the notification states the queue tests need" >&2
+    return 1
+  fi
+
   # Named explicitly rather than "every project": `phone-webkit` needs WebKit's
   # system libraries, which want root to install. Including it here would make the
   # stage red on a machine that is otherwise fine, and a stage that is always red

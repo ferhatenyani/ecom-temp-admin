@@ -501,6 +501,59 @@ It never mails.
 first. The list omits the message body; `GET /notifications/{id}` carries it, so a support agent
 scanning a queue does not pull five hundred customers' order contents into one response.
 
+> **Corrected in the build: `dedupe_key` cannot express a set, and two filters were added for the
+> panel.** The paragraph above lists four filters and the section calls `dedupe_key` *the* one that
+> answers the question, which is right as far as it goes — the key is `event:subject_id` by
+> construction. What it cannot say is "everything sent to this person" or "everything about this
+> order", and measured 2026-08-21 against the built API, `?recipient=`, `?subject_id=`, `?event=` and
+> `?audience=` were all **accepted and silently ignored**, while `?dedupe_key=` is exact-match only
+> (`?dedupe_key=payment.received` → 0 rows).
+>
+> The consequence was a customer-detail section costing one request per order per event name — four
+> guesses per order, on names the panel would have had to hard-code. `feat/notification-filters` in
+> `ecom-temp` added `?recipient=` and `?subject_id=`: two clauses in `buildWhere()`, two `args`
+> entries, no migration, and eleven assertions taking `tests/Api/notifications.php` to **67**. Neither
+> widens disclosure — both columns are already on every list row and the route is `ac_manage_customers`
+> throughout. `feat/cms-page-index` is the precedent, one collection over.
+>
+> `event` and `audience` stay unfilterable on purpose: `dedupe_key`'s left half *is* the event, and
+> `audience` is separated by `recipient`.
+
+> **Corrected in the build: `?orderby=` and `?order=` are not parameters, and are not even
+> validated.** Measured: `?orderby=channel`, `?orderby=id&order=asc` and `?order=asc` all return the
+> identical first six ids as the bare request, and **`?orderby=nonsense` answers 200** — where
+> `?status=nonsense` is a 400. So the ordering is `created_at DESC, id DESC` and nothing can change
+> it, which is why the panel offers no sort control rather than one that appears to work.
+
+> **Corrected in the build: `last_error` is not the provider's words.** `NotificationPresenter` calls
+> it "whatever the SMTP server said". It is not: `EmailChannel` only ever sees `wp_mail()` return a
+> boolean, so the column holds one of three sentences this codebase wrote — `"wp_mail() did not accept
+> the message."`, `"Not a deliverable email address."`, `"The stored payload is not readable."` The
+> transport's own text (`sendmail: can't connect to remote host`) goes to stderr and never reaches the
+> column. The panel still quotes it rather than translating it: the set is not closed, since a plugin
+> filtering `wp_mail` can return anything, and `markFailed()` truncates at 500 bytes on the way in.
+
+> **Corrected in the build: `audience` is a published column the section never mentions, and 18 of 39
+> rows carried `admin`.** Measured before the seed: `admin@example.test`, event `admin.new_order` —
+> the shop being told it had an order, not a customer being confirmed. It matters because "did it
+> send?" is two different questions on one list, with two different owners, and a screen that renders
+> them identically buries the distinction between *a customer was not told* and *we were not told*.
+
+> **Corrected in the build: `status` alone cannot say what happened to a row.** A retryable failure
+> leaves the row **`pending`** — `markFailed()` writes `status = pending` whenever the failure is
+> retryable and `attempts` is under `MAX_ATTEMPTS` (5) — so a queue read as three statuses shows a row
+> the drain has already choked on as though nothing had touched it. Measured: after one real drain
+> every row read `status: "pending"`, `attempts: 1`, `last_error: "wp_mail() did not accept the
+> message."` The panel therefore derives **four** states from three fields — `queued`, `retrying`,
+> `sent`, `failed` — and `retrying` is toned warning rather than danger, because the row is still in
+> the queue and retrying it answers 202 `already_pending: true` and does nothing.
+
+> **Verified in the build: a `sent` row is a 409 and the body names `sent_at`.** Measured, exactly as
+> the section promises: `{code: "conflict", details: {status: "sent", sent_at: "…+00:00"}}` with the
+> message *"Re-sending would deliver a message frozen when it was queued."* The panel does not offer
+> retry on a sent row at all, and still handles the conflict — a row that sends between the render and
+> the tap is the race the backend's conditional `UPDATE` exists for.
+
 ---
 
 ## Part I build order
@@ -2452,6 +2505,49 @@ and cannot match; say it in the criteria form. A segment in use cannot be delete
 The operator's answer to "did it send?". List by channel, status and date; detail carries the frozen
 message. Retry is a **202** that clears the row for the next drain and mails nothing.
 
+> **Corrected in the build: it is two screens sharing one reader, and the second one needed a backend
+> branch.** These four lines describe a list and a detail. What they leave out is *where a person
+> arrives from* — and the answer is not always the queue. A support agent with a customer on the phone
+> is asking "was **this person** told", which a queue ordered newest-first cannot answer at any length.
+>
+> So `/notifications` is a top-level destination in `/more`, beside Customers because it is Customers'
+> capability, **and** a third tab on the customer detail. They share `NotificationRow` and `query.ts`
+> rather than growing a second row shape: the same question about the same object, differing only in
+> which rows and how many.
+>
+> The tab was not buildable when this branch started — `?recipient=` was accepted and ignored — which
+> is what `feat/notification-filters` was for. It filters on the customer's address, so the shop's own
+> `admin.new_order` about their order is correctly **absent**, and the section says so rather than
+> letting a count quietly disagree with the order screen.
+
+> **Corrected in the build: the frozen message is bilingual, and rendering it verbatim is the
+> requirement rather than an oversight.** Measured: `subject: "Algerian Commerce — payment received
+> for order 4529"` over `body: "Bonjour Yacine,\n\nWe have received your payment of 2000.00 DZD…"` —
+> a French salutation and an English sentence, out of `NotificationMessages`, which is plain text by
+> design.
+>
+> This is the analytics branch's hazard arriving from the opposite direction. There, English prose
+> across an Arabic sheet was a defect a capture caught; here the English is *correct* and must stay,
+> because the body is evidence of what was queued and a panel that translated it would show the
+> operator something the customer never received. The resolution is presentation, not content: the
+> message is framed as a quoted record on its own surface with `dir="auto"`, so a French body stays
+> left-to-right inside the Arabic UI and never reads as chrome that somebody forgot to translate.
+>
+> Set apart by **surface, not by a leading rule** — the first draft used an inline-start border and
+> `check-design.sh` refused it as the banned accent bar, correctly, and the surface step is the better
+> answer anyway.
+
+> **Corrected in the build: the retry's confirmation is a persistent panel, and it leads with the
+> negative.** "Retry is a 202 that mails nothing" is a fact about the API; the line the operator reads
+> has to carry it. So the confirmation says **"Rien n'a été envoyé"** first, then whether the row was
+> requeued or was already waiting, then the command from `meta.drain` that will actually send —
+> `wp algerian-commerce send-notifications`, rendered as an identifier so it does not reorder in
+> Arabic.
+>
+> Not a toast, which is for confirmations nobody needs to act on, and emphatically not a spinner
+> resolving into a checkmark: that reads as "sent" to everybody who has ever used software, and they
+> would tell the customer so.
+
 ## Import and export
 
 `POST /import/products`, `/import/inventory`; `GET /export/{products,inventory,orders,customers}`.
@@ -2848,11 +2944,24 @@ mirroring §47's slicing.
 >                          fixture for the whole branch.
 >
 > 14b. feat/notifications  the queue: list by channel and status, the frozen
->                          message, retry as a 202
+>                          message, retry as a 202                        DONE
 >                          **`ac_manage_customers`** — read out of
 >                          `NotificationService::` rather than inferred. A
 >                          Manager is **200** here, so 14a's fixture does not
->                          transfer and this branch needs its own.
+>                          transfer and this branch needs its own: the live
+>                          refusal is a **Marketing Manager**, 403 on all three
+>                          notification routes and on `/customers` besides,
+>                          while a Support Agent reads both.
+>
+>                          Two things had to exist before the screens did.
+>                          `feat/notification-filters` in `ecom-temp` added
+>                          `?recipient=` and `?subject_id=`, without which a
+>                          customer's own notifications cost one request per
+>                          order per event name. And `seed-notifications.mjs`:
+>                          all 39 rows were `pending`, so `sent`, `failed`, a
+>                          second channel and an unreadable payload were every
+>                          one of them unreachable, and a screen whose purpose
+>                          is "did it send?" could only answer "nothing has".
 >
 > 14c. feat/campaigns      marketing config, segments, email templates, the
 >                          composer

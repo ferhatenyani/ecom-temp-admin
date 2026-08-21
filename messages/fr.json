@@ -22,7 +22,8 @@
     "payments": "Paiements",
     "analytics": "Analyses",
     "content": "Contenu",
-    "settings": "Réglages"
+    "settings": "Réglages",
+    "notifications": "Notifications"
   },
   "login": {
     "title": "Connexion",
@@ -525,7 +526,8 @@
     "tabLabel": "Section du client",
     "tab": {
       "profile": "Profil",
-      "orders": "Commandes"
+      "orders": "Commandes",
+      "notifications": "Notifications"
     },
     "section": {
       "identity": "Identité",
@@ -1361,6 +1363,112 @@
       "network": "Le téléversement n’a pas pu être envoyé.",
       "other": "Le téléversement a échoué.",
       "otherFix": "Réessayez, puis signalez le problème s’il persiste."
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "refresh": "Actualiser",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "previous": "Précédent",
+    "next": "Suivant",
+    "count": "{total, plural, =0 {Aucune notification} one {# notification} other {# notifications}}",
+    "statusLabel": "Filtrer par état",
+    "status": {
+      "all": "Tous",
+      "pending": "En attente",
+      "sent": "Envoyées",
+      "failed": "Échouées"
+    },
+    "channelLabel": "Filtrer par canal",
+    "channel": {
+      "all": "Tous",
+      "email": "E-mail",
+      "sms": "SMS"
+    },
+    "state": {
+      "queued": "En file",
+      "retrying": "Nouvel essai",
+      "sent": "Transmise",
+      "failed": "Échec"
+    },
+    "pageSummary": {
+      "queued": "{count, plural, one {# en file} other {# en file}}",
+      "retrying": "{count, plural, one {# à réessayer} other {# à réessayer}}",
+      "sent": "{count, plural, one {# transmise} other {# transmises}}",
+      "failed": "{count, plural, one {# échec} other {# échecs}}"
+    },
+    "event": {
+      "order_placed": "Commande confirmée",
+      "payment_received": "Paiement reçu",
+      "shipment_shipped": "Colis expédié",
+      "shipment_delivered": "Colis livré",
+      "order_cancelled": "Commande annulée",
+      "order_refunded": "Commande remboursée",
+      "stock_low": "Stock bas",
+      "admin_new_order": "Nouvelle commande"
+    },
+    "audience": {
+      "customer": "Le client",
+      "admin": "La boutique"
+    },
+    "errorQuote": "« {error} »",
+    "dateFrom": "Depuis le",
+    "dateTo": "Jusqu’au",
+    "clearDates": "Effacer",
+    "dateScope": "Du {from} au {to}, en UTC, journées entières.",
+    "clearKey": "Retirer le filtre de clé",
+    "clearSubject": "Retirer le filtre de commande",
+    "subjectChip": "Commande #{id}",
+    "empty": {
+      "none": "La file est vide. Rien n’a encore été mis en attente d’envoi.",
+      "noResults": "Aucune notification pour ces filtres.",
+      "clear": "Effacer les filtres"
+    },
+    "notFound": "Cette notification n’existe pas. Elle a peut-être été purgée par une réinitialisation de l’environnement.",
+    "section": {
+      "status": "État",
+      "retry": "Remettre en file",
+      "message": "Message figé",
+      "delivery": "Acheminement"
+    },
+    "field": {
+      "state": "État",
+      "created": "Mis en file le",
+      "sentAt": "Transmise le",
+      "attempts": "Tentatives",
+      "lastError": "Dernière erreur",
+      "recipient": "Destinataire",
+      "audience": "Destiné à",
+      "channel": "Canal",
+      "dedupeKey": "Clé",
+      "order": "Commande",
+      "subject": "Objet",
+      "siblings": "Notifications de cette commande"
+    },
+    "attemptsOf": "{attempts} sur 5",
+    "sentMeans": "« Transmise » signifie que le message a été accepté par le service d’envoi, pas qu’il est arrivé. La confirmation de remise demanderait un fournisseur avec webhook.",
+    "retry": {
+      "explain": "Remet la ligne en file pour le prochain envoi groupé. Rien n’est envoyé depuis le panneau : l’envoi est une commande à part.",
+      "action": "Remettre en file",
+      "nothingSent": "Rien n’a été envoyé.",
+      "requeued": "La ligne est de nouveau en file, ses tentatives et son erreur ont été effacées.",
+      "alreadyPending": "La ligne était déjà en file. Rien n’a changé.",
+      "drainLabel": "L’envoi se fera par cette commande :",
+      "alreadyQueuedNote": "Cette ligne attend déjà. La remettre en file remettra ses tentatives à zéro, sans rien envoyer.",
+      "alreadySentOn": "Elle a été transmise le {date}. La renvoyer expédierait un message figé à ce moment-là."
+    },
+    "message": {
+      "frozenNote": "Le texte exact mis en file, figé à ce moment-là. Il est reproduit tel quel, dans sa langue d’origine : c’est ce que le client a reçu, pas du texte du panneau.",
+      "unreadable": "Le contenu enregistré est illisible.",
+      "unreadableNote": "C’est exactement ce qu’a vu l’envoi groupé : il n’a pas pu décoder le message et a classé la ligne en échec sans tenter de l’expédier."
+    },
+    "customerSection": "Notifications",
+    "customer": {
+      "none": "Aucune notification pour ce client.",
+      "noneNote": "Une notification est créée par une commande ou un paiement, jamais à la main.",
+      "noEmail": "Ce client n’a pas d’adresse e-mail, il n’y a donc rien à rapprocher.",
+      "scopeNote": "Les messages adressés à ce client. Les alertes envoyées à la boutique au sujet de ses commandes n’y figurent pas."
     }
   }
 }

@@ -257,6 +257,28 @@ const RULES: readonly Rule[] = [
    */
   rule("/media", "GET", "POST"),
   rule("/media/\\d+", "GET", "PATCH"),
+
+  /*
+   * Notifications. **`ac_manage_customers`, not `ac_manage_content`** — which is
+   * why this is its own branch and not part of the block above. A row holds a
+   * customer's address and, on the single read, the frozen body of their order
+   * confirmation: their name and what they bought. §90 gates it on the
+   * capability that already reads a customer's record and explicitly refuses to
+   * invent one, so a Manager is **200** here and 403 on every `/cms/` route
+   * above — the two fixtures invert, measured.
+   *
+   * Three routes, which is every route the API has for them. There is no write
+   * beyond the retry and nothing here sends: §59d put the drain behind
+   * `wp algerian-commerce send-notifications` precisely so an SMTP server that
+   * hangs cannot hang the panel, and the retry answers 202 naming that command.
+   *
+   * `POST /notifications` is absent because it does not exist — a queue row is
+   * written by an order save, never by a person — and there is no `DELETE`: a
+   * sent notification is a record of something that left the building.
+   */
+  rule("/notifications", "GET"),
+  rule("/notifications/\\d+", "GET"),
+  rule("/notifications/\\d+/retry", "POST"),
 ];
 
 export type AllowResult =
