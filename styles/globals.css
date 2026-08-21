@@ -557,6 +557,54 @@
     padding-block-start: env(safe-area-inset-top, 0px);
   }
 
+  /*
+   * The bar, and it is the only chart mark in the panel.
+   *
+   * Every analytics chart here is a *magnitude* comparison of a single series —
+   * which product sold most, which status holds most orders, which wilaya
+   * ordered most — so the `dataviz` form heuristic gives one answer for all of
+   * them: a bar, one hue, no legend. That is also the only answer this token set
+   * can give honestly. A categorical palette needs 7–8 hues that survive a
+   * colour-vision-deficiency check, tokens.css has five semantic colours that are
+   * reserved for status, and inventing more would put colour literals in a
+   * repository whose design script fails on them. One hue is not a compromise
+   * here; it is the correct form.
+   *
+   * Identity is carried by the label and, on a status breakdown, by the tonal
+   * badge beside it — never by the bar. Every value is printed as text on the
+   * same row, so nothing is reachable only by looking at a length.
+   *
+   * The specs are the skill's: thin mark, 8px; a 4px-equivalent rounded data-end
+   * with a square baseline; a hairline-recessive track; no gradient, no shadow,
+   * no border drawn round the mark. `border-*-end-radius` is logical, so the
+   * rounded end is the growing end in both directions with no mirrored rule.
+   */
+  .bar-track {
+    block-size: 0.5rem;
+    border-radius: var(--radius-full);
+    background-color: var(--color-fill-tertiary);
+  }
+  .bar-fill {
+    block-size: 100%;
+    background-color: var(--color-accent);
+    border-start-end-radius: var(--radius-full);
+    border-end-end-radius: var(--radius-full);
+    /* A row with one order must not render as an empty track: at 249 orders to
+     * the maximum, one order is 0.4 % of the width and rounds to nothing. */
+    min-inline-size: 2px;
+    transition: inline-size var(--dur-base) var(--ease-ios);
+  }
+  /*
+   * The second fill, and it marks a different *kind* of row rather than a lesser
+   * one. `unattributed` is the largest row in the wilaya report and is not a
+   * place; drawing it in the same hue as Adrar invites the reader to compare
+   * them as peers. It is never colour alone — the row is named and carries the
+   * API's own reason underneath.
+   */
+  .bar-fill-muted {
+    background-color: var(--color-fill);
+  }
+
   /* A 20px icon gets a 44px hit area via a pseudo-element, not by growing the
    * icon. */
   .tap-44 {

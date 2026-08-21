@@ -567,6 +567,164 @@ for (const [name, options] of TARGETS) {
       return a !== undefined && a === b && Number(a) > 0;
     });
 
+    // --------------------------------------------------------- dashboard ---
+    await page.goto(`${BASE}/${locale}/dashboard`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-testid^='card-']");
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/dashboard-${name}-${locale}.png`, fullPage: true });
+
+    const dashboardOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: dashboard no horizontal overflow`, dashboardOverflow, (v) => v <= 1);
+
+    /*
+     * **Two card sets, and neither has holes.** Seven either way — with money the
+     * hero is net revenue and collected sits beside it; without, orders placed
+     * leads and completed and new customers take those slots. This capture signs
+     * in as a Super Admin, so it is the money set; the other is covered by
+     * `e2e/analytics.spec.ts` with `AC_LIMITED_*`.
+     */
+    const cardCount = await page.locator("[data-testid^='card-']").count();
+    check(`${name}/${locale}: dashboard renders a full card set`, cardCount, 7);
+
+    /*
+     * Every card is a link, and exactly one is the hero. A dashboard number that
+     * cannot be drilled into is decoration, and a second hero is two headlines.
+     */
+    const cardShape = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll("[data-testid^='card-']")];
+      const linked = cards.filter((c) => c.getAttribute("href")).length;
+      // The hero spans the row; the tiles do not.
+      const heroes = cards.filter((c) => c.className.includes("col-span-2")).length;
+      return `${linked}/${cards.length} linked, ${heroes} hero`;
+    });
+    check(
+      `${name}/${locale}: every card links and exactly one leads`,
+      cardShape,
+      (v) => /^(\d+)\/\1 linked, 1 hero$/.test(String(v)),
+    );
+
+    /*
+     * **The window on screen is the window the API answered**, never the one the
+     * picker holds. `date_from`/`date_to` sent without `range=custom` are
+     * silently ignored — measured, 200 with the thirty-day default — so a picker
+     * bound to its own state would caption a month of data with a chosen
+     * fortnight. Asserted by *disagreeing* with the picker: `range=today` is
+     * pressed, and the line must read one day rather than the default.
+     */
+    await page.goto(`${BASE}/${locale}/dashboard?range=today`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-testid='range-applied']");
+    const appliedToday = await page.locator("[data-testid='range-applied']").innerText();
+    check(
+      `${name}/${locale}: the range line comes from the response`,
+      appliedToday.replace(/\s+/g, " ").trim(),
+      (v) => /(1 jour|يوم)/.test(String(v)),
+    );
+
+    // ---------------------------------------------------------- analytics ---
+    await page.goto(`${BASE}/${locale}/analytics`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-testid='report-revenue']");
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/analytics-${name}-${locale}.png`, fullPage: true });
+
+    const revenueOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: revenue report no overflow`, revenueOverflow, (v) => v <= 1);
+
+    /*
+     * **Every revenue figure carries its population**, because two pairs on this
+     * screen do not divide: 844 placed against 289 counted, and 719 700 net
+     * against 145 150 collected. Counted structurally, the same way the COD
+     * funnel is above: as many scope lines as figures.
+     */
+    const revenueScoped = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("[data-testid='report-revenue'] .list-row")].filter(
+        (r) => r.querySelector("[data-numeric]"),
+      );
+      const withScope = rows.filter((r) => r.querySelector(".text-caption"));
+      return `${withScope.length}/${rows.length}`;
+    });
+    check(`${name}/${locale}: every revenue figure names its scope`, revenueScoped, (v) => {
+      const [a, b] = String(v).split("/");
+      return a !== undefined && a === b && Number(a) > 0;
+    });
+
+    /*
+     * **No English paragraph on a French or Arabic sheet.** `unavailable` is an
+     * object of English sentences and `unattributed.reason` is another; both are
+     * replaced by localised wording, and the API's text is rendered only for a
+     * key the panel has no line for. Asserted by looking for the sentences the
+     * API actually sends.
+     */
+    const englishLeak = await page.evaluate(() => {
+      const text = document.querySelector("[data-testid='report-revenue']")?.textContent ?? "";
+      return /No cost of goods exists|Gateway fees are not summable|is not recorded/.test(text)
+        ? "english"
+        : "localised";
+    });
+    check(`${name}/${locale}: the unavailable reasons are localised`, englishLeak, "localised");
+
+    // --------------------------------------------------- the wilaya report ---
+    await page.goto(`${BASE}/${locale}/analytics?view=shipping`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-testid='report-shipping']");
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/wilaya-${name}-${locale}.png`, fullPage: true });
+
+    /*
+     * **The unattributed slice is bigger than every attributed wilaya combined**
+     * — 249 orders against 39 and 1 — so it is ranked first as a named row, in
+     * the muted fill that marks it as a different *kind* of thing. A nameless
+     * wedge that size reads as a bug.
+     */
+    const firstSlice = await page.evaluate(() => {
+      const rows = [
+        ...document.querySelectorAll("[data-testid='report-shipping'] .list-row"),
+      ].filter((r) => r.querySelector(".bar-fill"));
+      const wilayaRows = rows.filter((r) => r.querySelector(".bar-fill-muted"));
+      if (wilayaRows.length === 0) return "no muted row";
+      // The muted row must be the first of the geography rows it belongs to.
+      const group = wilayaRows[0].parentElement;
+      const inGroup = [...(group?.children ?? [])];
+      return inGroup.indexOf(wilayaRows[0]) === 0 ? "first" : "not first";
+    });
+    check(`${name}/${locale}: the unattributed slice is named and ranked`, firstSlice, "first");
+
+    /*
+     * **A bar grows from the reading-start edge, and its number does not
+     * mirror.** In RTL the fill's end must sit on the track's start-side end —
+     * asserted geometrically, because a `dir` attribute cannot catch a reorder
+     * and the logical `border-*-end-radius` is the only thing making it true.
+     */
+    const barGeometry = await page.evaluate((rtl) => {
+      const fill = document.querySelector("[data-testid='report-shipping'] .bar-fill");
+      const track = fill?.parentElement;
+      if (!fill || !track) return "no bar";
+      const f = fill.getBoundingClientRect();
+      const t = track.getBoundingClientRect();
+      const anchored = rtl ? Math.abs(f.right - t.right) <= 1 : Math.abs(f.left - t.left) <= 1;
+      return anchored ? "anchored" : "floating";
+    }, locale === "ar");
+    check(`${name}/${locale}: the bar grows from the reading edge`, barGeometry, "anchored");
+
+    /*
+     * **A bar's value is always printed as text.** The chart's table view is
+     * built in rather than bolted beside it, so a reader who cannot see a length
+     * loses nothing and there is nothing a tooltip could reveal.
+     */
+    const barsLabelled = await page.evaluate(() => {
+      const rows = [
+        ...document.querySelectorAll("[data-testid='report-shipping'] .list-row"),
+      ].filter((r) => r.querySelector(".bar-fill"));
+      const withValue = rows.filter((r) => r.querySelector("[data-numeric]"));
+      return `${withValue.length}/${rows.length}`;
+    });
+    check(`${name}/${locale}: every bar prints its value`, barsLabelled, (v) => {
+      const [a, b] = String(v).split("/");
+      return a !== undefined && a === b && Number(a) > 0;
+    });
+
     // ------------------------------------------- the order detail sections ---
     await page.goto(`${BASE}/${locale}/orders/3939`, { waitUntil: "networkidle" });
     await page.waitForTimeout(600);

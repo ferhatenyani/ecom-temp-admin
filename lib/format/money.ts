@@ -134,3 +134,55 @@ export function formatPercent(amount: string | null | undefined, locale: string)
  * never falls through to `formatMoney`.
  */
 export const MONEY_UNAVAILABLE = Symbol("money-unavailable");
+
+const countCache = new Map<string, Intl.NumberFormat>();
+
+/**
+ * A count, grouped the way its locale groups.
+ *
+ * `844` needs nothing, `2 187 600` needs the separator, and `String(n)` gives
+ * neither the separator nor the Western digits Arabic requires here. The literal
+ * `locale === "ar" ? "ar-DZ-u-nu-latn" : "fr-DZ"` had been written inline at
+ * eleven sites across two screens before analytics would have made it thirty;
+ * `moneyLocale()` already knows the answer and this stops the ternary spreading.
+ *
+ * Named for what it takes: a **number**, not the API's decimal string. Money and
+ * rates arrive as strings and have their own formatters above and below.
+ */
+export function formatCount(value: number, locale: string): string {
+  if (!Number.isFinite(value)) return "—";
+  const tag = moneyLocale(locale);
+  let made = countCache.get(tag);
+  if (!made) {
+    made = new Intl.NumberFormat(tag);
+    countCache.set(tag, made);
+  }
+  return made.format(value);
+}
+
+const rateCache = new Map<string, Intl.NumberFormat>();
+
+/**
+ * A rate, from the fraction the analytics payloads actually send.
+ *
+ * **Not the same input as `formatPercent`, and the difference is a factor of a
+ * hundred.** A coupon sends `"10.00"` meaning ten percent; `/analytics/cod` sends
+ * `"0.2109"` meaning twenty-one. `formatPercent` divides by 100 before handing
+ * `Intl` a fraction, so feeding it `0.2109` renders **0,21 %** — a plausible
+ * number, on a screen about conversion, that is wrong by two orders of magnitude
+ * and would never look like a bug.
+ *
+ * So this one takes the fraction already parsed — `rateFraction()` in
+ * `lib/analytics.ts`, or `ratePercent()` in `lib/cod.ts` — and one decimal, which
+ * is as much precision as a rate over a few hundred orders can carry.
+ */
+export function formatRate(fraction: number | null, locale: string): string {
+  if (fraction === null || !Number.isFinite(fraction)) return "—";
+  const tag = moneyLocale(locale);
+  let made = rateCache.get(tag);
+  if (!made) {
+    made = new Intl.NumberFormat(tag, { style: "percent", maximumFractionDigits: 1 });
+    rateCache.set(tag, made);
+  }
+  return made.format(fraction);
+}

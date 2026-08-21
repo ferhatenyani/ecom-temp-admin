@@ -246,6 +246,55 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["audit-logs"], "GET").allowed).toBe(false);
   });
 
+  it("permits the seven analytics reports, and no eighth", () => {
+    for (const report of [
+      "overview",
+      "revenue",
+      "orders",
+      "products",
+      "customers",
+      "shipping",
+      "cod",
+    ]) {
+      expect(checkAllowed(["analytics", report], "GET").allowed).toBe(true);
+    }
+
+    /*
+     * `/analytics/revenue` is on the list **because** it is the one route a
+     * caller can be refused. Measured 2026-08-21 with a credential holding
+     * `ac_view_analytics` without `ac_manage_orders`: a flat 403, while the
+     * other six answer 200 with their money keys absent. The panel asks and
+     * renders the refusal, naming the capability off `meta.money_requires`.
+     * Keeping it off this list would turn a 403 the panel can explain into a
+     * 404 it cannot.
+     */
+    expect(checkAllowed(["analytics", "revenue"], "GET").allowed).toBe(true);
+  });
+
+  it("refuses an analytics route that does not exist, and every write", () => {
+    // The API registers exactly seven. A guessed eighth must not reach it.
+    expect(checkAllowed(["analytics"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["analytics", "margin"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["analytics", "profit"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["analytics", "overview", "export"], "GET").allowed).toBe(false);
+
+    // There is no write on this subject anywhere in the API, so there is none
+    // here either.
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      expect(checkAllowed(["analytics", "overview"], method).allowed).toBe(false);
+      expect(checkAllowed(["analytics", "revenue"], method).allowed).toBe(false);
+    }
+
+    /*
+     * `/export/orders` stays refused. It is the neighbouring route a reader of
+     * this screen will reach for — the same figures, as a file — and it is
+     * `ac_manage_orders` territory behind a screen nobody has built. A route no
+     * screen calls must not be reachable by guessing a URL.
+     */
+    expect(checkAllowed(["export", "orders"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["export", "customers"], "GET").allowed).toBe(false);
+  });
+
   it("permits the customer routes the screens call, and only those", () => {
     expect(checkAllowed(["customers"], "GET").allowed).toBe(true);
     expect(checkAllowed(["customers", "24"], "GET").allowed).toBe(true);
