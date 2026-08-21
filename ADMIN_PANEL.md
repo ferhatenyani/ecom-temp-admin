@@ -3019,9 +3019,10 @@ mirroring §47's slicing.
                         Manager needs to see what a coupon applies to.
 12. feat/shipping       + payments + COD
 13. feat/analytics      dashboard, the seven reports, the money gate
-14. feat/content        CMS, media, marketing, campaigns, notifications
-                        — split three ways; see below. 14a is DONE.
-15. feat/admin          settings, users, audit, import/export
+14. feat/content        CMS, media, marketing, campaigns, notifications  DONE
+                        — split three ways; see below. 14a, 14b and 14c are
+                        all merged.
+15. feat/admin          settings, users, audit, import/export      ← next
 16. feat/pwa            manifest, service worker, offline states, cache wiping
 ```
 
