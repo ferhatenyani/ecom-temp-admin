@@ -178,6 +178,29 @@ const RULES: readonly Rule[] = [
    * behind it.
    */
   rule("/cod/statistics", "GET"),
+
+  /*
+   * Analytics. Seven reads, and reads are all they are — there is no write on
+   * this subject anywhere in the API.
+   *
+   * `/analytics/revenue` is on the list despite being the one route a caller can
+   * be refused. It has to be: the panel *asks* and renders the refusal, which is
+   * the only way the money gate can be honest. Measured 2026-08-21 with a
+   * credential holding `ac_view_analytics` without `ac_manage_orders` — a flat
+   * **403**, while the other six answer 200 with their money keys *absent*
+   * rather than nulled. Keeping it off the list would turn a 403 the panel can
+   * explain into a 404 it cannot.
+   *
+   * Nothing else under `/analytics/` is added. The API registers exactly these
+   * seven and a guessed eighth must not reach it.
+   */
+  rule("/analytics/overview", "GET"),
+  rule("/analytics/revenue", "GET"),
+  rule("/analytics/orders", "GET"),
+  rule("/analytics/products", "GET"),
+  rule("/analytics/customers", "GET"),
+  rule("/analytics/shipping", "GET"),
+  rule("/analytics/cod", "GET"),
 ];
 
 export type AllowResult =

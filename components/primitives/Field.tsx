@@ -162,6 +162,72 @@ export function DecimalField(props: Omit<Parameters<typeof TextField>[0], "input
   return <TextField {...props} inputMode="decimal" isolate />;
 }
 
+/**
+ * A calendar date, `Y-m-d` in and `Y-m-d` out.
+ *
+ * A native `<input type="date">`, so the platform picker appears — a phone's
+ * wheel and a desktop's calendar are already localised, already keyboard
+ * navigable, and better than anything drawn here.
+ *
+ * **The value format is the wire format, and that is why this is safe where a
+ * coupon's expiry was not.** README's warning is about `date_expires`, which the
+ * API writes as `Y-m-d` and reads back as full ISO: an input bound to *that*
+ * response renders empty and the next save clears a date nobody touched.
+ * Analytics has no such asymmetry — `date_from` and `date_to` are `Y-m-d` in both
+ * directions, and nothing here writes to the shop at all.
+ *
+ * `dir="ltr"`: a date input's own segments are ordered by the platform's locale
+ * and must not be re-ordered by an Arabic paragraph around them.
+ */
+export function DateField({
+  label,
+  value,
+  onChange,
+  error,
+  hint,
+  min,
+  max,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  hint?: string;
+  min?: string;
+  max?: string;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const errorId = `${id}-error`;
+  const hydrated = useHydrated();
+
+  return (
+    <div className={rowClass(Boolean(error))}>
+      <Label htmlFor={id} hint={hint}>
+        {label}
+      </Label>
+      <input
+        id={id}
+        type="date"
+        value={value}
+        min={min}
+        max={max}
+        disabled={disabled || !hydrated}
+        aria-busy={!hydrated || undefined}
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        dir="ltr"
+        data-numeric=""
+        className={`${CONTROL} text-start disabled:opacity-40`}
+        style={{ unicodeBidi: "isolate" }}
+      />
+      {error ? <FieldError id={errorId} message={error} /> : null}
+    </div>
+  );
+}
+
 export function TextAreaField({
   label,
   value,

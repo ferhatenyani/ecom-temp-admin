@@ -12,9 +12,23 @@
  * the failure mode duplicated error handling always has: the copy that gets fixed
  * is the one whose screen someone happened to test.
  *
- * `orders/query.ts` and `products/query.ts` still carry their own and are not
- * swept here; their fetchers read bespoke `meta` (facets) and rewriting three
- * tested screens is not this branch's work.
+ * **`orders/query.ts` and `products/query.ts` are now swept in too**, and the two
+ * defects that survived in them are worth naming, because both were real and
+ * neither was visible from the code:
+ *
+ *   orders    read `body.error.message` and nothing else, so `?per_page=500`
+ *             showed *"Invalid parameter(s): per_page"* where the API had said
+ *             *"per_page must be between 1 (inclusive) and 100 (inclusive)"*.
+ *             The useful half was in `details.params` and was thrown away.
+ *
+ *   products  read `details.params` but only in its object shape, so the array
+ *             form — measured on `/inventory/lookup`, `{"params": ["sku"]}` —
+ *             would have put the bare word `sku` on screen as though it were an
+ *             explanation.
+ *
+ * Both also called `response.json()` directly, which throws on an empty body: a
+ * 204, or a 200 with nothing in it, failed inside the parser rather than
+ * succeeding.
  */
 
 /** The envelope, as every route in this API answers it. */
@@ -127,13 +141,29 @@ async function request(path: string, init?: RequestInit): Promise<Envelope> {
   return body;
 }
 
-/** A read. `total` comes from `meta.total`, which every list route sends. */
-export async function acRead<T>(path: string): Promise<{ data: T; total: number }> {
+/**
+ * A read. `total` comes from `meta.total`, which every list route sends.
+ *
+ * `meta` is returned whole beside it, because `total` is not the only thing that
+ * arrives there: `/products` puts its facet counts in `meta.facets`, and the
+ * analytics routes put `money_visible`, `money_requires`, `cache_ttl` and
+ * `generated_at` there. Returning only `total` is what kept the products fetcher
+ * hand-rolled through three branches — it needed one more key than this gave it,
+ * so it kept its own copy of the whole reader to get it.
+ *
+ * Typed `Record<string, unknown>`, so a caller narrows what it wants and nothing
+ * here has to know every route's `meta` shape.
+ */
+export async function acRead<T>(
+  path: string,
+): Promise<{ data: T; total: number; meta: Record<string, unknown> }> {
   const body = await request(path, { headers: { Accept: "application/json" } });
+  const meta = body.meta ?? {};
 
   return {
     data: (body.data ?? []) as T,
-    total: typeof body.meta?.total === "number" ? body.meta.total : 0,
+    total: typeof meta.total === "number" ? meta.total : 0,
+    meta,
   };
 }
 

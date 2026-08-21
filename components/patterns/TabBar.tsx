@@ -14,10 +14,14 @@ import { Icon, type IconName } from "@/components/primitives/Icon";
  *
  * A role holding fewer than five of the primary destinations gets its tabs
  * backfilled from `More` in a fixed order, so a Marketing Manager's tab bar is
- * coherent rather than three tabs and two gaps. Everything except `Dashboard` is
- * built; it renders as a disabled-looking placeholder rather than a link that
- * 404s — a tab that navigates nowhere is worse than one that says it is not
- * ready. `More` stopped being one of those when customers and coupons shipped.
+ * coherent rather than three tabs and two gaps.
+ *
+ * **Every tab now navigates.** `Dashboard` was the last placeholder — a tab that
+ * navigates nowhere is worse than one that says it is not ready — and it points
+ * at `/dashboard` rather than at the panel root. The root still redirects to
+ * Orders, which is the screen staff actually open, and the active-state test is
+ * `pathname.startsWith(href)`: a tab whose href were `/{locale}` would match
+ * every path in the panel and light up beside whichever tab was really active.
  */
 
 type Tab = {
@@ -46,7 +50,7 @@ type Tab = {
 const TABS: Tab[] = [
   { key: "orders", href: "/orders", icon: "orders" },
   { key: "products", href: "/products", icon: "products" },
-  { key: "dashboard", href: null, icon: "dashboard", shortKey: "dashboardShort" },
+  { key: "dashboard", href: "/dashboard", icon: "dashboard", shortKey: "dashboardShort" },
   { key: "inventory", href: "/inventory", icon: "box" },
   // `More` was a placeholder until customers and coupons existed. It now leads to
   // a real screen listing them, which is the iOS answer to a tab bar that holds

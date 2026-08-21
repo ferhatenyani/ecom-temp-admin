@@ -48,7 +48,12 @@ const DESTINATIONS: Destination[] = [
    * than a special case.
    */
   { key: "payments", href: "/payments", icon: "note", capability: "ac_manage_payments" },
-  { key: "analytics", href: null, icon: "dashboard", capability: "ac_view_analytics" },
+  /*
+   * The six reports. Separate from the Dashboard tab and not a duplicate of it:
+   * the dashboard is cards that drill into a filtered list, this is the reports
+   * themselves. They share a capability and a date range and nothing else.
+   */
+  { key: "analytics", href: "/analytics", icon: "dashboard", capability: "ac_view_analytics" },
   { key: "content", href: null, icon: "note", capability: "ac_manage_content" },
   { key: "settings", href: null, icon: "lock", capability: "ac_manage_settings" },
 ];

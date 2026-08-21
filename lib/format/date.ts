@@ -65,6 +65,40 @@ export function formatDate(
   return absoluteFormatter(locale, withTime).format(date);
 }
 
+const dayCache = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A calendar day from a bare `Y-m-d`, formatted in **UTC** rather than the shop's
+ * timezone — and the difference is not pedantry.
+ *
+ * The analytics range boundaries are days, not instants: `/analytics/overview`
+ * answers `{from: "2026-07-23", to: "2026-08-21", timezone: "+00:00"}`, and that
+ * `timezone` is the clock the server drew the boundaries with. It is **not**
+ * `Africa/Algiers`. Re-reading those days in the shop's zone would render a
+ * boundary the report does not have, and at UTC−something it would render the
+ * wrong day outright.
+ *
+ * `formatDate` is for a timestamp — an order's `date_created`, a movement — which
+ * *is* an instant and does belong in the shop's zone. Two different questions,
+ * two formatters.
+ *
+ * The Arabic output carries U+200F marks (`23‏/07‏/2026`), so a caller wraps it in
+ * `Isolate` and never in `Ltr` — see `components/primitives/Ltr.tsx`.
+ */
+export function formatDay(value: string | null | undefined, locale: string): string {
+  if (!value) return "—";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  const key = intlLocale(locale);
+  let made = dayCache.get(key);
+  if (!made) {
+    made = new Intl.DateTimeFormat(key, { dateStyle: "medium", timeZone: "UTC" });
+    dayCache.set(key, made);
+  }
+  return made.format(date);
+}
+
 /**
  * Relative time under 24 hours, absolute after. `now` is injectable so the unit
  * suite is not a hostage to the clock.

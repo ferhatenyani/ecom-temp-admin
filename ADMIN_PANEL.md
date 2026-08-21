@@ -1278,6 +1278,50 @@ used by every analytics surface. Responses are cached server-side for 60 s
 Charts follow the `dataviz` skill. **Flat fills, no gradient areas, no drop shadows on bars.** Axis
 direction mirrors in RTL; the numbers on it do not.
 
+> **Corrected in the build: six endpoints are one endpoint.** The route list above names
+> `/analytics/overview` plus five others. Measured 2026-08-21: **the overview nests all of them.** Its
+> payload carries `orders` (with `by_status`), `customers`, `cod`, `shipping`, `inventory` and
+> `revenue` as blocks, and every figure the five cards above need is inside it. The other five routes
+> would add five round trips, five failure modes and five cache entries to re-fetch numbers this one
+> already returned.
+>
+> The only thing the overview lacks is `best_sellers`, and that is not a dashboard card — it is the
+> products report, and the card that leads there is a link. `/dashboard` therefore makes exactly one
+> request, asserted in `e2e/analytics.spec.ts` by counting what reaches the proxy.
+
+> **Corrected in the build: the money gate has no production role that can reach it — and it is
+> covered end to end anyway.** The two-tier collapse gave Manager `ac_view_analytics` *and*
+> `ac_manage_orders`, so `canSeeMoney()` is true for both live tiers and `meta.money_visible` is never
+> false for one of them. The hand-off brief concluded the state was untestable and asked whether to
+> state the gap or add a third role to the backend.
+>
+> Neither was needed. `GET /roles` still publishes **three retired roles holding `ac_view_analytics`
+> without `ac_manage_orders`** — Product Manager, Marketing Manager and Support Agent —
+> `mint-credential.sh` still assigns them because `set_role()` is WordPress core and bypasses the
+> API's narrowing, and `scripts/test.sh` already mints one as `AC_LIMITED_*`. Measured with it:
+> `/analytics/revenue` is a flat **403**, and the other six answer **200 with their money keys
+> absent**.
+>
+> What the fixture does not prove, stated rather than implied: it describes a configuration only the
+> test harness can create. That is the same footing every other forbidden fixture in this panel has
+> stood on since the collapse.
+
+> **Corrected in the build: money is omitted field by field, not nulled and not zeroed.** Measured on
+> the six non-403 routes: `overview.revenue` (the whole block), `orders.average_order_value` and
+> `orders.currency`, `best_sellers[].revenue`, `by_wilaya[].revenue`, `unattributed.revenue`,
+> `shipping.shipping_revenue` and `shipping.currency`. Nothing marks the hole; the key is gone. So
+> every money field in `lib/api/schemas/analytics.ts` is `.optional()` — a required one turns a
+> Support Agent's dashboard into a `schema_mismatch` at the boundary rather than a working screen.
+>
+> **`meta.money_requires` is `"ac_manage_orders"` and is not in this specification.** The forbidden
+> screen renders the capability the response named, the same discipline as rendering a 409's `allowed`
+> list rather than the panel's own idea of the rule.
+>
+> "Two card sets" is a pure function, `dashboardCards()`, so the branch is a unit test rather than a
+> screenshot — and both sets are **seven cards**. An earlier draft returned seven with money and six
+> without, which is precisely the layout-with-holes this passage forbids; the test that compares the
+> two sets by length rather than checking the second for absences is what caught it.
+
 ## Orders
 
 `GET/POST /orders`, `GET/PATCH /orders/{id}`, `/orders/{id}/cancel`, `/notes`, `/timeline`.
@@ -2130,6 +2174,86 @@ with a reason attached. Show the reason; an "unattributed" slice with no explana
 Counts cover every order, sums only those in the shop's currency, with `excluded_currencies` naming
 the rest. On an install carrying pre-`DZD` orders, "22 commandes" beside a COD funnel of 615 is
 correct and needs the note beside it.
+
+> **Corrected in the build: the date range is `?range=` only, and the pair above is a trap.** Six
+> presets — `today, yesterday, 7d, 30d, 90d, custom` — and `custom` **requires** `date_from` and
+> `date_to`. The 366-day cap and a reversed pair are both real refusals, and note that **one endpoint
+> answers two error shapes**: a bad `range` is `details.params`, a bad date is `details.fields`.
+>
+> ```
+> range=custom                  400 {"fields":{"date_from":"Required when range is custom.", …}}
+> range=custom&…966 days        400 {"fields":{"date_from":"A custom range covers at most 366 days."}}
+> range=custom&from>to          400 {"fields":{"date_from":"Must not be later than date_to."}}
+> range=400d  /  range=zzz      400 {"params":{"range":"range is not one of today, …, and custom."}}
+> ```
+>
+> The trap is silent. **`date_from`/`date_to` sent *without* `range=custom` are ignored** — measured on
+> four spellings including a valid ten-day window, every one answering **200 with the 30-day default**.
+> A picker that sends only the dates captions a month of data with a chosen fortnight, and nothing
+> errors. Two rules follow, both enforced in `lib/analytics.ts`: `analyticsParams()` **always** sends
+> `range`, and every screen renders **`data.range`** rather than what the picker holds.
+
+> **Corrected in the build: `unavailable` is an object of reasons, in English — not a list of names.**
+> Three keys on `/analytics/revenue` (`shipping_cost`, `payment_fees`, `margin`), one on
+> `/analytics/shipping` (`shipping_cost` alone), each mapped to a full sentence explaining *why*:
+> *"Gateway fees are not summable across providers. `ac_payment_transactions` has no fee column by
+> design…"*.
+>
+> This is the facet `scope_note` problem in a second place — the panel is fr/ar and the sentence is
+> English. A key the panel has wording for renders the panel's own localised line; a key it does not
+> renders the API's sentence marked `lang="en" dir="ltr"`, so a fourth key added later degrades to
+> "readable but foreign" rather than to nothing. `unattributed.reason` gets the same treatment for the
+> same reason, and `npm run shots` asserts that none of the API's English sentences reach the screen.
+
+> **Corrected in the build: `excluded_currencies` does not explain the gap this section points it at,
+> and it was absent from every response.** The passage above says counts cover every order while sums
+> cover only the shop's currency, with `excluded_currencies` naming the rest. That is true and it is
+> not what separates `orders_placed` 844 from `orders_counted` **289**.
+>
+> **289 is a status exclusion.** `RevenueReport::COUNTED_STATUSES` is `processing`, `on-hold`,
+> `completed` and `refunded`: 160 + 1 + 45 + 83 = 289, verified against the payload rather than read
+> out of the source and trusted. The excluded 555 are pending 197, cancelled 357 and failed 1 —
+> nothing paid, nothing committed, or called off. `refunded` is *included* deliberately: a fully
+> refunded order made a sale and gave it back, so it belongs in gross with its refund subtracted,
+> netting to zero; excluding the order while still counting the refund nets to minus the sale.
+>
+> `excluded_currencies` would explain a *different* gap — the revenue report's own `orders_placed` is
+> already currency-scoped, so it is `/analytics/orders`'s `placed` it would reconcile against. It is
+> emitted only when the window holds a non-`DZD` order, which this shop has none of, and the panel
+> renders it when it appears.
+>
+> `countedReconciliation()` carries a `proves` flag and the screen states the explanation **only where
+> the arithmetic holds on that payload**. If the backend's definition changes, the panel reports the
+> gap and stops explaining it, rather than printing a confident sentence that has quietly become false.
+
+> **Corrected in the build: `collected` and `net` are a third pair that does not divide,** 145 150
+> against 719 700. Net is what the shop booked over the four counted statuses; collected is
+> `completed` alone, because for a cash-on-delivery shop the money arrives when the parcel does. Three
+> populations, so `RevenueFigure` carries a required `scope` of `all` / `counted` / `completed` — the
+> `CodFigure` and `StatFigure` pattern in a third place, and `npm run shots` counts the scope lines
+> structurally against the figures.
+
+> **Corrected in the build: `guest_orders` appears twice in one payload with two different values.**
+> `/analytics/overview` reports `orders.guest_orders` **389** and `customers.guest_orders` **185**, and
+> both are right: the orders block counts every guest order in the window, while the customers block
+> restricts to the counted statuses, since it scopes to the same population it counts customers over.
+> `customers` itself is not the shop's customer count either — it is accounts that placed a counted
+> order in the window, 9 against the shop's 16. One key, two scopes, one response.
+
+> **Corrected in the build: an empty window returns zeros, never omitted blocks.** `range=today` on a
+> shop with no orders today answers **200 with every key present and every figure zero** on all seven
+> routes — `best_sellers: []`, `providers: []`, `by_wilaya: []`, every count `0` and every rate
+> `"0.0000"`. There is no missing key to detect it by and no error to render, so a screen of thirty
+> zeros reads as a report that failed rather than as a quiet Tuesday. Each report says which it is and
+> offers to widen the window. `/analytics/products` is the exception and keeps rendering: its
+> `low_stock` block is **not** range-scoped and stays at 3 under `range=today`.
+
+> **Verified in the build, not corrected: the analytics cache is keyed by capability.**
+> `docs/SECURITY_AUDIT.md` claims it and a shared key would serve a money payload to a caller who is
+> refused one, so it was measured rather than assumed — inside a single 60 s TTL window, in both
+> orders. A Super Admin and a caller without `ac_manage_orders` each got their own answer twice, and
+> the Super Admin's second call came back from cache with the money intact. The claim holds, and
+> `meta.cache_ttl` is 60: **no client refetch is layered on top of it.**
 
 ## Content
 

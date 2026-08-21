@@ -1,3 +1,4 @@
+import { acRead } from "@/lib/api/browser";
 import type { Order } from "@/lib/api/schemas/order";
 
 /**
@@ -32,6 +33,19 @@ export type OrdersPage = { orders: Order[]; total: number };
 /**
  * Reads go through the proxy, which attaches the credential server-side. The
  * browser never sees one.
+ *
+ * `acRead` rather than a hand-rolled reader. This module carried its own from the
+ * orders branch until the analytics branch swept it, and the copy had drifted in
+ * one measurable way: it read `body.error.message` and nothing else, so
+ * `?per_page=500` put *"Invalid parameter(s): per_page"* on screen while the API
+ * had actually said *"per_page must be between 1 (inclusive) and 100
+ * (inclusive)"* under `details.params`. The list rendered the half that names the
+ * parameter and dropped the half that says what to do about it.
+ *
+ * It also threw a bare `Error` with `status` and `code` glued on by
+ * `Object.assign`, which type-checked and told a caller nothing —
+ * `BrowserApiError` keeps `status`, `code`, `details` and `fields` as real
+ * properties.
  */
 export async function fetchOrders(query: OrdersQuery): Promise<OrdersPage> {
   const params = new URLSearchParams({
@@ -41,24 +55,6 @@ export async function fetchOrders(query: OrdersQuery): Promise<OrdersPage> {
   if (query.status) params.set("status", query.status);
   if (query.search) params.set("search", query.search);
 
-  const response = await fetch(`/api/ac/orders?${params}`, {
-    headers: { Accept: "application/json" },
-  });
-  const body = (await response.json()) as {
-    success?: boolean;
-    data?: unknown;
-    meta?: { total?: number };
-    error?: { code?: string; message?: string };
-  };
-
-  if (!response.ok || body.success === false) {
-    const error = new Error(body.error?.message ?? `Request failed (${response.status})`);
-    Object.assign(error, { status: response.status, code: body.error?.code });
-    throw error;
-  }
-
-  return {
-    orders: (body.data ?? []) as Order[],
-    total: body.meta?.total ?? 0,
-  };
+  const { data, total } = await acRead<Order[]>(`/orders?${params}`);
+  return { orders: data, total };
 }

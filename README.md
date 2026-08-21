@@ -11,7 +11,8 @@ cookie. No component library.
 ## What exists
 
 The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
-Coupons, and Shipping with Payments and cash on delivery.
+Coupons, Shipping with Payments and cash on delivery, and the Dashboard with the six analytics
+reports.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -34,13 +35,18 @@ Coupons, and Shipping with Payments and cash on delivery.
 /[locale]/coupons/new        the same form against an empty coupon
 /[locale]/shipping           the tariff with its own resolver, and the parcels
 /[locale]/payments           the transactions ledger, and the COD funnel beside it
+/[locale]/dashboard          the overview as seven cards, each one a link into the list
+                             behind its figure — two card sets, chosen by canSeeMoney()
+/[locale]/analytics          six reports behind one date range — revenue, orders, products,
+                             customers, shipping, COD
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
 `fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
 branch — the specification calls it the hardest component in the panel — and so is editing attributes
-and categories. Everything else in Part V is a later branch, and `/more` renders those destinations
-as visibly not-yet-built rather than as links that 404.
+and categories. Content and Settings are later branches, and `/more` renders those destinations as
+visibly not-yet-built rather than as links that 404. **Every tab in the bar now navigates** — Dashboard
+was the last placeholder.
 
 Five things were fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch,
 because the screens were not buildable as specified. They are listed under **Owed to the backend, and
@@ -89,11 +95,17 @@ still mint (`set_role()` bypasses the API) and whose suites still pass, but whic
 configuration production does not have. A Manager is 200 on shipping and COD and **403 on
 payments** — one credential carrying a real refusal and a real success.
 
-The e2e suite runs on Chromium at current iPhone widths — **420 tests** across four widths and both
-locales. `--project=phone-webkit` is the honest engine and is **105/105** (verified 2026-08-20), kept out
+`npm run shots` captures into `.impeccable/review/` and asserts **384 things a screenshot cannot
+show** — that the Arabic face loaded rather than falling back, that a bar grows from the reading edge
+in both directions, that every figure names its scope, and that none of the API's English sentences
+reached the screen.
+
+The e2e suite runs on Chromium at current iPhone widths — **492 tests** across four widths and both
+locales. `--project=phone-webkit` is the honest engine and is **123/123** (verified 2026-08-21), kept out
 of the default run because its system libraries are 231 apt packages behind root. Export all
 **four** credentials before running it by hand — with only two, nine forbidden-fixture tests skip
-and the run reports 96 passed, which is not the same thing as green.
+and the run reports fewer passes, which is not the same thing as green. A run that reports any skips
+is a run that did not test what you think it did.
 
 Two operator errors are worth naming, because both invalidated a run and both looked like code
 defects. **Minting a credential while a suite is running** kills that suite's credential — the same
@@ -114,7 +126,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 123 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 139 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -123,6 +135,15 @@ positive control on its own patterns — a grep that matches nothing must not re
 - No arbitrary Tailwind values.
 - Logical properties only: `ms-`/`me-`/`ps-`/`pe-`/`start-`/`end-`, never `ml-`/`pr-`/`left-`.
 - No `shadow-` outside `Sheet`, `Popover` and `ActionSheet`.
+
+The charts obey the same rules, which decides what they are. Every analytics chart here is a
+**single-series magnitude** comparison, so the `dataviz` form heuristic gives one answer for all of
+them — a bar, one hue, no legend — and that is also the only answer this token set can give honestly:
+a categorical palette needs seven or eight hues that survive a colour-vision check, `tokens.css` has
+five semantic colours reserved for status, and inventing more would put colour literals in a
+repository whose design script fails on them. Identity is carried by the label and by the tonal badge
+beside it, never by the bar, and **every bar prints its value as text on the same row**, so the table
+view is built in rather than bolted beside it.
 
 ## Things worth knowing before changing anything
 
@@ -259,6 +280,54 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **A `Field`'s `hint` is inside its `<label>`**, so it becomes part of the accessible name and
   changes as the hint does — while `FieldError` uses `aria-describedby`. Shared by every form; noted
   rather than changed.
+
+- **Analytics takes `?range=` and nothing else.** Six presets; `custom` requires `date_from` **and**
+  `date_to`. The dates sent *without* `range=custom` are **accepted and ignored** — 200 with the
+  thirty-day default, measured on four spellings including a valid ten-day window. So the panel always
+  sends `range`, and every screen renders `data.range` rather than what the picker holds. One endpoint,
+  two error shapes: a bad `range` is `details.params`, a bad date is `details.fields`.
+- **Money is omitted key by key, not nulled.** Without `ac_manage_orders`, `/analytics/revenue` is
+  403 and the other six drop `overview.revenue`, `orders.average_order_value`, `orders.currency`,
+  `best_sellers[].revenue`, `by_wilaya[].revenue`, `unattributed.revenue`, `shipping_revenue` and
+  `currency`. Every money field in the schema is `.optional()` for that reason. `meta.money_requires`
+  names the capability and is not in the spec; the forbidden screen renders what the response said.
+- **The money gate is reachable in tests, and not in production.** Both live tiers hold
+  `ac_manage_orders`, but `GET /roles` still publishes three retired roles holding `ac_view_analytics`
+  without it, and `scripts/test.sh` already mints one as `AC_LIMITED_*` (a Support Agent). The e2e
+  suite covers the gate with it, against the live API, with a Super Admin as the positive control.
+- **844 placed against 289 counted is a *status* exclusion, not `excluded_currencies`.** The counted
+  set is `processing + on-hold + completed + refunded` (160+1+45+83), and `refunded` is in on purpose.
+  `excluded_currencies` was absent from every response and would explain a different gap.
+  `countedReconciliation()` carries a `proves` flag, and the screen states the explanation only where
+  the sum actually holds.
+- **An empty window is zeros, not omitted blocks.** `range=today` answers 200 with every key present
+  and every figure `0`, so a report has to say the window was quiet or it reads as one that failed.
+  `/analytics/products` is the exception: `low_stock` is not range-scoped.
+- **`unavailable` is an object of English sentences**, one per key, and `unattributed.reason` is
+  another. Both are rendered as localised lines keyed on the *key*, with the API's text as the
+  fallback for a key the panel has no wording for. Rendering the raw note puts an English paragraph in
+  the middle of an Arabic sheet — which it did, until the capture showed it.
+- **`formatRate` and `formatPercent` take different inputs and differ by 100×.** Analytics sends
+  `"0.2109"` meaning 21 %; a coupon sends `"10.00"` meaning 10 %. Feeding a rate to `formatPercent`
+  renders `0,21 %` — plausible, wrong by two orders of magnitude, and it never looks like a bug.
+- **`guest_orders` is two different numbers in one payload** — 389 in the orders block, 185 in the
+  customers block, both correct and scoped differently. `customers` is accounts that ordered in the
+  window (9), not the shop's customers (16).
+- **The analytics cache key varies by capability**, verified in both directions inside one 60 s TTL
+  window rather than taken from `docs/SECURITY_AUDIT.md`. `meta.cache_ttl` is 60 and no client refetch
+  is layered on top of it.
+- **`Ltr` around a full-width cell forces the cell's direction, not just the identifier's.** The
+  provider name and its count both landed at the left edge of an Arabic row. Wrap the identifier, never
+  the cell.
+- **`details.params` has two shapes and only one is a message.** For a bad value it is an object
+  keyed by parameter (`{"per_page": "per_page must be between 1 and 100"}`); for a *missing* required
+  parameter it is an array of names (`{"params": ["sku"]}`, measured on `/inventory/lookup`).
+  `Object.values` of an array returns its elements, so the second shape renders `sku` as though it
+  were an explanation. `lib/api/browser.ts` falls through to the generic message instead — and is now
+  the only reader in the panel, `orders/query.ts` and `products/query.ts` included. Their private
+  copies had each drifted: orders dropped `details` entirely and showed *"Invalid parameter(s):
+  per_page"* where the API had said what the range was, and products mishandled the array. Both are
+  asserted in `tests/boundary.test.ts`.
 
 ## Owed to the backend, and paid
 
