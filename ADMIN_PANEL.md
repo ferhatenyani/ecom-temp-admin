@@ -2693,14 +2693,29 @@ this is the one place the envelope-unwrapping client must be bypassed deliberate
 > `columns_found` listing a product name as a column. Fixed on `fix/product-export-header`; the
 > assertion aimed at it counted commas on the first line, which a data row passes.
 >
-> **The round trip still does not close for products, and the screen says so per subject.** The header
-> carries WooCommerce's *display* labels — `ID`, `SKU`, `GTIN, UPC, EAN, or ISBN` — because that is the
-> file every other WooCommerce tool reads, and the table mapping those onto field names lives in
-> `includes/admin/importers/mappings/`, inside `admin/`, which `WooCsv` deliberately does not load.
-> Measured: a re-import parses every row and resolves an empty `sku` on each, while the same file with
-> a lowercased header previews `updated: 2`. The **inventory** export uses our own writer and our own
-> field names and round-trips as it stands, so `ROUND_TRIPS` states it subject by subject rather than
-> as a promise the shop cannot keep.
+> **The round trip did not close for products, and the reason it did not was a third defect rather
+> than a limitation.** This was first written as one: the export carried WooCommerce's *display*
+> labels — `ID`, `SKU`, `GTIN, UPC, EAN, or ISBN` — the table mapping those onto field names lives in
+> `includes/admin/importers/mappings/`, inside `admin/`, which `WooCsv` deliberately does not load, and
+> so `ROUND_TRIPS.products` was `false` and the screen said so.
+>
+> That described the symptom accurately and defended the wrong half. **The failure was not a missing
+> loop, it was a green preview**: `created: 33, failed: 0` over a file in which every field had
+> resolved empty. Two readers disagreed about one header and only the lenient one was consulted —
+> `CsvReader` lower-cases headers on purpose, so `requireColumns(['sku'])` was satisfied by `SKU`,
+> while `WC_Product_CSV_Importer::map_headers()` matches **exactly** and, given no mapping, resolved
+> nothing at all.
+>
+> Fixed in `ecom-temp` on `fix/product-export-field-names`: the export writes field names
+> (`id,type,sku,global_unique_id,name,…`), the precondition asks the importer's own
+> `get_mapped_keys()`, and a label-headed file is a **400 naming `sku`**. Composing WooCommerce's own
+> two tables found 2 divergences in 52 columns, and a field-name header is *better* interop, not worse
+> — wp-admin's own `auto_map_columns()` preselects **40 of 52** against 39 for the labels.
+>
+> Measured after the fix, on a 33-product file: default mode `skipped 33` naming each SKU,
+> `?mode=update` `updated 33, failed 0` with every field resolved. `ROUND_TRIPS.products` is now
+> `true`. **`orders` and `customers` stay false for an unrelated reason** — they have no importer at
+> all, an order being created by a checkout and a customer by a registration.
 
 > **Corrected in the build: a preview row has four shapes, not one.** This section describes the
 > preview as though it were a table. Measured, `preview[]` depends on the subject **and** on whether

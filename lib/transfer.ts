@@ -102,25 +102,37 @@ export const EXPORT_LIMIT_MAX = 2000;
 export const UTF8_BOM = "﻿";
 
 /**
- * **The products export does not round-trip through `/import/products`
- * unedited**, and the screen has to say so rather than imply a loop that does
- * not close.
+ * **Every subject with an importer round-trips**, and for products that is true
+ * only since `fix/product-export-field-names` in `ecom-temp`.
  *
- * Measured after the header fix: the file parses, every row is read, and every
- * `sku` resolves **empty**. The header carries WooCommerce's *display* labels —
- * `ID`, `SKU`, `GTIN, UPC, EAN, or ISBN` — because that is the file every other
- * WooCommerce tool reads, and the table mapping those onto field names lives in
- * `includes/admin/importers/mappings/`, inside `admin/`, which `WooCsv`
- * deliberately does not load. The same file with a lowercased header previews
- * `updated: 2` with both SKUs resolved, which is the control that proves it is
- * the header and not the rows.
+ * This flag read `products: false` for one branch, with a long argument for why
+ * it could not: the export carried WooCommerce's *display* labels — `ID`, `SKU`,
+ * `GTIN, UPC, EAN, or ISBN` — and the table mapping those onto field names lives
+ * in `includes/admin/importers/mappings/`, which `WooCsv` deliberately does not
+ * load. That much was right. What the argument missed is that the **export** was
+ * the wrong half to defend.
  *
- * The **inventory** export uses our own writer and our own field names and
- * round-trips as it stands. So the screen states it per subject rather than as a
- * general promise.
+ * The real defect was two readers disagreeing about one header. `CsvReader`
+ * lower-cases headers on purpose, so `requireColumns(['sku'])` was satisfied by
+ * `SKU`; `WC_Product_CSV_Importer::map_headers()` matches **exactly** and, with
+ * no mapping passed, never resolved a single column. So a dry run reported
+ * **`created: 33, failed: 0` with every `sku` empty** — a green preview for a
+ * file nothing had been read out of. Not a missing convenience: a lie.
+ *
+ * The export now writes field names (`id,type,sku,global_unique_id,name,…`), the
+ * importer's own `get_mapped_keys()` is what the precondition asks, and a
+ * label-headed file is a **400 naming `sku`** rather than a cheerful 33.
+ *
+ * Measured after the fix, on the same 33-product file:
+ *
+ *   default mode   rows 33, skipped 33 — "a product with that SKU already exists"
+ *   ?mode=update   rows 33, updated 33, failed 0, every sku and name resolved
+ *
+ * `orders` and `customers` stay `false` because they have **no importer at all**,
+ * which is a different fact from a broken one — see `isImportable()`.
  */
 export const ROUND_TRIPS: Record<ExportSubject, boolean> = {
-  products: false,
+  products: true,
   orders: false,
   inventory: true,
   customers: false,

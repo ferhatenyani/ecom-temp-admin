@@ -58,15 +58,22 @@ export function TransferScreen({
                   <span className="flex flex-wrap items-center gap-2 text-caption text-label-secondary">
                     <span>{t(`exportRow.${subject}`)}</span>
                     {/*
-                      **Stated per subject, because it is true per subject.** The
-                      inventory export uses our own writer and our own field
-                      names and re-imports as it stands; the products export
-                      carries WooCommerce's display labels — `ID`, `SKU`, `GTIN,
-                      UPC, EAN, or ISBN` — and its label-to-field table lives in
-                      WooCommerce's admin importer, which this API does not load.
-                      Measured: every row parses and every SKU resolves empty.
-                      Promising a round trip the shop cannot complete is worse
-                      than not offering one.
+                      **Stated per subject, because it is true per subject** —
+                      and for products it became true only after
+                      `fix/product-export-field-names` in `ecom-temp`.
+
+                      This badge was withheld from products for a branch, on the
+                      grounds that the export carried WooCommerce's display
+                      labels and nothing mapped them onto field names. That was
+                      an accurate description of a defect and the wrong thing to
+                      design around: the failure was not a missing loop but a
+                      dry run reporting `created: 33, failed: 0` over a file
+                      whose every field had resolved empty. The export writes
+                      field names now.
+
+                      `orders` and `customers` still carry no badge, and that is
+                      a different fact: they have no importer at all — an order
+                      is created by a checkout and a customer by a registration.
                     */}
                     {ROUND_TRIPS[subject] ? (
                       <StatusBadge tone="success">{t("roundTrips")}</StatusBadge>

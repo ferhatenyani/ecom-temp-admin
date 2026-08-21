@@ -2464,26 +2464,152 @@
     "success": true,
     "data": {
       "dry_run": true,
-      "rows": 2,
+      "rows": 33,
       "created": 0,
       "updated": 0,
-      "skipped": 2,
+      "skipped": 33,
       "failed": 0,
       "errors": [],
       "preview": [
         {
           "line": 2,
           "action": "skipped",
-          "sku": "",
-          "name": "",
-          "reason": "no product with that SKU to update"
+          "sku": "AC-TAP-001",
+          "name": "Tapis berbère de Ghardaïa 200x140",
+          "reason": "a product with that SKU already exists"
         },
         {
           "line": 3,
           "action": "skipped",
-          "sku": "",
-          "name": "",
-          "reason": "no product with that SKU to update"
+          "sku": "AC-TAP-004",
+          "name": "Couverture kabyle en laine",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 4,
+          "action": "skipped",
+          "sku": "AC-BUR-010",
+          "name": "Burnous en laine",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 5,
+          "action": "skipped",
+          "sku": "AC-BUR-010-S",
+          "name": "Burnous en laine - S",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 6,
+          "action": "skipped",
+          "sku": "AC-BUR-010-M",
+          "name": "Burnous en laine - M",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 7,
+          "action": "skipped",
+          "sku": "AC-BUR-010-L",
+          "name": "Burnous en laine - L",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 8,
+          "action": "skipped",
+          "sku": "AC-POT-001",
+          "name": "Jarre en terre cuite de Maatkas",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 9,
+          "action": "skipped",
+          "sku": "AC-POT-007",
+          "name": "Service à thé en céramique émaillée, 6 verres",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 10,
+          "action": "skipped",
+          "sku": "AC-EPI-001",
+          "name": "Huile d'olive extra vierge de Kabylie, 1 L",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 11,
+          "action": "skipped",
+          "sku": "AC-EPI-004",
+          "name": "Dattes Deglet Nour branchées, 1 kg",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 12,
+          "action": "skipped",
+          "sku": "AC-EPI-009",
+          "name": "Miel de jujubier, 500 g",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 13,
+          "action": "skipped",
+          "sku": "AC-BIJ-002",
+          "name": "Fibule kabyle",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 14,
+          "action": "skipped",
+          "sku": "AC-BIJ-002-AG",
+          "name": "Fibule kabyle - Argent",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 15,
+          "action": "skipped",
+          "sku": "AC-BIJ-002-OR",
+          "name": "Fibule kabyle - Or",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 16,
+          "action": "skipped",
+          "sku": "AC-BIJ-005",
+          "name": "Bracelet touareg en argent et ébène",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 17,
+          "action": "skipped",
+          "sku": "AC-MAI-003",
+          "name": "Lanterne en cuivre ciselé",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 18,
+          "action": "skipped",
+          "sku": "AC-MAI-008",
+          "name": "Plateau en bois d'olivier, 40 cm",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 19,
+          "action": "skipped",
+          "sku": "AC-AN-LAMP",
+          "name": "Analytics test AC-AN-LAMP",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 20,
+          "action": "skipped",
+          "sku": "AC-COD-LAMP",
+          "name": "COD test AC-COD-LAMP",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 21,
+          "action": "skipped",
+          "sku": "AC-CUS-KETTLE",
+          "name": "Customer test AC-CUS-KETTLE",
+          "reason": "a product with that SKU already exists"
         }
       ],
       "preview_only": "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed."
@@ -2541,6 +2667,210 @@
       "GET /export/customers": 200,
       "POST /import/products": 403,
       "POST /import/inventory": 403
+    }
+  },
+  "exportProductsRoundTripUpdate": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 33,
+      "created": 0,
+      "updated": 33,
+      "skipped": 0,
+      "failed": 0,
+      "errors": [],
+      "preview": [
+        {
+          "line": 2,
+          "action": "updated",
+          "sku": "AC-TAP-001",
+          "name": "Tapis berbère de Ghardaïa 200x140"
+        },
+        {
+          "line": 3,
+          "action": "updated",
+          "sku": "AC-TAP-004",
+          "name": "Couverture kabyle en laine"
+        },
+        {
+          "line": 4,
+          "action": "updated",
+          "sku": "AC-BUR-010",
+          "name": "Burnous en laine"
+        },
+        {
+          "line": 5,
+          "action": "updated",
+          "sku": "AC-BUR-010-S",
+          "name": "Burnous en laine - S"
+        },
+        {
+          "line": 6,
+          "action": "updated",
+          "sku": "AC-BUR-010-M",
+          "name": "Burnous en laine - M"
+        },
+        {
+          "line": 7,
+          "action": "updated",
+          "sku": "AC-BUR-010-L",
+          "name": "Burnous en laine - L"
+        },
+        {
+          "line": 8,
+          "action": "updated",
+          "sku": "AC-POT-001",
+          "name": "Jarre en terre cuite de Maatkas"
+        },
+        {
+          "line": 9,
+          "action": "updated",
+          "sku": "AC-POT-007",
+          "name": "Service à thé en céramique émaillée, 6 verres"
+        },
+        {
+          "line": 10,
+          "action": "updated",
+          "sku": "AC-EPI-001",
+          "name": "Huile d'olive extra vierge de Kabylie, 1 L"
+        },
+        {
+          "line": 11,
+          "action": "updated",
+          "sku": "AC-EPI-004",
+          "name": "Dattes Deglet Nour branchées, 1 kg"
+        },
+        {
+          "line": 12,
+          "action": "updated",
+          "sku": "AC-EPI-009",
+          "name": "Miel de jujubier, 500 g"
+        },
+        {
+          "line": 13,
+          "action": "updated",
+          "sku": "AC-BIJ-002",
+          "name": "Fibule kabyle"
+        },
+        {
+          "line": 14,
+          "action": "updated",
+          "sku": "AC-BIJ-002-AG",
+          "name": "Fibule kabyle - Argent"
+        },
+        {
+          "line": 15,
+          "action": "updated",
+          "sku": "AC-BIJ-002-OR",
+          "name": "Fibule kabyle - Or"
+        },
+        {
+          "line": 16,
+          "action": "updated",
+          "sku": "AC-BIJ-005",
+          "name": "Bracelet touareg en argent et ébène"
+        },
+        {
+          "line": 17,
+          "action": "updated",
+          "sku": "AC-MAI-003",
+          "name": "Lanterne en cuivre ciselé"
+        },
+        {
+          "line": 18,
+          "action": "updated",
+          "sku": "AC-MAI-008",
+          "name": "Plateau en bois d'olivier, 40 cm"
+        },
+        {
+          "line": 19,
+          "action": "updated",
+          "sku": "AC-AN-LAMP",
+          "name": "Analytics test AC-AN-LAMP"
+        },
+        {
+          "line": 20,
+          "action": "updated",
+          "sku": "AC-COD-LAMP",
+          "name": "COD test AC-COD-LAMP"
+        },
+        {
+          "line": 21,
+          "action": "updated",
+          "sku": "AC-CUS-KETTLE",
+          "name": "Customer test AC-CUS-KETTLE"
+        }
+      ],
+      "preview_only": "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed."
+    }
+  },
+  "importLabelHeader": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The header does not name WooCommerce's import fields.",
+      "details": {
+        "fields": {
+          "file": "Missing: sku. WooCommerce's importer matches column names exactly and reads field names — sku, name, regular_price, stock_quantity — not the display labels \"SKU\" and \"Regular price\" that a wp-admin product export writes. GET /export/products writes a header this route can read."
+        },
+        "columns_found": [
+          "id",
+          "type",
+          "SKU",
+          "global_unique_id",
+          "Name",
+          "published",
+          "featured",
+          "catalog_visibility",
+          "short_description",
+          "description",
+          "date_on_sale_from",
+          "date_on_sale_to",
+          "tax_status",
+          "tax_class",
+          "stock_status",
+          "stock_quantity",
+          "low_stock_amount",
+          "backorders",
+          "sold_individually",
+          "weight",
+          "length",
+          "width",
+          "height",
+          "reviews_allowed",
+          "purchase_note",
+          "sale_price",
+          "regular_price",
+          "category_ids",
+          "tag_ids",
+          "shipping_class_id",
+          "images",
+          "download_limit",
+          "download_expiry",
+          "parent_id",
+          "grouped_products",
+          "upsell_ids",
+          "cross_sell_ids",
+          "product_url",
+          "button_text",
+          "menu_order",
+          "attributes:Name1",
+          "attributes:value1",
+          "attributes:visible1",
+          "attributes:taxonomy1",
+          "attributes:Name2",
+          "attributes:value2",
+          "attributes:visible2",
+          "attributes:taxonomy2",
+          "attributes:Name3",
+          "attributes:value3",
+          "attributes:visible3",
+          "attributes:taxonomy3"
+        ],
+        "columns_required": [
+          "sku"
+        ]
+      }
     }
   }
 }
