@@ -87,7 +87,30 @@ const DESTINATIONS: Destination[] = [
    * to avoid.
    */
   { key: "marketing", href: "/marketing", icon: "mail", capability: "ac_manage_marketing" },
-  { key: "settings", href: null, icon: "lock", capability: "ac_manage_settings" },
+  /*
+   * The four subjects of `feat/admin`, and **only one of them shares a
+   * capability with another screen in this list**.
+   *
+   * Settings, Staff and Audit are `ac_manage_settings`, `ac_manage_users` and
+   * `ac_view_audit_logs` — three capabilities that after the two-tier collapse
+   * name the Super Admin tier alone, measured: a Manager holding ten other
+   * management capabilities is 403 on all three.
+   *
+   * Import and export is the odd one and is deliberately last. It has no
+   * capability of its own — **capability follows the resource**, so
+   * `/export/products` is `ac_manage_products` and `/export/customers` is
+   * `ac_manage_customers` — so the filter below cannot express its gate at all.
+   * `ac_manage_products` is the widest of the four and the closest honest
+   * approximation: a Manager holds it and sees the row, a Marketing Manager
+   * holds none of the four and does not. The screen itself renders per subject,
+   * which is where the real answer is, and a reader holding only
+   * `ac_manage_customers` reaches it by URL and gets their one export rather
+   * than a refusal.
+   */
+  { key: "settings", href: "/settings", icon: "lock", capability: "ac_manage_settings" },
+  { key: "staff", href: "/users", icon: "customers", capability: "ac_manage_users" },
+  { key: "audit", href: "/audit", icon: "list", capability: "ac_view_audit_logs" },
+  { key: "transfer", href: "/transfer", icon: "down", capability: "ac_manage_products" },
 ];
 
 export default async function MorePage({

@@ -227,24 +227,153 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["inventory", "movements"], "PATCH").allowed).toBe(false);
   });
 
-  it("refuses the routes that would have named a movement's actor", () => {
+  it("does not let the ledger's actor problem be solved by the routes it refused", () => {
     /*
-     * The ledger carries `actor_id: 475` and no name. Both routes that could
-     * resolve one are refused here on purpose, and the decision is measured
-     * rather than cautious:
+     * **This assertion used to say both routes were refused, and it is corrected
+     * rather than deleted.** The reasoning that kept them off the list is still
+     * the reasoning — it was about the *inventory ledger*, and it still holds
+     * there:
      *
      *   GET /users/{id}   403 for Admin, Manager and Product Manager — three of
      *                     the four roles holding `ac_manage_inventory`
      *   GET /audit-logs   403 for Manager and Product Manager, and carries no
      *                     movement id to join on even where it is readable
      *
-     * So neither could produce a ledger that reads the same for everyone, and
-     * putting a user-directory route behind the panel's proxy to label rows for
-     * a quarter of the staff is not a trade worth making. `movementActor()`
-     * documents what the row shows instead.
+     * Both are allowed now because `feat/admin` built the screens they exist
+     * for, and on those screens the route's capability and the screen's gate are
+     * the same capability. Nothing about the ledger changed: it still shows what
+     * it can prove, `movementActor()` still documents why, and a Product Manager
+     * reading a movement is still 403 on both of these — the panel's proxy
+     * allowing a route has never been the same thing as the API allowing a
+     * caller.
      */
-    expect(checkAllowed(["users", "475"], "GET").allowed).toBe(false);
-    expect(checkAllowed(["audit-logs"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["users", "475"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["audit-logs"], "GET").allowed).toBe(true);
+
+    // What has not changed: there is no route joining a movement to a trail
+    // entry, so nothing here could label a ledger row even now.
+    expect(checkAllowed(["inventory", "movements", "5813", "audit"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["users", "475", "display-name"], "GET").allowed).toBe(false);
+  });
+
+  it("permits the four admin subjects' routes, and only those", () => {
+    /*
+     * Settings, staff, the trail and the two imports. **The four exports are
+     * deliberately absent** and are asserted so below — an export is a file and
+     * this proxy forwards only `content-type`, so a download routed through it
+     * would arrive with no filename and no `no-store`.
+     */
+    for (const [path, method] of [
+      [["settings"], "GET"],
+      [["settings"], "PATCH"],
+      [["users"], "GET"],
+      [["users"], "POST"],
+      [["users", "770"], "GET"],
+      [["users", "770"], "PATCH"],
+      [["users", "770"], "DELETE"],
+      [["users", "770", "application-passwords"], "GET"],
+      [["users", "770", "application-passwords"], "POST"],
+      [["roles"], "GET"],
+      [["audit-logs"], "GET"],
+      [["import", "products"], "POST"],
+      [["import", "inventory"], "POST"],
+    ] as const) {
+      expect(checkAllowed([...path], method), `${method} /${path.join("/")}`).toEqual({
+        allowed: true,
+        path: `/${path.join("/")}`,
+      });
+    }
+
+    /*
+     * The uuid segment is pinned to RFC 4122's shape rather than left as
+     * `[^/]+`. It comes from a row the panel is holding, never from a person,
+     * and a permissive segment on a `DELETE` is a revoke aimed by guessing.
+     */
+    const uuid = "27e0417e-7e03-4fe9-b2bf-2376c30fb670";
+    expect(
+      checkAllowed(["users", "770", "application-passwords", uuid], "DELETE").allowed,
+    ).toBe(true);
+    for (const segment of ["all", "*", "27e0417e", `${uuid}x`, uuid.toUpperCase().replace(/-/g, "")]) {
+      expect(
+        checkAllowed(["users", "770", "application-passwords", segment], "DELETE").allowed,
+        segment,
+      ).toBe(false);
+    }
+    // Upper-case hex is legal in a uuid and is accepted.
+    expect(
+      checkAllowed(["users", "770", "application-passwords", uuid.toUpperCase()], "DELETE").allowed,
+    ).toBe(true);
+  });
+
+  it("refuses the admin routes and verbs no screen calls", () => {
+    /*
+     * **The four exports stay off the list, and this is the assertion that says
+     * why.** An export is a file — `text/csv`, a `Content-Disposition` filename
+     * that is the API's, `Cache-Control: no-store`, and a body opening with a
+     * UTF-8 BOM. `FORWARD_RESPONSE_HEADERS` is `content-type` and `retry-after`,
+     * so a download through this proxy would lose its filename and its
+     * `no-store`, and `acRead()` would try to `JSON.parse` a spreadsheet.
+     *
+     * `app/api/export/[subject]/route.ts` is the second deliberate bypass of the
+     * envelope client after `app/api/label/[id]`, and it carries its own subject
+     * allowlist — so nothing is reachable that this file refuses.
+     */
+    for (const subject of ["products", "orders", "inventory", "customers"]) {
+      expect(checkAllowed(["export", subject], "GET"), subject).toEqual({
+        allowed: false,
+        reason: "path",
+      });
+    }
+
+    // The trail is append-only. There is no write on the API to allow.
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      expect(checkAllowed(["audit-logs"], method)).toEqual({ allowed: false, reason: "method" });
+    }
+    // A single audit row is not a route either.
+    expect(checkAllowed(["audit-logs", "16825"], "GET").allowed).toBe(false);
+
+    // `/roles` is GET-only and there is no route that creates one: the matrix is
+    // code, it is unit-tested, and a role invented at runtime is a capability
+    // set nothing has reviewed.
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      expect(checkAllowed(["roles"], method)).toEqual({ allowed: false, reason: "method" });
+    }
+    expect(checkAllowed(["roles", "ac_manager"], "GET").allowed).toBe(false);
+
+    // Settings has no DELETE and no PUT — a partial write is the contract, and
+    // `PUT` would imply a document replace the API does not do.
+    expect(checkAllowed(["settings"], "PUT")).toEqual({ allowed: false, reason: "method" });
+    expect(checkAllowed(["settings"], "DELETE")).toEqual({ allowed: false, reason: "method" });
+    expect(checkAllowed(["settings", "store"], "PATCH").allowed).toBe(false);
+
+    /*
+     * There is no `/import/orders` and no `/import/customers`, and that is the
+     * API's shape rather than an omission here: an order comes from a checkout
+     * and a customer from a registration, and a CSV that invented either would
+     * be inventing money and consent.
+     */
+    expect(checkAllowed(["import", "orders"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["import", "customers"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["import"], "POST").allowed).toBe(false);
+    // An import is a POST and nothing else.
+    expect(checkAllowed(["import", "products"], "GET")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+
+    // Guessed neighbours around the user routes.
+    for (const path of [
+      ["users", "770", "password"],
+      ["users", "770", "capabilities"],
+      ["users", "770", "orders"],
+      ["users", "me"],
+      ["users", "770", "application-passwords", "all", "revoke"],
+    ]) {
+      expect(checkAllowed(path, "GET"), path.join("/")).toEqual({
+        allowed: false,
+        reason: "path",
+      });
+    }
   });
 
   it("permits the seven analytics reports, and no eighth", () => {
@@ -650,10 +779,21 @@ describe("the proxy allowlist", () => {
   });
 
   it("refuses the platform routes docs/API.md opens by telling you not to touch", () => {
-    // A generic proxy here is an open relay to wp/v2/users with an admin
-    // credential attached.
-    expect(checkAllowed(["users"], "GET").allowed).toBe(false);
-    expect(checkAllowed(["settings"], "PATCH").allowed).toBe(false);
+    /*
+     * **`/users` and `/settings` used to be in this list and have moved up to
+     * their own cases**, now that `feat/admin` has built the screens that call
+     * them. That is the list's whole purpose — a route becomes reachable when
+     * something in the panel reaches for it, never before — and the sentence
+     * this case was written around is unchanged and still the point:
+     *
+     * A generic proxy under `/wp-json/` would be an open relay to **`/wp/v2/`**
+     * with an admin credential attached. `/users` on *this* namespace is §87's
+     * staff endpoint behind `ac_manage_users`; `/wp/v2/users` is WordPress's own
+     * and is a different thing entirely, which is why the pattern is anchored
+     * and the traversal guard runs before it.
+     */
+    expect(checkAllowed(["wp", "v2", "users"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["users", "..", "..", "wp", "v2", "users"], "GET").allowed).toBe(false);
     /*
      * `/customers` used to be in this list and has moved up to its own case now
      * that a screen calls it. What stays refused is the storefront's half of the

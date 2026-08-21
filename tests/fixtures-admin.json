@@ -1,0 +1,2546 @@
+{
+  "settings": {
+    "success": true,
+    "data": {
+      "store": {
+        "name": "Algerian Commerce",
+        "description": "",
+        "locale": "en_US",
+        "currency": "DZD",
+        "currency_symbol": "د.ج",
+        "storefront_url": "",
+        "logo_id": 0,
+        "logo": null
+      },
+      "contact": {
+        "email": "",
+        "phone": "",
+        "address": "",
+        "wilaya": "",
+        "hours": ""
+      },
+      "legal": {
+        "registered_name": "",
+        "rc": "",
+        "nif": "",
+        "nis": "",
+        "ai": ""
+      },
+      "social": {
+        "facebook": "",
+        "instagram": "",
+        "tiktok": "",
+        "youtube": ""
+      },
+      "features": {
+        "cod": true,
+        "chargily": true,
+        "yalidine": false,
+        "zr_express": false,
+        "marketing_pixels": false,
+        "blog": false,
+        "reviews": false,
+        "sms": false,
+        "whatsapp": false
+      },
+      "providers": {
+        "payment": [
+          "chargily",
+          "cod"
+        ],
+        "shipping": [
+          "manual"
+        ],
+        "marketing": []
+      }
+    }
+  },
+  "settingsForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "settingsEmptyPatch": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "No supported fields were provided.",
+      "details": {
+        "fields": [
+          "store",
+          "contact",
+          "legal",
+          "social"
+        ]
+      }
+    }
+  },
+  "settingsRefusedCurrency": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "store": "Unknown keys: currency. Known: name, description, storefront_url, logo_id."
+        }
+      }
+    }
+  },
+  "settingsRefusedFeatures": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "features": "Feature flags are environment variables read once at bootstrap (ENABLE_COD, ENABLE_CHARGILY, …). Set them in .env and restart, or the registry and this document disagree."
+        }
+      }
+    }
+  },
+  "settingsRefusedProviders": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "providers": "Read-only: this reports which providers actually registered, which follows from their credentials and flags."
+        }
+      }
+    }
+  },
+  "settingsBadUrl": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "store.storefront_url": "Must be a URL, including https://."
+        }
+      }
+    }
+  },
+  "settingsBadEmail": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "contact.email": "Must be an email address."
+        }
+      }
+    }
+  },
+  "settingsUnknownBlock": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "nonsense": "Unknown block. Known: store, contact, legal, social."
+        }
+      }
+    }
+  },
+  "settingsUnknownKey": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The settings are invalid.",
+      "details": {
+        "fields": {
+          "store": "Unknown keys: zzz. Known: name, description, storefront_url, logo_id."
+        }
+      }
+    }
+  },
+  "settingsWritten": {
+    "success": true,
+    "data": {
+      "store": {
+        "name": "Algerian Commerce",
+        "description": "",
+        "locale": "en_US",
+        "currency": "DZD",
+        "currency_symbol": "د.ج",
+        "storefront_url": "",
+        "logo_id": 0,
+        "logo": null
+      },
+      "contact": {
+        "email": "",
+        "phone": "+213 555 01 02 03",
+        "address": "",
+        "wilaya": "",
+        "hours": ""
+      },
+      "legal": {
+        "registered_name": "",
+        "rc": "",
+        "nif": "",
+        "nis": "",
+        "ai": ""
+      },
+      "social": {
+        "facebook": "",
+        "instagram": "",
+        "tiktok": "",
+        "youtube": ""
+      },
+      "features": {
+        "cod": true,
+        "chargily": true,
+        "yalidine": false,
+        "zr_express": false,
+        "marketing_pixels": false,
+        "blog": false,
+        "reviews": false,
+        "sms": false,
+        "whatsapp": false
+      },
+      "providers": {
+        "payment": [
+          "chargily",
+          "cod"
+        ],
+        "shipping": [
+          "manual"
+        ],
+        "marketing": []
+      }
+    }
+  },
+  "users": {
+    "success": true,
+    "data": [
+      {
+        "id": 770,
+        "username": "ac_panel_suspended",
+        "email": "ac_panel_suspended@example.test",
+        "first_name": "Nadia",
+        "last_name": "Cherif",
+        "display_name": "Nadia Cherif",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "suspended",
+        "date_created": "2026-08-21T20:25:35+00:00"
+      },
+      {
+        "id": 766,
+        "username": "ac_usr_promote",
+        "email": "ac_usr_promote@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "Now staff",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:45+00:00"
+      },
+      {
+        "id": 764,
+        "username": "ac_usr_new",
+        "email": "ac_usr_new@example.test",
+        "first_name": "Karim",
+        "last_name": "Benali",
+        "display_name": "Karim B.",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:44+00:00"
+      },
+      {
+        "id": 763,
+        "username": "ac_audit_manager",
+        "email": "ac_audit_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_audit_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:10+00:00"
+      },
+      {
+        "id": 762,
+        "username": "ac_audit_super",
+        "email": "ac_audit_super@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_audit_super",
+        "role": "ac_super_admin",
+        "role_name": "Super Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:10+00:00"
+      },
+      {
+        "id": 536,
+        "username": "ac_coupon_marketing",
+        "email": "ac_coupon_marketing@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_coupon_marketing",
+        "role": "ac_marketing_manager",
+        "role_name": "Marketing Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-19T00:45:58+00:00"
+      },
+      {
+        "id": 518,
+        "username": "ac_panel_order_manager",
+        "email": "ac_panel_order_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_order_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T23:50:29+00:00"
+      },
+      {
+        "id": 517,
+        "username": "ac_panel_marketing_manager",
+        "email": "ac_panel_marketing_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_marketing_manager",
+        "role": "ac_marketing_manager",
+        "role_name": "Marketing Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T23:50:23+00:00"
+      },
+      {
+        "id": 516,
+        "username": "ac_panel_product_manager",
+        "email": "ac_panel_product_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_product_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T11:04:19+00:00"
+      },
+      {
+        "id": 515,
+        "username": "ac_panel_manager",
+        "email": "ac_panel_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T11:04:12+00:00"
+      },
+      {
+        "id": 514,
+        "username": "ac_panel_admin",
+        "email": "ac_panel_admin@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_admin",
+        "role": "ac_super_admin",
+        "role_name": "Super Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T11:04:04+00:00"
+      },
+      {
+        "id": 475,
+        "username": "ac_panel_super_admin",
+        "email": "ac_panel_super_admin@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_super_admin",
+        "role": "ac_super_admin",
+        "role_name": "Super Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T07:00:55+00:00"
+      },
+      {
+        "id": 474,
+        "username": "ac_panel_support_agent",
+        "email": "ac_panel_support_agent@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_support_agent",
+        "role": "ac_support_agent",
+        "role_name": "Support Agent",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T04:50:34+00:00"
+      },
+      {
+        "id": 473,
+        "username": "ac_paneldev",
+        "email": "ac_paneldev@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_paneldev",
+        "role": "ac_super_admin",
+        "role_name": "Super Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T03:17:25+00:00"
+      },
+      {
+        "id": 415,
+        "username": "ac_notif_auditor",
+        "email": "ac_notif_auditor@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_notif_auditor",
+        "role": "ac_admin",
+        "role_name": "Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T22:08:30+00:00"
+      },
+      {
+        "id": 414,
+        "username": "ac_notif_product",
+        "email": "ac_notif_product@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_notif_product",
+        "role": "ac_product_manager",
+        "role_name": "Product Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T22:08:30+00:00"
+      },
+      {
+        "id": 413,
+        "username": "ac_notif_support",
+        "email": "ac_notif_support@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_notif_support",
+        "role": "ac_support_agent",
+        "role_name": "Support Agent",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T22:08:30+00:00"
+      },
+      {
+        "id": 346,
+        "username": "ac_cms_auditor",
+        "email": "ac_cms_auditor@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_cms_auditor",
+        "role": "ac_admin",
+        "role_name": "Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T21:21:13+00:00"
+      },
+      {
+        "id": 288,
+        "username": "ac_attr_auditor",
+        "email": "ac_attr_auditor@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_attr_auditor",
+        "role": "ac_admin",
+        "role_name": "Admin",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T19:02:19+00:00"
+      },
+      {
+        "id": 287,
+        "username": "ac_attr_denied",
+        "email": "ac_attr_denied@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_attr_denied",
+        "role": "ac_support_agent",
+        "role_name": "Support Agent",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-17T19:02:18+00:00"
+      }
+    ],
+    "meta": {
+      "total": 72,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 4
+    }
+  },
+  "usersForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "usersSuspended": {
+    "success": true,
+    "data": [
+      {
+        "id": 770,
+        "username": "ac_panel_suspended",
+        "email": "ac_panel_suspended@example.test",
+        "first_name": "Nadia",
+        "last_name": "Cherif",
+        "display_name": "Nadia Cherif",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "suspended",
+        "date_created": "2026-08-21T20:25:35+00:00"
+      }
+    ],
+    "meta": {
+      "total": 1,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 1
+    }
+  },
+  "usersByRole": {
+    "success": true,
+    "data": [
+      {
+        "id": 770,
+        "username": "ac_panel_suspended",
+        "email": "ac_panel_suspended@example.test",
+        "first_name": "Nadia",
+        "last_name": "Cherif",
+        "display_name": "Nadia Cherif",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "suspended",
+        "date_created": "2026-08-21T20:25:35+00:00"
+      },
+      {
+        "id": 766,
+        "username": "ac_usr_promote",
+        "email": "ac_usr_promote@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "Now staff",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:45+00:00"
+      },
+      {
+        "id": 764,
+        "username": "ac_usr_new",
+        "email": "ac_usr_new@example.test",
+        "first_name": "Karim",
+        "last_name": "Benali",
+        "display_name": "Karim B.",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:44+00:00"
+      },
+      {
+        "id": 763,
+        "username": "ac_audit_manager",
+        "email": "ac_audit_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_audit_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-21T20:09:10+00:00"
+      },
+      {
+        "id": 518,
+        "username": "ac_panel_order_manager",
+        "email": "ac_panel_order_manager@example.test",
+        "first_name": "",
+        "last_name": "",
+        "display_name": "ac_panel_order_manager",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "active",
+        "date_created": "2026-08-18T23:50:29+00:00"
+      }
+    ],
+    "meta": {
+      "total": 8,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 2
+    }
+  },
+  "usersSearch": {
+    "success": true,
+    "data": [
+      {
+        "id": 770,
+        "username": "ac_panel_suspended",
+        "email": "ac_panel_suspended@example.test",
+        "first_name": "Nadia",
+        "last_name": "Cherif",
+        "display_name": "Nadia Cherif",
+        "role": "ac_manager",
+        "role_name": "Manager",
+        "is_administrator": false,
+        "status": "suspended",
+        "date_created": "2026-08-21T20:25:35+00:00"
+      }
+    ],
+    "meta": {
+      "total": 1,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 1
+    }
+  },
+  "usersSearchEmpty": {
+    "success": true,
+    "data": [],
+    "meta": {
+      "total": 0,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 0
+    }
+  },
+  "roles": {
+    "success": true,
+    "data": [
+      {
+        "role": "ac_super_admin",
+        "name": "Super Admin",
+        "capabilities": [
+          "ac_manage_products",
+          "ac_manage_inventory",
+          "ac_manage_orders",
+          "ac_manage_customers",
+          "ac_manage_coupons",
+          "ac_manage_content",
+          "ac_manage_marketing",
+          "ac_view_analytics",
+          "ac_manage_shipping",
+          "ac_manage_payments",
+          "ac_manage_settings",
+          "ac_manage_users",
+          "ac_view_audit_logs"
+        ],
+        "assignable": true
+      },
+      {
+        "role": "ac_admin",
+        "name": "Admin",
+        "capabilities": [
+          "ac_manage_products",
+          "ac_manage_inventory",
+          "ac_manage_orders",
+          "ac_manage_customers",
+          "ac_manage_coupons",
+          "ac_manage_content",
+          "ac_manage_marketing",
+          "ac_view_analytics",
+          "ac_manage_shipping",
+          "ac_manage_payments",
+          "ac_view_audit_logs"
+        ],
+        "assignable": false
+      },
+      {
+        "role": "ac_manager",
+        "name": "Manager",
+        "capabilities": [
+          "ac_manage_products",
+          "ac_manage_inventory",
+          "ac_manage_orders",
+          "ac_manage_customers",
+          "ac_manage_coupons",
+          "ac_manage_shipping",
+          "ac_view_analytics"
+        ],
+        "assignable": true
+      },
+      {
+        "role": "ac_product_manager",
+        "name": "Product Manager",
+        "capabilities": [
+          "ac_manage_products",
+          "ac_manage_inventory",
+          "ac_view_analytics"
+        ],
+        "assignable": false
+      },
+      {
+        "role": "ac_order_manager",
+        "name": "Order Manager",
+        "capabilities": [
+          "ac_manage_orders",
+          "ac_manage_customers",
+          "ac_manage_shipping",
+          "ac_view_analytics"
+        ],
+        "assignable": false
+      },
+      {
+        "role": "ac_marketing_manager",
+        "name": "Marketing Manager",
+        "capabilities": [
+          "ac_manage_marketing",
+          "ac_manage_content",
+          "ac_manage_coupons",
+          "ac_view_analytics"
+        ],
+        "assignable": false
+      },
+      {
+        "role": "ac_support_agent",
+        "name": "Support Agent",
+        "capabilities": [
+          "ac_manage_customers",
+          "ac_view_analytics"
+        ],
+        "assignable": false
+      }
+    ]
+  },
+  "rolesForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "me": {
+    "success": true,
+    "data": {
+      "id": 475,
+      "username": "ac_panel_super_admin",
+      "display_name": "ac_panel_super_admin",
+      "email": "ac_panel_super_admin@example.test",
+      "roles": [
+        "ac_super_admin"
+      ],
+      "capabilities": [
+        "ac_manage_content",
+        "ac_manage_coupons",
+        "ac_manage_customers",
+        "ac_manage_inventory",
+        "ac_manage_marketing",
+        "ac_manage_orders",
+        "ac_manage_payments",
+        "ac_manage_products",
+        "ac_manage_settings",
+        "ac_manage_shipping",
+        "ac_manage_users",
+        "ac_view_analytics",
+        "ac_view_audit_logs"
+      ],
+      "auth_method": "application_password"
+    }
+  },
+  "userSuspendedDetail": {
+    "success": true,
+    "data": {
+      "id": 770,
+      "username": "ac_panel_suspended",
+      "email": "ac_panel_suspended@example.test",
+      "first_name": "Nadia",
+      "last_name": "Cherif",
+      "display_name": "Nadia Cherif",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "suspended",
+      "date_created": "2026-08-21T20:25:35+00:00",
+      "application_passwords": []
+    }
+  },
+  "refuseOwnRole": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You cannot change your own role. Ask another Super Admin."
+    }
+  },
+  "refuseOwnSuspend": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You cannot suspend your own account."
+    }
+  },
+  "refuseOwnDelete": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You cannot delete your own account."
+    }
+  },
+  "refuseWordPressRole": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The user data is invalid.",
+      "details": {
+        "fields": {
+          "role": "This API manages commerce roles and does not grant \"administrator\". A WordPress role carries platform access — installing plugins, editing files — that no capability in this matrix models."
+        }
+      }
+    }
+  },
+  "refuseRetiredRole": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The user data is invalid.",
+      "details": {
+        "fields": {
+          "role": "The role \"ac_support_agent\" is retired and is no longer assigned. Accounts already holding it keep it and are unaffected; new assignments choose one of: ac_super_admin, ac_manager."
+        }
+      }
+    }
+  },
+  "refuseNoRole": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The user data is invalid.",
+      "details": {
+        "fields": {
+          "role": "Required. An account with no role is a customer, and customers are managed at /customers."
+        }
+      }
+    }
+  },
+  "refuseFields": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The user data is invalid.",
+      "details": {
+        "fields": {
+          "password": "A password set by somebody else is one its owner cannot trust. Onboard with POST /users/{id}/application-passwords.",
+          "capabilities": "Capabilities come from the role. Assign a role and GET /roles to see what it holds.",
+          "user_login": "A login is an identity, not a field. Create the account with the username you want.",
+          "roles": "An account holds exactly one role here. Use \"role\"."
+        }
+      }
+    }
+  },
+  "refuseDuplicateUsername": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That username is already taken.",
+      "details": {
+        "username": "ac_panel_suspended"
+      }
+    }
+  },
+  "userNotFound": {
+    "success": false,
+    "error": {
+      "code": "not_found",
+      "message": "No staff account with that id."
+    }
+  },
+  "userCreated": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00"
+    }
+  },
+  "userDetail": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00",
+      "application_passwords": []
+    }
+  },
+  "appPasswordsEmpty": {
+    "success": true,
+    "data": []
+  },
+  "appPasswordMinted": {
+    "success": true,
+    "data": {
+      "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2",
+      "name": "Panneau — iPhone de Yacine",
+      "created": "2026-08-21T21:02:29+00:00",
+      "last_used": null,
+      "password": "LyBrGaFTRsO017Jws9tXTbN4"
+    }
+  },
+  "appPasswordDuplicate": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That account already has an application password with this name.",
+      "details": {
+        "name": "Panneau — iPhone de Yacine"
+      }
+    }
+  },
+  "appPasswords": {
+    "success": true,
+    "data": [
+      {
+        "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2",
+        "name": "Panneau — iPhone de Yacine",
+        "created": "2026-08-21T21:02:29+00:00",
+        "last_used": null
+      }
+    ]
+  },
+  "userDetailWithPasswords": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00",
+      "application_passwords": [
+        {
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2",
+          "name": "Panneau — iPhone de Yacine",
+          "created": "2026-08-21T21:02:29+00:00",
+          "last_used": null
+        }
+      ]
+    }
+  },
+  "userSuspendedWrite": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "suspended",
+      "date_created": "2026-08-21T21:02:29+00:00"
+    }
+  },
+  "appPasswordOnSuspended": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That account is suspended. Reactivate it before issuing a credential."
+    }
+  },
+  "userReactivated": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_manager",
+      "role_name": "Manager",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00"
+    }
+  },
+  "userRoleChanged": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad",
+      "display_name": "Yacine Haddad",
+      "role": "ac_super_admin",
+      "role_name": "Super Admin",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00"
+    }
+  },
+  "userUpdated": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "username": "ac_capture_probe",
+      "email": "ac_capture_probe@example.test",
+      "first_name": "Yacine",
+      "last_name": "Haddad-Bey",
+      "display_name": "Yacine Haddad",
+      "role": "ac_super_admin",
+      "role_name": "Super Admin",
+      "is_administrator": false,
+      "status": "active",
+      "date_created": "2026-08-21T21:02:29+00:00"
+    }
+  },
+  "appPasswordRevoked": {
+    "success": true,
+    "data": {
+      "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2",
+      "revoked": true
+    }
+  },
+  "userDeleted": {
+    "success": true,
+    "data": {
+      "id": 773,
+      "deleted": true
+    }
+  },
+  "audit": {
+    "success": true,
+    "data": [
+      {
+        "id": 16920,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16919,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16918,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16916,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.reactivated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16915,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.suspended",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16914,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:29"
+      },
+      {
+        "id": 16913,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:29"
+      },
+      {
+        "id": 16912,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "settings.updated",
+        "resource_type": "settings",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "blocks": [
+            "contact"
+          ],
+          "fields": [
+            "contact.phone"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:28"
+      },
+      {
+        "id": 16911,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "settings.updated",
+        "resource_type": "settings",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "blocks": [
+            "contact"
+          ],
+          "fields": [
+            "contact.phone"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:27"
+      },
+      {
+        "id": 16910,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "import.products",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": true,
+          "rows": 2,
+          "created": 0,
+          "updated": 0,
+          "skipped": 2,
+          "failed": 0
+        },
+        "created_at": "2026-08-21 20:32:37"
+      },
+      {
+        "id": 16909,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "import.inventory",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": false,
+          "rows": 1,
+          "created": 0,
+          "updated": 0,
+          "skipped": 1,
+          "failed": 0
+        },
+        "created_at": "2026-08-21 20:32:36"
+      },
+      {
+        "id": 16908,
+        "actor_id": 515,
+        "actor_login": "ac_panel_manager",
+        "action": "import.inventory",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": true,
+          "rows": 2,
+          "created": 0,
+          "updated": 1,
+          "skipped": 0,
+          "failed": 1
+        },
+        "created_at": "2026-08-21 20:32:36"
+      },
+      {
+        "id": 16907,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "import.products",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": true,
+          "rows": 2,
+          "created": 1,
+          "updated": 0,
+          "skipped": 1,
+          "failed": 0
+        },
+        "created_at": "2026-08-21 20:32:36"
+      },
+      {
+        "id": 16906,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "import.products",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": true,
+          "rows": 2,
+          "created": 0,
+          "updated": 1,
+          "skipped": 1,
+          "failed": 0
+        },
+        "created_at": "2026-08-21 20:32:36"
+      },
+      {
+        "id": 16905,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "import.inventory",
+        "resource_type": "import",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "dry_run": true,
+          "rows": 2,
+          "created": 0,
+          "updated": 1,
+          "skipped": 0,
+          "failed": 1
+        },
+        "created_at": "2026-08-21 20:32:36"
+      },
+      {
+        "id": 16904,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 20:32:35"
+      },
+      {
+        "id": 16903,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "27e0417e-7e03-4fe9-b2bf-2376c30fb670"
+        },
+        "created_at": "2026-08-21 20:32:34"
+      },
+      {
+        "id": 16902,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 20:32:34"
+      },
+      {
+        "id": 16901,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 20:32:34"
+      }
+    ],
+    "meta": {
+      "total": 16910,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 846
+    }
+  },
+  "auditForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "auditByAction": {
+    "success": true,
+    "data": [
+      {
+        "id": 16913,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:29"
+      },
+      {
+        "id": 16897,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 20:32:34"
+      },
+      {
+        "id": 16830,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "771",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 20:26:46"
+      },
+      {
+        "id": 16826,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "770",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_panel_suspended",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 20:25:35"
+      },
+      {
+        "id": 16796,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "769",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_probe_1",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 20:12:31"
+      }
+    ],
+    "meta": {
+      "total": 62,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 13
+    }
+  },
+  "auditByActor": {
+    "success": true,
+    "data": [
+      {
+        "id": 16920,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16919,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16918,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16916,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.reactivated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      }
+    ],
+    "meta": {
+      "total": 933,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 187
+    }
+  },
+  "auditByType": {
+    "success": true,
+    "data": [
+      {
+        "id": 16920,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16919,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16918,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16916,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.reactivated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      }
+    ],
+    "meta": {
+      "total": 519,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 104
+    }
+  },
+  "auditByResourceId": {
+    "success": true,
+    "data": [
+      {
+        "id": 16920,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16919,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16918,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16916,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.reactivated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16915,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.suspended",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16914,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:29"
+      },
+      {
+        "id": 16913,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_manager",
+          "fields": [
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "username"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:29"
+      }
+    ],
+    "meta": {
+      "total": 8,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 1
+    }
+  },
+  "auditByDate": {
+    "success": true,
+    "data": [
+      {
+        "id": 16920,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.deleted",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "role": "ac_super_admin"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16919,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_revoked",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16918,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.updated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "fields": [
+            "first_name",
+            "last_name"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16916,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.reactivated",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe"
+        },
+        "created_at": "2026-08-21 21:02:30"
+      }
+    ],
+    "meta": {
+      "total": 1950,
+      "page": 1,
+      "per_page": 5,
+      "total_pages": 390
+    }
+  },
+  "auditEmptyWindow": {
+    "success": true,
+    "data": [],
+    "meta": {
+      "total": 0,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 0
+    }
+  },
+  "auditUnknownAction": {
+    "success": true,
+    "data": [],
+    "meta": {
+      "total": 0,
+      "page": 1,
+      "per_page": 20,
+      "total_pages": 0
+    }
+  },
+  "auditBadDate": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): date_from",
+      "details": {
+        "params": {
+          "date_from": "date_from does not match pattern ^\\d{4}-\\d{2}-\\d{2}$."
+        }
+      }
+    }
+  },
+  "auditBadPerPage": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): per_page",
+      "details": {
+        "params": {
+          "per_page": "per_page must be between 1 (inclusive) and 100 (inclusive)"
+        }
+      }
+    }
+  },
+  "auditRedacted": {
+    "success": true,
+    "data": [
+      {
+        "id": 16737,
+        "actor_id": 413,
+        "actor_login": "ac_notif_support",
+        "action": "notification.retried",
+        "resource_type": "notification",
+        "resource_id": "4678",
+        "ip_address": "127.0.0.1",
+        "metadata": {
+          "channel": "email",
+          "event": "order.placed",
+          "dedupe_key": "[redacted]",
+          "status_from": "pending",
+          "attempts_before": 0
+        },
+        "created_at": "2026-08-21 20:10:36"
+      },
+      {
+        "id": 16736,
+        "actor_id": 413,
+        "actor_login": "ac_notif_support",
+        "action": "notification.retried",
+        "resource_type": "notification",
+        "resource_id": "4678",
+        "ip_address": "127.0.0.1",
+        "metadata": {
+          "channel": "email",
+          "event": "order.placed",
+          "dedupe_key": "[redacted]",
+          "status_from": "failed",
+          "attempts_before": 1
+        },
+        "created_at": "2026-08-21 20:10:36"
+      },
+      {
+        "id": 16632,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "notification.retried",
+        "resource_type": "notification",
+        "resource_id": "4640",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "channel": "email",
+          "event": "order.refunded",
+          "dedupe_key": "[redacted]",
+          "status_from": "pending",
+          "attempts_before": 0
+        },
+        "created_at": "2026-08-21 18:55:45"
+      }
+    ],
+    "meta": {
+      "total": 86,
+      "page": 1,
+      "per_page": 3,
+      "total_pages": 29
+    }
+  },
+  "auditSettings": {
+    "success": true,
+    "data": [
+      {
+        "id": 16912,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "settings.updated",
+        "resource_type": "settings",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "blocks": [
+            "contact"
+          ],
+          "fields": [
+            "contact.phone"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:28"
+      },
+      {
+        "id": 16911,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "settings.updated",
+        "resource_type": "settings",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "blocks": [
+            "contact"
+          ],
+          "fields": [
+            "contact.phone"
+          ]
+        },
+        "created_at": "2026-08-21 21:02:27"
+      },
+      {
+        "id": 16896,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "settings.updated",
+        "resource_type": "settings",
+        "resource_id": "0",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "blocks": [
+            "contact"
+          ],
+          "fields": [
+            "contact.phone"
+          ]
+        },
+        "created_at": "2026-08-21 20:32:32"
+      }
+    ],
+    "meta": {
+      "total": 180,
+      "page": 1,
+      "per_page": 3,
+      "total_pages": 60
+    }
+  },
+  "auditRoleChange": {
+    "success": true,
+    "data": [
+      {
+        "id": 16917,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 21:02:30"
+      },
+      {
+        "id": 16901,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 20:32:34"
+      },
+      {
+        "id": 16834,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.role_changed",
+        "resource_type": "user",
+        "resource_id": "771",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "from": "ac_manager",
+          "to": "ac_super_admin",
+          "promoted_from_customer": false
+        },
+        "created_at": "2026-08-21 20:26:46"
+      }
+    ],
+    "meta": {
+      "total": 123,
+      "page": 1,
+      "per_page": 3,
+      "total_pages": 41
+    }
+  },
+  "auditAppPassword": {
+    "success": true,
+    "data": [
+      {
+        "id": 16914,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_created",
+        "resource_type": "user",
+        "resource_id": "773",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "14b6810e-7f0e-4dbd-8e31-5b747bb328b2"
+        },
+        "created_at": "2026-08-21 21:02:29"
+      },
+      {
+        "id": 16898,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_created",
+        "resource_type": "user",
+        "resource_id": "772",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "27e0417e-7e03-4fe9-b2bf-2376c30fb670"
+        },
+        "created_at": "2026-08-21 20:32:34"
+      },
+      {
+        "id": 16831,
+        "actor_id": 475,
+        "actor_login": "ac_panel_super_admin",
+        "action": "user.app_password_created",
+        "resource_type": "user",
+        "resource_id": "771",
+        "ip_address": "172.19.0.1",
+        "metadata": {
+          "login": "ac_capture_probe",
+          "name": "Panneau — iPhone de Yacine",
+          "uuid": "8960622c-24b3-4b8f-8711-1761bc61f528"
+        },
+        "created_at": "2026-08-21 20:26:46"
+      }
+    ],
+    "meta": {
+      "total": 32,
+      "page": 1,
+      "per_page": 3,
+      "total_pages": 11
+    }
+  },
+  "importInventoryDry": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 2,
+      "created": 0,
+      "updated": 1,
+      "skipped": 0,
+      "failed": 1,
+      "errors": [
+        {
+          "line": 3,
+          "message": "No product with that SKU.",
+          "fields": {
+            "sku": "Not found. An inventory import never creates products."
+          }
+        }
+      ],
+      "preview": [
+        {
+          "line": 2,
+          "action": "updated",
+          "sku": "AC-TAP-001",
+          "product_id": 10,
+          "from": 6,
+          "to": 12
+        }
+      ]
+    }
+  },
+  "importProductsDry": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 2,
+      "created": 0,
+      "updated": 1,
+      "skipped": 1,
+      "failed": 0,
+      "errors": [],
+      "preview": [
+        {
+          "line": 2,
+          "action": "updated",
+          "sku": "AC-TAP-001",
+          "name": "Tapis berbère de Ghardaïa 200x140"
+        },
+        {
+          "line": 3,
+          "action": "skipped",
+          "sku": "AC-NEW-SEED",
+          "name": "Nouveau",
+          "reason": "no product with that SKU to update"
+        }
+      ],
+      "preview_only": "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed."
+    }
+  },
+  "importProductsCreate": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 2,
+      "created": 1,
+      "updated": 0,
+      "skipped": 1,
+      "failed": 0,
+      "errors": [],
+      "preview": [
+        {
+          "line": 2,
+          "action": "skipped",
+          "sku": "AC-TAP-001",
+          "name": "Tapis berbère de Ghardaïa 200x140",
+          "reason": "a product with that SKU already exists"
+        },
+        {
+          "line": 3,
+          "action": "created",
+          "sku": "AC-NEW-SEED",
+          "name": "Nouveau"
+        }
+      ],
+      "preview_only": "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed."
+    }
+  },
+  "importAsJson": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Send the CSV as the request body.",
+      "details": {
+        "fields": {
+          "body": "Content-Type must be text/csv, and the body the file itself — not JSON."
+        }
+      }
+    }
+  },
+  "importEmpty": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The file is empty.",
+      "details": {
+        "fields": {
+          "file": "A CSV with a header row is required."
+        }
+      }
+    }
+  },
+  "importMissingColumns": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The file is missing required columns.",
+      "details": {
+        "fields": {
+          "file": "Missing: sku."
+        },
+        "columns_found": [
+          "a",
+          "b",
+          "c"
+        ],
+        "columns_required": [
+          "sku"
+        ]
+      }
+    }
+  },
+  "importBadMode": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): mode",
+      "details": {
+        "params": {
+          "mode": "mode is not one of create and update."
+        }
+      }
+    }
+  },
+  "importInventoryAsManager": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 2,
+      "created": 0,
+      "updated": 1,
+      "skipped": 0,
+      "failed": 1,
+      "errors": [
+        {
+          "line": 3,
+          "message": "No product with that SKU.",
+          "fields": {
+            "sku": "Not found. An inventory import never creates products."
+          }
+        }
+      ],
+      "preview": [
+        {
+          "line": 2,
+          "action": "updated",
+          "sku": "AC-TAP-001",
+          "product_id": 10,
+          "from": 6,
+          "to": 12
+        }
+      ]
+    }
+  },
+  "importApplied": {
+    "success": true,
+    "data": {
+      "dry_run": false,
+      "rows": 1,
+      "created": 0,
+      "updated": 0,
+      "skipped": 1,
+      "failed": 0,
+      "errors": [],
+      "preview": [
+        {
+          "line": 2,
+          "action": "skipped",
+          "sku": "AC-TAP-001",
+          "product_id": 10,
+          "from": 6,
+          "to": 6,
+          "reason": "unchanged"
+        }
+      ]
+    }
+  },
+  "exportProducts": {
+    "status": 200,
+    "content_type": "text/csv; charset=utf-8",
+    "content_disposition": "attachment; filename=\"products-export-2026-08-21.csv\"",
+    "cache_control": "no-store, private",
+    "first_line": "ID,Type,SKU,\"GTIN, UPC, EAN, or ISBN\",Name,Published,\"Is featured?\",\"Visibility in catalog\",\"Short description\",Description,\"Date sale price starts\",\"Date sale price ends\",\"Tax status\",\"Tax class\",\"In stock?\",Stock,\"Low stock amount\",\"Backorders allowed?\",\"Sold individually?\",\"Weight (lbs)\",\"Length (in)\",\"Width (in)\",\"Height (in)\",\"Allow customer reviews?\",\"Purchase note\",\"Sale price\",\"Regular price\",Categories,Tags,\"Shipping class\",Images,\"Download limit\",\"Download expiry days\",Parent,\"Grouped products\",Upsells,Cross-sells,\"External URL\",\"Button text\",Position,\"Attribute 1 name\",\"Attribute 1 value(s)\",\"Attribute 1 visible\",\"Attribute 1 global\",\"Attribute 2 name\",\"Attribute 2 value(s)\",\"Attribute 2 visible\",\"Attribute 2 global\",\"Attribute 3 name\",\"Attribute 3 value(s)\",\"Attribute 3 visible\",\"Attribute 3 global\"",
+    "lines": 4,
+    "crlf": false
+  },
+  "exportOrders": {
+    "status": 200,
+    "content_type": "text/csv; charset=utf-8",
+    "content_disposition": "attachment; filename=\"orders-export-2026-08-21.csv\"",
+    "cache_control": "no-store, private",
+    "first_line": "order_id,date_created,status,currency,total,shipping_total,discount_total,payment_method,customer_id,billing_name,billing_phone,billing_email,shipping_city,shipping_state,items",
+    "lines": 4,
+    "crlf": true
+  },
+  "exportInventory": {
+    "status": 200,
+    "content_type": "text/csv; charset=utf-8",
+    "content_disposition": "attachment; filename=\"inventory-export-2026-08-21.csv\"",
+    "cache_control": "no-store, private",
+    "first_line": "sku,stock_quantity,stock_status,manage_stock,name,product_id",
+    "lines": 4,
+    "crlf": true
+  },
+  "exportCustomers": {
+    "status": 200,
+    "content_type": "text/csv; charset=utf-8",
+    "content_disposition": "attachment; filename=\"customers-export-2026-08-21.csv\"",
+    "cache_control": "no-store, private",
+    "first_line": "customer_id,email,first_name,last_name,phone,address_1,city,state,country,date_registered",
+    "lines": 4,
+    "crlf": true
+  },
+  "exportAsManager": {
+    "status": 200,
+    "content_type": "text/csv; charset=utf-8",
+    "content_disposition": "attachment; filename=\"products-export-2026-08-21.csv\"",
+    "cache_control": "no-store, private",
+    "first_line": "ID,Type,SKU,\"GTIN, UPC, EAN, or ISBN\",Name,Published,\"Is featured?\",\"Visibility in catalog\",\"Short description\",Description,\"Date sale price starts\",\"Date sale price ends\",\"Tax status\",\"Tax class\",\"In stock?\",Stock,\"Low stock amount\",\"Backorders allowed?\",\"Sold individually?\",\"Weight (lbs)\",\"Length (in)\",\"Width (in)\",\"Height (in)\",\"Allow customer reviews?\",\"Purchase note\",\"Sale price\",\"Regular price\",Categories,Tags,\"Shipping class\",Images,\"Download limit\",\"Download expiry days\",Parent,\"Grouped products\",Upsells,Cross-sells,\"External URL\",\"Button text\",Position,\"Attribute 1 name\",\"Attribute 1 value(s)\",\"Attribute 1 visible\",\"Attribute 1 global\",\"Attribute 2 name\",\"Attribute 2 value(s)\",\"Attribute 2 visible\",\"Attribute 2 global\",\"Attribute 3 name\",\"Attribute 3 value(s)\",\"Attribute 3 visible\",\"Attribute 3 global\"",
+    "lines": 4,
+    "crlf": false
+  },
+  "exportOverCap": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): limit",
+      "details": {
+        "params": {
+          "limit": "limit must be between 1 (inclusive) and 2000 (inclusive)"
+        }
+      }
+    }
+  },
+  "exportForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "exportPartial": {
+    "customers": 200,
+    "products": 403,
+    "orders": 403,
+    "inventory": 403
+  },
+  "importForbidden": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "exportProductsRoundTrip": {
+    "success": true,
+    "data": {
+      "dry_run": true,
+      "rows": 2,
+      "created": 0,
+      "updated": 0,
+      "skipped": 2,
+      "failed": 0,
+      "errors": [],
+      "preview": [
+        {
+          "line": 2,
+          "action": "skipped",
+          "sku": "",
+          "name": "",
+          "reason": "no product with that SKU to update"
+        },
+        {
+          "line": 3,
+          "action": "skipped",
+          "sku": "",
+          "name": "",
+          "reason": "no product with that SKU to update"
+        }
+      ],
+      "preview_only": "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed."
+    }
+  },
+  "capabilityGrid": {
+    "super": {
+      "GET /settings": 200,
+      "PATCH /settings": 400,
+      "GET /users": 200,
+      "GET /roles": 200,
+      "GET /audit-logs": 200,
+      "GET /export/products": 200,
+      "GET /export/orders": 200,
+      "GET /export/inventory": 200,
+      "GET /export/customers": 200,
+      "POST /import/products": 400,
+      "POST /import/inventory": 400
+    },
+    "manager": {
+      "GET /settings": 403,
+      "PATCH /settings": 403,
+      "GET /users": 403,
+      "GET /roles": 403,
+      "GET /audit-logs": 403,
+      "GET /export/products": 200,
+      "GET /export/orders": 200,
+      "GET /export/inventory": 200,
+      "GET /export/customers": 200,
+      "POST /import/products": 400,
+      "POST /import/inventory": 400
+    },
+    "marketing": {
+      "GET /settings": 403,
+      "PATCH /settings": 403,
+      "GET /users": 403,
+      "GET /roles": 403,
+      "GET /audit-logs": 403,
+      "GET /export/products": 403,
+      "GET /export/orders": 403,
+      "GET /export/inventory": 403,
+      "GET /export/customers": 403,
+      "POST /import/products": 403,
+      "POST /import/inventory": 403
+    },
+    "limited": {
+      "GET /settings": 403,
+      "PATCH /settings": 403,
+      "GET /users": 403,
+      "GET /roles": 403,
+      "GET /audit-logs": 403,
+      "GET /export/products": 403,
+      "GET /export/orders": 403,
+      "GET /export/inventory": 403,
+      "GET /export/customers": 200,
+      "POST /import/products": 403,
+      "POST /import/inventory": 403
+    }
+  }
+}

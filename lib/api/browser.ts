@@ -221,3 +221,39 @@ export async function acWriteWithMeta<T>(
 
   return { data: body.data as T, meta: body.meta ?? {} };
 }
+
+/**
+ * A write whose body is a **file**, not an object.
+ *
+ * `POST /import/products` and `/import/inventory` take the CSV as the raw
+ * request body with `Content-Type: text/csv` — not JSON, not multipart, which
+ * differs from `/media`, the only other upload in this panel, and which
+ * ADMIN_PANEL.md says outright "will be got wrong once". The API refuses the
+ * wrong one by name:
+ *
+ *   POST /import/products  Content-Type: application/json
+ *   → 400 details.fields.body:
+ *     "Content-Type must be text/csv, and the body the file itself — not JSON."
+ *
+ * So this exists rather than a flag on `acWrite`. Routing an import through the
+ * function that calls `JSON.stringify` is precisely how that 400 gets shipped,
+ * and a boolean parameter on a serialiser is a serialiser that sometimes does
+ * not serialise. The response is still the ordinary envelope — only the request
+ * differs — so it goes through the same `request()` and fails the same way.
+ *
+ * The proxy forwards the incoming `content-type` verbatim and passes the body as
+ * an `ArrayBuffer`, so nothing between here and the API re-encodes the file.
+ */
+export async function acWriteRaw<T>(
+  path: string,
+  body: string,
+  contentType: string,
+): Promise<{ data: T; meta: Record<string, unknown> }> {
+  const envelope = await request(path, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": contentType },
+    body,
+  });
+
+  return { data: envelope.data as T, meta: envelope.meta ?? {} };
+}
