@@ -1,0 +1,301 @@
+{
+ "pageIndex": {
+  "success": true,
+  "data": [
+   {
+    "id": 55,
+    "path": "ac-legal",
+    "slug": "ac-legal",
+    "parent_path": "",
+    "status": "publish",
+    "title": "Ac legal",
+    "menu_order": 0,
+    "date_created": "2026-08-16T23:06:23",
+    "date_modified": "2026-08-21T07:37:23"
+   },
+   {
+    "id": 56,
+    "path": "ac-legal/ac-terms",
+    "slug": "ac-terms",
+    "parent_path": "ac-legal",
+    "status": "publish",
+    "title": "Ac terms",
+    "menu_order": 0,
+    "date_created": "2026-08-16T23:06:23",
+    "date_modified": "2026-08-21T07:37:23"
+   }
+  ],
+  "meta": {
+   "total": 12,
+   "page": 1,
+   "per_page": 2,
+   "total_pages": 6,
+   "excluded_system": 4
+  }
+ },
+ "page": {
+  "success": true,
+  "data": {
+   "id": 4596,
+   "path": "livraison",
+   "slug": "livraison",
+   "parent_path": "",
+   "status": "publish",
+   "title": "Livraison et délais",
+   "content": "<p>Nous livrons dans les 48 wilayas. Le délai est de 2 à 5 jours ouvrables selon la commune.</p>\n",
+   "excerpt": "<p>Délais et zones de livraison.</p>\n",
+   "parent_id": 0,
+   "menu_order": 0,
+   "image": null,
+   "seo": {
+    "title": "Livraison et délais — Algerian Commerce",
+    "description": "Délais et zones de livraison.",
+    "canonical": "",
+    "robots": {
+     "index": true,
+     "follow": true,
+     "directive": "index, follow"
+    },
+    "og": {
+     "title": "Livraison et délais — Algerian Commerce",
+     "description": "Délais et zones de livraison.",
+     "type": "website",
+     "image": null
+    },
+    "image": null,
+    "structured_data": {
+     "@context": "https://schema.org",
+     "@type": "WebPage",
+     "name": "Livraison et délais",
+     "description": "Délais et zones de livraison."
+    },
+    "overrides": []
+   },
+   "date_created": "2026-08-21T07:42:47",
+   "date_modified": "2026-08-21T10:52:38"
+  }
+ },
+ "banners": {
+  "success": true,
+  "data": [
+   {
+    "id": 4608,
+    "title": "Soldes d&#8217;été",
+    "caption": "<p>Jusqu&#8217;à -50% sur une sélection de tapis.</p>\n",
+    "link": "/soldes",
+    "placement": "home_hero",
+    "status": "publish",
+    "position": 0,
+    "image": null,
+    "date_modified": "2026-08-21T10:52:39"
+   },
+   {
+    "id": 60,
+    "title": "Ac brouillon",
+    "caption": "",
+    "link": "",
+    "placement": "home_hero",
+    "status": "draft",
+    "position": 0,
+    "image": null,
+    "date_modified": "2026-08-21T07:37:23"
+   }
+  ],
+  "meta": {
+   "total": 6,
+   "page": 1,
+   "per_page": 2,
+   "total_pages": 3
+  }
+ },
+ "faqs": {
+  "success": true,
+  "data": [
+   {
+    "id": 61,
+    "question": "Quel est le délai de livraison ?",
+    "answer": "<p>Entre 2 et 5 jours ouvrables selon la commune.</p>\n",
+    "categories": [
+     {
+      "id": 21,
+      "slug": "livraison",
+      "name": "livraison"
+     }
+    ],
+    "status": "publish",
+    "position": 0,
+    "date_modified": "2026-08-21T10:52:40"
+   },
+   {
+    "id": 62,
+    "question": "Puis-je payer à la livraison ?",
+    "answer": "<p>Oui. Le paiement à la livraison est disponible dans les 48 wilayas.</p>\n",
+    "categories": [
+     {
+      "id": 532,
+      "slug": "paiement",
+      "name": "paiement"
+     }
+    ],
+    "status": "publish",
+    "position": 1,
+    "date_modified": "2026-08-21T10:52:40"
+   }
+  ],
+  "meta": {
+   "total": 3,
+   "page": 1,
+   "per_page": 2,
+   "total_pages": 2
+  }
+ },
+ "faqCategories": {
+  "success": true,
+  "data": [
+   {
+    "id": 21,
+    "slug": "livraison",
+    "name": "livraison",
+    "description": "",
+    "count": 1
+   },
+   {
+    "id": 532,
+    "slug": "paiement",
+    "name": "paiement",
+    "description": "",
+    "count": 1
+   }
+  ],
+  "meta": {
+   "total": 2
+  }
+ },
+ "menu": {
+  "success": true,
+  "data": {
+   "location": "primary",
+   "id": 22,
+   "name": "AC Test Menu",
+   "slug": "ac-test-menu",
+   "items": [
+    {
+     "id": 4501,
+     "title": "Boutique",
+     "url": "https://example.test/boutique",
+     "target": "",
+     "type": "custom",
+     "object": "custom",
+     "object_id": 4501,
+     "position": 1,
+     "classes": [],
+     "children": [
+      {
+       "id": 4502,
+       "title": "Tapis",
+       "url": "https://example.test/boutique/tapis",
+       "target": "",
+       "type": "custom",
+       "object": "custom",
+       "object_id": 4502,
+       "position": 2,
+       "classes": [],
+       "children": []
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "homepage": {
+  "success": true,
+  "data": {
+   "sections": [
+    {
+     "type": "hero",
+     "data": {
+      "title": "Tapis & Kilims",
+      "cta": "/boutique"
+     }
+    },
+    {
+     "type": "featured_products",
+     "data": {
+      "limit": 8,
+      "category": "tapis"
+     }
+    },
+    {
+     "type": "text",
+     "data": {
+      "body": "<p>Fait main en Algérie.</p>"
+     }
+    },
+    {
+     "type": "faq",
+     "data": {
+      "category": "livraison"
+     }
+    },
+    {
+     "type": "newsletter",
+     "data": {
+      "headline": "Restez informé"
+     }
+    }
+   ]
+  },
+  "meta": {
+   "problems": [
+    "Section 2 is not an object.",
+    "Section 4 has an unknown type \"carousel\".",
+    "Section 6 (\"promotion\") has a \"data\" that is not an object."
+   ]
+  }
+ },
+ "media": {
+  "success": true,
+  "data": [
+   {
+    "id": 4544,
+    "title": "Tapis",
+    "slug": "ac-media-fixture-42",
+    "alt": "Tapis berbère",
+    "caption": "",
+    "mime_type": "image/jpeg",
+    "url": "http://localhost:8090/wp-content/uploads/2026/08/ac-fixture-41.jpg",
+    "filename": "ac-fixture-41.jpg",
+    "filesize": 706,
+    "width": 30,
+    "height": 20,
+    "sizes": [],
+    "uploaded_by": 37,
+    "date_created": "2026-08-21T07:38:00",
+    "date_modified": "2026-08-21T07:38:01"
+   },
+   {
+    "id": 4428,
+    "title": "Tapis",
+    "slug": "ac-media-fixture-41",
+    "alt": "Tapis berbère",
+    "caption": "",
+    "mime_type": "image/jpeg",
+    "url": "http://localhost:8090/wp-content/uploads/2026/08/ac-fixture-40.jpg",
+    "filename": "ac-fixture-40.jpg",
+    "filesize": 706,
+    "width": 30,
+    "height": 20,
+    "sizes": [],
+    "uploaded_by": 37,
+    "date_created": "2026-08-21T07:32:20",
+    "date_modified": "2026-08-21T07:32:20"
+   }
+  ],
+  "meta": {
+   "total": 43,
+   "page": 1,
+   "per_page": 2,
+   "total_pages": 22
+  }
+ }
+}
