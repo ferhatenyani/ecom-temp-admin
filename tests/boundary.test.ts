@@ -6,11 +6,12 @@
  * of Uint8Array"), which is an artefact of the test environment and not of the
  * code under test.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { unwrap } from "@/lib/api/envelope";
 import { ApiError, errorMessageKey, isRetryable } from "@/lib/api/errors";
 import { checkAllowed } from "@/lib/api/allowlist";
+import { BrowserApiError, acRead } from "@/lib/api/browser";
 import { seal, unseal } from "@/lib/session/seal";
 import { canSeeMoney, canSendCampaigns, canManageOrders } from "@/lib/capabilities";
 import { customerName, orderPlace, STATUS_TONE } from "@/lib/orders";
@@ -636,6 +637,154 @@ describe("order domain rules", () => {
     ] as const) {
       expect(STATUS_TONE[status]).toBeTruthy();
     }
+  });
+});
+
+describe("the browser's envelope reader", () => {
+  /**
+   * The sweep's proof.
+   *
+   * `orders/query.ts` and `products/query.ts` each carried a hand-rolled copy of
+   * this reader until the analytics branch, and the differences between the
+   * copies were never intentional. Each case below is one of those differences,
+   * measured against the live API rather than imagined — so this suite fails if
+   * the sweep is ever undone by someone re-inlining a fetch.
+   */
+  const stub = (
+    body: unknown,
+    init: { status?: number; text?: string } = {},
+  ): typeof globalThis.fetch =>
+    (async () =>
+      ({
+        ok: (init.status ?? 200) < 400,
+        status: init.status ?? 200,
+        text: async () => init.text ?? JSON.stringify(body),
+      }) as Response) as unknown as typeof globalThis.fetch;
+
+  const original = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = original;
+  });
+
+  it("prefers the parameter's own sentence over the generic message", async () => {
+    /*
+     * Measured on `/orders?per_page=500`. The orders fetcher read
+     * `error.message` alone, so the screen said "Invalid parameter(s):
+     * per_page" — which names the parameter and not the rule. The half that
+     * says what to do about it was in `details.params` and was dropped.
+     */
+    globalThis.fetch = stub(
+      {
+        success: false,
+        error: {
+          code: "invalid_request",
+          message: "Invalid parameter(s): per_page",
+          details: {
+            params: { per_page: "per_page must be between 1 (inclusive) and 100 (inclusive)" },
+          },
+        },
+      },
+      { status: 400 },
+    );
+
+    await expect(acRead("/orders?per_page=500")).rejects.toThrow(
+      "per_page must be between 1 (inclusive) and 100 (inclusive)",
+    );
+  });
+
+  it("never renders an array of parameter names as though it were an explanation", async () => {
+    /*
+     * `details.params` has **two shapes on this API**. Measured on
+     * `/inventory/lookup`: a *missing* required parameter answers
+     * `{"params": ["sku"]}`. The products fetcher did `Object.values(params)[0]`,
+     * which on an array is its first element — so the screen would have read
+     * "sku". It falls through to the API's own message instead.
+     */
+    globalThis.fetch = stub(
+      {
+        success: false,
+        error: {
+          code: "invalid_request",
+          message: "Missing parameter(s): sku",
+          details: { params: ["sku"] },
+        },
+      },
+      { status: 400 },
+    );
+
+    let thrown: unknown;
+    try {
+      await acRead("/inventory/lookup");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(BrowserApiError);
+    expect((thrown as BrowserApiError).message).toBe("Missing parameter(s): sku");
+    expect((thrown as BrowserApiError).message).not.toBe("sku");
+  });
+
+  it("keeps status, code and fields as real properties", async () => {
+    // Both hand-rolled copies threw a bare `Error` with `status` and `code` glued
+    // on by `Object.assign` — which type-checked, and told a caller nothing.
+    globalThis.fetch = stub(
+      {
+        success: false,
+        error: {
+          code: "duplicate_sku",
+          message: "That SKU is already in use.",
+          details: { sku: "AC-BUR-010", fields: { sku: "Already in use." } },
+        },
+      },
+      { status: 409 },
+    );
+
+    const thrown = await acRead("/products/1").catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(BrowserApiError);
+    const error = thrown as BrowserApiError;
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("duplicate_sku");
+    expect(error.fields).toEqual({ sku: "Already in use." });
+    expect(error.details.sku).toBe("AC-BUR-010");
+  });
+
+  it("survives an empty body, which both copies threw on", async () => {
+    // `response.json()` throws on an empty string, so a 204 — or a 200 with
+    // nothing in it — failed inside the parser rather than succeeding.
+    globalThis.fetch = stub(null, { status: 204, text: "" });
+    await expect(acRead("/whatever")).resolves.toEqual({ data: [], total: 0, meta: {} });
+  });
+
+  it("returns meta whole, which is what let the products fetcher stop copying it", async () => {
+    /*
+     * `total` was the only thing the shared reader exposed, and `/products` needs
+     * `meta.facets` as well — so it kept a private copy of the entire envelope
+     * reader to get one extra key. The analytics routes need `money_visible` and
+     * `generated_at` from the same place.
+     */
+    globalThis.fetch = stub({
+      success: true,
+      data: [{ id: 1 }],
+      meta: { total: 28, facets: { price: { min: "0", max: "1" } }, money_visible: false },
+    });
+
+    const { data, total, meta } = await acRead<{ id: number }[]>("/products");
+    expect(data).toHaveLength(1);
+    expect(total).toBe(28);
+    expect(meta.facets).toEqual({ price: { min: "0", max: "1" } });
+    expect(meta.money_visible).toBe(false);
+  });
+
+  it("treats a 2xx carrying success:false as a failure", async () => {
+    globalThis.fetch = stub({ success: false, error: { code: "nope", message: "Refused." } });
+    await expect(acRead("/anything")).rejects.toThrow("Refused.");
+  });
+
+  it("does not pretend a non-JSON body is an envelope", async () => {
+    globalThis.fetch = stub(null, { status: 502, text: "<html>Bad Gateway</html>" });
+    const error = (await acRead("/anything").catch((e: unknown) => e)) as BrowserApiError;
+    expect(error).toBeInstanceOf(BrowserApiError);
+    expect(error.code).toBe("unparseable_response");
   });
 });
 

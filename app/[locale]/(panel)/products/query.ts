@@ -1,3 +1,4 @@
+import { acRead } from "@/lib/api/browser";
 import type { Facets, Product } from "@/lib/api/schemas/product";
 import { DEFAULT_SORT_KEY, sortFromKey } from "@/lib/product-status";
 
@@ -189,36 +190,27 @@ export type ProductsPage = {
  * key — parameter errors arrive under `params`, and the **attributes filter is
  * the exception**, reporting under `details.fields.attributes` with
  * `details.facetable_attributes` beside it at the `details` level.
+ *
+ * `acRead` rather than a hand-rolled reader. This module's own copy read
+ * `details.params` in its object shape only, and **`details.params` has two
+ * shapes on this API** — for a missing required parameter it is an array of
+ * names, measured on `/inventory/lookup` as `{"params": ["sku"]}`. `Object.values`
+ * of an array returns its elements, so that path would have rendered the bare
+ * word `sku` as though it were an explanation. `firstMessage()` in
+ * `lib/api/browser.ts` falls through to the generic message instead, and carries
+ * the measurement.
+ *
+ * Facets come off `meta`, which is why the shared reader now returns it whole:
+ * needing one key more than `total` is exactly what kept this fetcher carrying a
+ * private copy of the entire envelope reader for three branches.
  */
 export async function fetchProducts(query: ProductsQuery): Promise<ProductsPage> {
-  const response = await fetch(`/api/ac/products?${toApiParams(query)}`, {
-    headers: { Accept: "application/json" },
-  });
-
-  const body = (await response.json()) as {
-    success?: boolean;
-    data?: unknown;
-    meta?: { total?: number; facets?: Facets };
-    error?: { code?: string; message?: string; details?: Record<string, unknown> };
-  };
-
-  if (!response.ok || body.success === false) {
-    const details = body.error?.details ?? {};
-    const params = details.params as Record<string, string> | undefined;
-    const fields = details.fields as Record<string, string> | undefined;
-    const first =
-      (params && Object.values(params)[0]) ??
-      (fields && Object.values(fields)[0]) ??
-      body.error?.message;
-
-    const error = new Error(first ?? `Request failed (${response.status})`);
-    Object.assign(error, { status: response.status, code: body.error?.code });
-    throw error;
-  }
+  const { data, total, meta } = await acRead<Product[]>(`/products?${toApiParams(query)}`);
 
   return {
-    products: (body.data ?? []) as Product[],
-    total: body.meta?.total ?? 0,
-    facets: body.meta?.facets ?? null,
+    products: data,
+    total,
+    // Facets are opt-in and a response can legitimately carry none.
+    facets: (meta.facets as Facets | undefined) ?? null,
   };
 }

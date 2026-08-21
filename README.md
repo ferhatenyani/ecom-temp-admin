@@ -318,6 +318,15 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **`Ltr` around a full-width cell forces the cell's direction, not just the identifier's.** The
   provider name and its count both landed at the left edge of an Arabic row. Wrap the identifier, never
   the cell.
+- **`details.params` has two shapes and only one is a message.** For a bad value it is an object
+  keyed by parameter (`{"per_page": "per_page must be between 1 and 100"}`); for a *missing* required
+  parameter it is an array of names (`{"params": ["sku"]}`, measured on `/inventory/lookup`).
+  `Object.values` of an array returns its elements, so the second shape renders `sku` as though it
+  were an explanation. `lib/api/browser.ts` falls through to the generic message instead — and is now
+  the only reader in the panel, `orders/query.ts` and `products/query.ts` included. Their private
+  copies had each drifted: orders dropped `details` entirely and showed *"Invalid parameter(s):
+  per_page"* where the API had said what the range was, and products mishandled the array. Both are
+  asserted in `tests/boundary.test.ts`.
 
 ## Owed to the backend, and paid
 
