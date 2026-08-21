@@ -252,6 +252,13 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
   leaves Turbopack with a route entry for a directory that disappeared, and the route then renders as
   unmatched — which looked exactly like the bug above on a page that was fine. `rm -rf .next` and
   restart before believing a routing error that only one screen shows.
+- **Killing `next dev` mid-generation corrupts the types it writes, and `tsc` fails in *your* code's
+  name.** `tsconfig.json` includes `.next/dev/types/**/*.ts`, and a dev server interrupted while
+  regenerating them leaves a torn file — measured 2026-08-21: `routes.d.ts` had its whole closing
+  block written twice, and `npx tsc --noEmit` reported *"Unterminated regular expression literal"*
+  against a generated file nobody wrote. The stage fails, the branch looks broken, and nothing in the
+  source is wrong. Same remedy: stop the dev server, `rm -rf .next`, re-run. A `rm -rf .next` that is
+  itself interrupted leaves the corrupt file in place, so check that the directory is actually gone.
 
 - **The shipment label is `metadata.label`** (and `metadata.labels`), not a top-level field, and no
   shipment in this shop carries one — `manual` is the only configured provider and issues none. But
