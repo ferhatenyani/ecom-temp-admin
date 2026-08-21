@@ -12,7 +12,8 @@ cookie. No component library.
 
 The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
 Coupons, Shipping with Payments and cash on delivery, the Dashboard with the six analytics
-reports, the CMS with its media library, the notification queue, and email marketing.
+reports, the CMS with its media library, the notification queue, email marketing, and the
+administration screens — settings, staff accounts, the audit trail and import/export.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -67,13 +68,27 @@ reports, the CMS with its media library, the notification queue, and email marke
 /[locale]/marketing/email-templates  read-only: they are authored in wp-admin
 /[locale]/marketing/config   the public pixel configuration, and the token that
                              appears in no response ever
+/[locale]/settings           the shop's own configuration — four blocks that write,
+                             two that report, and a third kind of read-only the
+                             specification does not mention
+/[locale]/users              the staff list — a picker that filters on assignable
+                             and labels that must not
+/[locale]/users/[id]         identity, role, devices, and the five escalation
+                             refusals rendered rather than hidden
+/[locale]/users/new          create, then go and mint the first credential
+/[locale]/audit              the trail — five filters, two of which did not filter
+                             until this branch, and no search box because there is
+                             nothing to search
+/[locale]/transfer           import and export — the one screen here a Manager can
+                             reach, and the only request in the panel whose body
+                             is not JSON
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
 `fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
 branch — the specification calls it the hardest component in the panel — and so is editing attributes
-and categories. Settings is a later branch, and `/more` renders it as visibly not-yet-built rather
-than as a link that 404s. **Every tab in the bar now navigates** — Dashboard was the last placeholder.
+and categories. **Settings was the last placeholder in `/more` and is now real**, along with the three
+subjects that came with it; the only thing left in Part X is `feat/pwa`.
 
 **Step 14 is three branches, not one**, and the seam is the capability rather than the subject.
 Part X's line reads "CMS, media, marketing, campaigns, notifications"; `feat/content` is the first
@@ -127,7 +142,7 @@ npm run test:e2e                  # four device widths × both locales
 npm run shots -- <user> <pass>    # captures + assertions into .impeccable/review/
 ```
 
-`scripts/test.sh` mints **four** credentials, and the **failed-login** bucket is cleared by
+`scripts/test.sh` mints **four** credentials and runs **six** seeds, and the **failed-login** bucket is cleared by
 Playwright's own `globalSetup` (`e2e/rate-limit.ts`, wired in `playwright.config.ts`) rather than by
 `test.sh` itself — the suite provokes a login failure on purpose, and that bucket is 10 failures per
 15 minutes per IP, after which a *correct* password is refused too. Note the scope: it clears the
@@ -204,6 +219,21 @@ Templates are the exception that proves the rule: `wp_insert_post` is the **only
 makes them a post type authored in wp-admin and the API only reads them. The insert still runs
 `wp_kses` through `sanitizeOnSave`, so the script cannot store what an author could not.
 
+`scripts/seed-staff.mjs` is the sixth, and it is `seed-notifications.mjs`'s argument one collection
+over. Measured before it existed: `GET /users` answered **72 accounts, every single one `active`**, so
+`?status=suspended` answered nothing and the suspend action, the reactivate action, the status filter
+and the suspended badge were four controls with nothing to act on — while two of §87's five escalation
+refusals are about suspension.
+
+It creates one throwaway account and suspends it **through `POST /users` and `PATCH /users/{id}`**,
+which are the production writers and are audited exactly as they would be for a person. Nothing goes
+underneath, unlike `seed-cms.mjs`: suspension is one `PATCH` away from being observable and there is no
+reason to fake it. A *throwaway* account rather than a real one because `Users\SuspensionGuard` answers
+**401 at every route in the namespace**, `/auth/me` and `/health` included — suspending one of the four
+credentials the suite mints would kill the run, and suspending one of the shop's own would take away
+access somebody may be using. It is idempotent and re-asserts the status rather than only creating,
+because `e2e/admin.spec.ts` reactivates the account on purpose and this heals it before the next run.
+
 The fourth credential is a **Manager**, and it is the only one of the four that still describes a
 live account: the two-tier collapse retired `ac_support_agent` and `ac_marketing_manager`, which
 still mint (`set_role()` bypasses the API) and whose suites still pass, but which now name a
@@ -223,7 +253,12 @@ in `tests/notification-schema.test.ts` against captured payloads, and what is le
 the capability refusal, the allowlist, the retry reaching the screen and the customer tab rendering.
 `e2e/campaigns.spec.ts` is nine more on the same one project, for the same reason: the composer
 actually walking, the send confirmation reaching the screen, and the compound-capability refusal.
-The unit suite is at **349**. `--project=phone-webkit` is the honest engine and is **123/123**
+`e2e/admin.spec.ts` is nine more again, and the same argument a third time: everything about those
+four screens that a schema can answer is answered in `tests/admin-schema.test.ts` against 79 captured
+payloads across **four** credentials, and what is left for a browser is the capability boundary
+reaching a screen, a **download actually arriving**, suspend and reactivate walking, a settings save
+round-tripping, and the trail's date range narrowing on screen. The unit suite is at **442**.
+`--project=phone-webkit` is the honest engine and is **123/123**
 (verified 2026-08-21), kept out of the default run because its system libraries are 231 apt packages
 behind root.
 
@@ -250,7 +285,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 195 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 223 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -340,7 +375,11 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
   row in this shop today and would diverge the moment a variable product tracked stock at the parent.
 - **The stock ledger cannot name its actor.** `GET /users/{id}` is Super Admin only and `/audit-logs`
   stops at Admin, carries no movement id, and covers 13 rows of 1154. The row renders *an order*, *you*,
-  *a colleague* or *unknown* — never a bare id — and `?actor_id=` survives as a filter.
+  *a colleague* or *unknown* — never a bare id — and `?actor_id=` survives as a filter. **Both routes
+  are on the proxy allowlist now**, because `feat/admin` built the screens they exist for and there
+  their capability *is* the screen's gate — and nothing about the ledger changed: a Product Manager
+  reading a movement is still 403 on both, since the panel allowing a route has never been the same
+  thing as the API allowing a caller.
 - **The movement reason vocabulary is the union of two endpoints**, nine values; the adjust endpoint
   accepts six of them and the summary reports seven. Built from either alone, a picker 400s or a legend
   goes missing. `lib/movement-reason.ts`.
@@ -555,9 +594,131 @@ Added by the content build:
   8 of its 10 assertions fail against the previous version, which is the control that makes them worth
   keeping.
 
+Added by the admin build:
+
+- **A writable settings block is not wholly writable.** ADMIN_PANEL.md lists four writable blocks and
+  puts only `currency` in its read-only table; measured, `store` publishes **eight** keys and accepts
+  **four**. `locale`, `currency`, `currency_symbol` and `logo` are refused from inside a block the
+  spec calls writable, and `locale` is not mentioned anywhere. The four lists come from the API's own
+  refusal — `PATCH {"store":{"zzz":"1"}}` answers *"Unknown keys: zzz. Known: name, description,
+  storefront_url, logo_id."* — and the unit suite re-derives the constant from that sentence so the
+  two cannot drift.
+- **`details.fields` is an array on exactly one refusal.** `PATCH /settings` with `{}` answers
+  `fields: ["store","contact","legal","social"]`, where every other refusal on the same route keys it
+  by block or by `block.key`. `BrowserApiError.fields` returns `null` for the array — verified against
+  the captured payload, not assumed from reading the getter — so the caller falls through to the
+  top-level message instead of putting `store,contact,legal,social` on screen as an explanation.
+- **`PATCH /settings` answers with the whole document**, not the block it wrote, so the form rebinds
+  to the response. Safe here for the reason it was safe on a CMS page and unsafe on a coupon's
+  `date_expires`: every field round-trips in the format it was sent.
+- **51 of 72 staff accounts hold a role that can no longer be assigned**, so the role picker and the
+  row label are two different questions asked of `GET /roles`. The picker filters on `assignable`; the
+  label must not, or three quarters of the list goes blank. Assigning a retired one is a **400 naming
+  it as retired**, not as unknown — it exists, it is published on that very route, and accounts hold
+  it, so "Unknown role" would send an operator looking for a typo.
+- **Two accounts are WordPress `administrator`** with `is_administrator: true`, and `administrator` is
+  not one of the seven and is not published by `/roles` at all. The label falls back to the row's own
+  `role_name`; the detail offers no role change for them.
+- **`/users` matches the display name; `/customers` does not.** The two screens look alike and the
+  rules invert — `UserRepository` searches `user_login`, `user_email`, `user_nicename` and
+  `display_name` where the customers list searches login and email only. The staff field says what it
+  matches for the same reason the customers field says what it does not.
+- **`?status=` was `active` on all 70 accounts**, so suspend, reactivate, the filter and the badge had
+  no fixture. `scripts/seed-staff.mjs` creates one throwaway account and suspends it through the
+  production writers. A suspended account answers **401 at every route in the namespace**, `/auth/me`
+  and `/health` included, which is why it is a throwaway and not a real colleague.
+- **Minting a credential for a suspended account is a 409 with no `details`**, where a duplicate name
+  is a 409 *with* `details.name`. Two conflicts on one route and two different sentences: one belongs
+  on a field, the other at the top of the section with the reactivate action beside it.
+- **`audit-logs[].created_at` has no offset** — `"2026-08-21 18:55:45"`, the third route in this API
+  with the convention after `notes[].created_at` and a campaign recipient's `sent_at`. `new Date()`
+  shifts it by the host's offset with nothing on screen to show it; `parseApiDate` reads it as UTC,
+  which is what `AuditEvent`'s `gmdate()` means.
+- **"Audited by field name, never by value" is true of settings and false of products.** Measured on
+  the live table: `settings.updated` records `{blocks, fields}` and no values — which is where the
+  spec argues for the rule, and what keeps the trade-register numbers out of a table nobody cleans —
+  while `product.updated` carries `before` and `after` in full across 3 072 rows. Four metadata shapes,
+  and the row renders by shape rather than by assumption.
+- **`[redacted]` is a fact, not a gap.** `notification.retried` stores `dedupe_key: "[redacted]"`
+  because the key carries a customer's order id. A row rendering it as a blank would say the field was
+  absent, which is a different and untrue thing.
+- **An audit action is an identifier and is not translated.** 85 distinct actions across 23 resource
+  types on this install, growing with every subsystem, and **every one contains a `.`** — a `next-intl`
+  path separator, which is the defect 14b shipped. The resource type *is* translated, because it is the
+  vocabulary of the filter this screen offers; the twenty-third, `ac_banner`, is deliberately unnamed
+  so that one-row oddity stays visible.
+- **`actor_login` is on every audit row**, so the trail does not have the inventory ledger's problem —
+  which is the same observation from the other side, and the fix that section still asks the backend
+  for one table over.
+- **An export's capability follows the resource, and a Support Agent proves it.** Measured across four
+  credentials: a Manager is 403 on settings, users and audit and **200 on all four exports**, so one
+  credential is the branch's forbidden fixture and its positive control; a Support Agent is **200 on
+  `/export/customers` and 403 on the other three**, which is the only fixture that can show the gate is
+  per subject rather than per screen.
+- **An import's body is the CSV itself**, with `Content-Type: text/csv` — the only request in this
+  panel that is not JSON, and unlike `/media`, which is multipart. Sending JSON is a 400 naming it:
+  *"Content-Type must be text/csv, and the body the file itself — not JSON."* `acWriteRaw()` exists
+  beside `acWrite()` for exactly the two import routes.
+- **A preview row has four shapes and only `line` and `action` are on all four.** They differ by
+  subject *and* by whether it was a dry run, and `line` is not unique: WooCommerce's importer reports
+  `line: 2` for every row of an applied products run. `preview_only` is present on a **products dry
+  run only** — an inventory dry run really does rehearse — so its presence is the signal and its
+  English text is never rendered.
+- **A report that would write nothing is a 200.** `created: 0, updated: 0` with every row skipped, or
+  every row failed, is a successful request and a useless import; the screen says so and disables the
+  apply. **`failed` is not part of that test**, and an earlier version that required it to be zero
+  offered an apply button over a file of nothing but errors — caught by the e2e against a SKU that does
+  not exist, which is the commonest way an import goes wrong.
+- **A file input renders its own chrome as page content.** `<select>` and `<input type="date">` are
+  kept native throughout this panel because the platform picker is better than anything drawn here and
+  its chrome follows the browser's locale — but a file input puts "Choose File" and "No file chosen"
+  *in the page*, left-aligned in an RTL row with no 44px target. It is the one native control here
+  that is hidden and driven by a `Button`. Caught by eye at 390 px.
+
 ## Owed to the backend, and paid
 
 Each one is here because the panel could not be built honestly without it.
+
+Fixed in `ecom-temp` on **`feat/audit-filters`**, **`fix/export-download`** and
+**`fix/product-export-header`** while building the admin branch — three narrow branches, all three
+found by measuring the API rather than by reading it:
+
+- **Two of the audit trail's five filters did not filter.** Measured 2026-08-21 against 16 632 rows,
+  `?resource_id=` and `?date_from=`/`?date_to=` were **accepted and silently ignored** — §65's failure
+  mode, where a filter that does not filter is indistinguishable from a collection that all matches.
+  Both are named in ADMIN_PANEL.md as though they worked, and **16 632 rows at 20 a page is 832
+  pages**: no way to reach yesterday, and no way to get from an audited object to its own history.
+  The `resource_id` clause had been in `AuditRepository::buildWhere()` since the table existed; the
+  route never declared the argument, so `WP_REST_Request` dropped it before the controller looked. It
+  is registered as a **string**, because a page is audited by path and a menu by location and `absint`
+  would turn `conditions` into 0. `tests/Api/audit.php` is the route's first suite — its assertions had
+  lived scattered across the eight suites whose *writes* it records, which covers the writing
+  thoroughly and the reading not at all. 35 assertions, floored on the filtered set being **strictly
+  smaller** than the whole; 14 of them fail against the previous version.
+
+- **Every export arrived JSON-encoded, under `Content-Type: text/csv`.** One quoted line per export —
+  the byte-order mark as the six characters `﻿`, every accent as `è`, every newline as the
+  two characters `\r\n` — with `Content-Disposition: attachment` on it. A file no spreadsheet can
+  open, saved as `products.csv`. `API\FileDownload` marked its own responses with
+  `set_matched_route()`, which `WP_REST_Server::respond_to_request()` overwrites *after* the callback
+  returns, so `rest_pre_serve_request` declined every download and WordPress encoded the string. The
+  whole mechanism was dead and had been. Marked by response **subclass** now, which
+  `rest_ensure_response()` leaves alone.
+
+  **The more useful half is why nothing caught it.** Two assertions in `scripts/test-api.sh` were
+  aimed straight at this and passed: *"the body is a CSV, not JSON"* grepped for `"success"`, which a
+  JSON-encoded **string** has no key for, and *"the CSV names its columns"* grepped a first line that
+  was the whole file. Both assert the shape they meant now — the first three bytes are `EF BB BF`, and
+  there is a record after the header — and both fail against the previous version while the old two do
+  not.
+
+- **The product export named no columns.** `ProductCsvExporter::toCsv()` called `get_csv_data()`,
+  which is the rows; `WC_CSV_Exporter::export()` sends `export_column_headers()` before it. So a
+  48-column file began `10,simple,AC-TAP-001,…` while `/export/orders`, `/export/inventory` and
+  `/export/customers` all began with their column names — and `POST /import/products` read the first
+  product's own values as the header, answering *"Missing: sku."* with `columns_found` listing a
+  product name as a column. The assertion pointed at it counted commas on the first line, which a data
+  row passes. `tests/Api/import-export.php` went 56 → **61**.
 
 Fixed in `ecom-temp` on **`feat/cms-page-index`** while building the content branch:
 
@@ -715,9 +876,43 @@ return `total - 1`. The count version passed at ten rows and would have failed s
   `{{`, and the fix is to pass a token as a **value** rather than to escape the braces, which ICU
   allows and no translator would survive.
 
+### Found on the admin branch, and not fixed here
+
+- **A product export cannot be re-imported without editing its header**, and that is a WooCommerce
+  fact rather than a defect in this stack. The header carries WooCommerce's *display* labels — `ID`,
+  `SKU`, `GTIN, UPC, EAN, or ISBN` — because that is the file every other WooCommerce tool reads, and
+  the table mapping those onto field names lives in `includes/admin/importers/mappings/`, inside
+  `admin/`, which `WooCsv` deliberately does not load: the whole argument of that class is that only
+  the *loader* is admin-gated and the engine is not. Measured after the header fix, a re-import parses
+  every row and resolves an **empty `sku` on each**, while the same file with a lowercased header
+  previews `updated: 2`. The fix is either loading the mapping files — which crosses the line
+  `WooCsv`'s docblock draws — or building the map ourselves, which is reimplementing the contract §64
+  exists not to reimplement. So the screen states it per subject: the **inventory** export uses our own
+  writer and our own field names and round-trips as it stands.
+- **The product export uses LF while the other three use CRLF.** `CsvWriter` emits CRLF (RFC 4180, and
+  what Excel on Windows expects); `WC_CSV_Exporter` emits LF. Not fixed, for the same reason: every
+  reader in play handles both, and rewriting WooCommerce's output forks the format. Pinned in
+  `tests/admin-schema.test.ts` so a future assertion splitting on `\r\n` fails on purpose rather than
+  reporting a one-line file.
+- **A settings logo cannot be chosen from this screen.** `store.logo_id` is writable and
+  `components/patterns/MediaPicker` exists, but the media library is `ac_manage_content` — a
+  capability today's Super Admin happens to hold, and one this screen's own gate does not imply. The
+  control would be the only thing on the settings form able to 403 on its own, so the row shows the id
+  read-only with that reason. The same shape of gap the product image picker has, from the other side.
+- **An account's order count is not on a user row**, so the delete refusal cannot be predicted. There
+  is no `orders_count` and `/orders?customer_id=` is `ac_manage_orders`, which `ac_manage_users` does
+  not imply — so the panel asks and renders the 409's `details.orders` rather than greying a button on
+  a guess. A count on the row, or on the single read, would let the screen say "suspend instead"
+  *before* somebody presses delete rather than after.
+
 ## Open, and owed to the backend
 
 - `/settings` could reasonably publish `store.timezone`.
+- **`GET /audit-logs` has no summary block**, so the trail opens on page 1 of 832 with no way to see
+  its own shape. Counts by action, or by resource type, or by day over the selected range, would let
+  the screen answer "what has been happening" rather than "here are the twenty most recent rows" — and
+  would make the date range a control somebody aims rather than one they guess at. The same gap
+  `GET /notifications` has, one table over, and the same fix: a `meta.summary`.
 - **`GET /notifications` has no summary.** The pending/sent/failed counts exist only on the CLI drain's
   `--summary`, so a queue-wide breakdown would cost one request per state. The panel counts the page it
   is holding and the label says so; a `meta.summary` block would let the screen answer "how healthy is

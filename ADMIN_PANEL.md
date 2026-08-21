@@ -2666,6 +2666,63 @@ the API's. An export *error* still arrives in the envelope, so a client never sa
 `products.csv`. Download through the server proxy, streaming, so the credential stays server-side —
 this is the one place the envelope-unwrapping client must be bypassed deliberately.
 
+> **Corrected in the build: exports were not files, and neither the API's own tests nor this section
+> could see it.** Measured 2026-08-21 on WordPress 7.0.4, every export arrived **JSON-encoded** — one
+> quoted line, the byte-order mark as the six characters `﻿`, every accent as `è` and every
+> newline as the two characters `\r\n` — under `Content-Type: text/csv` and
+> `Content-Disposition: attachment`. A file no spreadsheet can open, saved as `products.csv`.
+>
+> `API\FileDownload` marked its own responses with `set_matched_route()`, and
+> `WP_REST_Server::respond_to_request()` calls `set_matched_route($route)` *after* the callback
+> returns — so by the time `rest_pre_serve_request` fired the marker had been replaced by the real
+> route, the filter declined every download, and WordPress encoded the string it was handed. The
+> mechanism was dead and had been. Fixed in `ecom-temp` on `fix/export-download` by marking the
+> response with a **subclass**, which `rest_ensure_response()` leaves alone.
+>
+> **The more useful half is why nothing caught it.** Two assertions in `scripts/test-api.sh` were
+> pointed straight at this and passed over the broken body: *"the body is a CSV, not JSON"* grepped
+> for `"success"`, which a JSON-encoded **string** has no key for, and *"the CSV names its columns"*
+> grepped the first line for `sku` — and the whole file was one line with `sku` on it. Both now
+> assert the shape they meant: the first three bytes are `EF BB BF`, and there is a record after the
+> header.
+>
+> A second defect came with it. **`/export/products` had no header row**: `ProductCsvExporter::toCsv()`
+> called `get_csv_data()`, which is the rows, where `WC_CSV_Exporter::export()` sends
+> `export_column_headers()` before it. So a 48-column file began `10,simple,AC-TAP-001,…` and
+> `POST /import/products` read a product's own values as the header, answering *"Missing: sku."* with
+> `columns_found` listing a product name as a column. Fixed on `fix/product-export-header`; the
+> assertion aimed at it counted commas on the first line, which a data row passes.
+>
+> **The round trip still does not close for products, and the screen says so per subject.** The header
+> carries WooCommerce's *display* labels — `ID`, `SKU`, `GTIN, UPC, EAN, or ISBN` — because that is the
+> file every other WooCommerce tool reads, and the table mapping those onto field names lives in
+> `includes/admin/importers/mappings/`, inside `admin/`, which `WooCsv` deliberately does not load.
+> Measured: a re-import parses every row and resolves an empty `sku` on each, while the same file with
+> a lowercased header previews `updated: 2`. The **inventory** export uses our own writer and our own
+> field names and round-trips as it stands, so `ROUND_TRIPS` states it subject by subject rather than
+> as a promise the shop cannot keep.
+
+> **Corrected in the build: a preview row has four shapes, not one.** This section describes the
+> preview as though it were a table. Measured, `preview[]` depends on the subject **and** on whether
+> it was a dry run:
+>
+> ```
+> products, dry      {line, action, sku, name, reason?}
+> products, applied  {line, action, product_id} / {line, action, reason}
+> inventory, dry     {line, action, sku, product_id, from, to}
+> inventory, applied {line, action, sku, product_id, from, to, reason?}
+> ```
+>
+> Only `line` and `action` are on all four, so a fixed column set shows four empty columns on a
+> products apply — the one request an operator makes after reading a preview they trusted. `line` is
+> also **not unique**: WooCommerce's importer reports `line: 2` for every row of an applied products
+> run, so the table keys by index and renders the line as a label.
+>
+> `preview_only` is present on a **products dry run only** — an inventory dry run really does rehearse
+> — so its *presence* is the signal and its English text is never rendered. And `mode` defaults to
+> `create`, which this section does not say: measured, a file naming one existing SKU and one new one
+> answered `created: 1, skipped: 1` with no `mode` at all.
+
 ## Settings
 
 `GET/PATCH /settings`. `ac_manage_settings` — **Super Admin only**.
@@ -2689,6 +2746,61 @@ An Admin holding the other ten management capabilities is refused here, and that
 stops an Admin escalating. The forbidden state should name Super Admin rather than the capability
 string.
 
+> **Corrected in the build: a writable block is not wholly writable, and four keys are refused from
+> inside one.** This section says "four writable blocks" and puts only `currency` in its read-only
+> table. Measured 2026-08-21 by sending an unknown key to each block and reading what the 400 named:
+>
+> ```
+> store    Known: name, description, storefront_url, logo_id
+> contact  Known: email, phone, address, wilaya, hours
+> legal    Known: registered_name, rc, nif, nis, ai
+> social   Known: facebook, instagram, tiktok, youtube
+> ```
+>
+> `GET` publishes **eight** keys under `store`. `locale`, `currency`, `currency_symbol` and `logo` are
+> read-only inside a block this document calls writable, and `locale` is not mentioned anywhere. A form
+> that bound every key it read would send four fields the API names back at it, so `WRITABLE_KEYS` is
+> derived from those four sentences and `tests/admin-schema.test.ts` re-derives it from the captured
+> refusal so the constant and the API cannot drift.
+>
+> `logo_id` is writable and the panel does not offer it: an attachment picker is `ac_manage_content`,
+> and it would be the only control on this screen able to 403 on its own. The row shows the id with
+> that reason.
+
+> **Corrected in the build: `details.fields` is an array on exactly one refusal**, and every form in
+> this panel binds to it as an object.
+>
+> ```
+> PATCH {}                          fields: ["store","contact","legal","social"]
+> PATCH {"store":{"zzz":1}}         fields: {"store": "Unknown keys: zzz. Known: …"}
+> PATCH {"contact":{"email":"x"}}   fields: {"contact.email": "Must be an email address."}
+> ```
+>
+> Two levels, and the dot is the API's rather than `next-intl`'s: a bad *value* is keyed `block.key`
+> while a whole-block complaint is keyed by the block alone, so a form reading only one of the two
+> renders neither. `BrowserApiError.fields` returns `null` for the array — verified against the
+> captured payload rather than assumed from reading the getter — and the caller falls through to the
+> top-level message, which is the sentence a reader needs. Rendering the array would put
+> `store,contact,legal,social` on screen as though it were an explanation.
+>
+> The panel never sends that request: the save bar does not appear when nothing is dirty. It is pinned
+> because it is the shape a future caller meets.
+
+> **Verified in the build: the read-only blocks refuse by name with the reason, and the reason is
+> renderable.** Measured verbatim — `features` answers *"Feature flags are environment variables read
+> once at bootstrap (ENABLE_COD, ENABLE_CHARGILY, …). Set them in .env and restart, or the registry
+> and this document disagree."* and `providers` answers *"Read-only: this reports which providers
+> actually registered, which follows from their credentials and flags."* Both are rendered as reports
+> rather than as disabled forms: a switch that cannot be switched is a control, and these are not
+> controls.
+>
+> The flag-versus-registry gap this section exists to surface is a **state this shop is not in**, and
+> that is worth saying rather than leaving implied: `chargily` and `cod` are both flagged and both
+> registered, `yalidine` and `zr_express` are both off and both absent. So the unit suite asserts the
+> agreement as a positive control first and then the gap on a synthesised pair, and the four flags
+> that gate nothing yet — `blog`, `reviews`, `sms`, `whatsapp` — are excluded by name, because pairing
+> a flag with a registry it has no entry in would invent a gap on every install.
+
 ## Users and roles
 
 §87's routes. `ac_manage_users` — Super Admin only.
@@ -2699,6 +2811,69 @@ as a hidden one — the refusals are the security model, and a Super Admin shoul
 
 The minted password appears **once**, in a sheet, with a copy button and a warning that it will not
 be shown again. No "reveal" affordance elsewhere in the panel, because there is nothing to reveal.
+
+> **Corrected in the build: the role picker and the row label are two different questions, and 51 of
+> 72 accounts are the reason.** This section says "a role picker fed by `GET /roles`" as though the
+> route answered one thing. It answers two: seven roles, `assignable` true on two.
+>
+> ```
+> total 72, every one active before the seed
+> roles     super_admin 12, admin 14, manager 7, order_manager 7, product_manager 6,
+>           support_agent 19, marketing_manager 5, administrator 2
+> /roles    7 published, 2 assignable (ac_super_admin, ac_manager)
+> ```
+>
+> So **the picker filters on the flag and the label must not**: a picker built from the whole list
+> offers a role the API answers with a paragraph — a 400 *naming it as retired*, not as unknown,
+> because it exists, it is published on that very route and accounts hold it — while a label built
+> from the assignable half blanks three quarters of the staff. The detail's picker prepends the
+> account's own retired role so a save does not silently reassign it.
+>
+> **Two accounts are WordPress `administrator` with `is_administrator: true`**, and `administrator` is
+> not one of the seven and not published by `/roles` at all. `roleLabel()` falls back to the row's own
+> `role_name` and then to the raw key, never to a blank, and the detail offers no role change for
+> them: assigning `administrator` is the first of the five refusals, and changing one *away* would
+> take platform access off an account this API never granted it to.
+
+> **Corrected in the build: `status` was `active` on all 70 accounts, so two of the five refusals had
+> no fixture.** Measured 2026-08-21: `?status=suspended` answered **0 rows**. Suspend, reactivate, the
+> status filter and the suspended badge were four controls with nothing to act on — 14b's "every row
+> is `pending`", one collection over.
+>
+> `scripts/seed-staff.mjs` creates one throwaway account and suspends it **through the API** — `POST
+> /users` and `PATCH /users/{id}`, the production writers, audited exactly as they would be for a
+> person. A throwaway rather than a real account because `SuspensionGuard` answers 401 at *every* route
+> in the namespace, including `/auth/me` and `/health`: suspending one of the credentials the suite
+> mints would kill the run, and suspending one of the shop's own would take away access somebody may
+> be using. It is idempotent and re-asserts the status, because the e2e reactivates the account on
+> purpose — reactivate is the other half of the pair and has to be proven too.
+
+> **Corrected in the build: the three self-refusals are known locally and the other two are asked.**
+> This section asks for all five to render "as a disabled control with the reason", and two of them
+> cannot be. Changing your own role, suspending yourself and deleting yourself are facts about the
+> session — the panel knows who it is, disables the control and sends nothing. Assigning a WordPress
+> or retired role, and deleting an account that owns orders, are facts about the *request*: **nothing
+> on a user row says whether they own orders**, there is no count, and `/orders?customer_id=` is
+> `ac_manage_orders`, which this screen's own gate does not imply. So the panel asks and renders
+> `details.orders`, which arrives as a count beside a message naming the alternative — and the
+> confirmation offers suspend as a button rather than repeating the sentence.
+>
+> The same split the analytics money gate makes, and for the same reason: a control greyed out on a
+> guess is a control that will be wrong.
+
+> **Corrected in the build: the credential mint has two 409s and they are different sentences.**
+> A duplicate name is `409` with `details.name` and belongs on the field; a **suspended account** is
+> `409` with no `details` at all — *"That account is suspended. Reactivate it before issuing a
+> credential."* — and belongs at the top of the section with the reactivate action beside it, because
+> it is a fact about the account rather than a typo. The panel pre-empts the second by disabling the
+> mint, since a credential issued to a suspended account answers 401 everywhere and is a key to a
+> locked door.
+>
+> The password is **24 characters with no spaces** on this install, where docs/API.md's example shows
+> the six-group spaced form wp-admin renders. Both authenticate; the panel renders what arrived rather
+> than re-grouping it. And it appears in that one response and nowhere else — asserted against the
+> collection, the single read **and the audit row**, which carries `{login, name, uuid}` and was
+> checked for the secret rather than assumed clean.
 
 ## Audit
 
@@ -2711,6 +2886,85 @@ authenticates as themselves.
 Writes are audited **by field name, never by value**, so the log says a trade-register field changed
 and not what it changed to. Render it that way; a reader expecting values needs to know they were
 never stored.
+
+> **Corrected in the build: two of the five filters were accepted and ignored, and the panel could not
+> be built until they were not.** Measured 2026-08-21 against 16 632 live rows:
+>
+> ```
+> ?actor_id=475                  873 of 16 632   honoured
+> ?action=notification.retried    84             honoured
+> ?resource_type=notification     84             honoured
+> ?resource_id=4640           16 632             ACCEPTED AND IGNORED
+> ?date_from= / ?date_to=     16 632             ACCEPTED AND IGNORED
+> ?search=                    16 632             ACCEPTED AND IGNORED
+> ?action=nonsense                 0             200, not validated
+> ```
+>
+> §65's failure mode exactly: a filter that does not filter is indistinguishable from a collection that
+> all matches. **16 632 rows at 20 a page is 832 pages**, so the date range is the difference between a
+> screen an operator can use and one they scroll, and `?resource_id=` is how somebody gets from an
+> audited object to its own history — both named here as though they worked.
+>
+> Fixed in `ecom-temp` on `feat/audit-filters` before a line of this screen existed. The `resource_id`
+> clause had been in `AuditRepository::buildWhere()` since the table did; the route simply never
+> declared the argument, so `WP_REST_Request` dropped it before the controller looked. It is registered
+> as a **string**: the column is `varchar(64)` because a page is audited by path, a FAQ category by
+> slug and a menu by location, and `absint` would turn `conditions` into 0 and match every row that has
+> no resource id at all. `tests/Api/audit.php` is the route's first suite — **35 assertions**, floored
+> on the filtered set being *strictly smaller* than the whole rather than merely a 200, with the three
+> already-working filters asserted in the same run as the control. 14 of the 35 fail against the
+> previous version.
+>
+> **`?search=` stays unfilterable and the panel offers no search box**, which is this section's own
+> rule turned into a screen decision: writes are audited by field *name*, so there is no column holding
+> what a free-text box would be searching for. `?orderby=` and `?order=` are likewise not parameters —
+> the table is append-only, so its id order is its time order — and there is no sort control, the same
+> answer the notification queue reached.
+
+> **Corrected in the build: "by field name, never by value" is true of some subsystems and not of
+> others.** This section states it as a rule about the whole trail. Measured on the live table, four
+> shapes:
+>
+> ```
+> settings.updated     {blocks: ["contact"], fields: ["contact.phone"]}
+> product.updated      {fields: [...], before: {...}, after: {...}}
+> user.role_changed    {login, from, to, promoted_from_customer}
+> notification.retried {channel, event, dedupe_key: "[redacted]", …}
+> ```
+>
+> The rule holds exactly where this document argues for it — `settings.updated` records names and no
+> values, which is what keeps the shop's trade-register numbers out of a table nobody cleans — and
+> **`product.updated` carries `before` and `after` in full**, across 3 072 rows. docs/API.md already
+> names the role change as the deliberate exception; the product write is a third case the panel had to
+> discover. So the row renders **by shape** rather than by assumption, and a metadata block it does not
+> recognise renders as its own key/value pairs: the trail is the one screen where showing less than
+> arrived is the wrong failure.
+>
+> `[redacted]` is rendered as a **fact rather than a gap** — the writer stored that string, and a row
+> showing a blank would say the key was absent, which is untrue.
+
+> **Corrected in the build: the action is an identifier and is not translated.** This section implies a
+> readable vocabulary. Measured, **85 distinct actions across 23 resource types**, growing with every
+> subsystem the backend adds, and **every one of them contains a `.`** — which is a `next-intl` path
+> separator, the defect 14b shipped and caught only in the dev log. 170 messages over an open
+> vocabulary would be stale on the next feature and would render a key path where the newest action
+> should be.
+>
+> So `product.updated` renders as itself, in `Ltr`, the way a SKU does: it is the exact string
+> `?action=` takes and it is what somebody quotes into a bug report. The **resource type** *is*
+> translated, because it is a different thing — 22 named values, and it is the vocabulary of the
+> control this screen offers. The twenty-third, `ac_banner`, is deliberately unnamed: one row in
+> 16 632, written by a CMS delete path recording a WordPress post type where every sibling records
+> `banner`, and naming it would translate a typo into two languages.
+>
+> **`created_at` is `"2026-08-21 18:55:45"` — no `T`, no offset**, the third route in this API with the
+> convention. `new Date()` reads it as local and shifts every row by the host's offset with nothing on
+> screen to show it; `parseApiDate()` reads it as UTC, which is what `AuditEvent`'s `gmdate()` means.
+>
+> **`actor_login` is on every row**, so this screen does not have the inventory ledger's problem — and
+> that is the same observation from the other side. The ledger carries `actor_id` alone and both routes
+> that could resolve it are refused to most of the staff who can read it; the trail carries the login
+> itself, which is exactly the fix that section asks the backend for, one table over.
 
 ---
 
@@ -3022,9 +3276,62 @@ mirroring §47's slicing.
 14. feat/content        CMS, media, marketing, campaigns, notifications  DONE
                         — split three ways; see below. 14a, 14b and 14c are
                         all merged.
-15. feat/admin          settings, users, audit, import/export      ← next
+15. feat/admin          settings, users, audit, import/export      DONE
+                        — one branch, four subjects, and not a split. Step 14
+                        split three ways because its seam was a capability;
+                        this one has no such seam to cut along. Three of the
+                        four are Super Admin alone and the fourth follows the
+                        resource, so **a Manager is a genuine forbidden
+                        fixture for settings, users and audit and a positive
+                        one for import/export in the same session** — one
+                        credential carrying both halves, which is the
+                        strongest fixture any branch here has had.
+
+                        Three things had to be fixed in `ecom-temp` first,
+                        all three found by measuring rather than by reading:
+                        `feat/audit-filters` (two of the five filters this
+                        document names were accepted and ignored),
+                        `fix/export-download` (every export arrived
+                        JSON-encoded under `Content-Type: text/csv`) and
+                        `fix/product-export-header` (the product CSV had no
+                        column names and could not be re-imported). And
+                        `seed-staff.mjs`: all 70 accounts were `active`, so
+                        suspend and reactivate — two of §87's five refusals —
+                        had no fixture at all.
 16. feat/pwa            manifest, service worker, offline states, cache wiping
+                                                                   ← next
 ```
+
+> **Corrected in the build: step 15 is one branch, and the reasoning is the inverse of step 14's.**
+> Step 14 split because its five subjects sat behind three different capabilities and the panel has
+> never let a screen guess at one. These four have the opposite property: settings, users and audit are
+> `ac_manage_settings`, `ac_manage_users` and `ac_view_audit_logs`, which after the two-tier collapse
+> all name the Super Admin tier, and import/export has no capability of its own at all — it follows
+> the resource. So the seam that made 14 three branches does not exist here, each screen is
+> individually small, and they share a single `/more` destination group.
+>
+> Import and export is the odd one structurally and is a section rather than a branch: it is the only
+> part a Manager can reach, the only part needing a streaming file proxy, and the only part whose
+> request body is not JSON.
+>
+> The capability grid, measured across four credentials, is what decides all of that:
+>
+> ```
+>                         super   manager   marketing   support
+> GET  /settings           200      403        403        403
+> GET  /users              200      403        403        403
+> GET  /audit-logs         200      403        403        403
+> GET  /export/products    200      200        403        403
+> GET  /export/orders      200      200        403        403
+> GET  /export/inventory   200      200        403        403
+> GET  /export/customers   200      200        403        200
+> POST /import/*           400      400        403        403
+> ```
+>
+> The last column is the assertion worth keeping: a **Support Agent holds `ac_manage_customers` and
+> nothing else here**, so one credential is 200 on one export and 403 on the other three. A credential
+> refused everything would be consistent with a per-screen gate; that one is not, and it is the only
+> fixture that can prove the rule is per subject.
 
 > **Corrected in the build: step 14 is three branches, not one.** The line above names five subjects
 > as though they were one screen set. They are three, and the seam is the **capability**, which is the

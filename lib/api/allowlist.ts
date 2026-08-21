@@ -18,6 +18,22 @@ const rule = (source: string, ...methods: string[]): Rule => ({
 });
 
 /**
+ * RFC 4122's shape, for the one path segment that is neither a literal nor an
+ * id: an application password's uuid.
+ *
+ * Composed from a hex class rather than written out, and that is not only
+ * tidiness — `scripts/check-design.sh` refuses an arbitrary Tailwind value by
+ * matching a hyphen, an opening bracket and a digit, which is exactly the
+ * sequence a hyphen-separated hex class produces when the uuid is spelled out.
+ * A regular expression is not a class name and the script has no way to know
+ * that, so the pattern is built where the two cannot collide. The alternative
+ * was an exemption in the script, and an exemption is how a rule stops being
+ * one.
+ */
+const HEX = "[0-9a-fA-F]";
+const UUID = `${HEX}{8}-${HEX}{4}-${HEX}{4}-${HEX}{4}-${HEX}{12}`;
+
+/**
  * Only what this step's screens actually call. The list grows one route group per
  * branch, which is the point of it being a list: a screen that has not been built
  * cannot be reached through the proxy by guessing a URL.
@@ -322,6 +338,84 @@ const RULES: readonly Rule[] = [
   rule("/email-templates", "GET"),
   rule("/email-templates/\\d+", "GET"),
   rule("/marketing/config", "GET"),
+
+  /*
+   * Settings. `ac_manage_settings`, which is Super Admin alone — measured, a
+   * Manager holding ten other management capabilities is 403 on both verbs.
+   * That is the boundary that stops an Admin escalating, and the forbidden
+   * screen names Super Admin rather than the capability string.
+   *
+   * `PATCH` writes four blocks and refuses `features`, `providers` and every
+   * secret **by name with the reason**, which is what the screen renders. The
+   * refusals never reach the wire from here — no control offers them — but the
+   * route is one route and the method is the whole verb.
+   */
+  rule("/settings", "GET", "PATCH"),
+
+  /*
+   * Staff users and roles. `ac_manage_users`, Super Admin alone.
+   *
+   * **`GET /users/{id}` was refused for eleven branches and is allowed now**,
+   * and the reason it was refused is worth keeping: the inventory ledger wanted
+   * it to turn a movement's `actor_id` into a name, and it is Super Admin only
+   * while `ac_manage_inventory` is held by four roles — so allowing it there
+   * would have put a user-directory route behind the proxy to label rows three
+   * quarters of the staff would never see. It is allowed here because this is
+   * the screen the route exists for, and its capability and this screen's gate
+   * are the same capability. `tests/boundary.test.ts` asserts the change and the
+   * ledger's own note is updated rather than deleted.
+   *
+   * `POST /users/{id}/application-passwords` is the onboarding step and the
+   * reason §87 exists — WordPress shows a password once, in wp-admin, which
+   * PLAN §52 says routine administration must not require.
+   *
+   * The uuid pattern is pinned to the RFC 4122 shape rather than left as
+   * `[^/]+`: it comes from a row the panel is holding, never from a person, and
+   * a permissive segment on a `DELETE` is a revoke aimed by guessing.
+   */
+  rule("/users", "GET", "POST"),
+  rule("/users/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/users/\\d+/application-passwords", "GET", "POST"),
+  rule(`/users/\\d+/application-passwords/${UUID}`, "DELETE"),
+  rule("/roles", "GET"),
+
+  /*
+   * The audit trail. `ac_view_audit_logs`, and read-only because the route is:
+   * audit records are append-only and there is no POST, PATCH or DELETE on the
+   * API to allow.
+   */
+  rule("/audit-logs", "GET"),
+
+  /*
+   * Imports. **The only routes in this panel whose body is not JSON** — the CSV
+   * is the raw request body with `Content-Type: text/csv`, which differs from
+   * `/media`, the only other upload here, and which ADMIN_PANEL.md says outright
+   * will be got wrong once. `acWriteRaw()` exists for exactly these two.
+   *
+   * `dry_run` defaults to **true**, so a request that lost the parameter
+   * previews and never writes.
+   *
+   * There is no `/import/orders` and no `/import/customers`, and that is the
+   * API's shape rather than an omission here: an order comes from a checkout and
+   * a customer from a registration, and a CSV that invented either would be
+   * inventing money and consent.
+   */
+  rule("/import/(products|inventory)", "POST"),
+
+  /*
+   * **The four exports are deliberately NOT on this list**, and this comment is
+   * the second half of the two unit tests that assert it.
+   *
+   * An export is a file, not an envelope — `text/csv`, a `Content-Disposition`
+   * filename that is the API's, and a UTF-8 BOM Excel needs. This proxy forwards
+   * only `content-type` and `retry-after`, so a download routed through it would
+   * arrive with no filename and no `no-store`, and `acRead()` would try to
+   * `JSON.parse` a spreadsheet.
+   *
+   * `app/api/export/[subject]/route.ts` is the second deliberate bypass of the
+   * envelope client, after `app/api/label/[id]`. It carries its own subject
+   * allowlist, so nothing is reachable that this file refuses.
+   */
 ];
 
 export type AllowResult =

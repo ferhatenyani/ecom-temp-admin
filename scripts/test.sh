@@ -178,6 +178,32 @@ run_e2e() {
     return 1
   fi
 
+  # And one suspended staff account. The same shape as the queue above, one
+  # collection over:
+  #
+  #   GET /users        total 70
+  #   statuses          {"active": 70}
+  #   ?status=suspended 0 rows
+  #
+  # **Every account was active**, so the suspend action, the reactivate action,
+  # the `?status=` filter and the suspended badge were four controls with
+  # nothing to act on — and two of §87's five escalation refusals are about
+  # suspension. There is no `POST` that suspends nobody, and `SuspensionGuard`
+  # answers 401 at *every* route in the namespace, so suspending one of the four
+  # accounts minted above would kill the run and suspending a real one would
+  # take away access somebody may be using.
+  #
+  # So it creates its own throwaway account through `POST /users` and suspends
+  # it through `PATCH /users/{id}` — the production writers, audited exactly as
+  # they would be for a person. Idempotent, and it re-asserts the status rather
+  # than only creating: the e2e reactivates the account on purpose, because
+  # reactivate is the other half of the pair, and this heals it before the next
+  # run.
+  if ! node scripts/seed-staff.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the suspended staff account the users tests need" >&2
+    return 1
+  fi
+
   # Named explicitly rather than "every project": `phone-webkit` needs WebKit's
   # system libraries, which want root to install. Including it here would make the
   # stage red on a machine that is otherwise fine, and a stage that is always red
