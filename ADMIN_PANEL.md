@@ -2270,6 +2270,75 @@ API does, on save, with `wp_kses`. The panel's job is to render the sanitised re
 author sees what was actually stored rather than what they typed. An editor that shows the unstored
 version is one where a stripped `<iframe>` silently comes back on the next save attempt.
 
+> **Corrected in the build: a page could not be listed, and the backend was paid to fix it.**
+> Measured 2026-08-21: **`GET /cms/pages` was not a route.** §89 registered `POST /cms/pages` and
+> `GET, PATCH, DELETE /cms/pages/{path}` — a complete write surface over a read surface that could
+> address one page and enumerate none. So "pages addressed by full path" is right and is not enough:
+> a content manager could edit any page whose path they already knew and discover not one.
+>
+> The failure was worse than inconvenience. `?status=` **filters** a single read rather than widening
+> it, so a published page asked for as a draft is a 404 — and it carries *the same message* as a path
+> that does not exist, `"No page at that path."`. That is not hypothetical: WordPress creates
+> `privacy-policy` as a **draft**, so `GET /cms/pages/privacy-policy` answered "No page at that path."
+> about a page sitting right there. On a single-resource route the two facts are indistinguishable.
+> The index is the only place they separate, which is the argument for it over a path box.
+>
+> `feat/cms-page-index` in `ecom-temp` adds it, with `?status=`, `?search=`, pagination, ordered by
+> title. The row is deliberately **less** than a page — no `content`, no `seo`, no `excerpt` — because
+> the first is a whole page body per row and the second is a `SeoResolver` pass per row; the omission
+> is asserted so it cannot drift back.
+>
+> **The interesting half is what a listing has to decide, and this section could not have known it,
+> because §89 could only ever address one page at a time.** A WordPress install running WooCommerce
+> contains pages nobody wrote, and measured on this install they are **not one kind of thing**:
+> `cart`, `checkout` and `my-account` have a block or a shortcode for a body and `shop` has no body at
+> all, while `privacy-policy` is real prose with real headings and `refund_returns` is prose
+> referenced by no option whatsoever. Every obvious design is wrong on that data — all editable risks
+> a content manager trashing the checkout; all read-only takes away the privacy policy nobody else can
+> edit; all hidden does both. So `SystemPages` publishes two sets, derived from options WordPress and
+> WooCommerce already store rather than from a list of paths: the **functional** ones are omitted from
+> the index with `meta.excluded_system` reporting the count, and **any** option-referenced page refuses
+> `DELETE` with a 409 naming the option — `?force=true` explicitly does *not* override it, unlike the
+> children guard, because reparenting children is recoverable and leaving
+> `woocommerce_checkout_page_id` pointing at nothing makes WooCommerce report a missing page rather
+> than a broken setting.
+>
+> **`?search=` matches the title and the body and never the path.** `WP_Query`'s `s` does not search
+> `post_name` and will not accept it in `search_columns`, so on the one resource whose address *is* its
+> path, a path cannot be searched for. Asserted rather than worked around — a bespoke `posts_where` on
+> the only list route that has one is a divergence to maintain forever — and the screen says what the
+> field matches, the treatment `/customers` already gets.
+>
+> **Two pages can share a path, and the panel has to say so.** `wp_unique_post_slug()` does not run
+> for a draft, so nothing prevents it: measured before the seed cleaned this shop, **53 pages answered
+> to `ac-unpublished` and 27 to `conditions`**, unsuffixed, and `get_page_by_path()` resolves exactly
+> one of each — the other 78 could not be read, written or deleted through `/cms/pages/{path}` at all.
+> An index that linked them all would be one where opening the fourteenth row silently opens the first
+> and saving writes over somebody else's page, so `collidingPaths()` marks them and the list refuses to
+> link them.
+>
+> **The homepage drop report cannot be provoked through the API.** `GET` drops a malformed section and
+> reports it in `meta.problems`; `PUT` refuses one with a 400. The only route that writes the document
+> is the one that refuses to write a bad one, so `scripts/seed-cms.mjs` writes the option underneath
+> the API with `wp eval`. Two consequences the section does not anticipate: **`meta` is absent
+> entirely** when there is nothing to report, not an empty array — code that destructured
+> `meta.problems` would throw on the healthy case; and **saving repairs the document by discarding
+> what was dropped**, because the editor only ever sees what survived the read, so the save is gated
+> behind a confirmation naming the count. The report's positions are **1-based over the stored
+> document**, not over the surviving sections, so "Section 6" is not the sixth row on screen.
+>
+> **`sections` has two error paths and only one is positional.** A bad section is `sections[2].type`;
+> more than fifty is a flat `sections`. A form binding every homepage error to a row index drops the
+> cap error on the floor. The type vocabulary is **eleven** values and no endpoint publishes it — it
+> was read out of the 400.
+>
+> **Drag-ordering is specified and is not what shipped.** HTML5 drag-and-drop fires no `dragstart`
+> from a touch pointer, so a drag handle at the 390px floor is decoration on the device this panel is
+> designed for; and `draggable` is not focusable and takes no key events, so reordering would be
+> unavailable to anyone not using a mouse. iOS itself ships both — `UITableView`'s reorder control has
+> `accessibilityCustomAction`s for "move up" and "move down" — and this panel ships the half that
+> works everywhere. `components/patterns/MoveControls.tsx` carries the argument.
+
 ## Media
 
 `GET /media`, `POST /media`, `GET/PATCH/DELETE /media/{id}`. `ac_manage_content`.
@@ -2289,6 +2358,51 @@ connection.
 **A Product Manager cannot upload.** That is a documented gap in the capability matrix, not an
 oversight. The product image picker must handle a role that can select existing media and cannot add
 any — the "téléverser" affordance renders disabled with the reason, and the library still works.
+
+> **Corrected in the build: it is five distinguishable failures, not two — and the fifth is the one
+> that most needs its own words.** Measured 2026-08-21:
+>
+> | condition | status | code | `details` |
+> |---|---|---|---|
+> | under 64 bytes | 400 | `invalid_upload` | `{size}` |
+> | over 8 MiB | 413 | `file_too_large` | `{size, max_bytes}` |
+> | extension not jpg/jpeg/png/webp | 415 | `unsupported_media_type` | `{extension}` |
+> | bytes are not an accepted image | 415 | `unsupported_media_type` | `{detected}` |
+> | **extension disagrees with the contents** | 415 | `unsupported_media_type` | `{extension, detected}` |
+> | `shell.php.jpg` | 400 | `invalid_upload` | — |
+>
+> "Trop volumineux" and "format non accepté" are two of six. The fifth is a JPEG somebody renamed to
+> `.png`: "Only jpg, png and webp are accepted" reads as *false* to a person looking at a file called
+> `.png`, and the fix is to re-export it rather than to choose a different file. Three of these share
+> one status code and two share a code *and* a status, so the panel classifies on `details` and never
+> on the message — which is English prose the API is free to reword.
+>
+> **The measurement took a correction of its own, and that is the point of the positive-control rule.**
+> A PDF renamed `.png` first answered 400 `"The uploaded file is empty or truncated."`, which reads
+> like a third code for a disguised file. It is not: the fake PDF was 48 bytes and `UploadPolicy`
+> checks `MIN_BYTES = 64` **before** it sniffs anything, so the size floor fired and the sniffer never
+> ran. With a 5.4 KB control the same file answers 415 with `details.detected: "application/pdf"`.
+>
+> **The generated filename is confirmed and is a collision suffix, not a rewrite.** `real.jpg`
+> uploaded three times stored `real.jpg`, `real-1.jpg`, `real-2.jpg`, and the extension comes from the
+> sniffed type. Show the returned name, as this section says.
+>
+> **`sizes` is empty on every fixture in this shop** — the images are 30×20, below every threshold at
+> which WordPress generates a thumbnail — so a client indexing into `sizes[0]` for a list thumbnail
+> works in production and fails on every test fixture. `url` is the one size that always exists.
+>
+> **`DELETE /media/{id}` is not on the panel's allowlist**, with a unit test saying so. Nothing in
+> this API tells a client what an attachment is used by — a banner's `image`, a page thumbnail and a
+> homepage section all reference one with no back-reference anywhere — so the library cannot answer
+> "what would this break?", and an irreversible action a screen cannot explain is worse than one it
+> does not offer.
+>
+> **The gap this section names is wider than it says.** `ac_manage_content` guards the media *reads*
+> as well as the writes, so the "select existing media" path it describes as available to a Product
+> Manager is not reachable either: measured, a Manager is **403 on `GET /media`**. The picker renders
+> the refusal naming the capability rather than an empty grid, which is the difference between "there
+> are no images" and "you cannot see them" — but the affordance this section asks for cannot exist
+> until the reads are split from the writes on the backend.
 
 ## Marketing
 
@@ -2717,9 +2831,49 @@ mirroring §47's slicing.
 12. feat/shipping       + payments + COD
 13. feat/analytics      dashboard, the seven reports, the money gate
 14. feat/content        CMS, media, marketing, campaigns, notifications
+                        — split three ways; see below. 14a is DONE.
 15. feat/admin          settings, users, audit, import/export
 16. feat/pwa            manifest, service worker, offline states, cache wiping
 ```
+
+> **Corrected in the build: step 14 is three branches, not one.** The line above names five subjects
+> as though they were one screen set. They are three, and the seam is the **capability**, which is the
+> one thing this panel has never let a screen guess at:
+>
+> ```
+> 14a. feat/content        pages, the homepage document, banners, FAQs, menus,
+>                          the media library, and `Field`'s hint          DONE
+>                          `ac_manage_content` — a Manager is 403 on every
+>                          route, so one credential is a real forbidden
+>                          fixture for the whole branch.
+>
+> 14b. feat/notifications  the queue: list by channel and status, the frozen
+>                          message, retry as a 202
+>                          **`ac_manage_customers`** — read out of
+>                          `NotificationService::` rather than inferred. A
+>                          Manager is **200** here, so 14a's fixture does not
+>                          transfer and this branch needs its own.
+>
+> 14c. feat/campaigns      marketing config, segments, email templates, the
+>                          composer
+>                          `ac_manage_marketing`. Last on purpose: `/campaigns`,
+>                          `/segments` and `/email-templates` all answered **0
+>                          rows**, so it needs its own seed before a single
+>                          assertion means anything — and this document calls
+>                          the composer the second-hardest screen in the panel.
+> ```
+>
+> Numbered `14a/b/c` rather than renumbered to 14/15/16, so steps 15 and 16 keep the numbers three
+> other sections already reference.
+>
+> Media stays with the CMS and is not a fourth branch: banners and pages both take an `image`, so a
+> CMS branch without a media library is a CMS branch with two forms that cannot be completed.
+>
+> Notifications being grouped with the CMS in the line above is the error worth naming, because the
+> capability matrix never agreed with it. A notification row holds a customer's address and the frozen
+> body of their order confirmation; §90 gates it on `ac_manage_customers` for exactly that reason and
+> explicitly refuses to invent a capability. Building it on a content branch would have put a
+> customer's order contents behind a content manager's credential in the panel's own navigation.
 
 Step 8 comes before step 7 is finished being pretty. Orders is the screen that will reveal which
 patterns are wrong, and finding that out on the fourth screen instead of the first costs three

@@ -201,6 +201,62 @@ const RULES: readonly Rule[] = [
   rule("/analytics/customers", "GET"),
   rule("/analytics/shipping", "GET"),
   rule("/analytics/cod", "GET"),
+
+  /*
+   * Content. `ac_manage_content`, which after the two-tier collapse is the Super
+   * Admin tier alone — a **Manager is 403 on every route in this block**,
+   * measured, which makes one credential a real forbidden fixture for the whole
+   * branch.
+   *
+   * `GET /cms/pages` did not exist when this branch started. It was added to the
+   * backend on `feat/cms-page-index` because the screen was not buildable
+   * without it: the API could address a page by path and could not list one, so
+   * a Pages screen had no index and no way to discover a page whose path nobody
+   * remembered — and worse, a draft and a path that does not exist are the same
+   * 404 with the same message, so the screen could not even say which had
+   * happened. The `feat/coupon-pickers` precedent, one collection over.
+   *
+   * `/cms/pages/.+` is the one pattern here that is not a literal or an id, and
+   * it is deliberately greedy: a page is addressed by its **full path**, so
+   * `legal/terms` arrives as two segments and a `[^/]+` would refuse every child
+   * page in the shop. The traversal guard in `checkAllowed()` runs first and is
+   * what makes that safe — a segment containing `..` or a slash is refused
+   * before any pattern is tried, so the greedy match can only ever see segments
+   * the catch-all produced from a real URL.
+   */
+  rule("/cms/pages", "GET", "POST"),
+  rule("/cms/pages/.+", "GET", "PATCH", "DELETE"),
+  rule("/cms/homepage", "GET", "PUT"),
+  rule("/cms/banners", "GET", "POST"),
+  rule("/cms/banners/\\d+", "PATCH", "DELETE"),
+  rule("/cms/faqs", "GET", "POST"),
+  rule("/cms/faqs/\\d+", "PATCH", "DELETE"),
+  rule("/cms/faq-categories", "GET", "POST"),
+  rule("/cms/faq-categories/\\d+", "PATCH", "DELETE"),
+  /*
+   * `{location}` is `primary` or `footer` and nothing else — pinned to the two
+   * rather than left as `[a-z0-9_-]+`, because `PUT` to an unregistered location
+   * **creates and assigns a menu** there. Measured: `PUT /cms/menus/footer`
+   * against a location with nothing assigned answered 200 having created
+   * "Footer navigation". A permissive pattern would let a guessed URL invent
+   * navigation the theme has no slot for.
+   */
+  rule("/cms/menus/(primary|footer)", "GET", "PUT"),
+
+  /*
+   * Media. `POST` is the upload and is the only `multipart/form-data` request
+   * the panel makes — every other write here is JSON.
+   *
+   * **`DELETE /media/{id}` is deliberately absent.** The route exists and the
+   * capability allows it, but nothing on this branch deletes a file: an
+   * attachment referenced by a banner, a page thumbnail or a homepage section
+   * has no back-reference anywhere in this API, so the panel cannot tell a
+   * person what a delete would break. A library that offers an irreversible
+   * action it cannot explain is worse than one that does not offer it, and the
+   * route stays unreachable until a screen can answer "used by what?".
+   */
+  rule("/media", "GET", "POST"),
+  rule("/media/\\d+", "GET", "PATCH"),
 ];
 
 export type AllowResult =

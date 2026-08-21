@@ -346,6 +346,49 @@
   }
 
   /*
+   * The indeterminate half of the upload progress bar.
+   *
+   * The bytes leaving is not the request finishing: the API then sniffs the file
+   * with `finfo` **and** `getimagesize()`, writes it, and builds the response.
+   * A determinate bar pinned at 100% through that says the work is done when it
+   * is not, so the bar switches to this once the upload reports `load`.
+   *
+   * A `transform` on a full-width child rather than an animated `inline-size`,
+   * so it composites rather than laying out sixty times a second on a phone
+   * already busy with an upload.
+   *
+   * It pulses from the centre rather than sweeping along the bar, and that is a
+   * direction decision rather than a taste one: a sweep has a *direction*, so it
+   * would need to run the other way in Arabic — and `transform-origin` takes no
+   * logical keyword, so expressing that means writing `left`, which is the
+   * physical property this project bans and `check-design.sh` fails on. A pulse
+   * from the centre reads identically in both directions and needs no second
+   * rule to stay honest.
+   *
+   * Under reduced motion the global rule at the foot of this file stops it after
+   * one pass, which leaves a filled bar — correct here, because "working" is
+   * exactly what it means.
+   */
+  .indeterminate {
+    animation: indeterminate-pulse 1.4s var(--ease-ios) infinite;
+    transform-origin: center;
+  }
+  @keyframes indeterminate-pulse {
+    from {
+      transform: scaleX(0.2);
+      opacity: 0.55;
+    }
+    50% {
+      transform: scaleX(1);
+      opacity: 1;
+    }
+    to {
+      transform: scaleX(0.2);
+      opacity: 0.55;
+    }
+  }
+
+  /*
    * A skeleton block. The shimmer is a transform on a pseudo-element rather than
    * an animated background-position, so it composites; and under reduced motion
    * the global rule already collapses it to a still fill.

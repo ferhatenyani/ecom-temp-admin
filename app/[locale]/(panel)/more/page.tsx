@@ -54,7 +54,13 @@ const DESTINATIONS: Destination[] = [
    * themselves. They share a capability and a date range and nothing else.
    */
   { key: "analytics", href: "/analytics", icon: "dashboard", capability: "ac_view_analytics" },
-  { key: "content", href: null, icon: "note", capability: "ac_manage_content" },
+  /*
+   * Content became a link on the content branch. It is a hub rather than a
+   * single screen — pages, the homepage document, banners, FAQs, menus and the
+   * media library — because six destinations do not fit a segmented control at
+   * the 390px floor and share no row shape.
+   */
+  { key: "content", href: "/content", icon: "note", capability: "ac_manage_content" },
   { key: "settings", href: null, icon: "lock", capability: "ac_manage_settings" },
 ];
 

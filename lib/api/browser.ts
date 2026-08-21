@@ -167,9 +167,20 @@ export async function acRead<T>(
   };
 }
 
-/** A write. Throws `BrowserApiError` with `fields`, `code` and `details` intact. */
+/**
+ * A write. Throws `BrowserApiError` with `fields`, `code` and `details` intact.
+ *
+ * **`PUT` arrived with the content branch**, and it is not a synonym for `PATCH`
+ * here. Two routes use it and both mean *replace the whole thing*:
+ * `PUT /cms/homepage` and `PUT /cms/menus/{location}` each take an ordered array
+ * and swap it for what is stored. §89 argues why they are not PATCHes — sections
+ * and menu items are ordered, and an API that let two clients insert at index 2
+ * concurrently would have invented a merge problem the shop does not have — so
+ * spelling it `PUT` at the call site is the difference between "change this
+ * field" and "this is now the document".
+ */
 export async function acWrite<T>(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   payload?: unknown,
 ): Promise<T> {
