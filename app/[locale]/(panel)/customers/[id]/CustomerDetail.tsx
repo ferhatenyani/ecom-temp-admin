@@ -410,7 +410,18 @@ export function CustomerDetail({
         {consent.state !== "never" && consent.source !== null ? (
           <ListValueRow
             label={t("consent.sourceLabel")}
-            value={t(`consent.source.${consent.source}`)}
+            /*
+              **A source the panel has no name for renders as itself.** The three
+              known values are a convention on the backend, not a contract:
+              `Consent::set()` stores whatever string it is handed, with no
+              validation. The schema used to enum them and one unexpected value
+              blanked the whole screen — see `lib/api/schemas/customer.ts`.
+            */
+            value={
+              t.has(`consent.source.${consent.source}`)
+                ? t(`consent.source.${consent.source}`)
+                : consent.source
+            }
           />
         ) : null}
         {consent.state === "never" ? (

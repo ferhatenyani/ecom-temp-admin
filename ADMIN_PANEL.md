@@ -802,6 +802,28 @@ compound rules today and the third will be added in one place.
 > rules the API still enforces, and a third tier or a widened Manager would make them bite again. What
 > they can no longer do is supply a test fixture — see [Part VII](#what-the-e2e-suite-must-cover).
 
+> **Corrected in the build, on 14c: `canSendCampaigns()` does have a fixture, and it is one
+> `scripts/test.sh` already mints.** The block above concludes that "drafts but cannot send is a state
+> no role reaches", which is true of the two *live* tiers and not of the credential the suite uses.
+> The retired `ac_marketing_manager` still mints — `set_role()` is WordPress core and bypasses the
+> API's narrowing, which this document says two paragraphs earlier — and it holds
+> `ac_manage_marketing` without `ac_manage_customers`. Measured 2026-08-21:
+>
+> ```
+>                                       super admin   marketing manager
+> GET  /campaigns, /campaigns/{id}          200             200
+> GET  /campaigns/{id}/preview              200             200
+> POST /campaigns/{id}/send                 202             403
+> GET  /campaigns/{id}/recipients           200             403
+> GET  /segments/{id}/preview               200             403
+> GET  /customers                           200             403
+> ```
+>
+> Three routes, and they are exactly the three the compound rule names. So the composer's
+> disabled-send-with-the-reason, the withheld `audience_count` and the withheld recipient list are all
+> exercised by a real credential rather than reasoned about — and `e2e/campaigns.spec.ts` asserts them
+> in one session whose first half is the positive control.
+
 ## The API client
 
 One typed client in `lib/api/`. Three jobs:
@@ -2498,6 +2520,77 @@ Segments are stored queries with eleven criteria. `consent`, `email`, `email_con
 `audience_type: all` is for. `wilaya_id` comes off the shipment, so an unshipped order has no wilaya
 and cannot match; say it in the criteria form. A segment in use cannot be deleted.
 
+> **Corrected in the build: the last two steps of the sequence were unreachable, and one line of
+> `.env` was the whole reason.** This section names the composer's sequence as audience → content →
+> preview → test → send. Measured 2026-08-21, `POST /campaigns/{id}/test` and `POST
+> /campaigns/{id}/send` were both **503 `mail_not_configured`**, because this stack has no
+> `SMTP_HOST`. So the composer was buildable as far as `preview` and no further, and `send`'s 202, the
+> frozen audience, the recipient list, the purge state and every status past `draft` were all
+> unassertable.
+>
+> `MailTransport::isConfigured()` is `host() !== ''` and nothing more. `scripts/seed-campaigns.mjs`
+> therefore sets `SMTP_HOST=127.0.0.1` with `SMTP_PORT=1` — a port nothing listens on, chosen over a
+> `.invalid` hostname because a refused connection is instant while a DNS timeout would hang the
+> synchronous test send. **Nothing can leave the machine, and that is now a tested property rather
+> than an assumed one**: an unset host is untested, a dead host is tried and refused.
+>
+> `send` then does what it always did — resolve the audience, write one row per recipient, return 202
+> — and mails nothing, because the mailing is `wp algerian-commerce send-campaigns`.
+
+> **Corrected in the build: `test` is a 200 that reports a failed send, not a 503.** Once a transport
+> exists, `POST /campaigns/{id}/test` answers **`{sent: false, to, subject, unknown_tokens}`** with a
+> 200. The request succeeded and the transport did not, which are different facts — so the screen says
+> "we tried, here is what came back" instead of "we cannot try", which is a better step than the one
+> this section could have specified. It writes no recipient row, so a test never appears in the list.
+
+> **Corrected in the build: one customer in sixteen had consent, so the gate this section is built
+> around was illegible.** "Show the eligible count beside the raw count so *1 000 clients sélectionnés
+> → 412 destinataires* is legible rather than alarming" needs a shop where the two numbers differ
+> meaningfully. Measured before the seed: **16 customers, 1 consenting**, so every audience resolved
+> to 0 or 1 and 16 → 1 reads as a bug rather than as a rule. The seed grants consent to eight through
+> `Consent::set()`, the production writer, which also stamps `marketing_consent_at` and the source —
+> so the customers screen's consent record is real rather than a bare flag.
+>
+> The gap is shown **only where it is true**: for an explicit id list, where the panel knows what was
+> chosen. For `all` and for a segment there is no honest "selected" figure, because only the server
+> knows the pre-consent count, and inventing one would be worse than showing one number.
+
+> **Corrected in the build: `audience_count` is `null` for a caller who cannot read customers.** Not
+> absent, and not zero. Measured: a Marketing Manager previewing a campaign gets the rendered HTML,
+> the text and the token list, and `audience_count: null` — counting an audience means counting
+> customers, which is the second capability. The panel renders the whole preview and says whose
+> permission the number is; a zero would say "nobody". The backend's own suite asserts the distinction
+> with `array_key_exists`, which is the same reason the schema uses `.nullable()` and not
+> `.optional()`.
+
+> **Corrected in the build: the recipient list reported more than it returned.**
+> `GET /campaigns/{id}/recipients?status=` filtered the rows and not the total — measured,
+> `?status=failed` answered **0 rows with `meta.total: 9`**, so a paginating screen showed "9
+> destinataires" over an empty table and offered pages that do not exist. It is the filter the drain
+> itself points at: `send-campaigns` ends with *"see GET /campaigns/{id}/recipients?status=failed"*.
+> Fixed in `ecom-temp` on `feat/campaign-recipient-counts`, where the same branch also made
+> `tests/Api/campaigns.php` stop asserting the deployment's mail configuration and made it
+> re-runnable. 99 → **108** assertions.
+
+> **Corrected in the build: two conventions for the same two fields, on one branch.** A recipient's
+> `last_error` and `sent_at` are **empty strings**, never null — `CampaignService::recipientList()`
+> casts to string where the notification queue nulls — so `!== null` is true on every row and only
+> emptiness tells them apart. And a recipient's `sent_at` is **`"2026-08-21 17:31:12"`, with no `T`
+> and no offset**, on the same branch where the campaign's own `created_at` carries `+00:00`. That is
+> the `notes[].created_at` trap one table over: `new Date()` reads it as local and is silently wrong
+> by the host's offset, so every date on these screens goes through `formatDate`.
+
+> **Corrected in the build: email templates have no editor, and should not.** This section lists
+> `/email-templates` among the composer's routes without saying what a panel does with them. §85 makes
+> a template an `ac_email_template` **post authored in wp-admin**, where the revisions and the media
+> library already are, and gives the API two read routes and no write. So the screen reads them and
+> says where to write one — the alternative being a form that cannot save.
+>
+> What it adds over wp-admin is the two checks the API computes on the template itself rather than only
+> on a campaign's preview: `unknown_tokens`, which is the earliest possible place to catch
+> `{{firstname}}`, and `has_unsubscribe_token`, where **false is correct** because the API appends one.
+> Rendering that as a warning would teach somebody to add a second.
+
 ## Notifications
 
 §90's routes. `ac_manage_customers`.
@@ -2964,12 +3057,27 @@ mirroring §47's slicing.
 >                          is "did it send?" could only answer "nothing has".
 >
 > 14c. feat/campaigns      marketing config, segments, email templates, the
->                          composer
+>                          composer                                       DONE
 >                          `ac_manage_marketing`. Last on purpose: `/campaigns`,
 >                          `/segments` and `/email-templates` all answered **0
 >                          rows**, so it needs its own seed before a single
 >                          assertion means anything — and this document calls
 >                          the composer the second-hardest screen in the panel.
+>
+>                          It was worse than empty. **`test` and `send` were both
+>                          503**, so two of the composer's own five steps were
+>                          unreachable, and one customer in sixteen had marketing
+>                          consent, so the audience gate the screen is built
+>                          around could not be made legible. The seed fixes both:
+>                          a dead `SMTP_HOST` makes `send` answer its real 202
+>                          while mailing nothing, and consent goes to eight
+>                          through the production writer.
+>
+>                          The compound capability finally has a fixture again —
+>                          see Part V's correction. And the composer is the one
+>                          **stepped wizard** in this panel; the argument for it
+>                          is in `Composer.tsx` and is about the send being
+>                          irreversible, not about the number of fields.
 > ```
 >
 > Numbered `14a/b/c` rather than renumbered to 14/15/16, so steps 15 and 16 keep the numbers three

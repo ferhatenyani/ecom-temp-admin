@@ -1,0 +1,767 @@
+{
+  "list": {
+    "success": true,
+    "data": [
+      {
+        "id": 322,
+        "name": "Rentrée — envoyée",
+        "subject": "{{shop_name}} — la rentrée, {{first_name}}",
+        "template_id": 0,
+        "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Notre sélection de rentrée est en ligne.</p>",
+        "body_text": "Bonjour {{first_name}},\n\nNotre sélection de rentrée est en ligne.",
+        "audience": {
+          "type": "all",
+          "segment_id": 0,
+          "customer_ids": []
+        },
+        "status": "sent",
+        "is_editable": false,
+        "allowed_transitions": [],
+        "recipients": {
+          "total": 9,
+          "sent": 5,
+          "failed": 4,
+          "purged": false
+        },
+        "created_by": 475,
+        "created_at": "2026-08-21T17:31:07+00:00",
+        "updated_at": "2026-08-21T17:31:28+00:00",
+        "claimed_at": "2026-08-21T17:31:07+00:00",
+        "completed_at": "2026-08-21T17:31:28+00:00"
+      },
+      {
+        "id": 320,
+        "name": "Ramadan — annulée",
+        "subject": "{{shop_name}}",
+        "template_id": 0,
+        "body_html": "<p>Bonjour {{first_name}},</p>",
+        "body_text": "Bonjour {{first_name}},",
+        "audience": {
+          "type": "segment",
+          "segment_id": 44,
+          "customer_ids": []
+        },
+        "status": "cancelled",
+        "is_editable": false,
+        "allowed_transitions": [],
+        "recipients": {
+          "total": 0,
+          "sent": 0,
+          "failed": 0,
+          "purged": false
+        },
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:53+00:00",
+        "updated_at": "2026-08-21T17:24:53+00:00",
+        "claimed_at": null,
+        "completed_at": "2026-08-21T17:24:53+00:00"
+      },
+      {
+        "id": 319,
+        "name": "Relance panier — brouillon",
+        "subject": "{{shop_name}} — votre panier",
+        "template_id": 0,
+        "body_html": "<p>Bonjour {{firstname}},</p>\n<p>Votre panier vous attend.</p>",
+        "body_text": "Bonjour {{firstname}},\n\nVotre panier vous attend.",
+        "audience": {
+          "type": "all",
+          "segment_id": 0,
+          "customer_ids": []
+        },
+        "status": "draft",
+        "is_editable": true,
+        "allowed_transitions": [
+          "sending",
+          "cancelled"
+        ],
+        "recipients": {
+          "total": 0,
+          "sent": 0,
+          "failed": 0,
+          "purged": false
+        },
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:52+00:00",
+        "updated_at": "2026-08-21T17:24:52+00:00",
+        "claimed_at": null,
+        "completed_at": null
+      },
+      {
+        "id": 318,
+        "name": "Soldes d'août — brouillon",
+        "subject": "{{shop_name}} — nos soldes commencent, {{first_name}}",
+        "template_id": 0,
+        "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Nos soldes commencent aujourd'hui.</p>",
+        "body_text": "Bonjour {{first_name}},\n\nNos soldes commencent aujourd'hui.",
+        "audience": {
+          "type": "segment",
+          "segment_id": 43,
+          "customer_ids": []
+        },
+        "status": "draft",
+        "is_editable": true,
+        "allowed_transitions": [
+          "sending",
+          "cancelled"
+        ],
+        "recipients": {
+          "total": 0,
+          "sent": 0,
+          "failed": 0,
+          "purged": false
+        },
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:52+00:00",
+        "updated_at": "2026-08-21T17:24:52+00:00",
+        "claimed_at": null,
+        "completed_at": null
+      }
+    ],
+    "meta": {
+      "total": 4,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "draft": {
+    "success": true,
+    "data": {
+      "id": 318,
+      "name": "Soldes d'août — brouillon",
+      "subject": "{{shop_name}} — nos soldes commencent, {{first_name}}",
+      "template_id": 0,
+      "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Nos soldes commencent aujourd'hui.</p>",
+      "body_text": "Bonjour {{first_name}},\n\nNos soldes commencent aujourd'hui.",
+      "audience": {
+        "type": "segment",
+        "segment_id": 43,
+        "customer_ids": []
+      },
+      "status": "draft",
+      "is_editable": true,
+      "allowed_transitions": [
+        "sending",
+        "cancelled"
+      ],
+      "recipients": {
+        "total": 0,
+        "sent": 0,
+        "failed": 0,
+        "purged": false
+      },
+      "created_by": 475,
+      "created_at": "2026-08-21T17:24:52+00:00",
+      "updated_at": "2026-08-21T17:24:52+00:00",
+      "claimed_at": null,
+      "completed_at": null
+    }
+  },
+  "cancelled": {
+    "success": true,
+    "data": {
+      "id": 320,
+      "name": "Ramadan — annulée",
+      "subject": "{{shop_name}}",
+      "template_id": 0,
+      "body_html": "<p>Bonjour {{first_name}},</p>",
+      "body_text": "Bonjour {{first_name}},",
+      "audience": {
+        "type": "segment",
+        "segment_id": 44,
+        "customer_ids": []
+      },
+      "status": "cancelled",
+      "is_editable": false,
+      "allowed_transitions": [],
+      "recipients": {
+        "total": 0,
+        "sent": 0,
+        "failed": 0,
+        "purged": false
+      },
+      "created_by": 475,
+      "created_at": "2026-08-21T17:24:53+00:00",
+      "updated_at": "2026-08-21T17:24:53+00:00",
+      "claimed_at": null,
+      "completed_at": "2026-08-21T17:24:53+00:00"
+    }
+  },
+  "sent": {
+    "success": true,
+    "data": {
+      "id": 322,
+      "name": "Rentrée — envoyée",
+      "subject": "{{shop_name}} — la rentrée, {{first_name}}",
+      "template_id": 0,
+      "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Notre sélection de rentrée est en ligne.</p>",
+      "body_text": "Bonjour {{first_name}},\n\nNotre sélection de rentrée est en ligne.",
+      "audience": {
+        "type": "all",
+        "segment_id": 0,
+        "customer_ids": []
+      },
+      "status": "sent",
+      "is_editable": false,
+      "allowed_transitions": [],
+      "recipients": {
+        "total": 9,
+        "sent": 5,
+        "failed": 4,
+        "purged": false
+      },
+      "created_by": 475,
+      "created_at": "2026-08-21T17:31:07+00:00",
+      "updated_at": "2026-08-21T17:31:28+00:00",
+      "claimed_at": "2026-08-21T17:31:07+00:00",
+      "completed_at": "2026-08-21T17:31:28+00:00"
+    }
+  },
+  "preview": {
+    "success": true,
+    "data": {
+      "campaign_id": 319,
+      "subject": "Algerian Commerce — votre panier",
+      "html": "<p>Bonjour ,</p>\n<p>Votre panier vous attend.</p>\n<p style=\"font-size:12px;color:#666\"><a href=\"http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample\">Unsubscribe</a></p>\n",
+      "text": "Bonjour ,\n\nVotre panier vous attend.\n\nUnsubscribe: http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample\n",
+      "unknown_tokens": [
+        "firstname"
+      ],
+      "unsubscribe_appended": true,
+      "sample_recipient": {
+        "customer_name": "Amina Belkacem",
+        "first_name": "Amina",
+        "shop_name": "Algerian Commerce",
+        "order_number": "1234",
+        "unsubscribe_url": "http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample"
+      },
+      "audience_count": 9
+    }
+  },
+  "previewAsMarketer": {
+    "success": true,
+    "data": {
+      "campaign_id": 319,
+      "subject": "Algerian Commerce — votre panier",
+      "html": "<p>Bonjour ,</p>\n<p>Votre panier vous attend.</p>\n<p style=\"font-size:12px;color:#666\"><a href=\"http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample\">Unsubscribe</a></p>\n",
+      "text": "Bonjour ,\n\nVotre panier vous attend.\n\nUnsubscribe: http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample\n",
+      "unknown_tokens": [
+        "firstname"
+      ],
+      "unsubscribe_appended": true,
+      "sample_recipient": {
+        "customer_name": "Amina Belkacem",
+        "first_name": "Amina",
+        "shop_name": "Algerian Commerce",
+        "order_number": "1234",
+        "unsubscribe_url": "http://localhost:8090/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample"
+      },
+      "audience_count": null
+    }
+  },
+  "test": {
+    "success": true,
+    "data": {
+      "sent": false,
+      "to": "ops@example.test",
+      "subject": "Algerian Commerce — votre panier",
+      "unknown_tokens": [
+        "firstname"
+      ]
+    }
+  },
+  "testBadAddress": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "Invalid parameter(s): to",
+      "details": {
+        "params": {
+          "to": "Invalid email address."
+        }
+      }
+    }
+  },
+  "recipients": {
+    "success": true,
+    "data": [
+      {
+        "id": 348,
+        "customer_id": 19,
+        "email": "ac_cod_customer@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 349,
+        "customer_id": 24,
+        "email": "ac_cus_shopper@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 350,
+        "customer_id": 47,
+        "email": "ac_pay_customer@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 351,
+        "customer_id": 2,
+        "email": "amina.belkacem@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 352,
+        "customer_id": 5,
+        "email": "karim.mansouri@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 353,
+        "customer_id": 6,
+        "email": "lila.ouali@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 354,
+        "customer_id": 4,
+        "email": "nadia.cherif@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 355,
+        "customer_id": 7,
+        "email": "sofiane.benali@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 356,
+        "customer_id": 3,
+        "email": "yacine.hamdani@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      }
+    ],
+    "meta": {
+      "total": 9,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1,
+      "purged": false
+    }
+  },
+  "recipientsFailed": {
+    "success": true,
+    "data": [
+      {
+        "id": 353,
+        "customer_id": 6,
+        "email": "lila.ouali@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 354,
+        "customer_id": 4,
+        "email": "nadia.cherif@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 355,
+        "customer_id": 7,
+        "email": "sofiane.benali@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      },
+      {
+        "id": 356,
+        "customer_id": 3,
+        "email": "yacine.hamdani@example.test",
+        "status": "failed",
+        "attempts": 3,
+        "last_error": "wp_mail() did not accept the message.",
+        "sent_at": ""
+      }
+    ],
+    "meta": {
+      "total": 4,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1,
+      "purged": false
+    }
+  },
+  "recipientsSent": {
+    "success": true,
+    "data": [
+      {
+        "id": 348,
+        "customer_id": 19,
+        "email": "ac_cod_customer@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 349,
+        "customer_id": 24,
+        "email": "ac_cus_shopper@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 350,
+        "customer_id": 47,
+        "email": "ac_pay_customer@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 351,
+        "customer_id": 2,
+        "email": "amina.belkacem@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      },
+      {
+        "id": 352,
+        "customer_id": 5,
+        "email": "karim.mansouri@example.test",
+        "status": "sent",
+        "attempts": 0,
+        "last_error": "",
+        "sent_at": "2026-08-21 17:31:12"
+      }
+    ],
+    "meta": {
+      "total": 5,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1,
+      "purged": false
+    }
+  },
+  "sendAgain": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That campaign has already been sent or cancelled.",
+      "details": {
+        "status": "sent"
+      }
+    }
+  },
+  "editSent": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "A campaign can only be edited while it is a draft.",
+      "details": {
+        "status": "sent"
+      }
+    }
+  },
+  "deleteSent": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "Only a draft can be deleted. Cancel the campaign instead.",
+      "details": {
+        "status": "sent"
+      }
+    }
+  },
+  "segments": {
+    "success": true,
+    "data": [
+      {
+        "id": 46,
+        "name": "Alger, expédiés",
+        "description": "",
+        "criteria": {
+          "wilaya_id": 16
+        },
+        "is_resolvable": true,
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:51+00:00",
+        "updated_at": "2026-08-21T17:31:06+00:00"
+      },
+      {
+        "id": 44,
+        "name": "Clients à plus de 10 000 DA",
+        "description": "",
+        "criteria": {
+          "min_spent": "10000.00"
+        },
+        "is_resolvable": true,
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:51+00:00",
+        "updated_at": "2026-08-21T17:31:06+00:00"
+      },
+      {
+        "id": 43,
+        "name": "Clients avec commande",
+        "description": "",
+        "criteria": {
+          "min_orders": 1
+        },
+        "is_resolvable": true,
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:51+00:00",
+        "updated_at": "2026-08-21T17:31:06+00:00"
+      },
+      {
+        "id": 45,
+        "name": "Inscrits depuis 2026",
+        "description": "",
+        "criteria": {
+          "registered_after": "2026-01-01"
+        },
+        "is_resolvable": true,
+        "created_by": 475,
+        "created_at": "2026-08-21T17:24:51+00:00",
+        "updated_at": "2026-08-21T17:31:06+00:00"
+      }
+    ],
+    "meta": {
+      "total": 4,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "segmentPreview": {
+    "success": true,
+    "data": {
+      "segment_id": 43,
+      "matches": 8,
+      "criteria": {
+        "min_orders": 1
+      },
+      "problems": [],
+      "note": "Only customers who have given marketing consent are counted."
+    }
+  },
+  "segmentPreviewEmpty": {
+    "success": true,
+    "data": {
+      "segment_id": 46,
+      "matches": 0,
+      "criteria": {
+        "wilaya_id": 16
+      },
+      "problems": [],
+      "note": "Only customers who have given marketing consent are counted."
+    }
+  },
+  "segmentPreviewAsMarketer": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "segmentEmptyCriteria": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "A segment needs at least one criterion.",
+      "details": {
+        "fields": {
+          "criteria": "Empty criteria would match every customer; use audience_type \"all\" for that."
+        },
+        "supported": [
+          "min_spent",
+          "max_spent",
+          "min_orders",
+          "max_orders",
+          "ordered_after",
+          "ordered_before",
+          "registered_after",
+          "registered_before",
+          "wilaya_id",
+          "bought_product_id",
+          "not_bought_product_id"
+        ]
+      }
+    }
+  },
+  "segmentRefusedCriterion": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The segment criteria are invalid.",
+      "details": {
+        "fields": {
+          "sql": "No."
+        }
+      }
+    }
+  },
+  "segmentInUse": {
+    "success": false,
+    "error": {
+      "code": "conflict",
+      "message": "That segment is used by a campaign.",
+      "details": {
+        "campaigns": 1,
+        "fix": "Point those campaigns at another audience first."
+      }
+    }
+  },
+  "templates": {
+    "success": true,
+    "data": [
+      {
+        "id": 4650,
+        "name": "Bienvenue",
+        "subject": "{{shop_name}} — bienvenue {{first_name}}",
+        "status": "publish",
+        "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Merci d'avoir créé un compte chez {{shop_name}}.</p>\n<p><a href=\"{{unsubscribe_url}}\">Se désabonner</a></p>",
+        "body_text": "Bonjour {{first_name}},\n\nMerci d'avoir créé un compte chez {{shop_name}}.\n\nSe désabonner : {{unsubscribe_url}}",
+        "unknown_tokens": [],
+        "has_unsubscribe_token": true,
+        "modified_at": "2026-08-21T17:31:05+00:00"
+      },
+      {
+        "id": 4652,
+        "name": "Relance panier (avec une coquille)",
+        "subject": "{{shop_name}} — votre panier vous attend",
+        "status": "publish",
+        "body_html": "<p>Bonjour {{firstname}},</p>\n<p>Votre panier vous attend, {{prenom}}.</p>",
+        "body_text": "Bonjour {{firstname}},\n\nVotre panier vous attend, {{prenom}}.",
+        "unknown_tokens": [
+          "firstname",
+          "prenom"
+        ],
+        "has_unsubscribe_token": false,
+        "modified_at": "2026-08-21T17:31:05+00:00"
+      },
+      {
+        "id": 4651,
+        "name": "Soldes",
+        "subject": "{{shop_name}} — nos soldes commencent",
+        "status": "publish",
+        "body_html": "<p>Bonjour {{first_name}},</p>\n<p>Nos soldes commencent aujourd'hui.</p>",
+        "body_text": "Bonjour {{first_name}},\n\nNos soldes commencent aujourd'hui.",
+        "unknown_tokens": [],
+        "has_unsubscribe_token": false,
+        "modified_at": "2026-08-21T17:31:05+00:00"
+      }
+    ],
+    "meta": {
+      "total": 3,
+      "page": 1,
+      "per_page": 100,
+      "total_pages": 1
+    }
+  },
+  "template": {
+    "success": true,
+    "data": {
+      "id": 4652,
+      "name": "Relance panier (avec une coquille)",
+      "subject": "{{shop_name}} — votre panier vous attend",
+      "status": "publish",
+      "body_html": "<p>Bonjour {{firstname}},</p>\n<p>Votre panier vous attend, {{prenom}}.</p>",
+      "body_text": "Bonjour {{firstname}},\n\nVotre panier vous attend, {{prenom}}.",
+      "unknown_tokens": [
+        "firstname",
+        "prenom"
+      ],
+      "has_unsubscribe_token": false,
+      "modified_at": "2026-08-21T17:31:05+00:00"
+    }
+  },
+  "marketingConfig": {
+    "success": true,
+    "data": {
+      "enabled": false,
+      "providers": [],
+      "browser_events": [
+        "PageView",
+        "ViewContent",
+        "Search",
+        "AddToCart",
+        "InitiateCheckout",
+        "Purchase"
+      ],
+      "server_events": [
+        "Purchase",
+        "InitiateCheckout"
+      ]
+    }
+  },
+  "campaignRefusedField": {
+    "success": false,
+    "error": {
+      "code": "invalid_request",
+      "message": "The campaign is invalid.",
+      "details": {
+        "fields": {
+          "status": "A campaign's status is reached by sending or cancelling it, never set directly — a payload that could write \"sent\" would mark a campaign delivered without mailing anybody."
+        }
+      }
+    }
+  },
+  "sendAsMarketer": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "recipientsAsMarketer": {
+    "success": false,
+    "error": {
+      "code": "forbidden",
+      "message": "You are not allowed to perform this action."
+    }
+  },
+  "notFound": {
+    "success": false,
+    "error": {
+      "code": "not_found",
+      "message": "No campaign with that id."
+    }
+  }
+}

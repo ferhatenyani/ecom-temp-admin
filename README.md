@@ -12,7 +12,7 @@ cookie. No component library.
 
 The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
 Coupons, Shipping with Payments and cash on delivery, the Dashboard with the six analytics
-reports, the CMS with its media library, and the notification queue.
+reports, the CMS with its media library, the notification queue, and email marketing.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -57,6 +57,16 @@ reports, the CMS with its media library, and the notification queue.
                              because the API has none
 /[locale]/notifications/[id] the frozen message quoted as a record, and a retry that
                              is a 202 saying what it did *not* do
+/[locale]/marketing          the hub — campaigns, segments, templates, the pixel
+/[locale]/marketing/campaigns        the list, four statuses, and what a draft has
+                             instead of a recipient count
+/[locale]/marketing/campaigns/[id]   the composer — the panel's one stepped wizard —
+                             or, once it is not a draft, the record of what went out
+/[locale]/marketing/segments stored queries with a live count, and the one that
+                             matches nobody because the wilaya is on the shipment
+/[locale]/marketing/email-templates  read-only: they are authored in wp-admin
+/[locale]/marketing/config   the public pixel configuration, and the token that
+                             appears in no response ever
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
@@ -78,9 +88,12 @@ third and Part X now records the split with its reasoning:
   `/customers` besides, while a Support Agent reads both. Two things had to exist first: a backend
   branch for the two filters the customer tab needs, and a seed, because every row in the queue was
   `pending`.
-- **14c `feat/campaigns`** — marketing, segments, templates, the composer. `ac_manage_marketing`, and
-  last on purpose: all three collections answered **0 rows**, so it needs its own seed before an
-  assertion means anything, and the specification calls the composer the second-hardest screen here.
+- **14c `feat/campaigns`** — marketing, segments, templates, the composer. **DONE.**
+  `ac_manage_marketing`, and last on purpose. It was worse than empty: all three collections answered
+  **0 rows**, one customer in sixteen had marketing consent, and **`test` and `send` were both 503**,
+  so two of the composer's own five steps were unreachable. The compound capability
+  `canSendCampaigns()` turns out to have a fixture after all — the retired `ac_marketing_manager` the
+  suite already mints is 403 on exactly the three routes that need the second capability.
 
 Five things were fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch,
 because the screens were not buildable as specified. They are listed under **Owed to the backend, and
@@ -160,6 +173,37 @@ pending that is not one of them — putting the rest of the shop back exactly as
 makes running it on every `test.sh` harmless rather than a slow march towards marking the whole queue
 failed.
 
+`scripts/seed-campaigns.mjs` is the fifth, and it is the only one that changes the **stack's own
+configuration**. Measured before it existed: `/campaigns`, `/segments` and `/email-templates` all
+answered 0 rows, **1 of 16 customers had marketing consent**, and `POST /campaigns/{id}/test` and
+`/send` were both **503 `mail_not_configured`** — so two of the composer's five steps were
+unreachable, not merely untested.
+
+`MailTransport::isConfigured()` is `host() !== ''` and nothing more, so the seed sets `SMTP_HOST` in
+the stack's `.env` to **127.0.0.1 port 1** — a port nothing listens on, chosen over a `.invalid`
+hostname because a refused connection is instant while a DNS timeout would hang the synchronous test
+send. `send` then answers its real 202 and writes recipient rows while mailing nothing, which it never
+did anyway: the mailing is `wp algerian-commerce send-campaigns`. **Nothing can leave the machine, and
+that is now a tested property rather than an assumed one.** The restart happens only on the run that
+changes the value.
+
+That configuration used to break the backend: `tests/Api/campaigns.php` asserted the 503 **over the
+route**, so it was asserting the deployment's mail settings rather than the code, and two assertions
+failed the moment a transport existed. Fixed on `feat/campaign-recipient-counts` by making both halves
+of the mail precondition run in-process against a `Config` the file controls — the device the positive
+half already used. Verified **108/0 with `SMTP_HOST` set and 108/0 with it empty**.
+
+The rest is produced by running the system: consent through `Consent::set()`, the production writer;
+segments and campaigns over the API; the campaign drain for real. One thing is stubbed and only for a
+single call — `pre_wp_mail` is short-circuited around **one in-process `drain()`** so some recipients
+genuinely send, which is what keeps the rows and the campaign's stored columns in step. Writing the
+rows directly does not: the first version used `markSent()` and left a campaign reporting `failed: 9`
+over rows that said sent 5 / failed 4.
+
+Templates are the exception that proves the rule: `wp_insert_post` is the **only** door, because §85
+makes them a post type authored in wp-admin and the API only reads them. The insert still runs
+`wp_kses` through `sanitizeOnSave`, so the script cannot store what an author could not.
+
 The fourth credential is a **Manager**, and it is the only one of the four that still describes a
 live account: the two-tier collapse retired `ac_support_agent` and `ac_marketing_manager`, which
 still mint (`set_role()` bypasses the API) and whose suites still pass, but which now name a
@@ -177,7 +221,9 @@ locales as of the content branch, plus `e2e/notifications.spec.ts`, which is **8
 **not** re-verified on this branch: everything about the queue that a schema can answer is answered
 in `tests/notification-schema.test.ts` against captured payloads, and what is left for a browser is
 the capability refusal, the allowlist, the retry reaching the screen and the customer tab rendering.
-The unit suite is at **307**. `--project=phone-webkit` is the honest engine and is **123/123**
+`e2e/campaigns.spec.ts` is nine more on the same one project, for the same reason: the composer
+actually walking, the send confirmation reaching the screen, and the compound-capability refusal.
+The unit suite is at **349**. `--project=phone-webkit` is the honest engine and is **123/123**
 (verified 2026-08-21), kept out of the default run because its system libraries are 231 apt packages
 behind root.
 
@@ -204,7 +250,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 179 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 195 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -253,6 +299,20 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
 - **A duplicate SKU is a 409 with `details.sku`**, not a 400 with `details.fields` — and a PATCH
   carrying only read-only fields is a 400 with no `details` at all.
 - **A trashed product still reads back as 200** with `status: "trash"`; only `?force=true` gives a 404.
+- **A campaign's `send` sends nothing.** It is a 202 that freezes the audience and writes one row per
+  recipient; the mail leaves when `wp algerian-commerce send-campaigns` runs. A second `send` is a 409
+  and must never be retried automatically.
+- **`test` is a 200 that may report `sent: false`.** The request succeeded and the transport did not.
+- **A recipient's `last_error` and `sent_at` are empty strings, never null** — the opposite convention
+  to the notification queue, in the same API. And a recipient's `sent_at` carries **no offset**, where
+  the campaign's own timestamps do.
+- **`audience_count` on a campaign preview is `null` for a caller without `ac_manage_customers`** —
+  present and null, not absent. Rendering it as a zero would say "nobody".
+- **Consent is not a toggle and not optional.** Every audience is filtered to consenting customers by
+  the resolver, including a list named id by id. `PATCH /customers/{id}` refuses `marketing_consent`
+  by name.
+- **Email templates are read-only through the API.** They are `ac_email_template` posts authored in
+  wp-admin; a template with no `{{unsubscribe_url}}` is **correct**, because the API appends one.
 - **Product ids are not stable.** The backend's own suites recreate their fixtures, so tests and
   scripts find a product by SKU.
 - **A notification's `status` does not say what happened to it.** A retryable failure leaves the row
@@ -519,6 +579,28 @@ Fixed in `ecom-temp` on **`feat/cms-page-index`** while building the content bra
   than a broken setting. The refusal is on the API rather than in this panel, so it holds for every
   caller. `tests/Api/cms.php` grew 155 → **169** assertions, each with its positive control.
 
+Fixed in `ecom-temp` on **`feat/campaign-recipient-counts`** while building the campaigns branch:
+
+- **A recipient list reported more than it returned.**
+  `GET /campaigns/{id}/recipients?status=` filtered the rows and not the total — the rows came from
+  `RecipientRepository::paginate()`, which honours the filter, and `meta.total` came from the
+  unfiltered `counts()` two lines above. Measured: `?status=failed` answered **0 rows with
+  `meta.total: 9`**, so a paginating client showed "9 destinataires" over an empty table and offered
+  pages that do not exist. It is the one filter this route exists to serve: `send-campaigns` ends its
+  run with *"see GET /campaigns/{id}/recipients?status=failed"*, so the URL the drain hands an
+  operator was the one that reported wrong. `counts()` already returns the per-status breakdown, so
+  the fix is a key lookup on a result the method was already fetching.
+- **The suite asserted the deployment's mail configuration.** The 503 half of the mail precondition
+  went over the route, so configuring an `SMTP_HOST` — which this panel needs, since `send` is
+  unreachable without one — made two assertions fail and claim "sending is 503 rather than a lie"
+  about a shop that could now send. A suite that breaks when the environment is made *more* capable is
+  asserting the environment. Both halves now rebuild the service with a `Config` the file controls,
+  which is the device the positive half already used. **108/0 with the host set and 108/0 with it
+  empty.**
+- **The suite was not re-runnable.** It recreates its three customers but left its segments behind, so
+  a second run answered 409 *"A segment already uses that name"* on the first assertion and then
+  fatalled forty lines later on a campaign id of 0 — a dirty fixture that reads like a broken feature.
+
 Fixed in `ecom-temp` on **`feat/notification-filters`** while building the notifications branch:
 
 - **A customer's own notifications were not readable in one request.** §90 shipped four filters and
@@ -612,6 +694,26 @@ it. `e2e/notifications.spec.ts` compares membership rather than counts — the `
 because nothing can queue a second, and the e-mail filter is asserted to exclude it rather than to
 return `total - 1`. The count version passed at ten rows and would have failed silently past
 `per_page`.
+
+### Found on the campaigns branch, and not fixed here
+
+- **There is no customer picker for an `ids` audience, and there cannot be one yet.** `audience_type:
+  "ids"` takes up to 1 000 customer ids, and the composer takes them as a typed list — which is a poor
+  affordance and the only honest one available. `/customers` is `ac_manage_customers`, which a
+  Marketing Manager does not hold, so a picker would be an empty list for the one role whose job this
+  is. **The coupon branch hit exactly this wall** and the backend answered it with
+  `GET /coupons/eligible-products` and `/coupons/eligible-categories` — narrow, id-and-name-only routes
+  behind the *marketing* capability. Nothing equivalent exists for customers, and it is the same
+  shape of fix: a `GET /campaigns/eligible-customers` carrying id, name and consent flag only would
+  make the picker buildable without widening what a Marketing Manager can read.
+- **`{{token}}` cannot appear in an ICU message**, and nothing warns loudly. `{{first_name}}` parses
+  as a literal `{`, the placeholder `{first_name}`, and a literal `}` — next-intl throws
+  `INVALID_MESSAGE` and renders the **key path** as visible text. It appeared on screen inside the
+  token warning, which is the one place on this branch that talks about tokens, and the existing
+  message floor could not see it: every key was present and every value was a string. Presence is not
+  validity. `tests/campaign-schema.test.ts` now asserts that no message in the namespace contains
+  `{{`, and the fix is to pass a token as a **value** rather than to escape the braces, which ICU
+  allows and no translator would survive.
 
 ## Open, and owed to the backend
 

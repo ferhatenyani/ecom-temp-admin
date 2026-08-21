@@ -154,6 +154,30 @@ run_e2e() {
     return 1
   fi
 
+  # And the marketing shop. The strongest case of the five, because two of the
+  # composer's own five steps were **unreachable** without it, not merely thin:
+  #
+  #   GET /campaigns, /segments, /email-templates   all 0 rows
+  #   marketing consent                             1 of 16 customers
+  #   POST /campaigns/{id}/test and /send           503 mail_not_configured
+  #
+  # `MailTransport::isConfigured()` is `host() !== ''` and nothing more, so the
+  # seed sets `SMTP_HOST` in the stack's `.env` to a dead port — 127.0.0.1:1,
+  # where a connection is refused instantly. `send` then answers its real 202 and
+  # writes recipient rows while mailing nothing, which it never did anyway: the
+  # sending is `wp algerian-commerce send-campaigns`. Nothing can leave the
+  # machine, and unlike an unset host that property is *tested* rather than
+  # merely assumed.
+  #
+  # It restarts the wordpress container the first time and is a no-op after.
+  # `tests/Api/campaigns.php` used to fail when a transport was configured — it
+  # asserted the deployment's mail settings — and was fixed on
+  # `feat/campaign-recipient-counts`; it is 108/0 either way now.
+  if ! node scripts/seed-campaigns.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the campaigns, segments and templates the marketing tests need" >&2
+    return 1
+  fi
+
   # Named explicitly rather than "every project": `phone-webkit` needs WebKit's
   # system libraries, which want root to install. Including it here would make the
   # stage red on a machine that is otherwise fine, and a stage that is always red
