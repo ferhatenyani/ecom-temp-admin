@@ -17,6 +17,7 @@ import {
   isNotificationEvent,
   messageParagraphs,
   queueState,
+  type QueueState,
   retryOutcome,
   sentConflict,
   type RetryOutcome,
@@ -83,7 +84,15 @@ export function NotificationDetail({
     <Scaffold title={eventLabel} back={{ href: `/${locale}/notifications`, label: t("title") }}>
       <div className="mx-auto max-w-3xl px-4">
         <StatusCard />
-        <RetrySection />
+        <RetrySection
+          notification={notification}
+          state={state}
+          locale={locale}
+          onRetried={async () => {
+            await refetch();
+            await client.invalidateQueries({ queryKey: ["notifications"] });
+          }}
+        />
         <MessageCard />
         <DeliveryCard />
       </div>
@@ -159,155 +168,6 @@ export function NotificationDetail({
             >
               {t("errorQuote", { error: notification.last_error })}
             </span>
-          </ListRow>
-        ) : null}
-      </ListGroup>
-    );
-  }
-
-  /* --------------------------------------------------------------- retry --- */
-
-  /**
-   * The one action, and the one place this screen could mislead.
-   *
-   * **Retry is a 202 and it mails nothing.** It clears `status`, `attempts` and
-   * `last_error` so the next drain picks the row up; the mail leaves when
-   * something runs `wp algerian-commerce send-notifications`, which the response
-   * names in `meta.drain`. So the confirmation is a persistent panel rather than
-   * a toast, and it says what did *not* happen first — a spinner that resolves
-   * into a checkmark would read as "sent" to every operator who has ever used
-   * software, and they would tell the customer so.
-   */
-  function RetrySection() {
-    const [pending, setPending] = useState(false);
-    const [outcome, setOutcome] = useState<RetryOutcome | null>(null);
-    const [failure, setFailure] = useState<{ message: string; sentAt: string | null } | null>(null);
-
-    /*
-     * A sent row is not offered the action at all — it is a 409 and the API is
-     * right to refuse it. The conflict is still *handled* below, because a row
-     * that sends between this render and the tap is exactly the race the
-     * backend's conditional `UPDATE` exists for, and "read the 409 body" is a
-     * house rule rather than a formality.
-     */
-    if (state === "sent") return null;
-
-    const retry = async () => {
-      setPending(true);
-      setFailure(null);
-      try {
-        /*
-         * `acWriteWithMeta` and not `acWrite`: `meta` is where the whole answer
-         * is — `already_pending` and `drain` — and `data` alone cannot tell a
-         * real requeue from a row that was already in the queue, since both are
-         * 202. The first draft of this called `acWrite` and then fetched the
-         * route again for the meta, which retried the notification twice.
-         */
-        const { meta } = await acWriteWithMeta<unknown>(
-          "POST",
-          `/notifications/${notification.id}/retry`,
-        );
-        const parsed = retryMeta.safeParse(meta);
-
-        setOutcome(
-          parsed.success
-            ? retryOutcome(parsed.data)
-            : // The 202 is the success; a meta the panel cannot parse does not
-              // turn it into a failure, it just costs the sentence its detail.
-              { requeued: true, drain: "" },
-        );
-
-        /*
-         * Re-read rather than rebind. The retry answers a **list row** — no
-         * `message` key on it, measured — so binding the screen to the response
-         * would blank the quoted record on a screen that was working a moment
-         * ago.
-         */
-        await refetch();
-        await client.invalidateQueries({ queryKey: ["notifications"] });
-      } catch (thrown) {
-        const apiError = thrown as BrowserApiError;
-        const details = sentConflictDetails.safeParse(apiError.details ?? {});
-        setFailure({
-          message: apiError.message,
-          sentAt: details.success ? sentConflict(details.data) : null,
-        });
-      } finally {
-        setPending(false);
-      }
-    };
-
-    return (
-      <ListGroup
-        title={t("section.retry")}
-        footnote={state === "queued" ? t("retry.alreadyQueuedNote") : undefined}
-      >
-        <ListRow className="flex-col items-stretch gap-3">
-          <p className="text-footnote text-label-secondary">{t("retry.explain")}</p>
-          <Button
-            variant="tinted"
-            loading={pending}
-            onClick={() => void retry()}
-            data-testid="retry"
-          >
-            {t("retry.action")}
-          </Button>
-        </ListRow>
-
-        {outcome ? (
-          <ListRow className="items-start">
-            <div
-              className="tone-warning tonal flex w-full flex-col gap-2 rounded-md px-3 py-3"
-              role="status"
-              data-testid="retry-result"
-            >
-              <span className="flex items-center gap-2 text-subhead font-medium">
-                <Icon name="clock" className="size-4 shrink-0" />
-                {/* The headline is the negative, deliberately. */}
-                {t("retry.nothingSent")}
-              </span>
-              <span className="text-footnote">
-                {outcome.requeued ? t("retry.requeued") : t("retry.alreadyPending")}
-              </span>
-              {outcome.drain !== "" ? (
-                <>
-                  <span className="text-caption text-label-secondary">{t("retry.drainLabel")}</span>
-                  {/*
-                    A shell command is an identifier, not prose: it must not
-                    reorder in Arabic, and it is the string somebody copies.
-                  */}
-                  <Ltr
-                    numeric={false}
-                    className="overflow-x-auto rounded-sm bg-surface-2 px-2 py-1 font-mono text-caption text-label"
-                  >
-                    {outcome.drain}
-                  </Ltr>
-                </>
-              ) : null}
-            </div>
-          </ListRow>
-        ) : null}
-
-        {failure ? (
-          <ListRow className="items-start">
-            <div className="flex w-full flex-col gap-1" data-testid="retry-failure">
-              <SectionError>
-                <span className="text-label">{failure.message}</span>
-              </SectionError>
-              {/*
-                The 409 names `sent_at`, and that date is the whole reason the
-                refusal is correct: re-queueing would deliver a body frozen when
-                it was queued, so an order refunded since would still send the
-                confirmation that was true when it was placed.
-              */}
-              {failure.sentAt !== null ? (
-                <p className="px-4 text-caption text-label-secondary">
-                  <Isolate>
-                    {t("retry.alreadySentOn", { date: formatDate(failure.sentAt, locale) })}
-                  </Isolate>
-                </p>
-              ) : null}
-            </div>
           </ListRow>
         ) : null}
       </ListGroup>
@@ -503,4 +363,173 @@ export function NotificationDetail({
       </ListGroup>
     );
   }
+}
+
+/* ----------------------------------------------------------------- retry --- */
+
+/**
+ * The one action, and the one place this screen could mislead.
+ *
+ * **Retry is a 202 and it mails nothing.** It clears `status`, `attempts` and
+ * `last_error` so the next drain picks the row up; the mail leaves when something
+ * runs `wp algerian-commerce send-notifications`, which the response names in
+ * `meta.drain`. So the confirmation is a persistent panel rather than a toast,
+ * and it says what did *not* happen first — a spinner that resolves into a
+ * checkmark would read as "sent" to every operator who has ever used software,
+ * and they would tell the customer so.
+ *
+ * **Declared here rather than inside `NotificationDetail`, and that is a bug fix
+ * rather than a tidy-up.** It was a nested function, which gives React a new
+ * component *identity* on every parent render — so the successful retry's own
+ * `refetch()` re-rendered the parent, remounted this, and discarded the result
+ * panel it had just set. The e2e test caught it as a **race**: the assertion beat
+ * the refetch on a warm dev server and lost on a cold one, so it passed four runs
+ * before failing. Every other card on this screen is nested too and none of them
+ * shows it, because none of them holds state.
+ */
+function RetrySection({
+  notification,
+  state,
+  locale,
+  onRetried,
+}: {
+  notification: Detail;
+  state: QueueState;
+  locale: string;
+  /** Re-read the row and the list. The parent owns both queries. */
+  onRetried: () => Promise<void>;
+}) {
+  const t = useTranslations("notifications");
+  const [pending, setPending] = useState(false);
+  const [outcome, setOutcome] = useState<RetryOutcome | null>(null);
+  const [failure, setFailure] = useState<{ message: string; sentAt: string | null } | null>(null);
+
+  /*
+   * A sent row is not offered the action at all — it is a 409 and the API is
+   * right to refuse it. The conflict is still *handled* below, because a row
+   * that sends between this render and the tap is exactly the race the
+   * backend's conditional `UPDATE` exists for, and "read the 409 body" is a
+   * house rule rather than a formality.
+   */
+  if (state === "sent") return null;
+
+  const retry = async () => {
+    setPending(true);
+    setFailure(null);
+    try {
+      /*
+       * `acWriteWithMeta` and not `acWrite`: `meta` is where the whole answer
+       * is — `already_pending` and `drain` — and `data` alone cannot tell a
+       * real requeue from a row that was already in the queue, since both are
+       * 202. The first draft of this called `acWrite` and then fetched the
+       * route again for the meta, which retried the notification twice.
+       */
+      const { meta } = await acWriteWithMeta<unknown>(
+        "POST",
+        `/notifications/${notification.id}/retry`,
+      );
+      const parsed = retryMeta.safeParse(meta);
+
+      setOutcome(
+        parsed.success
+          ? retryOutcome(parsed.data)
+          : // The 202 is the success; a meta the panel cannot parse does not
+            // turn it into a failure, it just costs the sentence its detail.
+            { requeued: true, drain: "" },
+      );
+
+      /*
+       * Re-read rather than rebind. The retry answers a **list row** — no
+       * `message` key on it, measured — so binding the screen to the response
+       * would blank the quoted record on a screen that was working a moment
+       * ago.
+       */
+      await onRetried();
+    } catch (thrown) {
+      const apiError = thrown as BrowserApiError;
+      const details = sentConflictDetails.safeParse(apiError.details ?? {});
+      setFailure({
+        message: apiError.message,
+        sentAt: details.success ? sentConflict(details.data) : null,
+      });
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <ListGroup
+      title={t("section.retry")}
+      footnote={state === "queued" ? t("retry.alreadyQueuedNote") : undefined}
+    >
+      <ListRow className="flex-col items-stretch gap-3">
+        <p className="text-footnote text-label-secondary">{t("retry.explain")}</p>
+        <Button
+          variant="tinted"
+          loading={pending}
+          onClick={() => void retry()}
+          data-testid="retry"
+        >
+          {t("retry.action")}
+        </Button>
+      </ListRow>
+
+      {outcome ? (
+        <ListRow className="items-start">
+          <div
+            className="tone-warning tonal flex w-full flex-col gap-2 rounded-md px-3 py-3"
+            role="status"
+            data-testid="retry-result"
+          >
+            <span className="flex items-center gap-2 text-subhead font-medium">
+              <Icon name="clock" className="size-4 shrink-0" />
+              {/* The headline is the negative, deliberately. */}
+              {t("retry.nothingSent")}
+            </span>
+            <span className="text-footnote">
+              {outcome.requeued ? t("retry.requeued") : t("retry.alreadyPending")}
+            </span>
+            {outcome.drain !== "" ? (
+              <>
+                <span className="text-caption text-label-secondary">{t("retry.drainLabel")}</span>
+                {/*
+                  A shell command is an identifier, not prose: it must not
+                  reorder in Arabic, and it is the string somebody copies.
+                */}
+                <Ltr
+                  numeric={false}
+                  className="overflow-x-auto rounded-sm bg-surface-2 px-2 py-1 font-mono text-caption text-label"
+                >
+                  {outcome.drain}
+                </Ltr>
+              </>
+            ) : null}
+          </div>
+        </ListRow>
+      ) : null}
+
+      {failure ? (
+        <ListRow className="items-start">
+          <div className="flex w-full flex-col gap-1" data-testid="retry-failure">
+            <SectionError>
+              <span className="text-label">{failure.message}</span>
+            </SectionError>
+            {/*
+              The 409 names `sent_at`, and that date is the whole reason the
+              refusal is correct: re-queueing would deliver a body frozen when
+              it was queued, so an order refunded since would still send the
+              confirmation that was true when it was placed.
+            */}
+            {failure.sentAt !== null ? (
+              <p className="px-4 text-caption text-label-secondary">
+                <Isolate>
+                  {t("retry.alreadySentOn", { date: formatDate(failure.sentAt, locale) })}
+                </Isolate>
+              </p>
+            ) : null}
+          </div>
+        </ListRow>
+      ) : null}
+    </ListGroup>
+  );
 }

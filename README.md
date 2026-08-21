@@ -563,6 +563,15 @@ Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branc
 Two defects this branch surfaced that are wider than it. Both are recorded rather than fixed, because
 fixing either means touching a dozen screens this branch has no business editing.
 
+- **A component declared inside another component remounts on every parent render, and loses its
+  state.** `RetrySection` was nested in `NotificationDetail`, so the successful retry's own
+  `refetch()` re-rendered the parent, gave React a new component identity, remounted the section and
+  discarded the result panel it had just set. The e2e test caught it as a **race** — the assertion beat
+  the refetch on a warm dev server and lost on a cold one, so it passed four runs before failing once.
+  Fixed by hoisting it to module scope with explicit props, and verified over five consecutive runs.
+  **The pattern is used throughout this panel** — `CustomerDetail`'s `OrdersTab` holds a page number
+  the same way, and `StatusCard`/`MessageCard`/`DeliveryCard` are nested here too. The stateless ones
+  are merely wasteful; any nested component holding `useState` has this bug.
 - **`formatWhen` cannot be server-rendered, and a dozen screens call it unguarded.** It is relative
   under 24 hours, so a row timestamped a minute ago renders "il y a une minute" on the server and
   "il y a 2 minutes" on the client — React reports a hydration mismatch and regenerates the tree. The
@@ -582,6 +591,27 @@ fixing either means touching a dozen screens this branch has no business editing
   `tests/notification-schema.test.ts` now asserts that no key in the namespace carries a dot and that
   every event, state, status, channel and audience resolves in both locales — a floor that costs
   milliseconds and needs no browser. **Any API vocabulary used as a message key has this hazard.**
+
+### The notification table is shared, and other suites write to it
+
+Found while checking whether 14b was safe to build 14c on. Two facts that decide how anything asserting
+on this queue has to be written:
+
+- **`tests/Api/campaigns.php` queues transactional notifications of its own and then calls
+  `drain(50)`** — and it short-circuits `wp_mail` for the duration, so that drain **succeeds** and marks
+  rows `sent` rather than failing the way the bare stack does. Measured: one campaigns run took the
+  queue from 10 rows to 19 and moved the panel's four pending rows to `sent`.
+- **It does not break either side.** The suite's own assertions are deltas (`before === after`,
+  `id > watermark`), so the panel's standing rows cancel out — verified, **100/0 with the seed in
+  place**, which is the opposite of the `seed-shipping-rules.mjs` situation below. And
+  `seed-notifications.mjs` re-creates its own rows on every run, so `test.sh` heals the drift before
+  the e2e stage.
+
+What it does mean is that **the queue's total is not the panel's to predict**, so nothing may assert on
+it. `e2e/notifications.spec.ts` compares membership rather than counts — the `sms` row is exactly one
+because nothing can queue a second, and the e-mail filter is asserted to exclude it rather than to
+return `total - 1`. The count version passed at ten rows and would have failed silently past
+`per_page`.
 
 ## Open, and owed to the backend
 

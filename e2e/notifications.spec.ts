@@ -90,23 +90,38 @@ test.describe("the queue", () => {
      * (there is no `sms` channel to queue one) precisely so this proves
      * something.
      *
-     * The floor is the pair: SMS narrows to fewer rows than "all", and e-mail
-     * narrows to a different set. A filter that is accepted and ignored — which
-     * is what `?event=` and `?audience=` do on this route — satisfies neither.
+     * **Asserted on membership, not on counts**, and that is not fussiness. The
+     * first version compared `email === all - 1`, which held at ten rows and
+     * would have failed the moment the queue passed `per_page`: this table
+     * accumulates rows from *other* repositories' suites — `tests/Api/campaigns.php`
+     * queues transactional notifications of its own and drains them — so the
+     * total is not the panel's to predict. Measured after one campaigns run, it
+     * went 10 → 19.
+     *
+     * The sms row is still exactly one, because nothing can queue a second: the
+     * registry holds one channel and it is not this one. So the floor is the
+     * pair — SMS finds that row and only it, e-mail finds several and never it.
+     * A filter that is accepted and ignored, which is what `?event=` and
+     * `?audience=` do on this route, fails both halves.
      */
+    const SMS_RECIPIENT = "+213661234567";
+
     await signIn(page, "fr");
     await openQueue(page, "fr");
 
-    const all = await page.locator('a[href*="/notifications/"]').count();
-    expect(all).toBeGreaterThan(1);
+    const rows = page.locator('a[href*="/notifications/"]');
+    expect(await rows.count()).toBeGreaterThan(1);
+    await expect(page.getByText(SMS_RECIPIENT)).toBeVisible();
 
     await selectSegment(page, "SMS");
     await page.waitForURL(/channel=sms/);
-    await expect(page.locator('a[href*="/notifications/"]')).toHaveCount(1);
+    await expect(rows).toHaveCount(1);
+    await expect(page.getByText(SMS_RECIPIENT)).toBeVisible();
 
     await selectSegment(page, "E-mail");
     await page.waitForURL(/channel=email/);
-    await expect(page.locator('a[href*="/notifications/"]')).toHaveCount(all - 1);
+    expect(await rows.count()).toBeGreaterThan(1);
+    await expect(page.getByText(SMS_RECIPIENT)).toHaveCount(0);
   });
 });
 
