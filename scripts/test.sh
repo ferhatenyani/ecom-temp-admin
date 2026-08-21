@@ -110,6 +110,26 @@ run_e2e() {
     return 1
   fi
 
+  # And the content. Three reasons rather than the usual one:
+  #
+  # `GET /cms/homepage` answered `{"sections": []}`, so the homepage editor, its
+  # ordering and its `meta.problems` drop report were all built against a
+  # document with nothing in it. The drop report in particular **cannot be
+  # provoked through the API** — the only route that writes the document is the
+  # one that refuses to write a malformed one — so the seed writes the option
+  # underneath it.
+  #
+  # And it removes 78 pages that shared two paths between them. Not suffixed
+  # copies: `wp_unique_post_slug()` does not run for a draft, so 53 rows all
+  # answered to `ac-unpublished` and 27 to `conditions`, while
+  # `get_page_by_path()` can only ever resolve one of each. The rest were
+  # unreachable through `/cms/pages/{path}` entirely, and a Pages index would
+  # have shown 27 identical rows whose links all opened the same page.
+  if ! node scripts/seed-cms.mjs "$AC_STAFF_USER" "$AC_STAFF_PASS"; then
+    echo "could not seed the content the CMS tests need" >&2
+    return 1
+  fi
+
   # Named explicitly rather than "every project": `phone-webkit` needs WebKit's
   # system libraries, which want root to install. Including it here would make the
   # stage red on a machine that is otherwise fine, and a stage that is always red

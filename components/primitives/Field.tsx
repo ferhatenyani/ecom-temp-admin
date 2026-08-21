@@ -50,21 +50,67 @@ function rowClass(hasError: boolean): string {
     .join(" ");
 }
 
-function Label({
+/**
+ * The label, and the hint **beside** it rather than inside it.
+ *
+ * This was noted rather than fixed for three branches and README carried it as a
+ * known defect, because it is shared by every form in the panel and the branch
+ * that found it was not the branch to change it on. The content branch adds more
+ * forms than any before it, so it is the one.
+ *
+ * The defect: the hint used to sit inside the `<label>`, and everything inside a
+ * `<label>` is part of the control's **accessible name**. So a field labelled
+ * "Segment d'URL" with a hint reading "Un seul segment, sans barre oblique."
+ * announced as *"Segment d'URL Un seul segment, sans barre oblique., zone de
+ * texte"* — one long run with no pause, every time focus landed. Worse, the name
+ * changed as the hint changed: the page form's status hint appears only for a
+ * draft, so selecting "Brouillon" silently renamed the control beside it.
+ *
+ * A name should identify; a description should explain. `aria-describedby` is
+ * the mechanism for the second, it is announced after a pause and separately,
+ * and `FieldError` already used it — so the hint joins the error there and the
+ * two are read in order.
+ *
+ * `<div>` rather than `<label>` around both: nesting the hint in a sibling
+ * `<span>` inside the label would not have helped, because the accessible name
+ * is computed from the label's whole subtree.
+ */
+function LabelAndHint({
   htmlFor,
-  children,
+  hintId,
   hint,
+  children,
 }: {
   htmlFor: string;
-  children: ReactNode;
+  hintId: string;
   hint?: string;
+  children: ReactNode;
 }) {
   return (
-    <label htmlFor={htmlFor} className="flex flex-col gap-0.5">
-      <span className="text-footnote text-label-secondary">{children}</span>
-      {hint ? <span className="text-caption text-label-tertiary">{hint}</span> : null}
-    </label>
+    <div className="flex flex-col gap-0.5">
+      <label htmlFor={htmlFor} className="text-footnote text-label-secondary">
+        {children}
+      </label>
+      {hint ? (
+        <span id={hintId} className="text-caption text-label-tertiary">
+          {hint}
+        </span>
+      ) : null}
+    </div>
   );
+}
+
+/**
+ * Join the ids that describe a control, in reading order.
+ *
+ * The hint first and the error second, because that is the order they appear on
+ * screen and the order a person needs them in: what the field wants, then what
+ * went wrong with what they typed. `undefined` rather than an empty string when
+ * there is neither — an empty `aria-describedby` is a dangling reference.
+ */
+function describedBy(...ids: (string | false | undefined)[]): string | undefined {
+  const present = ids.filter((id): id is string => typeof id === "string" && id !== "");
+  return present.length > 0 ? present.join(" ") : undefined;
 }
 
 function FieldError({ id, message }: { id: string; message: string }) {
@@ -105,13 +151,14 @@ export function TextField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
   const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
-      <Label htmlFor={id} hint={hint}>
+      <LabelAndHint htmlFor={id} hintId={hintId} hint={hint}>
         {label}
-      </Label>
+      </LabelAndHint>
       <input
         id={id}
         name={name}
@@ -123,7 +170,7 @@ export function TextField({
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy(hint && hintId, error && errorId)}
         /*
          * `dir="auto"` when the field is not an identifier, and it is not
          * cosmetic. A control inherits the *page's* direction, so a French
@@ -200,13 +247,14 @@ export function DateField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
   const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
-      <Label htmlFor={id} hint={hint}>
+      <LabelAndHint htmlFor={id} hintId={hintId} hint={hint}>
         {label}
-      </Label>
+      </LabelAndHint>
       <input
         id={id}
         type="date"
@@ -217,7 +265,7 @@ export function DateField({
         aria-busy={!hydrated || undefined}
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy(hint && hintId, error && errorId)}
         dir="ltr"
         data-numeric=""
         className={`${CONTROL} text-start disabled:opacity-40`}
@@ -247,13 +295,14 @@ export function TextAreaField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
   const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
-      <Label htmlFor={id} hint={hint}>
+      <LabelAndHint htmlFor={id} hintId={hintId} hint={hint}>
         {label}
-      </Label>
+      </LabelAndHint>
       <textarea
         id={id}
         rows={rows}
@@ -265,7 +314,7 @@ export function TextAreaField({
         // was typed, and the control otherwise inherits the page's direction.
         dir="auto"
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy(hint && hintId, error && errorId)}
         className={`${CONTROL} resize-y py-1 disabled:opacity-40`}
       />
       {error ? <FieldError id={errorId} message={error} /> : null}
@@ -292,13 +341,14 @@ export function SelectField<T extends string>({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
   const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
-      <Label htmlFor={id} hint={hint}>
+      <LabelAndHint htmlFor={id} hintId={hintId} hint={hint}>
         {label}
-      </Label>
+      </LabelAndHint>
       <div className="flex items-center gap-2">
         {/* A real <select>, so the platform picker appears — a phone's native
             wheel beats any listbox this panel could draw, and it is already
@@ -310,7 +360,7 @@ export function SelectField<T extends string>({
           aria-busy={!hydrated || undefined}
           onChange={(event) => onChange(event.target.value as T)}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy(hint && hintId, error && errorId)}
           className={`${CONTROL} appearance-none disabled:opacity-40`}
         >
           {options.map((option) => (
@@ -350,22 +400,40 @@ export function SwitchField({
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+  const reasonId = `${id}-reason`;
   const hydrated = useHydrated();
 
   return (
     <div className={rowClass(Boolean(error))}>
       <div className="flex min-h-9 items-center gap-3">
-        <label htmlFor={id} className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-body text-label">{label}</span>
+        {/*
+          A switch's label is a single line and the two explanatory lines sit
+          outside it, for the reason `LabelAndHint` gives above: everything
+          inside a `<label>` becomes the control's accessible name, and a switch
+          announcing "Indexable Autorise les moteurs de recherche à indexer la
+          page., interrupteur, activé" buries the state that matters at the end
+          of a sentence.
+        */}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <label htmlFor={id} className="text-body text-label">
+            {label}
+          </label>
           {hint ? (
-            <span className="text-caption text-label-secondary">{hint}</span>
+            <span id={hintId} className="text-caption text-label-secondary">
+              {hint}
+            </span>
           ) : null}
           {/* A disabled toggle with no explanation gets raised as a bug every
-              few months. When it cannot be changed here, say so. */}
+              few months. When it cannot be changed here, say so — and describe
+              it rather than name it, so the reason is announced after the
+              state rather than as part of it. */}
           {readOnlyReason ? (
-            <span className="text-caption text-label-tertiary">{readOnlyReason}</span>
+            <span id={reasonId} className="text-caption text-label-tertiary">
+              {readOnlyReason}
+            </span>
           ) : null}
-        </label>
+        </div>
         <button
           id={id}
           type="button"
@@ -374,7 +442,11 @@ export function SwitchField({
           disabled={disabled || !hydrated}
           aria-busy={!hydrated || undefined}
           onClick={() => onChange(!checked)}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy(
+            hint && hintId,
+            readOnlyReason && reasonId,
+            error && errorId,
+          )}
           className={[
             "switch press relative shrink-0 rounded-full disabled:opacity-40",
             checked ? "bg-success" : "bg-fill",

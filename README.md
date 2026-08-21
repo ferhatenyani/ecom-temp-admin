@@ -11,8 +11,8 @@ cookie. No component library.
 ## What exists
 
 The shell, the credential boundary, Orders end to end, Products, Inventory, Customers and
-Coupons, Shipping with Payments and cash on delivery, and the Dashboard with the six analytics
-reports.
+Coupons, Shipping with Payments and cash on delivery, the Dashboard with the six analytics
+reports, and the CMS with its media library.
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
@@ -39,14 +39,39 @@ reports.
                              behind its figure — two card sets, chosen by canSeeMoney()
 /[locale]/analytics          six reports behind one date range — revenue, orders, products,
                              customers, shipping, COD
+/[locale]/content            the hub — six destinations, each with its count
+/[locale]/content/pages      the index the backend was paid for, with the draft
+                             a single read cannot distinguish from a missing page
+/[locale]/content/pages/…    the whole page as a form, path-addressed, with the
+                             rename warning before the save and the SEO block inside it
+/[locale]/content/homepage   the document edited whole — reorder, add, remove,
+                             and the drop report for the sections it could not read
+/[locale]/content/banners    grouped by placement, ordered within it
+/[locale]/content/faqs       one list, many categories, and the category manager
+/[locale]/content/menus      primary and footer, two levels, and the location
+                             that has no menu until you save one
+/[locale]/media              the library — a grid, an upload with a percentage,
+                             and five distinguishable refusals
 /[locale]/more               the tab bar holds five; this is the overflow
 ```
 
 `fr` and `ar` are both complete, at 390–440 px and on a desktop. The options editor (§83) is its own
 branch — the specification calls it the hardest component in the panel — and so is editing attributes
-and categories. Content and Settings are later branches, and `/more` renders those destinations as
-visibly not-yet-built rather than as links that 404. **Every tab in the bar now navigates** — Dashboard
-was the last placeholder.
+and categories. Settings is a later branch, and `/more` renders it as visibly not-yet-built rather
+than as a link that 404s. **Every tab in the bar now navigates** — Dashboard was the last placeholder.
+
+**Step 14 is three branches, not one**, and the seam is the capability rather than the subject.
+Part X's line reads "CMS, media, marketing, campaigns, notifications"; `feat/content` is the first
+third and Part X now records the split with its reasoning:
+
+- **14a `feat/content`** — the CMS and media. `ac_manage_content`, which after the two-tier collapse
+  is Super Admin alone, so a **Manager is a genuine forbidden fixture for every screen on the branch**.
+- **14b `feat/notifications`** — the queue. **`ac_manage_customers`**, not content: a notification row
+  holds a customer's address and the frozen body of their order confirmation, and §90 gates it there
+  deliberately. A Manager is **200** on `/notifications`, so 14a's fixture does not transfer.
+- **14c `feat/campaigns`** — marketing, segments, templates, the composer. `ac_manage_marketing`, and
+  last on purpose: all three collections answered **0 rows**, so it needs its own seed before an
+  assertion means anything, and the specification calls the composer the second-hardest screen here.
 
 Five things were fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch,
 because the screens were not buildable as specified. They are listed under **Owed to the backend, and
@@ -80,14 +105,27 @@ npm run test:e2e                  # four device widths × both locales
 npm run shots -- <user> <pass>    # captures + assertions into .impeccable/review/
 ```
 
-`scripts/test.sh` mints **four** credentials and clears the API's rate-limit counters first — the suite
-provokes a login failure on purpose, and the failed-login bucket would otherwise refuse the correct
-password for the next fifteen minutes. It also runs `scripts/seed-attributes.mjs`, because the facet
+`scripts/test.sh` mints **four** credentials, and the **failed-login** bucket is cleared by
+Playwright's own `globalSetup` (`e2e/rate-limit.ts`, wired in `playwright.config.ts`) rather than by
+`test.sh` itself — the suite provokes a login failure on purpose, and that bucket is 10 failures per
+15 minutes per IP, after which a *correct* password is refused too. Note the scope: it clears the
+login bucket and not the 600-a-minute **read** limit, which is per credential and therefore fresh
+every run because the credentials are. It also runs `scripts/seed-attributes.mjs`, because the facet
 tests need a global attribute to count and this shop shipped with none; the seed is idempotent and
 takes a few seconds. `scripts/seed-shipping-rules.mjs` runs beside it for the same reason —
 `GET /shipping/rules` answered `[]`, so `/shipping/rates` could only ever answer `[]` too and the
 resolver had nothing to resolve. Three rules (national 800, wilaya 16 at 500, commune 484 at 350)
 make commune-beats-wilaya-beats-national observable, and the suite asserts those figures.
+
+`scripts/seed-cms.mjs` is the third, and it does more than seed. `GET /cms/homepage` answered
+`{"sections": []}`, so the homepage editor and its drop report were built against a document with
+nothing in it — and **the drop report cannot be provoked through the API at all**, because the only
+route that writes the document is the one that refuses to write a malformed one. So the seed writes
+the option underneath the API with `wp eval`, the way `mint-credential.sh` already does for the one
+thing the API deliberately does not do. It also **deleted 78 pages**: not suffixed copies, but 53 rows
+that all answered to `ac-unpublished` and 27 to `conditions`, because `wp_unique_post_slug()` does not
+run for a draft. A path is the only address `/cms/pages/{path}` has, so `get_page_by_path()` reached
+one of each and the rest could not be read, written or deleted at all.
 
 The fourth credential is a **Manager**, and it is the only one of the four that still describes a
 live account: the two-tier collapse retired `ac_support_agent` and `ac_marketing_manager`, which
@@ -126,7 +164,7 @@ run, or let `test.sh` mint and export nothing yourself.
 
 ## The rules that are enforced, not just written down
 
-`scripts/check-design.sh` fails the build on any of these, scans 139 files, and asserts a floor plus a
+`scripts/check-design.sh` fails the build on any of these, scans 167 files, and asserts a floor plus a
 positive control on its own patterns — a grep that matches nothing must not report success.
 
 - No gradients, no accent bars, no component library, no generic fonts.
@@ -336,10 +374,97 @@ Measured against the live API, and each one is written up in ADMIN_PANEL.md as a
   per_page"* where the API had said what the range was, and products mishandled the array. Both are
   asserted in `tests/boundary.test.ts`.
 
+Added by the content build:
+
+- **A page could not be listed at all.** `GET /cms/pages` was not a route — §89 shipped a complete
+  write surface over a read surface that could address one page and enumerate none. Paid on
+  `ecom-temp`'s `feat/cms-page-index`; see **Owed to the backend, and paid**.
+- **A draft and a missing page are the same 404 with the same message.** `?status=` *filters* a single
+  read rather than widening it, so `"No page at that path."` covers both — and WordPress creates
+  `privacy-policy` as a draft, so that is exactly what it answered about a page sitting right there.
+  **The index is the only place the two separate**, which is the argument for it over a path box.
+- **Every content list asks for `?status=any`, which inverts the panel's own habit.** Everywhere else
+  the absence of `?status=` means everything; on these routes it means **publish only**, so a screen
+  that sent nothing would hide the drafts somebody opened it to finish.
+- **Two pages can share a path, and a path is the only address.** `wp_unique_post_slug()` does not run
+  for a draft: 53 pages answered to `ac-unpublished` and 27 to `conditions`, unsuffixed, and
+  `get_page_by_path()` resolves one of each — the other 78 were unreachable through the API entirely.
+  `collidingPaths()` marks them and the index refuses to link them, because opening the fourteenth row
+  would open the first and saving would write over somebody else's page.
+- **The shop's own pages are not editorial content, and they are not one kind of thing.** `cart`,
+  `checkout` and `my-account` have a block or a shortcode for a body; `privacy-policy` is real prose
+  and *is* option-referenced; `refund_returns` is prose referenced by nothing. `SystemPages` splits
+  them by option rather than by a list of paths, and the delete refusal lives on the API so it holds
+  for every caller rather than only for this panel.
+- **`?search=` matches the title and the body, never the path.** `WP_Query`'s `s` does not search
+  `post_name`. The field says so — the same treatment `/customers` gets.
+- **WordPress texturizes what it stores, so a title never reads back as it was written.**
+  `Soldes d'été` comes back with its apostrophe as character reference 8217. `decodeEntities` on every
+  title — and the seed learned it the hard way, creating a duplicate banner on its second run.
+- **`content` and `excerpt` read back as rendered HTML and PATCH back without accumulating a wrapper**,
+  verified over three round trips. That is what makes binding a form straight to the response safe
+  here where a coupon's `date_expires` made it unsafe there.
+- **The homepage drop report cannot be provoked through the API**, because the only route that writes
+  the document is the one that refuses to write a bad one. `scripts/seed-cms.mjs` writes the option
+  underneath it with `wp eval`. **`meta` is absent entirely** when there is nothing to report — not an
+  empty array, so code that destructured `meta.problems` would throw on the healthy case.
+- **Saving the homepage repairs it by discarding what was dropped**, since the editor only ever sees
+  what survived the read. Gated behind a confirmation naming the count.
+- **`meta.problems` positions are 1-based over the *stored* document**, not over the surviving
+  sections, so "Section 6" is not the sixth row on screen. The seed interleaves its malformed sections
+  rather than appending them, so an off-by-one here is visible.
+- **One endpoint, two error shapes, and only one is positional**: a bad section is `sections[2].type`,
+  more than fifty is a flat `sections`. Binding every homepage error to a row index drops the cap.
+- **The eleven homepage section types are published nowhere** — they were read out of a 400.
+  `unknownSectionTypes()` renders a type this build has no name for as itself rather than as a blank.
+- **`PUT /cms/menus/{location}` creates and assigns a missing menu**, so an unassigned location is an
+  empty state with a working action rather than an error. `GET` on it is a 404 with its own message,
+  which is a different fact from a location that was never registered.
+- **`POST /media` fails five distinguishable ways, not two.** The fifth — a JPEG renamed `.png`, 415
+  with both `extension` and `detected` — needs its own wording, because "only jpg, png and webp are
+  accepted" reads as false to somebody looking at a `.png`. The first measurement got this wrong: a
+  48-byte fake PDF tripped `MIN_BYTES = 64` before the sniffer ran, and only a 5.4 KB control showed
+  the real answer.
+- **`sizes` is empty on every fixture in this shop** — 30×20 images, below WordPress's thumbnail
+  thresholds — so `sizes[0]` works in production and fails in every test. `url` always exists.
+- **Upload progress means `XMLHttpRequest`.** `fetch` cannot report it on any mobile browser this
+  panel targets, and the specification is explicit that a spinner without a percentage is unacceptable
+  here. The bar stops at *sent* and goes indeterminate for the server's sniff-and-write.
+- **Drag-ordering is specified and is not what shipped.** HTML5 drag-and-drop fires no `dragstart`
+  from a touch pointer and `draggable` takes no key events, so at the 390 px floor it is decoration and
+  to a keyboard it is nothing. iOS ships both a drag *and* move-up/move-down accessibility actions;
+  this panel ships the half that works everywhere. `components/patterns/MoveControls.tsx`.
+- **`Field`'s `hint` was part of the accessible name** — inside the `<label>`, so a field announced as
+  its label plus a whole sentence, and the name *changed* as the hint changed. Fixed on this branch as
+  its own commit, with `tests/field.test.tsx` asserting the accessibility tree rather than the markup:
+  8 of its 10 assertions fail against the previous version, which is the control that makes them worth
+  keeping.
+
 ## Owed to the backend, and paid
 
-Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch. Each one is here
-because the panel could not be built honestly without it.
+Each one is here because the panel could not be built honestly without it.
+
+Fixed in `ecom-temp` on **`feat/cms-page-index`** while building the content branch:
+
+- **A page could not be listed.** §89 registered `POST /cms/pages` and `GET, PATCH, DELETE
+  /cms/pages/{path}` — a complete write surface over a read surface with no index — so the Pages
+  screen had nothing to open on, and a draft could not be told from a path that does not exist,
+  because both are `"No page at that path."`. `GET /cms/pages` adds `?status=`, `?search=` and
+  pagination, ordered by title, with a row carrying `path`/`title`/`status` and deliberately not
+  `content`, `seo` or `excerpt` — a whole page body and a `SeoResolver` pass per row would cost what
+  opening every page at once costs, and the omission is asserted so it cannot drift back.
+- **A listing has to decide what a page *is*, and §89 never had to.** `SystemPages` splits the pages
+  nobody wrote into two sets derived from options WordPress and WooCommerce already store: the
+  **functional** ones (`shop`, `cart`, `checkout`, `my-account`, the front and posts pages) are
+  omitted from the index with `meta.excluded_system` reporting the count, and **any** option-referenced
+  page — which adds `privacy-policy` and the terms page, both real prose somebody must be able to
+  edit — refuses `DELETE` with a 409 naming the option. **`?force=true` does not override it**, unlike
+  the children guard: reparenting children is recoverable, while leaving
+  `woocommerce_checkout_page_id` pointing at nothing makes WooCommerce report a missing page rather
+  than a broken setting. The refusal is on the API rather than in this panel, so it holds for every
+  caller. `tests/Api/cms.php` grew 155 → **169** assertions, each with its positive control.
+
+Fixed in `ecom-temp` on `feat/coupon-pickers` while building the customers branch:
 
 - **The consent row was not buildable as specified.** ADMIN_PANEL.md asks for "a read-only row with
   the date and the reason"; there was no date, the refusal was a generic `"Unknown field."`, and 0 of
@@ -371,6 +496,41 @@ because the panel could not be built honestly without it.
   what it can prove, which is documented in `movementActor()`.
 - **`inventory.adjusted` audit rows carry no movement id**, so the two records of the same event cannot
   be joined except by heuristic.
+- **`ac_manage_content` guards the media *reads* as well as the writes**, which makes the gap
+  ADMIN_PANEL.md documents wider than it says. A Product Manager deliberately cannot upload —
+  `MediaService`'s docblock argues it — but the "attach an image that already exists" path the same
+  section describes as theirs is not reachable either: measured, a Manager is **403 on `GET /media`**.
+  A read-only media capability, or `ac_manage_products` on the reads, would make the picker buildable
+  for the role that needs it. Until then `MediaPicker` renders the refusal naming the capability,
+  which is honest and is not the affordance the specification asks for.
+- **An attachment has no back-reference.** Nothing in the API answers "what uses this image?", so the
+  media library cannot offer a delete it can explain. A `usage` block on `GET /media/{id}` — the
+  banners, pages and homepage sections pointing at it — is what would make one possible.
+- **A menu item cannot be resolved to a name.** The reader returns `object_id` for a page, category or
+  product and nothing else, so the menu editor renders `#4192` where a person expects a product name.
+  The page items are addressable by path and the rest are not; `GET /cms/menus/{location}` could carry
+  the resolved label the way a coupon's restrictions now do.
+
+## Not built on the content branch, and why
+
+- **`DELETE /media/{id}`.** The route exists and `ac_manage_content` allows it, and it is off the
+  proxy allowlist with a unit test saying so. Nothing in this API tells the panel what an attachment
+  is used by — a banner's `image`, a page thumbnail and a homepage section all reference one with no
+  back-reference anywhere — so the library cannot answer "what would this break?". An irreversible
+  action a screen cannot explain is worse than one it does not offer.
+- **Marketing, campaigns and notifications.** Part X's step-14 line names them; they are 14b and 14c
+  and the reasoning is above and in Part X. Every route for all three stays off the allowlist, with a
+  unit test asserting the refusal, because a route no screen calls must not be reachable by guessing
+  a URL.
+- **A rich-text editor.** `content` and `answer` are `<textarea>`s holding the stored HTML. That is
+  deliberate for this branch rather than a shortcut: the API sanitises **on save**, so the panel's job
+  is to render the stored result back, and an editor with its own model of the document is the thing
+  most likely to show the author something other than what is stored. A WYSIWYG that round-trips
+  `wp_kses`'s output faithfully is its own piece of work.
+- **A page's featured image.** `image_id` is accepted on `PATCH /cms/pages` and the media picker
+  exists, but the page form does not offer it: no screen in this panel renders a page thumbnail, so it
+  would be a control whose effect is invisible from here. Banners take theirs because a banner *is*
+  its image.
 
 ## Not built on the inventory branch, and why
 

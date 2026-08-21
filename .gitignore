@@ -45,3 +45,7 @@ next-env.d.ts
 /playwright-report/
 /.impeccable/review/
 /.impeccable/config.local.json
+# The design hook's per-file result cache — a local artefact keyed by file
+# contents, not a decision anybody made. `config.json` beside it *is* committed,
+# because a suppression is a decision and belongs in review.
+/.impeccable/hook.cache.json

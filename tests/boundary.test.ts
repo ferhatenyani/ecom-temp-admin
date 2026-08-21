@@ -296,6 +296,119 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["export", "customers"], "GET").allowed).toBe(false);
   });
 
+  it("permits the CMS routes the content screens call", () => {
+    expect(checkAllowed(["cms", "pages"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "pages"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["cms", "pages", "livraison"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "pages", "livraison"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["cms", "pages", "livraison"], "DELETE").allowed).toBe(true);
+
+    /*
+     * A page is addressed by its **full path**, so a child arrives as more than
+     * one segment. `legal/conditions-generales` is a real page in this shop and
+     * a `[^/]+` pattern would have refused every child page in it — the kind of
+     * thing that looks like a 404 from the screen and like a working allowlist
+     * from the test that only ever tried a root page.
+     */
+    expect(checkAllowed(["cms", "pages", "legal", "conditions-generales"], "GET").allowed).toBe(
+      true,
+    );
+    expect(checkAllowed(["cms", "pages", "a", "b", "c"], "PATCH").allowed).toBe(true);
+
+    expect(checkAllowed(["cms", "homepage"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "homepage"], "PUT").allowed).toBe(true);
+    expect(checkAllowed(["cms", "banners"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "banners"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["cms", "banners", "58"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["cms", "banners", "58"], "DELETE").allowed).toBe(true);
+    expect(checkAllowed(["cms", "faqs"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "faqs", "61"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["cms", "faq-categories"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "faq-categories"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["cms", "faq-categories", "21"], "DELETE").allowed).toBe(true);
+    expect(checkAllowed(["cms", "menus", "primary"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["cms", "menus", "primary"], "PUT").allowed).toBe(true);
+    expect(checkAllowed(["cms", "menus", "footer"], "PUT").allowed).toBe(true);
+
+    expect(checkAllowed(["media"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["media"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["media", "4234"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["media", "4234"], "PATCH").allowed).toBe(true);
+  });
+
+  it("refuses the CMS routes no content screen calls", () => {
+    /*
+     * A menu location is `primary` or `footer` and nothing else. `PUT` to a
+     * location with nothing assigned **creates and assigns a menu there** —
+     * measured, `PUT /cms/menus/footer` answered 200 having created "Footer
+     * navigation" — so a permissive pattern would let a guessed URL invent
+     * navigation the theme has no slot for.
+     */
+    expect(checkAllowed(["cms", "menus", "sidebar"], "PUT").allowed).toBe(false);
+    expect(checkAllowed(["cms", "menus", "mobile"], "GET").allowed).toBe(false);
+
+    /*
+     * **`DELETE /media/{id}` is absent on purpose.** The route exists and
+     * `ac_manage_content` allows it. Nothing in this API tells the panel what an
+     * attachment is used by — a banner's `image`, a page thumbnail and a
+     * homepage section all reference it with no back-reference anywhere — so the
+     * library cannot say what a delete would break. An irreversible action a
+     * screen cannot explain is worse than one it does not offer.
+     */
+    expect(checkAllowed(["media", "4234"], "DELETE").allowed).toBe(false);
+
+    // The homepage is replaced whole. There is no section-level route, and PUT
+    // is the only write — a PATCH would imply a merge the API does not do.
+    expect(checkAllowed(["cms", "homepage"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["cms", "homepage"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["cms", "homepage", "sections"], "PUT").allowed).toBe(false);
+
+    // The index lists and creates; it does not take a body write of its own.
+    expect(checkAllowed(["cms", "pages"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["cms", "pages"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["cms", "banners"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["cms", "faqs"], "DELETE").allowed).toBe(false);
+
+    // Guessed neighbours. None of these is a route.
+    expect(checkAllowed(["cms"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cms", "settings"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cms", "menus"], "GET").allowed).toBe(false);
+
+    /*
+     * The rest of Part X's step 14, which this branch scoped out and split into
+     * `feat/notifications` and `feat/campaigns`. Each is a different capability
+     * with no screen behind it yet, and a route no screen calls must not be
+     * reachable by guessing a URL.
+     */
+    for (const path of [
+      ["campaigns"],
+      ["segments"],
+      ["email-templates"],
+      ["notifications"],
+      ["marketing", "config"],
+    ]) {
+      expect(checkAllowed(path, "GET").allowed).toBe(false);
+    }
+  });
+
+  it("refuses a traversal before the greedy page pattern can see it", () => {
+    /*
+     * `/cms/pages/.+` is the one non-literal, non-id pattern on the list, and it
+     * has to be greedy because a page's address is a path. What makes that safe
+     * is that `checkAllowed()` refuses a segment carrying a slash, a `..` or a
+     * `.` **before any pattern is tried** — so the greedy match only ever sees
+     * segments Next's catch-all produced from a real URL.
+     *
+     * Asserted here rather than assumed, because the guard and the pattern were
+     * written on different branches and nothing else pairs them.
+     */
+    expect(checkAllowed(["cms", "pages", ".."], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["cms", "pages", "..", "..", "wp-config"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cms", "pages", "legal/terms"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cms", "pages", ""], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cms", "pages", "."], "GET").allowed).toBe(false);
+  });
+
   it("permits the customer routes the screens call, and only those", () => {
     expect(checkAllowed(["customers"], "GET").allowed).toBe(true);
     expect(checkAllowed(["customers", "24"], "GET").allowed).toBe(true);

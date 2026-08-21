@@ -19,8 +19,8 @@ cd "$(dirname "$0")/.." || exit 2
 # glob, not to fail on one deleted file. 47 files at the orders branch, floor 40;
 # 61 at the products branch, floor 56; 77 at the inventory branch, floor 72; 101 at
 # the customers branch, floor 95; 123 at the shipping branch, floor 117; 139 at the
-# analytics branch, floor 133.
-FLOOR=133
+# analytics branch, floor 133; 167 at the content branch, floor 160.
+FLOOR=160
 failures=0
 checks=0
 

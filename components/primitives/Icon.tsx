@@ -33,6 +33,19 @@ export const ICON_NAMES = [
   "lock",
   "plus",
   "tag",
+  /*
+   * Added on the content branch. `up` and `down` are the reordering controls:
+   * the homepage document and the menu tree are both *ordered* content, and
+   * HTML5 drag-and-drop has no touch implementation and no keyboard path, so
+   * moving a row one place is a button rather than a drag. `MoveControls`
+   * carries the argument.
+   */
+  "image",
+  "up",
+  "down",
+  "trash",
+  "link",
+  "list",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -169,6 +182,37 @@ export function IconSprite() {
         <symbol id="ac-icon-tag" viewBox="0 0 24 24">
           <path d="M4.75 11.4V5.5a.75.75 0 0 1 .75-.75h5.9a.75.75 0 0 1 .53.22l7.1 7.1a.75.75 0 0 1 0 1.06l-5.9 5.9a.75.75 0 0 1-1.06 0l-7.1-7.1a.75.75 0 0 1-.22-.53Z" />
           <circle cx="8.75" cy="8.75" r="1.15" />
+        </symbol>
+        <symbol id="ac-icon-image" viewBox="0 0 24 24">
+          <rect x="3.75" y="5.25" width="16.5" height="13.5" rx="1.75" />
+          <circle cx="9" cy="10" r="1.5" />
+          <path d="m4.5 16.5 4.25-4.25a1 1 0 0 1 1.4 0l3.6 3.6a1 1 0 0 0 1.4 0l1.6-1.6a1 1 0 0 1 1.4 0l2.4 2.4" />
+        </symbol>
+        {/*
+          `up` and `down` are separate symbols and neither flips. A reordering
+          arrow points along the *list*, which runs top to bottom in both
+          directions — mirroring it would make the control lie in Arabic.
+        */}
+        <symbol id="ac-icon-up" viewBox="0 0 24 24">
+          <path d="M12 19V5.5M6.5 11 12 5.5 17.5 11" />
+        </symbol>
+        <symbol id="ac-icon-down" viewBox="0 0 24 24">
+          <path d="M12 5v13.5M6.5 13l5.5 5.5L17.5 13" />
+        </symbol>
+        <symbol id="ac-icon-trash" viewBox="0 0 24 24">
+          <path d="M4.75 6.75h14.5M9.5 6.75V5.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.25" />
+          <path d="M6.75 6.75 7.6 19a1 1 0 0 0 1 .95h6.8a1 1 0 0 0 1-.95l.85-12.25" />
+          <path d="M10.5 10.25v6M13.5 10.25v6" />
+        </symbol>
+        <symbol id="ac-icon-link" viewBox="0 0 24 24">
+          <path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3a3.54 3.54 0 0 0-5-5l-1.5 1.5" />
+          <path d="M13.5 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.54 3.54 0 0 0 5 5l1.5-1.5" />
+        </symbol>
+        <symbol id="ac-icon-list" viewBox="0 0 24 24">
+          <path d="M9 6.5h10.5M9 12h10.5M9 17.5h10.5" />
+          <circle cx="5" cy="6.5" r="1.15" fill="currentColor" stroke="none" />
+          <circle cx="5" cy="12" r="1.15" fill="currentColor" stroke="none" />
+          <circle cx="5" cy="17.5" r="1.15" fill="currentColor" stroke="none" />
         </symbol>
       </defs>
     </svg>

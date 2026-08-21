@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "app/[locale]/(panel)/content/banners/BannerSheet.tsx"
+        ],
+        "createdAt": "2026-08-21T08:00:15.869Z",
+        "reason": "Claude: src={imageUrl} is a dynamic non-empty URL from the media API, guarded by an imageUrl truthy check; the detector cannot resolve it statically"
+      }
+    ]
+  }
+}

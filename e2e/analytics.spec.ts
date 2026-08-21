@@ -114,12 +114,35 @@ test.describe("the reporting range", () => {
 
   test("a quiet window says so instead of showing a screen of zeros", async ({ page }) => {
     /*
-     * `range=today` on a shop with no orders today answers **200 with every
-     * figure zero** — measured on all seven routes. Nothing is omitted, so there
-     * is no missing key to detect it by and no error to render.
+     * An empty window answers **200 with every figure zero** — measured on all
+     * seven routes. Nothing is omitted, so there is no missing key to detect it
+     * by and no error to render, which is why the screen has to say the window
+     * was quiet rather than let it read as one that failed.
+     *
+     * **The window is pinned rather than `range=today`, and that is the whole
+     * point of this edit.** This test used to ask for today and its own comment
+     * said "on a shop with no orders today" — a precondition it stated and did
+     * not establish. `ecom-temp`'s own test suite creates order fixtures dated
+     * now, so running the backend's tests turned this green assertion red: 53
+     * orders landed in today's window and the report correctly stopped saying it
+     * was quiet. The test was wrong, not the panel.
+     *
+     * January 2026 is empty by construction: this shop's orders span
+     * 2026-08-16 to 2026-08-21, and the window is 31 days, well inside the API's
+     * 366-day cap. A fixture run cannot reach into it.
+     *
+     * `range=custom` is required for the dates to be honoured at all — sent
+     * without it they are accepted and **ignored**, which would silently give
+     * this test the thirty-day default and the failure it was written to catch.
      */
     await signIn(page, "fr");
-    await page.goto("/fr/analytics?view=orders&range=today");
+    await page.goto(
+      "/fr/analytics?view=orders&range=custom&date_from=2026-01-01&date_to=2026-01-31",
+    );
+
+    // The control: the window on screen is the one the API answered, so a
+    // silently-ignored parameter cannot pass as an empty result.
+    await expect(page.getByTestId("range-applied")).toContainText("31 jours");
 
     await expect(page.getByTestId("report-orders")).toContainText(
       "Aucune commande sur cette période",

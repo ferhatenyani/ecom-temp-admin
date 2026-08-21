@@ -763,6 +763,271 @@ for (const [name, options] of TARGETS) {
       (v) => v <= 1,
     );
 
+    // ------------------------------------------------------ content: pages ---
+    await page.goto(`${BASE}/${locale}/content`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${OUT}/content-hub-${name}-${locale}.png`, fullPage: true });
+
+    await page.goto(`${BASE}/${locale}/content/pages`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="pages-count"]');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/pages-${name}-${locale}.png`, fullPage: true });
+
+    const pagesOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: pages index no overflow`, pagesOverflow, (v) => v <= 1);
+
+    /*
+     * **A page path is an identifier and must read left to right in both
+     * locales.** Measured by glyph position rather than by markup: the first
+     * character of `/legal/conditions-generales` has to sit at the *visual* left
+     * of the run whatever the paragraph around it is doing. Wrapping the row
+     * instead of the path is what put a provider name at the wrong end of an
+     * Arabic row on the analytics branch, and this is the check that would have
+     * caught it.
+     */
+    const pathDirection = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('a[href*="/content/pages/"]')];
+      for (const row of rows) {
+        /*
+         * The *leaf*, not the first ancestor whose text happens to start with a
+         * slash. The first version of this check took the wrapper holding the
+         * path and the date, which inherits the page direction — so it passed in
+         * French for the wrong reason and failed in Arabic for the wrong reason.
+         * A check that reports the app is broken when the app is fine is worth
+         * no more than one that misses a real defect.
+         */
+        const path = [...row.querySelectorAll("span")]
+          .filter((s) => s.children.length === 0)
+          .find((s) => /^\/[a-z0-9-]/i.test(s.textContent?.trim() ?? ""));
+        if (!path) continue;
+        if (getComputedStyle(path).direction !== "ltr") return "path is not ltr";
+        // And the *row* must not have been forced with it: a full-width cell
+        // wrapped in `Ltr` forces the cell, which is the defect this guards.
+        if (getComputedStyle(row).direction !== document.documentElement.dir) {
+          return "the row's direction was forced";
+        }
+        return "ok";
+      }
+      return "no path found";
+    });
+    check(`${name}/${locale}: a page path reads ltr without forcing its row`, pathDirection, "ok");
+
+    /*
+     * **A field's hint describes the control; it does not name it.** The hint
+     * used to sit inside the `<label>`, which made it part of the accessible
+     * name — so the name ran to a full sentence and changed as the hint changed.
+     * Asserted on the real form: every hinted field points `aria-describedby` at
+     * its hint, and no `<label>` contains one.
+     */
+    await page.goto(`${BASE}/${locale}/content/pages/livraison`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/page-form-${name}-${locale}.png`, fullPage: true });
+
+    const hintPlacement = await page.evaluate(() => {
+      const hints = [...document.querySelectorAll('[id$="-hint"]')];
+      if (hints.length === 0) return "no hints on this form";
+      const insideLabel = hints.filter((h) => h.closest("label") !== null).length;
+      const described = hints.filter((h) =>
+        document
+          .querySelector(`[aria-describedby~="${h.id}"]`) !== null,
+      ).length;
+      return `${hints.length} hints, ${insideLabel} inside a label, ${described} described`;
+    });
+    check(
+      `${name}/${locale}: a hint describes rather than names`,
+      hintPlacement,
+      (v) => {
+        const m = String(v).match(/^(\d+) hints, 0 inside a label, (\d+) described$/);
+        return m !== null && m[1] === m[2] && Number(m[1]) > 0;
+      },
+    );
+
+    // --------------------------------------------------- content: homepage ---
+    await page.goto(`${BASE}/${locale}/content/homepage`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="sections-count"]');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${OUT}/homepage-${name}-${locale}.png`, fullPage: true });
+
+    const homepageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: homepage editor no overflow`, homepageOverflow, (v) => v <= 1);
+
+    /*
+     * **The drop report is a localised line with the API's English beneath it,
+     * never the English on its own.** Rendering the raw note is what put an
+     * English paragraph across the middle of an Arabic sheet on the analytics
+     * branch — none of the tests that existed failed, and a capture found it.
+     *
+     * Two halves, both required: the message must be in the reader's language,
+     * and the API's sentence must still be there as detail because it names the
+     * offending type verbatim. In Arabic the detail must also be `dir="ltr"`, or
+     * the quoted type reorders inside the column.
+     */
+    const dropReport = await page.evaluate((rtl) => {
+      const rows = [...document.querySelectorAll(".list-row")].filter((r) =>
+        /unknown type|not an object|not a list|More than/.test(r.textContent ?? ""),
+      );
+      if (rows.length === 0) return "no drop report";
+
+      for (const row of rows) {
+        const spans = [...row.querySelectorAll("span")];
+        const detail = spans.find((s) => /unknown type|not an object|More than/.test(s.textContent ?? "") && s.children.length === 0);
+        if (!detail) return "no detail line";
+        // The message is the sibling above the detail, and must not be English.
+        const message = spans.find(
+          (s) => s.children.length === 0 && s !== detail && (s.textContent ?? "").trim().length > 10,
+        );
+        if (!message) return "no localised message";
+        if (rtl && /^[A-Za-z ,.'"()]+$/.test((message.textContent ?? "").trim())) {
+          return "the message is English";
+        }
+        if (rtl && getComputedStyle(detail).direction !== "ltr") {
+          return "the English detail is not isolated";
+        }
+      }
+      return "ok";
+    }, locale === "ar");
+    check(`${name}/${locale}: the drop report is localised, with the API's text as detail`, dropReport, "ok");
+
+    /*
+     * **Reordering is a 44px target.** ADMIN_PANEL.md asks for drag-ordering;
+     * HTML5 drag-and-drop fires no `dragstart` from a touch pointer and has no
+     * keyboard path, so the panel ships buttons — which only helps if a thumb
+     * can hit them at the 390px floor.
+     */
+    const moveTargets = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll("button")].filter((b) =>
+        /Monter|Descendre|رفع|خفض/.test(b.getAttribute("aria-label") ?? ""),
+      );
+      if (buttons.length === 0) return "no move controls";
+      /*
+       * The button's own box, and it has to be the button's own box. `.tap-44`
+       * grows a hit area with an absolutely-positioned `::after`, which is right
+       * for a nav-bar control and wrong at the trailing edge of a padded row —
+       * it hangs past the container and widens the document without any
+       * element's rect overflowing. These are real 44px boxes for that reason,
+       * so measuring the rect is both the accessibility check and the guard
+       * against the layout defect that produced it.
+       */
+      const small = buttons.filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width < 44 || r.height < 44;
+      });
+      return small.length === 0 ? `${buttons.length} ok` : `${small.length} under 44px`;
+    });
+    check(`${name}/${locale}: reorder controls are 44px`, moveTargets, (v) => /ok$/.test(String(v)));
+
+    /*
+     * And every *other* control on a row, which is the half the check above
+     * misses. The menus screen has four controls per row and its main label
+     * button rendered **42px** tall in French and 44 in Arabic — two pixels
+     * short, in one locale, on the largest target on the row. Nothing but a
+     * measurement finds that.
+     */
+    const rowTargets = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll(".list-row button")];
+      if (buttons.length === 0) return "no row controls";
+      const small = buttons.filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && (r.width < 44 || r.height < 44);
+      });
+      return small.length === 0
+        ? `${buttons.length} ok`
+        : `${small.length} under 44px: ${small
+            .map((b) => (b.getAttribute("aria-label") ?? b.textContent ?? "").trim().slice(0, 20))
+            .join(", ")}`;
+    });
+    check(`${name}/${locale}: every row control is 44px`, rowTargets, (v) => /ok$/.test(String(v)));
+
+    /*
+     * The two screens with the most controls on one row, measured rather than
+     * captured — banners carry a thumbnail, a label, two reorder buttons and a
+     * delete; menus carry a label, two reorder buttons, an add and a delete, at
+     * two levels. Both are visited for this check alone, because a screenshot of
+     * a row that is two pixels short looks exactly like one that is not.
+     */
+    for (const [screen, url, ready] of [
+      ["banners", `${BASE}/${locale}/content/banners`, '[data-testid="banners-count"]'],
+      ["menus", `${BASE}/${locale}/content/menus`, '[data-testid="menu-count"]'],
+    ]) {
+      await page.goto(url, { waitUntil: "networkidle" });
+      await page.waitForSelector(ready);
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: `${OUT}/${screen}-${name}-${locale}.png`, fullPage: true });
+
+      const crowded = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll(".list-row button")];
+        if (buttons.length === 0) return "no row controls";
+        const small = buttons.filter((b) => {
+          const r = b.getBoundingClientRect();
+          return r.width > 0 && (r.width < 44 || r.height < 44);
+        });
+        return small.length === 0 ? `${buttons.length} ok` : `${small.length} under 44px`;
+      });
+      check(`${name}/${locale}: ${screen} row controls are 44px`, crowded, (v) =>
+        /ok$/.test(String(v)),
+      );
+
+      const crowdedOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      check(`${name}/${locale}: ${screen} no overflow`, crowdedOverflow, (v) => v <= 1);
+    }
+
+    // ------------------------------------------------------ content: media ---
+    await page.goto(`${BASE}/${locale}/media`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="media-count"]');
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${OUT}/media-${name}-${locale}.png` });
+
+    const mediaOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    check(`${name}/${locale}: media library no overflow`, mediaOverflow, (v) => v <= 1);
+
+    /*
+     * Every thumbnail is a real image that actually loaded, and every one is
+     * inside a labelled control. `naturalWidth === 0` is how a broken URL looks
+     * to a screenshot: identical to a slow one.
+     */
+    const thumbs = await page.evaluate(() => {
+      const images = [...document.querySelectorAll("ul img")];
+      if (images.length === 0) return "no thumbnails";
+      const broken = images.filter((i) => !i.complete || i.naturalWidth === 0).length;
+      const unlabelled = images.filter(
+        (i) => (i.closest("button")?.getAttribute("aria-label") ?? "").trim() === "",
+      ).length;
+      return `${images.length} images, ${broken} broken, ${unlabelled} unlabelled`;
+    });
+    check(
+      `${name}/${locale}: every thumbnail loaded and is labelled`,
+      thumbs,
+      (v) => /^\d+ images, 0 broken, 0 unlabelled$/.test(String(v)),
+    );
+
+    /*
+     * **No API English reaches the Arabic screen as a message.** The generic
+     * sweep the analytics branch added, pointed at this branch's screens: the
+     * CMS emits English field messages and English drop-report sentences, and
+     * both have a localised frame around them.
+     */
+    if (locale === "ar") {
+      const strayEnglish = await page.evaluate(() => {
+        const suspects = [
+          "No page at that path",
+          "The page data is invalid",
+          "Only image/",
+          "empty or truncated",
+        ];
+        const text = document.body.innerText;
+        return suspects.filter((s) => text.includes(s)).join(", ") || "clean";
+      });
+      check(`${name}/${locale}: no API English on the media screen`, strayEnglish, "clean");
+    }
+
     await context.close();
   }
 }
