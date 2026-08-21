@@ -17,6 +17,10 @@ import {
   statusBreakdown,
 } from "@/lib/customers";
 import {
+  CONSENT_SOURCES,
+  customer as customerSchema,
+} from "@/lib/api/schemas/customer";
+import {
   discount,
   discountsPerProduct,
   expiryInputValue,
@@ -192,6 +196,52 @@ describe("the consent record", () => {
       at: "2026-03-03T09:00:00+00:00",
       source: "unsubscribe_link",
     });
+  });
+
+  it("parses a consent source the panel has never heard of", () => {
+    /*
+     * **This blanked the entire customer detail screen, and the cause was a
+     * schema being stricter than the API.**
+     *
+     * `marketing_consent_source` was `z.enum(["registration", "account",
+     * "unsubscribe_link"])`. Those three are a convention among the backend's own
+     * *writers* — `Consent::set($id, $consented, $source)` validates nothing and
+     * stores whatever string it is handed. The campaigns seed passed `"seed"`,
+     * entirely reasonably, and `GET /customers/{id}` stopped parsing: `acFetch`
+     * parses on the **server**, so one unexpected label on one row rendered the
+     * whole detail as "This page couldn't load".
+     *
+     * It is the `unknownSectionTypes()` rule, which this panel already applies to
+     * the homepage's section types and to a notification's channel: a vocabulary
+     * copied from the other side of the wire must degrade, not blank the page.
+     * The row renders the raw value when it has no label for it.
+     */
+    const raw = customer({
+      marketing_consent: true,
+      marketing_consent_at: "2026-08-21T17:00:00+00:00",
+      marketing_consent_source: "seed",
+    });
+
+    expect(
+      customerSchema.safeParse(raw).success,
+      "an unknown consent source must not fail the parse",
+    ).toBe(true);
+    // Narrowed first: `ConsentRecord` is a union and the `never` arm carries no
+    // source, which is the shape that makes the three states unmistakable.
+    const record = consentRecord(raw);
+    expect(record.state).toBe("granted");
+    if (record.state !== "never") expect(record.source).toBe("seed");
+
+    // The controls: the three conventional values still parse, and the field is
+    // still type-checked — this did not simply stop looking at it.
+    for (const source of CONSENT_SOURCES) {
+      expect(customerSchema.safeParse(customer({ marketing_consent_source: source })).success).toBe(
+        true,
+      );
+    }
+    expect(
+      customerSchema.safeParse(customer({ marketing_consent_source: 7 as never })).success,
+    ).toBe(false);
   });
 
   it("reports a granted consent with its date and source", () => {

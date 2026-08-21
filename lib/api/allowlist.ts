@@ -279,6 +279,49 @@ const RULES: readonly Rule[] = [
   rule("/notifications", "GET"),
   rule("/notifications/\\d+", "GET"),
   rule("/notifications/\\d+/retry", "POST"),
+
+  /*
+   * Marketing. `ac_manage_marketing`, with a **second capability on three of
+   * them** — `send`, `recipients` and a segment's count also need
+   * `ac_manage_customers`, because a campaign reaches every customer record in
+   * the shop and a count of an audience is a count of customers.
+   *
+   * That compound rule finally has a fixture again. Part V records the two-tier
+   * collapse having made "drafts but cannot send" a state no role reaches;
+   * measured 2026-08-21, the retired `ac_marketing_manager` that
+   * `scripts/test.sh` already mints is **200** on `/campaigns`, the detail and
+   * the preview, and **403** on exactly those three.
+   *
+   * `POST /marketing/events/purchase` is deliberately absent, and it is the one
+   * write on this subject the API offers here. It records a *storefront*
+   * conversion — the browser and the server each report their half and share an
+   * `event_id` so Meta does not count it twice — and a panel that could post one
+   * would be inventing purchases in somebody's ad reporting. §85 assigns it to
+   * the storefront; nothing in this panel calls it.
+   *
+   * `/marketing/unsubscribe` is likewise absent. It is public, signed-token, and
+   * belongs to the customer following a link in their mail. Proxying it through
+   * a staff credential would let the panel unsubscribe people, which is a
+   * consent record it has no business writing — `PATCH /customers/{id}` already
+   * refuses `marketing_consent` by name for the same reason.
+   *
+   * There is no `DELETE /email-templates/{id}` and no write of any kind: §85
+   * makes a template a `ac_email_template` post authored in wp-admin, where the
+   * revisions and the media library already are, and the API only reads them.
+   */
+  rule("/campaigns", "GET", "POST"),
+  rule("/campaigns/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/campaigns/\\d+/preview", "GET"),
+  rule("/campaigns/\\d+/test", "POST"),
+  rule("/campaigns/\\d+/cancel", "POST"),
+  rule("/campaigns/\\d+/send", "POST"),
+  rule("/campaigns/\\d+/recipients", "GET"),
+  rule("/segments", "GET", "POST"),
+  rule("/segments/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/segments/\\d+/preview", "GET"),
+  rule("/email-templates", "GET"),
+  rule("/email-templates/\\d+", "GET"),
+  rule("/marketing/config", "GET"),
 ];
 
 export type AllowResult =

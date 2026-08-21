@@ -375,19 +375,90 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["cms", "menus"], "GET").allowed).toBe(false);
 
     /*
-     * The rest of Part X's step 14. `feat/notifications` has since taken
-     * `/notifications` off this list and onto the allowed one — see the
-     * notifications block below — and `feat/campaigns` is what remains. Each is
-     * a different capability with no screen behind it yet, and a route no screen
-     * calls must not be reachable by guessing a URL.
+     * Step 14's three branches have all landed now, and every route they call is
+     * on the allowed list — `feat/notifications` moved `/notifications` across,
+     * `feat/campaigns` moved the marketing block. What stays refused is what no
+     * screen calls, which is the list's whole point.
      */
+    expect(checkAllowed(["marketing", "events", "purchase"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["marketing", "unsubscribe"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["marketing", "unsubscribe"], "POST").allowed).toBe(false);
+  });
+
+  it("allows the marketing block, and refuses the two routes that are not the panel's", () => {
+    for (const [path, method] of [
+      [["campaigns"], "GET"],
+      [["campaigns"], "POST"],
+      [["campaigns", "321"], "PATCH"],
+      [["campaigns", "321"], "DELETE"],
+      [["campaigns", "321", "preview"], "GET"],
+      [["campaigns", "321", "test"], "POST"],
+      [["campaigns", "321", "cancel"], "POST"],
+      [["campaigns", "321", "send"], "POST"],
+      [["campaigns", "321", "recipients"], "GET"],
+      [["segments"], "POST"],
+      [["segments", "46"], "PATCH"],
+      [["segments", "46", "preview"], "GET"],
+      [["email-templates"], "GET"],
+      [["email-templates", "4650"], "GET"],
+      [["marketing", "config"], "GET"],
+    ] as const) {
+      expect(checkAllowed([...path], method), `${method} /${path.join("/")}`).toEqual({
+        allowed: true,
+        path: `/${path.join("/")}`,
+      });
+    }
+
+    /*
+     * **`POST /marketing/events/purchase` is the one write on this subject and
+     * it is not the panel's.** It records a storefront conversion, where the
+     * browser and the server each report a half sharing an `event_id` so Meta
+     * does not count it twice. A panel that could post one would be inventing
+     * purchases in somebody's ad reporting.
+     *
+     * `/marketing/unsubscribe` belongs to the customer following a link in their
+     * own mail — public, signed-token, no login. Proxying it through a staff
+     * credential would let the panel write a consent record on somebody's
+     * behalf, which is what `PATCH /customers/{id}` already refuses
+     * `marketing_consent` by name to prevent.
+     */
+    expect(checkAllowed(["marketing", "events", "purchase"], "POST")).toEqual({
+      allowed: false,
+      reason: "path",
+    });
+    expect(checkAllowed(["marketing", "unsubscribe"], "POST")).toEqual({
+      allowed: false,
+      reason: "path",
+    });
+
+    // A template is read-only: §85 makes it a post authored in wp-admin.
+    expect(checkAllowed(["email-templates"], "POST")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+    expect(checkAllowed(["email-templates", "4650"], "PATCH")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+    expect(checkAllowed(["email-templates", "4650"], "DELETE")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+
+    // Guessed neighbours. The campaign drain is a command, not a route, and must
+    // not become one by URL — nothing on a request path in this API sends mail.
     for (const path of [
-      ["campaigns"],
-      ["segments"],
-      ["email-templates"],
-      ["marketing", "config"],
+      ["campaigns", "drain"],
+      ["campaigns", "321", "drain"],
+      ["campaigns", "321", "resume"],
+      ["campaigns", "321", "recipients", "348"],
+      ["segments", "46", "customers"],
+      ["marketing"],
     ]) {
-      expect(checkAllowed(path, "GET").allowed).toBe(false);
+      expect(checkAllowed(path, "GET"), path.join("/")).toEqual({
+        allowed: false,
+        reason: "path",
+      });
     }
   });
 

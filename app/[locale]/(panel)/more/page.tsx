@@ -79,6 +79,14 @@ const DESTINATIONS: Destination[] = [
    * the 390px floor and share no row shape.
    */
   { key: "content", href: "/content", icon: "note", capability: "ac_manage_content" },
+  /*
+   * Marketing is a hub, like Content and for the same reason: four subjects
+   * sharing one capability — campaigns, segments, email templates and the pixel
+   * configuration — with no query, no filter bar and no row shape between them.
+   * Three top-level rows for one capability is what the content hub was created
+   * to avoid.
+   */
+  { key: "marketing", href: "/marketing", icon: "mail", capability: "ac_manage_marketing" },
   { key: "settings", href: null, icon: "lock", capability: "ac_manage_settings" },
 ];
 

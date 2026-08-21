@@ -47,8 +47,27 @@ export type Address = z.infer<typeof address>;
  * because `notes[].created_at` and `movements[].created_at` do not, and
  * `new Date()` shifts those silently.
  */
-const consentSource = z.enum(["registration", "account", "unsubscribe_link"]);
-export type ConsentSource = z.infer<typeof consentSource>;
+export const CONSENT_SOURCES = ["registration", "account", "unsubscribe_link"] as const;
+export type ConsentSource = (typeof CONSENT_SOURCES)[number];
+
+/**
+ * **A string, not an enum, and that is a correction rather than a loosening.**
+ *
+ * This was `z.enum([...])` and it blanked the entire customer screen. `Consent`
+ * on the backend writes `marketing_consent_source` from a caller-supplied string
+ * with **no validation of any kind** — `Consent::set($id, true, $source)` stores
+ * whatever it is handed — so the three values above are a convention, not a
+ * contract. The campaigns seed passed `"seed"`, entirely reasonably, and
+ * `GET /customers/{id}` then failed to parse: `acFetch` parses on the server, so
+ * the whole detail rendered as *"This page couldn't load"* over one label on one
+ * row.
+ *
+ * That is the `unknownSectionTypes()` rule, which this panel already applies to
+ * the homepage's section types and to a notification's channel: **a vocabulary
+ * copied from the other side of the wire must degrade, not blank the page.** A
+ * source the panel has no label for renders as itself — see `consentRecord()`.
+ */
+const consentSource = z.string();
 
 /**
  * A customer row.
