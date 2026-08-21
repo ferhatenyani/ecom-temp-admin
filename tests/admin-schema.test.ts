@@ -977,19 +977,51 @@ describe("exports are files", () => {
 
   it("promises a round trip only where the file actually round-trips", () => {
     /*
-     * Measured after the header fix: the products export parses, every row is
-     * read, and **every `sku` resolves empty** — the header carries
-     * WooCommerce's display labels and its label-to-field table lives in the
-     * admin importer, which this API deliberately does not load. The same file
-     * with a lowercased header previews `updated: 2`.
+     * **This assertion used to hold the opposite, and both versions were
+     * measured.** It read `every sku resolves empty` and `ROUND_TRIPS.products
+     * is false`, which was true of the API as it then stood: the export wrote
+     * WooCommerce's display labels, the importer matched field names exactly,
+     * and nothing in between mapped one onto the other.
+     *
+     * What made that a defect rather than a gap is the *shape* of the failure —
+     * `created: 33, failed: 0` with every field empty, a green preview for a
+     * file nothing had been read out of. Fixed in `ecom-temp` on
+     * `fix/product-export-field-names`; the fixtures below are re-captured.
      */
     const report = importReport.parse(data(fixtures.exportProductsRoundTrip));
     expect(report.rows).toBeGreaterThan(0);
-    expect(report.preview.every((row) => (row.sku ?? "") === "")).toBe(true);
+    expect(report.failed).toBe(0);
+    // Every SKU resolves now. This is the exact clause that used to assert the
+    // reverse, kept in place so the change is legible rather than deleted.
+    expect(report.preview.every((row) => (row.sku ?? "") !== "")).toBe(true);
+    // Default mode is `create`, so a file of products that exist is all skips —
+    // and the reason names the SKU rather than a missing one.
+    expect(report.skipped).toBe(report.rows);
+    expect(report.created).toBe(0);
 
-    expect(ROUND_TRIPS.products).toBe(false);
+    // The half an operator actually wants: edit the export, send it back.
+    const update = importReport.parse(data(fixtures.exportProductsRoundTripUpdate));
+    expect(update.updated).toBe(update.rows);
+    expect(update.failed).toBe(0);
+    expect(update.preview.every((row) => (row.name ?? "") !== "")).toBe(true);
+
+    /*
+     * And the control that keeps the fix honest: the **old** header is now
+     * refused outright rather than reported as a success. A file WooCommerce's
+     * importer cannot map is a 400 naming the column it needs, which is the
+     * difference between this being fixed and the lenient reader simply having
+     * moved.
+     */
+    const refused = error(fixtures.importLabelHeader);
+    expect(refused.code).toBe("invalid_request");
+    const fields = refused.details?.fields as Record<string, string>;
+    expect(fields.file).toContain("sku");
+
+    expect(ROUND_TRIPS.products).toBe(true);
     expect(ROUND_TRIPS.inventory).toBe(true);
-    // And only two subjects have an importer at all.
+    // `orders` and `customers` stay false for a different reason: no importer at
+    // all, which is not the same fact as a file that will not load.
+    expect(ROUND_TRIPS.orders).toBe(false);
     expect(isImportable("inventory")).toBe(true);
     expect(isImportable("orders")).toBe(false);
     expect([...IMPORT_SUBJECTS]).toEqual(["products", "inventory"]);
