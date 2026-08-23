@@ -190,3 +190,233 @@
     --color-fill-tertiary: rgb(118 118 128 / 0.24);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   THE NEW SYSTEM — see DESIGN.md
+ *
+ *   Structured neutral, light-first, dark derived. Everything below is
+ *   prefixed `ui-` for exactly one reason: the twenty-odd screens still on the
+ *   iOS system above must keep rendering byte-for-byte as they do today, and
+ *   four names would otherwise collide (`surface`, `surface-2`, `surface-3`,
+ *   `scrim`) while `--color-accent` would silently repaint every old screen
+ *   from #007aff to #0b62d6.
+ *
+ *   The prefix is temporary and mechanically removable. When the last screen
+ *   migrates, delete the block above and run:
+ *
+ *       find app components -type f -name '*.tsx' -exec sed -i 's/\bui-//g' {} +
+ *       sed -i 's/--\([a-z]*\)-ui-/--\1-/g' styles/tokens.css styles/globals.css
+ *
+ *   Until then, `ui-` in a className is a reliable marker that a file has been
+ *   migrated — `grep -rL 'ui-' app --include '<star>.tsx'` lists what has not.
+ *   (Written with <star> rather than the glob character on purpose: a `*` next
+ *   to a `/` inside a CSS comment closes the comment, and the parse error that
+ *   follows points at a line four hundred further down.)
+ *
+ *   Every contrast ratio in the comments is measured, not estimated.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ------------------------------------------------------------ surfaces ---
+   * Four steps. The canvas is the ground the page sits on; surface is what
+   * cards, tables and overlays are made of. Elevation is a border plus, for
+   * the few things that genuinely float, a shadow — never a surface step on
+   * its own. That inverts the rule above it, deliberately.
+   */
+  --color-ui-canvas: #f6f7f9;
+  --color-ui-surface: #ffffff;
+  --color-ui-surface-2: #f1f3f6; /* table headers, inputs, inset panels */
+  --color-ui-surface-3: #e6e9ee; /* hover, pressed, selected row */
+
+  /* ---------------------------------------------------------------- text ---
+   * Ratios are against --color-ui-surface. All three clear 4.5:1, which is why
+   * `subtle` is #686f7c and not the #79818f it started as — that measured
+   * 3.93:1 and would have been a placeholder nobody could read.
+   */
+  --color-ui-fg: #191d23; /* 16.92:1 */
+  --color-ui-muted: #59616e; /*  6.25:1 */
+  --color-ui-subtle: #686f7c; /*  5.06:1 */
+
+  /* --------------------------------------------------------------- lines ---
+   * Three tiers, and the third exists for a reason WCAG names: 1.4.11 wants
+   * 3:1 for the boundary of a control you can interact with. A card edge is
+   * decorative and exempt; the border of a text input is not.
+   */
+  --color-ui-line: #e2e5ea; /* card edges, row rules — decorative */
+  --color-ui-line-strong: #c9ced7; /* section dividers, table header rule */
+  --color-ui-line-control: #868f9e; /* inputs, checkboxes — 3.26:1 */
+
+  /* ------------------------------------------------------------- meaning ---
+   * Accent is for links, focus, selection and the active nav item. It is not
+   * the colour of the primary button — that is ink, so that accent keeps
+   * meaning "this is interactive" instead of meaning nothing.
+   */
+  --color-ui-accent: #0b62d6; /* 5.63:1 */
+
+  /* Paired, always. The `-fg` is the text and the `-bg` is its wash, and they
+   * are measured against each other rather than against the page. The old
+   * `.tonal` tinted text with the same hue as its own wash and measured
+   * 1.98:1 on success — every badge in the panel is currently unreadable. */
+  --color-ui-success-fg: #12703a; /* on its own bg: 5.50:1 */
+  --color-ui-success-bg: #e8f5ed;
+  --color-ui-warning-fg: #8a5300; /* 5.72:1 */
+  --color-ui-warning-bg: #fdf2e3;
+  --color-ui-danger-fg: #b3261e; /* 5.72:1 */
+  --color-ui-danger-bg: #fdecea;
+  --color-ui-info-fg: #2c4fa3; /* 6.62:1 */
+  --color-ui-info-bg: #eaeffa;
+  --color-ui-neutral-fg: #59616e; /* 5.62:1 */
+  --color-ui-neutral-bg: #f1f3f6;
+
+  --color-ui-scrim: rgb(16 24 40 / 0.48);
+  --color-ui-selection: rgb(11 98 214 / 0.16);
+
+  /* ---------------------------------------------------------------- type ---
+   * IBM Plex Sans stays — already self-hosted, already routing Arabic by
+   * unicode-range, and a perfectly good grotesque. Body drops 17 → 15: this is
+   * read on a monitor, and 17px in a table cell is a table that holds four
+   * columns.
+   */
+  --text-ui-display: 1.75rem; /* 28 */
+  --text-ui-display--line-height: 2.125rem; /* 34 */
+  --text-ui-display--font-weight: 600;
+  --text-ui-display--letter-spacing: -0.01em;
+
+  --text-ui-title: 1.375rem; /* 22 */
+  --text-ui-title--line-height: 1.75rem; /* 28 */
+  --text-ui-title--font-weight: 600;
+  --text-ui-title--letter-spacing: -0.006em;
+
+  --text-ui-heading: 1.125rem; /* 18 */
+  --text-ui-heading--line-height: 1.5rem; /* 24 */
+  --text-ui-heading--font-weight: 600;
+
+  --text-ui-subheading: 0.9375rem; /* 15 */
+  --text-ui-subheading--line-height: 1.375rem; /* 22 */
+  --text-ui-subheading--font-weight: 600;
+
+  --text-ui-body: 0.9375rem; /* 15 */
+  --text-ui-body--line-height: 1.375rem; /* 22 */
+  --text-ui-body--font-weight: 400;
+
+  --text-ui-compact: 0.875rem; /* 14 — table cells, dense panels */
+  --text-ui-compact--line-height: 1.25rem; /* 20 */
+
+  --text-ui-label: 0.8125rem; /* 13 — form labels, meta, help */
+  --text-ui-label--line-height: 1.125rem; /* 18 */
+  --text-ui-label--font-weight: 500;
+
+  --text-ui-caption: 0.75rem; /* 12 — timestamps, secondary meta */
+  --text-ui-caption--line-height: 1rem; /* 16 */
+  --text-ui-caption--font-weight: 500;
+
+  /* The only uppercase in the panel. */
+  --text-ui-overline: 0.6875rem; /* 11 */
+  --text-ui-overline--line-height: 1rem; /* 16 */
+  --text-ui-overline--font-weight: 600;
+  --text-ui-overline--letter-spacing: 0.06em;
+
+  /* -------------------------------------------------------------- radius ---
+   * Roundness is the loudest platform tell. 8/12/14/20 above reads as iOS;
+   * 4/6/8/12 reads as a console.
+   */
+  --radius-ui-sm: 4px; /* checkbox, swatch, skeleton block */
+  --radius-ui-md: 6px; /* button, input, select, badge, menu item */
+  --radius-ui-lg: 8px; /* card, table container, modal, popover, drawer */
+  --radius-ui-xl: 12px; /* the full-screen overlay's top corners below sm */
+
+  /* ----------------------------------------------------------- elevation ---
+   * Structure is the 1px line; the shadow marks the small number of things
+   * that actually float above the page.
+   */
+  --shadow-ui-xs: 0 1px 2px rgb(16 24 40 / 0.04);
+  --shadow-ui-sm:
+    0 2px 4px rgb(16 24 40 / 0.06), 0 1px 2px rgb(16 24 40 / 0.04);
+  --shadow-ui-md:
+    0 12px 32px rgb(16 24 40 / 0.12), 0 2px 8px rgb(16 24 40 / 0.06);
+
+  /* -------------------------------------------------------------- motion ---
+   * Exit is always one step faster than entry.
+   */
+  --dur-ui-instant: 80ms; /* hover, focus ring */
+  --dur-ui-fast: 120ms; /* toggles, selection, badge changes */
+  --dur-ui-base: 180ms; /* overlays in, popovers, tabs */
+  --dur-ui-slow: 240ms; /* drawer, full-screen overlay */
+
+  --ease-ui-out: cubic-bezier(0.16, 1, 0.3, 1); /* entrances */
+  --ease-ui-standard: cubic-bezier(0.4, 0, 0.2, 1); /* state changes */
+}
+
+/*
+ * Dark, derived and re-measured. Not an inversion: surfaces step *up* in
+ * lightness with elevation, semantics get lighter and desaturate, and the
+ * ground is near-black without being #000 — pure black against a real monitor's
+ * black bezel makes every border look like a scratch.
+ *
+ * Written twice for the same reason the block above it is: three theme states,
+ * not two. A colour defined only inside the media query disappears the moment
+ * someone picks light by hand.
+ */
+@layer theme {
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-ui-canvas: #0b0d10;
+      --color-ui-surface: #14171b;
+      --color-ui-surface-2: #1b1f25;
+      --color-ui-surface-3: #252a31;
+      --color-ui-fg: #e9ebee; /* 15.05:1 */
+      --color-ui-muted: #a0a8b4; /*  7.49:1 */
+      --color-ui-subtle: #8b93a1; /*  5.35:1 on surface-2 */
+      --color-ui-line: #272c33;
+      --color-ui-line-strong: #3a414a;
+      --color-ui-line-control: #6b7482; /* 3.81:1 */
+      --color-ui-accent: #6ba5ff; /* 7.23:1 */
+      --color-ui-success-fg: #4ec97e; /* on its own bg: 7.28:1 */
+      --color-ui-success-bg: #102a1c;
+      --color-ui-warning-fg: #e0a458; /* 7.16:1 */
+      --color-ui-warning-bg: #2e2113;
+      --color-ui-danger-fg: #ff8a80; /* 7.11:1 */
+      --color-ui-danger-bg: #33191a;
+      --color-ui-info-fg: #8fa8ee; /* 6.86:1 */
+      --color-ui-info-bg: #1a2135;
+      --color-ui-neutral-fg: #a0a8b4; /* 6.90:1 */
+      --color-ui-neutral-bg: #1b1f25;
+      --color-ui-scrim: rgb(0 0 0 / 0.64);
+      --color-ui-selection: rgb(107 165 255 / 0.22);
+      /* A shadow against a near-black ground does almost nothing, so dark
+       * leans on the line and the surface step and only deepens the overlay. */
+      --shadow-ui-xs: 0 1px 2px rgb(0 0 0 / 0.24);
+      --shadow-ui-sm: 0 2px 4px rgb(0 0 0 / 0.32), 0 1px 2px rgb(0 0 0 / 0.24);
+      --shadow-ui-md: 0 16px 40px rgb(0 0 0 / 0.56), 0 2px 8px rgb(0 0 0 / 0.32);
+    }
+  }
+  :root[data-theme="dark"] {
+    --color-ui-canvas: #0b0d10;
+    --color-ui-surface: #14171b;
+    --color-ui-surface-2: #1b1f25;
+    --color-ui-surface-3: #252a31;
+    --color-ui-fg: #e9ebee;
+    --color-ui-muted: #a0a8b4;
+    --color-ui-subtle: #8b93a1;
+    --color-ui-line: #272c33;
+    --color-ui-line-strong: #3a414a;
+    --color-ui-line-control: #6b7482;
+    --color-ui-accent: #6ba5ff;
+    --color-ui-success-fg: #4ec97e;
+    --color-ui-success-bg: #102a1c;
+    --color-ui-warning-fg: #e0a458;
+    --color-ui-warning-bg: #2e2113;
+    --color-ui-danger-fg: #ff8a80;
+    --color-ui-danger-bg: #33191a;
+    --color-ui-info-fg: #8fa8ee;
+    --color-ui-info-bg: #1a2135;
+    --color-ui-neutral-fg: #a0a8b4;
+    --color-ui-neutral-bg: #1b1f25;
+    --color-ui-scrim: rgb(0 0 0 / 0.64);
+    --color-ui-selection: rgb(107 165 255 / 0.22);
+    --shadow-ui-xs: 0 1px 2px rgb(0 0 0 / 0.24);
+    --shadow-ui-sm: 0 2px 4px rgb(0 0 0 / 0.32), 0 1px 2px rgb(0 0 0 / 0.24);
+    --shadow-ui-md: 0 16px 40px rgb(0 0 0 / 0.56), 0 2px 8px rgb(0 0 0 / 0.32);
+  }
+}

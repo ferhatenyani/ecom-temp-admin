@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.." || exit 2
 # analytics branch, floor 133; 167 at the content branch, floor 160; 179 at the
 # notifications branch, floor 172; 195 at the campaigns branch, floor 188; 223 at
 # the admin branch, floor 216.
-FLOOR=216
+FLOOR=234
 failures=0
 checks=0
 
@@ -73,6 +73,13 @@ report "no component library" \
   "Primitives are written here; Radix is permitted for behaviour only." \
   "$(scan 'from "(@mui|antd|@chakra-ui|@mantine)|shadcn')"
 
+# 2 — no emoji standing in for an icon. The sprite in components/primitives/Icon
+# is the only icon source; an emoji renders differently on every platform and
+# carries an accessible name nobody chose.
+report "no emoji as icons" \
+  "Use the Icon sprite. An emoji is a font glyph, not a design decision." \
+  "$(grep -nP '[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]' "${FILES[@]}" 2>/dev/null || true)"
+
 # 3 — no gradients. A backdrop-filter blur is not a gradient and is permitted.
 report "no gradients" \
   "A blur samples what is behind it; a gradient invents a colour ramp." \
@@ -106,6 +113,13 @@ report "no arbitrary values" \
   "An arbitrary value is a token that was not added. Add the token." \
   "$(scan '\-\[[0-9]|\-\[#|\-\[calc|\-\[var')"
 
+# Added with the redesign: the viewport floor is 340px and 100vh is wrong on a
+# phone — the URL bar makes it taller than the visible area, so a full-height
+# overlay's footer sits below the fold. dvh is the unit that accounts for it.
+report "no 100vh" \
+  "Use dvh. 100vh is taller than the visible viewport on a mobile browser." \
+  "$(scan '\bh-screen\b|100vh'; scan_css '\b100vh\b')"
+
 echo
 echo "logical properties only"
 
@@ -119,14 +133,26 @@ report "no physical direction in css" \
   "$(scan_css '(^|[^-])(margin|padding)-(left|right)\s*:|(^|[^-])(left|right)\s*:')"
 
 echo
-echo "elevation is surface, not shadow"
+echo "elevation from tokens only"
 
-# Shadow exists for a sheet and a popover. Nothing else in the panel casts one.
+# This rule inverted with the redesign, and the inversion is deliberate.
+#
+# The old system said elevation was a surface step and that a shadow belonged to
+# a sheet and a popover only. That is correct for iOS and wrong for a console:
+# DESIGN.md §1.6 makes structure a 1px line and gives the few things that
+# genuinely float a tokenised shadow. So the rule is no longer "almost nowhere",
+# it is "only from the three tokens".
+#
+# Permitted: shadow-ui-xs / -sm / -md (the new scale) and shadow-overlay (the
+# old one, still used by the screens that have not migrated).
+# Banned: Tailwind's own scale, which is untokenised and would drift, and any
+# arbitrary shadow.
 shadow_hits="$(grep -nE 'shadow-' "${FILES[@]}" 2>/dev/null \
-  | grep -vE '(Sheet|Popover|ActionSheet)\.tsx' \
-  | grep -vE 'shadow-overlay' || true)"
-report "no shadows outside Sheet and Popover" \
-  "A card is a surface step on a grouped ground — no border, no shadow." \
+  | grep -vE 'shadow-ui-(xs|sm|md)\b' \
+  | grep -vE 'shadow-overlay' \
+  | grep -vE '(Sheet|Popover|ActionSheet)\.tsx' || true)"
+report "no untokenised shadows" \
+  "Use shadow-ui-xs/sm/md. Tailwind's default scale and shadow-[…] both drift." \
   "$shadow_hits"
 
 echo

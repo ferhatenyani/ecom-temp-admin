@@ -27,7 +27,15 @@
     "marketing": "التسويق",
     "staff": "الفريق",
     "audit": "السجل",
-    "transfer": "الاستيراد والتصدير"
+    "transfer": "الاستيراد والتصدير",
+    "group": {
+      "commerce": "التجارة",
+      "catalog": "الكتالوج",
+      "engage": "التواصل",
+      "insight": "التحليلات",
+      "admin": "الإدارة"
+    },
+    "media": "الوسائط"
   },
   "login": {
     "title": "تسجيل الدخول",
@@ -120,7 +128,26 @@
       "allowedAre": "التغييرات المسموح بها:",
       "allowedNone": "لا يمكن أي تغيير من هذه الحالة."
     },
-    "clearSearch": "إزالة البحث"
+    "clearSearch": "إزالة البحث",
+    "refresh": "تحديث",
+    "export": "تصدير",
+    "exportSelected": "تصدير المحدد",
+    "openFull": "فتح",
+    "preview": "معاينة",
+    "copyNumber": "نسخ الرقم",
+    "chipSearch": "بحث: {term}",
+    "columns": {
+      "order": "الطلب",
+      "customer": "العميل",
+      "place": "المكان",
+      "items": "العناصر",
+      "payment": "الدفع",
+      "date": "تاريخ الإنشاء",
+      "modified": "آخر تعديل",
+      "total": "الإجمالي",
+      "status": "الحالة",
+      "id": "المعرف"
+    }
   },
   "status": {
     "pending": "في الانتظار",
@@ -1977,5 +2004,36 @@
     "columnsFound": "الأعمدة المقروءة في السطر الأول: {columns}",
     "importSafety": "المعاينة لا تكتب شيئًا أبدًا: وضع المحاكاة هو الوضع الافتراضي للواجهة البرمجية، والتطبيق إجراء منفصل.",
     "noFile": "لم يُختَر ملف"
+  },
+  "ui": {
+    "close": "إغلاق",
+    "cancel": "إلغاء",
+    "clearAll": "مسح الكل",
+    "removeFilter": "إزالة عامل التصفية {filter}",
+    "collapseNav": "طي قائمة التنقل",
+    "expandNav": "توسيع قائمة التنقل",
+    "atLeastOneColumn": "يجب أن يبقى عمود واحد على الأقل ظاهرًا.",
+    "theme": {
+      "label": "المظهر",
+      "light": "فاتح",
+      "dark": "داكن",
+      "system": "النظام"
+    },
+    "table": {
+      "columns": "الأعمدة",
+      "density": "الكثافة",
+      "comfortable": "مريحة",
+      "compact": "مضغوطة",
+      "actions": "إجراءات",
+      "selectAll": "تحديد الكل",
+      "deselectAll": "إلغاء تحديد الكل",
+      "selected": "{count, plural, zero {لم يتم التحديد} one {تم تحديد #} two {تم تحديد #} few {تم تحديد #} many {تم تحديد #} other {تم تحديد #}}",
+      "clearSelection": "إلغاء التحديد",
+      "range": "{from}–{to} من {total}",
+      "rows": "الصفوف",
+      "pageOf": "{page} / {pages}",
+      "previousPage": "الصفحة السابقة",
+      "nextPage": "الصفحة التالية"
+    }
   }
 }
