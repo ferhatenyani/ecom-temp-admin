@@ -1,11 +1,20 @@
+import { cookies } from "next/headers";
 import { getTranslations } from "next-intl/server";
 import { requireSession } from "@/lib/session/read";
-import { TabBar, Sidebar } from "@/components/patterns/TabBar";
+import { AppShell } from "@/components/ui/AppShell";
+import { dirFor } from "@/i18n/routing";
+import { THEME_COOKIE, isTheme } from "@/lib/theme";
 import { QueryProvider } from "@/components/patterns/QueryProvider";
 
 /**
  * Everything behind the credential boundary. The session is verified here, once,
  * so no page below has to remember to.
+ *
+ * The shell changed with the redesign: `TabBar` + `Sidebar` are replaced by
+ * `AppShell`, which renders one grouped navigation tree as a persistent sidebar
+ * at `lg` and as a drawer below it. Navigation is global by nature, so this file
+ * is the one place it changes — screens still on the old visual system keep
+ * working underneath it, because `Scaffold` is now a shim over `PageHeader`.
  */
 export default async function PanelLayout({
   children,
@@ -15,22 +24,25 @@ export default async function PanelLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  await requireSession(locale);
-  const t = await getTranslations("nav");
+  const { me } = await requireSession(locale);
   const tApp = await getTranslations("app");
+  const themeCookie = (await cookies()).get(THEME_COOKIE)?.value;
 
   return (
     <QueryProvider>
-      {/* Skip-to-content on every page, before anything focusable. */}
-      <a
-        href="#content"
-        className="press sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded-md focus:bg-surface focus:px-4 focus:py-3 focus:text-body focus:text-accent"
+      <AppShell
+        locale={locale}
+        dir={dirFor(locale)}
+        theme={isTheme(themeCookie) ? themeCookie : "system"}
+        appName={tApp("name")}
+        /* `display_name` is a plain string on the identity schema, not optional,
+           but it is empty on accounts created without one — so `username` is the
+           fallback, and the avatar takes its initial from whichever wins. */
+        userName={me.display_name.trim() || me.username}
+        capabilities={me.capabilities}
       >
-        {t("skipToContent")}
-      </a>
-      <Sidebar locale={locale} appName={tApp("name")} />
-      <div className="md:ms-60">{children}</div>
-      <TabBar locale={locale} />
+        {children}
+      </AppShell>
     </QueryProvider>
   );
 }

@@ -1,27 +1,40 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import Link from "next/link";
-import { Icon } from "@/components/primitives/Icon";
+import type { ReactNode } from "react";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 
 /**
- * The large title that collapses.
+ * **A compatibility shim, not a component to build with.** New screens use
+ * `PageHeader` and `PageBody` from `components/ui/` directly.
  *
- * The title starts at `--text-large-title`, leading-aligned, below the nav bar. On
- * scroll it moves into the nav bar as `--text-headline` and the bar's material
- * gains its hairline.
+ * This used to be the iOS navigation bar: a large title that collapsed into a
+ * fixed translucent bar, driven by an `IntersectionObserver` on a sentinel, with
+ * a `.material-bar` backdrop blur and a `max-w-3xl` content column. All of that
+ * is retired — see DESIGN.md §0.
  *
- * Driven by `IntersectionObserver` on a sentinel, not by a scroll handler that
- * runs on every frame — a scroll listener recomputing layout at 60 Hz is how a
- * list janks while the reader's thumb is on it.
+ * It survives as a shim for one reason. `AppShell` replaced the tab bar in the
+ * shared panel layout, which means every screen in the panel now renders inside
+ * the new chrome — including the twenty that have not been redesigned yet. Left
+ * as it was, each of those would paint its own fixed nav bar on top of the new
+ * top bar, and every one of them would have to be touched in the same commit
+ * that changed the layout.
+ *
+ * So the props stay identical and map onto the new header:
+ *
+ *   title     → PageHeader title
+ *   back      → PageHeader back
+ *   trailing  → PageHeader actions
+ *   toolbar   → PageHeader toolbar
+ *   children  → PageBody
+ *
+ * A screen migrates by deleting its `<Scaffold>` and writing the two components
+ * itself. When the last one has, this file goes.
  */
-
 export function Scaffold({
   title,
   back,
   trailing,
   children,
-  /** Rendered under the large title and above the content — a filter bar, usually. */
   toolbar,
 }: {
   title: string;
@@ -30,80 +43,37 @@ export function Scaffold({
   children: ReactNode;
   toolbar?: ReactNode;
 }) {
-  const sentinel = useRef<HTMLDivElement>(null);
-  const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    const node = sentinel.current;
-    if (!node) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setCollapsed(!entry.isIntersecting),
-      // The nav bar is 2.75rem tall; the sentinel leaves the viewport behind it.
-      { rootMargin: "-44px 0px 0px 0px", threshold: 0 },
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
+  /*
+   * `overflow-x: clip` on the shim's wrapper, and only on the shim's.
+   *
+   * Measured at 1440: an un-migrated screen scrolled 12px horizontally, which
+   * the new system forbids outright. The cause is old-system content authored
+   * for the old container — `.pill-row` bleeds its gutter with a negative
+   * inline margin sized to `Scaffold`'s old `px-4`, and `PageBody` pads
+   * differently at `xl`. Each screen's own rewrite removes the cause, so this
+   * is a floor under the transition rather than a fix.
+   *
+   * `clip` rather than `hidden`: `hidden` makes the element a scroll container,
+   * which silently breaks `position: sticky` on anything inside it. `clip`
+   * does not.
+   */
   return (
-    <div className="min-h-dvh bg-bg-grouped">
-      <header
-        className={`material-bar safe-t fixed inset-x-0 top-0 z-20 ${
-          collapsed ? "hairline-b" : ""
-        }`}
-      >
-        <div className="flex min-h-11 items-center gap-1 px-2">
-          {back ? (
-            <Link
-              href={back.href}
-              className="press flex min-h-11 items-center gap-0.5 rounded-md px-2 text-body text-accent"
-            >
-              {/* A back arrow points the way the reader reads, so it flips. */}
-              <Icon name="back" flipInRtl className="size-5" />
-              <span className="truncate">{back.label}</span>
-            </Link>
-          ) : (
-            <span className="min-h-11 w-2" />
-          )}
-
-          {/* The collapsed title. Opacity only — a title that slides while the
-              list scrolls fights the list.
-
-              `dir="auto"` because on every detail screen this is user content: a
-              product name, a coupon code, a customer's name. It is the one string
-              in the chrome that is not in the page's own language, and it is
-              centred and truncating, so in Arabic it was clipped from its front.
-              `back.label` beside it is deliberately *not* marked — that is always
-              a translated section name and always in the page's direction. */}
-          <h1
-            aria-hidden={!collapsed}
-            dir="auto"
-            className={`title-collapsed min-w-0 flex-1 truncate text-center text-headline text-label ${
-              collapsed ? "is-collapsed" : ""
-            }`}
-          >
-            {title}
-          </h1>
-
-          <div className="flex min-h-11 shrink-0 items-center gap-1">{trailing}</div>
-        </div>
-      </header>
-
-      {/* Clears the fixed nav bar. */}
-      <div className="safe-t h-11" />
-
-      <div ref={sentinel} aria-hidden="true" className="h-px" />
-
-      <h1 className="mx-auto max-w-3xl px-4 pt-2 pb-3 text-large-title text-label">
-        {title}
-      </h1>
-
-      {toolbar ? <div className="mx-auto max-w-3xl px-4 pb-3">{toolbar}</div> : null}
-
-      {/* The bottom padding clears the tab bar and its safe inset. */}
-      <main id="content" className="pb-28 md:pb-8">
-        {children}
-      </main>
+    <div className="min-h-dvh overflow-x-clip bg-ui-canvas">
+      <PageHeader
+        title={title}
+        back={back}
+        actions={trailing}
+        toolbar={toolbar}
+        divided
+      />
+      {/*
+        `detail` rather than `full`: an un-migrated screen is a column of iOS
+        grouped lists, and those were designed against the old `max-w-3xl`. A
+        full-width canvas would stretch a 768px list to 1600px and put each row's
+        badge a hand's width from the name it belongs to. The width goes when the
+        screen does.
+      */}
+      <PageBody width="detail">{children}</PageBody>
     </div>
   );
 }

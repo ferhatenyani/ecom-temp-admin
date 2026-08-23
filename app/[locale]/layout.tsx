@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getTranslations, setRequestLocale } from "next-intl/server";
 import { routing, isLocale, dirFor } from "@/i18n/routing";
+import { THEME_COOKIE, themeAttribute } from "@/lib/theme";
 import { THEME_COLOR_DARK, THEME_COLOR_LIGHT } from "@/lib/theme-color";
 import { IconSprite } from "@/components/primitives/Icon";
 import { ToastProvider } from "@/components/primitives/Toast";
@@ -62,8 +64,25 @@ export default async function LocaleLayout({
   // deeper Server Components.
   setRequestLocale(locale);
 
+  /*
+   * The theme, resolved on the server so the markup arrives correct.
+   *
+   * The usual recipe is a blocking inline <script> in <head> that reads
+   * localStorage before paint. Under React 19 that is an error — "Encountered a
+   * script tag while rendering React component" — and it showed as a red
+   * overlay on every page. A cookie is sent with the document request, so the
+   * server can simply answer the question. No script, no flash, nothing to
+   * hydrate. `lib/theme.ts` carries the full argument.
+   *
+   * `undefined` means `system`, and that is deliberately the *absence* of the
+   * attribute rather than a third value: tokens.css branches on explicit light,
+   * explicit dark, and nothing stamped.
+   */
+  const jar = await cookies();
+  const theme = themeAttribute(jar.get(THEME_COOKIE)?.value);
+
   return (
-    <html lang={locale} dir={dirFor(locale)} className="h-full">
+    <html lang={locale} dir={dirFor(locale)} data-theme={theme} className="h-full">
       <head>
         {/*
           Preloaded, and only the face this locale actually needs. `unicode-range`
@@ -109,7 +128,7 @@ export default async function LocaleLayout({
         a real mismatch anywhere inside the app still fails loudly, and `lang` and
         `dir` on <html> stay checked, which is what the RTL tests depend on.
       */}
-      <body className="min-h-full bg-bg-grouped text-label" suppressHydrationWarning>
+      <body className="min-h-full bg-ui-canvas text-ui-fg" suppressHydrationWarning>
         <IconSprite />
         <NextIntlClientProvider>
           <ToastProvider>{children}</ToastProvider>

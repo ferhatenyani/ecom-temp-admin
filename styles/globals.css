@@ -41,8 +41,18 @@
 
 @layer base {
   html {
-    background-color: var(--color-bg-grouped);
-    color: var(--color-label);
+    /*
+     * The ground moved to the new system's canvas with the redesign, and this is
+     * the one old-system value the migration changes for every screen.
+     *
+     * It has to: `<body>` is behind every page, so leaving it at the iOS
+     * `--color-bg-grouped` meant a seam on overscroll — and in dark that seam
+     * was pure black against the new near-black canvas. In light the two differ
+     * by about one percent of lightness, so no un-migrated screen visibly
+     * changes.
+     */
+    background-color: var(--color-ui-canvas);
+    color: var(--color-ui-fg);
     font-family: var(--font-sans);
     /* Nothing holding text is sized in px, so 200 % zoom and Dynamic Type both
      * work. This is the one place a root size is set. */
@@ -63,7 +73,7 @@
   }
 
   body {
-    background-color: var(--color-bg-grouped);
+    background-color: var(--color-ui-canvas);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -683,5 +693,436 @@
     transition-duration: 120ms !important;
     transition-property: opacity !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *   THE NEW SYSTEM — utilities. See DESIGN.md.
+ *
+ *   Everything here is `ui-` prefixed or `ui:`-namespaced so the iOS utilities
+ *   above keep working for the screens still on them.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  /* ------------------------------------------------------------- surfaces ---
+   * The card, as one utility rather than five classes repeated at ninety call
+   * sites. Border first, shadow second — and the shadow is almost nothing,
+   * because its job is to separate the card from the canvas, not to lift it.
+   */
+  .ui-card {
+    background-color: var(--color-ui-surface);
+    border: 1px solid var(--color-ui-line);
+    border-radius: var(--radius-ui-lg);
+    box-shadow: var(--shadow-ui-xs);
+  }
+
+  /* A row rule that drops on the last child, so a rounded corner is never
+   * crossed by a line. */
+  .ui-row {
+    border-block-end: 1px solid var(--color-ui-line);
+  }
+  .ui-row:last-child {
+    border-block-end: 0;
+  }
+
+  /* ---------------------------------------------------------------- state ---
+   * A pointer UI shows state by changing its ground, not by scaling. `.press`
+   * and its scale(0.97) are a touch idiom and do not appear in this system.
+   */
+  .ui-interactive {
+    transition:
+      background-color var(--dur-ui-instant) var(--ease-ui-standard),
+      border-color var(--dur-ui-instant) var(--ease-ui-standard),
+      color var(--dur-ui-instant) var(--ease-ui-standard);
+  }
+  .ui-hover-fill:hover:not(:disabled):not([aria-disabled="true"]) {
+    background-color: var(--color-ui-surface-2);
+  }
+  .ui-hover-fill:active:not(:disabled):not([aria-disabled="true"]) {
+    background-color: var(--color-ui-surface-3);
+  }
+
+  /* --------------------------------------------------------------- focus ---
+   * The control's own ring, rather than the global outline. An outline sits
+   * outside the border box and gets clipped by a table's overflow container;
+   * a ring drawn as a box-shadow does not.
+   */
+  .ui-ring:focus-visible {
+    outline: none;
+    border-color: var(--color-ui-accent);
+    box-shadow: 0 0 0 3px var(--color-ui-selection);
+  }
+
+  /* ---------------------------------------------------------------- tap ---
+   * A small icon gets a real hit area from a pseudo-element rather than by
+   * growing the icon. 44px on touch, 32px on a pointer — the pointer figure is
+   * still above WCAG 2.5.8's 24px floor.
+   */
+  .ui-tap {
+    position: relative;
+  }
+  .ui-tap::after {
+    content: "";
+    position: absolute;
+    inset-inline: 50%;
+    inset-block: 50%;
+    min-width: 32px;
+    min-height: 32px;
+    width: 100%;
+    height: 100%;
+    transform: translate(50%, -50%);
+  }
+  [dir="rtl"] .ui-tap::after {
+    transform: translate(-50%, -50%);
+  }
+  @media (pointer: coarse) {
+    .ui-tap::after {
+      min-width: 44px;
+      min-height: 44px;
+    }
+  }
+
+  /* --------------------------------------------------------------- table ---
+   * The header rule is `border-strong` while row rules are `line`: the head is
+   * a different kind of boundary from the ones between rows, and drawing both
+   * at the same weight is what makes a table read as a grid of cells rather
+   * than as a list with labels.
+   */
+  .ui-table {
+    inline-size: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .ui-th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    background-color: var(--color-ui-surface-2);
+    border-block-end: 1px solid var(--color-ui-line-strong);
+    white-space: nowrap;
+  }
+  .ui-td {
+    border-block-end: 1px solid var(--color-ui-line);
+  }
+  .ui-table tbody tr:last-child .ui-td {
+    border-block-end: 0;
+  }
+  .ui-table tbody tr {
+    transition: background-color var(--dur-ui-instant) var(--ease-ui-standard);
+  }
+  .ui-table tbody tr[data-hoverable]:hover {
+    background-color: var(--color-ui-surface-2);
+  }
+  .ui-table tbody tr[data-selected="true"] {
+    background-color: var(--color-ui-surface-3);
+  }
+  /* The scroll container for a table with more columns than room. The page
+   * itself never scrolls inline — this does. */
+  .ui-table-scroll {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  /* ---------------------------------------------------------------- tabs ---
+   * Active is weight plus a 2px underline *under the label*. That is not the
+   * banned accent bar: the ban is on a coloured bar standing in for status or
+   * selection on the leading edge of a row or card. An underline on the
+   * selected tab is the control's own affordance, it sits on the writing
+   * baseline rather than beside the content, and there is no other way to
+   * indicate a selected tab that does not reduce to colour alone.
+   */
+  .ui-tab {
+    position: relative;
+    white-space: nowrap;
+    color: var(--color-ui-muted);
+    transition:
+      color var(--dur-ui-instant) var(--ease-ui-standard),
+      background-color var(--dur-ui-instant) var(--ease-ui-standard);
+  }
+  .ui-tab:hover:not([aria-current="page"]) {
+    color: var(--color-ui-fg);
+  }
+  .ui-tab[aria-current="page"] {
+    color: var(--color-ui-fg);
+    font-weight: 600;
+  }
+  .ui-tab[aria-current="page"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: -1px;
+    block-size: 2px;
+    background-color: var(--color-ui-fg);
+  }
+  /* The tab strip scrolls inline at narrow widths rather than wrapping — a
+   * wrapped tab strip changes the page's height as the filter changes. */
+  .ui-tabs-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    overscroll-behavior-inline: contain;
+  }
+  .ui-tabs-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* -------------------------------------------------------------- overlay ---
+   * One set of animations for every overlay. Enter on --dur-ui-base, exit on
+   * --dur-ui-fast, and Radix drives both through data-state.
+   */
+  .ui-scrim {
+    background-color: var(--color-ui-scrim);
+  }
+  .ui-scrim[data-state="open"] {
+    animation: ui-fade-in var(--dur-ui-base) var(--ease-ui-out);
+  }
+  .ui-scrim[data-state="closed"] {
+    animation: ui-fade-out var(--dur-ui-fast) var(--ease-ui-standard);
+  }
+
+  /*
+   * The modal. Full screen below sm — at 340px a centred dialog is a dialog
+   * with 8px of margin on each side, which is not a dialog, it is a page that
+   * failed to lay out. Above sm it centres.
+   */
+  .ui-modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--color-ui-surface);
+  }
+  .ui-modal[data-state="open"] {
+    animation: ui-slide-up var(--dur-ui-slow) var(--ease-ui-out);
+  }
+  .ui-modal[data-state="closed"] {
+    animation: ui-fade-out var(--dur-ui-fast) var(--ease-ui-standard);
+  }
+  @media (min-width: 40rem) {
+    .ui-modal {
+      /*
+       * `inset-block-start` alone, never the `inset-block` shorthand. The
+       * shorthand sets both block insets to 50%, which with `block-size: auto`
+       * computes to `100% - 50% - 50%` — zero. That bug cost this repo a
+       * sixty-three-poll Playwright timeout once already; the note survives
+       * the redesign because the trap does.
+       */
+      inset: auto;
+      inset-block-start: 50%;
+      inset-inline-start: 50%;
+      transform: translate(-50%, -50%);
+      max-block-size: min(85vh, 44rem);
+      /* The width utilities are fixed rem values; this keeps a `lg` modal (720px)
+       * from overflowing a 640px viewport at the breakpoint where it stops being
+       * full screen. */
+      max-inline-size: calc(100vw - 2rem);
+      border: 1px solid var(--color-ui-line);
+      border-radius: var(--radius-ui-lg);
+      box-shadow: var(--shadow-ui-md);
+    }
+    [dir="rtl"] .ui-modal {
+      transform: translate(50%, -50%);
+    }
+    .ui-modal[data-state="open"] {
+      animation: ui-modal-in var(--dur-ui-base) var(--ease-ui-out);
+    }
+  }
+
+  /*
+   * The drawer. Anchored to the inline end by default; `data-side="start"` is
+   * for navigation only. Full screen below sm, same reasoning as the modal.
+   */
+  .ui-drawer {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--color-ui-surface);
+  }
+  .ui-drawer[data-state="open"] {
+    animation: ui-slide-up var(--dur-ui-slow) var(--ease-ui-out);
+  }
+  .ui-drawer[data-state="closed"] {
+    animation: ui-fade-out var(--dur-ui-fast) var(--ease-ui-standard);
+  }
+  @media (min-width: 40rem) {
+    .ui-drawer {
+      inset-block: 0;
+      inset-inline-end: 0;
+      inset-inline-start: auto;
+      border-inline-start: 1px solid var(--color-ui-line);
+      box-shadow: var(--shadow-ui-md);
+    }
+    .ui-drawer[data-side="start"] {
+      inset-inline-start: 0;
+      inset-inline-end: auto;
+      border-inline-start: 0;
+      border-inline-end: 1px solid var(--color-ui-line);
+    }
+    .ui-drawer[data-state="open"] {
+      animation: ui-drawer-in var(--dur-ui-slow) var(--ease-ui-out);
+    }
+    .ui-drawer[data-side="start"][data-state="open"] {
+      animation: ui-drawer-in-start var(--dur-ui-slow) var(--ease-ui-out);
+    }
+  }
+
+  /* Popovers and menus: the same small lift, and they animate from the edge
+   * Radix resolved them against. */
+  .ui-float {
+    background-color: var(--color-ui-surface);
+    border: 1px solid var(--color-ui-line);
+    border-radius: var(--radius-ui-lg);
+    box-shadow: var(--shadow-ui-sm);
+  }
+  .ui-float[data-state="open"] {
+    animation: ui-float-in var(--dur-ui-base) var(--ease-ui-out);
+  }
+  .ui-float[data-state="closed"] {
+    animation: ui-fade-out var(--dur-ui-fast) var(--ease-ui-standard);
+  }
+
+  @keyframes ui-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes ui-fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes ui-modal-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, calc(-50% + 8px));
+    }
+  }
+  [dir="rtl"] .ui-modal[data-state="open"] {
+    animation-name: ui-modal-in-rtl;
+  }
+  @keyframes ui-modal-in-rtl {
+    from {
+      opacity: 0;
+      transform: translate(50%, calc(-50% + 8px));
+    }
+  }
+  @keyframes ui-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+  }
+  @keyframes ui-drawer-in {
+    from {
+      transform: translateX(100%);
+    }
+  }
+  [dir="rtl"] .ui-drawer[data-state="open"] {
+    animation-name: ui-drawer-in-rtl;
+  }
+  @keyframes ui-drawer-in-rtl {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes ui-drawer-in-start {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  [dir="rtl"] .ui-drawer[data-side="start"][data-state="open"] {
+    animation-name: ui-drawer-in-start-rtl;
+  }
+  @keyframes ui-drawer-in-start-rtl {
+    from {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes ui-float-in {
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+
+  /* ------------------------------------------------------------ skeleton ---
+   * An opacity pulse on a flat block. It composites, it needs no pseudo-element
+   * sweeping across it, and the global reduced-motion rule already collapses it
+   * to a still fill.
+   */
+  .ui-skeleton {
+    background-color: var(--color-ui-surface-3);
+    border-radius: var(--radius-ui-sm);
+    animation: ui-pulse 1.6s var(--ease-ui-standard) infinite;
+  }
+  @keyframes ui-pulse {
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* --------------------------------------------------------------- misc ---- */
+
+  /*
+   * The bottom safe inset, as a utility rather than an arbitrary value at each
+   * call site. A full-screen overlay's footer sits above the home indicator; on
+   * a device without one `env()` resolves to 0 and the max() keeps the normal
+   * padding.
+   */
+  .ui-safe-b {
+    padding-block-end: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 40rem) {
+    .ui-safe-b {
+      padding-block-end: 0.75rem;
+    }
+  }
+
+  /*
+   * Menu items grow to 44px on a coarse pointer.
+   *
+   * DESIGN.md originally specified that a Menu should become bottom-anchored and
+   * full width below `sm`. It does not, and this is the honest reason: Radix
+   * positions the content with a popper `transform`, and overriding that to a
+   * fixed bottom sheet means fighting an inline style with `!important` on every
+   * axis — which breaks collision detection and flips the menu off screen the
+   * first time it opens near a viewport edge. Anchored-plus-collision-padding is
+   * correct at 340px and does not lie about where the menu came from; the touch
+   * target requirement is met here instead.
+   */
+  @media (pointer: coarse) {
+    .ui-menu [role="menuitem"],
+    .ui-menu [role="menuitemcheckbox"],
+    .ui-menu [role="menuitemradio"] {
+      min-block-size: 2.75rem;
+    }
+  }
+
+  /*
+   * A tooltip is a pointer affordance. On a coarse pointer it fires on the way
+   * to pressing the button it is attached to, so it does not render at all —
+   * which is safe only because every control carrying one also carries an
+   * `aria-label` saying the same thing.
+   */
+  @media (pointer: coarse) {
+    .ui-tooltip {
+      display: none;
+    }
+  }
+
+  /* The sidebar's own scroll, when the nav tree outgrows the viewport. */
+  .ui-scroll {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* A spinner for an in-flight control. Sized by the caller. */
+  .ui-spin {
+    animation: ui-spin 700ms linear infinite;
+  }
+  @keyframes ui-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }

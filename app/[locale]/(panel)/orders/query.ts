@@ -11,6 +11,13 @@ import type { Order } from "@/lib/api/schemas/order";
  */
 export const PER_PAGE = 20;
 
+/**
+ * The sizes the footer offers. 100 is the API's own cap — `?per_page=500`
+ * answers 400 rather than clamping, so the select must never offer a value the
+ * router will reject.
+ */
+export const PER_PAGE_OPTIONS = [20, 50, 100] as const;
+
 export type OrdersQuery = {
   /**
    * One status, never a list. Measured 2026-08-18:
@@ -21,11 +28,21 @@ export type OrdersQuery = {
   status: string;
   search: string;
   page: number;
+  /** Chosen in the table footer and persisted per user. Capped at 100. */
+  perPage: number;
 };
 
 /** The query key mirrors the URL, so the two can never disagree. */
 export function ordersKey(query: OrdersQuery) {
-  return ["orders", { status: query.status, search: query.search, page: query.page }] as const;
+  return [
+    "orders",
+    {
+      status: query.status,
+      search: query.search,
+      page: query.page,
+      perPage: query.perPage,
+    },
+  ] as const;
 }
 
 export type OrdersPage = { orders: Order[]; total: number };
@@ -49,7 +66,7 @@ export type OrdersPage = { orders: Order[]; total: number };
  */
 export async function fetchOrders(query: OrdersQuery): Promise<OrdersPage> {
   const params = new URLSearchParams({
-    per_page: String(PER_PAGE),
+    per_page: String(query.perPage),
     page: String(query.page),
   });
   if (query.status) params.set("status", query.status);

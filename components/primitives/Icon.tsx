@@ -46,6 +46,29 @@ export const ICON_NAMES = [
   "trash",
   "link",
   "list",
+  /*
+   * Added with the redesign. `menu` opens the navigation drawer below lg;
+   * `columns`, `density`, `sortAsc`/`sortDesc` and `collapse` belong to the
+   * DataTable's own controls; `sun`/`moon`/`system` are the three theme states;
+   * `download` is export; `command` marks the palette shortcut; `first`/`last`
+   * are the pagination ends; `external` marks a link that leaves the drawer.
+   */
+  "menu",
+  "columns",
+  "density",
+  "sortAsc",
+  "sortDesc",
+  "collapse",
+  "sun",
+  "moon",
+  "system",
+  "download",
+  "command",
+  "first",
+  "last",
+  "external",
+  "user",
+  "logout",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -213,6 +236,69 @@ export function IconSprite() {
           <circle cx="5" cy="6.5" r="1.15" fill="currentColor" stroke="none" />
           <circle cx="5" cy="12" r="1.15" fill="currentColor" stroke="none" />
           <circle cx="5" cy="17.5" r="1.15" fill="currentColor" stroke="none" />
+        </symbol>
+        {/* ── added with the redesign ──────────────────────────────────── */}
+        <symbol id="ac-icon-menu" viewBox="0 0 24 24">
+          <path d="M4.5 7h15M4.5 12h15M4.5 17h15" />
+        </symbol>
+        <symbol id="ac-icon-columns" viewBox="0 0 24 24">
+          <rect x="4" y="5" width="16" height="14" rx="1.5" />
+          <path d="M10.5 5v14M15.5 5v14" />
+        </symbol>
+        <symbol id="ac-icon-density" viewBox="0 0 24 24">
+          <path d="M4.5 6h15M4.5 10h15M4.5 14h15M4.5 18h15" />
+        </symbol>
+        {/*
+          Sort arrows are a bar plus an arrowhead rather than a bare chevron, so
+          the direction reads at 14px in a header cell. They never flip in RTL:
+          ascending is ascending in every script.
+        */}
+        <symbol id="ac-icon-sortAsc" viewBox="0 0 24 24">
+          <path d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5" />
+        </symbol>
+        <symbol id="ac-icon-sortDesc" viewBox="0 0 24 24">
+          <path d="M12 5v13M12 18l-4.5-4.5M12 18l4.5-4.5" />
+        </symbol>
+        <symbol id="ac-icon-collapse" viewBox="0 0 24 24">
+          <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
+          <path d="M9.5 5v14" />
+        </symbol>
+        <symbol id="ac-icon-sun" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" />
+        </symbol>
+        <symbol id="ac-icon-moon" viewBox="0 0 24 24">
+          <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+        </symbol>
+        <symbol id="ac-icon-system" viewBox="0 0 24 24">
+          <rect x="3.5" y="5" width="17" height="11" rx="1.5" />
+          <path d="M9 20h6M12 16v4" />
+        </symbol>
+        <symbol id="ac-icon-download" viewBox="0 0 24 24">
+          <path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14" />
+        </symbol>
+        <symbol id="ac-icon-command" viewBox="0 0 24 24">
+          <path d="M9 6.5a2.5 2.5 0 1 0-2.5 2.5H9m0-2.5V9m0-2.5h6m0 0a2.5 2.5 0 1 1 2.5 2.5H15m0-2.5V9m0 6v2.5a2.5 2.5 0 1 0 2.5-2.5H15Zm0 0H9m0 0v2.5A2.5 2.5 0 1 1 6.5 15H9Zm0 0V9m6 6V9m0 0H9" />
+        </symbol>
+        {/* Pagination ends. These DO flip — first means "the end you read
+            from", which is the right edge in Arabic. */}
+        <symbol id="ac-icon-first" viewBox="0 0 24 24">
+          <path d="m16 5.5-7 6.5 7 6.5M7.5 5.5v13" />
+        </symbol>
+        <symbol id="ac-icon-last" viewBox="0 0 24 24">
+          <path d="m8 5.5 7 6.5-7 6.5M16.5 5.5v13" />
+        </symbol>
+        <symbol id="ac-icon-external" viewBox="0 0 24 24">
+          <path d="M14 5h5v5M19 5l-7.5 7.5" />
+          <path d="M18 14.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V7.5A1.5 1.5 0 0 1 6 6h3.5" />
+        </symbol>
+        <symbol id="ac-icon-user" viewBox="0 0 24 24">
+          <circle cx="12" cy="8.5" r="3.5" />
+          <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
+        </symbol>
+        <symbol id="ac-icon-logout" viewBox="0 0 24 24">
+          <path d="M15 8V6a1.5 1.5 0 0 0-1.5-1.5h-7A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 15 18v-2" />
+          <path d="M11 12h9m0 0-3-3m3 3-3 3" />
         </symbol>
       </defs>
     </svg>

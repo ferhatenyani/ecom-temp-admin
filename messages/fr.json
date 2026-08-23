@@ -27,7 +27,15 @@
     "marketing": "Marketing",
     "staff": "Équipe",
     "audit": "Journal",
-    "transfer": "Import et export"
+    "transfer": "Import et export",
+    "group": {
+      "commerce": "Commerce",
+      "catalog": "Catalogue",
+      "engage": "Communication",
+      "insight": "Analyse",
+      "admin": "Administration"
+    },
+    "media": "Médias"
   },
   "login": {
     "title": "Connexion",
@@ -120,7 +128,26 @@
       "allowedAre": "Changements autorisés :",
       "allowedNone": "Aucun changement n’est possible depuis ce statut."
     },
-    "clearSearch": "Effacer la recherche"
+    "clearSearch": "Effacer la recherche",
+    "refresh": "Actualiser",
+    "export": "Exporter",
+    "exportSelected": "Exporter la sélection",
+    "openFull": "Ouvrir",
+    "preview": "Aperçu",
+    "copyNumber": "Copier le numéro",
+    "chipSearch": "Recherche : {term}",
+    "columns": {
+      "order": "Commande",
+      "customer": "Client",
+      "place": "Lieu",
+      "items": "Articles",
+      "payment": "Paiement",
+      "date": "Créée",
+      "modified": "Modifiée",
+      "total": "Total",
+      "status": "Statut",
+      "id": "ID"
+    }
   },
   "status": {
     "pending": "En attente",
@@ -1977,5 +2004,36 @@
     "columnsFound": "Colonnes lues sur la première ligne : {columns}",
     "importSafety": "La prévisualisation n’écrit jamais rien : le mode simulation est celui par défaut de l’API, et appliquer est une action distincte.",
     "noFile": "Aucun fichier choisi"
+  },
+  "ui": {
+    "close": "Fermer",
+    "cancel": "Annuler",
+    "clearAll": "Tout effacer",
+    "removeFilter": "Retirer le filtre {filter}",
+    "collapseNav": "Réduire la navigation",
+    "expandNav": "Déployer la navigation",
+    "atLeastOneColumn": "Au moins une colonne doit rester visible.",
+    "theme": {
+      "label": "Thème",
+      "light": "Clair",
+      "dark": "Sombre",
+      "system": "Système"
+    },
+    "table": {
+      "columns": "Colonnes",
+      "density": "Densité",
+      "comfortable": "Confortable",
+      "compact": "Compacte",
+      "actions": "Actions",
+      "selectAll": "Tout sélectionner",
+      "deselectAll": "Tout désélectionner",
+      "selected": "{count, plural, one {# sélectionnée} other {# sélectionnées}}",
+      "clearSelection": "Désélectionner",
+      "range": "{from}–{to} sur {total}",
+      "rows": "Lignes",
+      "pageOf": "{page} / {pages}",
+      "previousPage": "Page précédente",
+      "nextPage": "Page suivante"
+    }
   }
 }
