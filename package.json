@@ -12,6 +12,8 @@
     "test:design": "./scripts/check-design.sh",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "test:harness": "node scripts/capture.mjs",
+    "mock": "node scripts/mock-api.mjs",
     "shots": "node scripts/shots.mjs"
   },
   "dependencies": {
