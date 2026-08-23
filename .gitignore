@@ -44,6 +44,9 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /.impeccable/review/
+# scripts/capture.mjs re-renders these from the mock on every run; they are an
+# output of the harness, not a decision anybody made.
+/.impeccable/harness/
 /.impeccable/config.local.json
 # The design hook's per-file result cache — a local artefact keyed by file
 # contents, not a decision anybody made. `config.json` beside it *is* committed,
