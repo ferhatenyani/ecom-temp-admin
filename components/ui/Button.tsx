@@ -133,6 +133,16 @@ export function Button({
 /**
  * The same surface as a link. A button that navigates must be an `<a>`, or the
  * middle click, the context menu and "open in new tab" all silently do nothing.
+ *
+ * **`disabled` renders a real disabled `<button>`, not a dimmed anchor.** There
+ * is no disabled state for `<a href>`: `aria-disabled` plus
+ * `pointer-events: none` still leaves the link in the tab order, still opens on
+ * Enter, and still offers "open in new tab" from the context menu — so a control
+ * the screen says is unavailable stays fully available to the keyboard. Swapping
+ * the element is the only version of this that is true for every input.
+ *
+ * The caller passes `title` with the reason, per DESIGN.md §3.3: a disabled
+ * control that does not say why is a dead end.
  */
 export function ButtonLink({
   href,
@@ -143,21 +153,43 @@ export function ButtonLink({
   iconEnd,
   fullWidth = false,
   className = "",
+  disabled = false,
+  title,
   ...rest
-}: CommonProps & { href: string } & Omit<
+}: CommonProps & { href: string; disabled?: boolean } & Omit<
     React.ComponentPropsWithoutRef<typeof Link>,
     "href" | "className" | "children"
   >) {
   const iconSize = size === "sm" ? "size-3.5" : "size-4";
-  return (
-    <Link
-      href={href}
-      className={classes({ variant, size, fullWidth, className })}
-      {...rest}
-    >
+  const inner = (
+    <>
       {icon ? <Icon name={icon} className={`${iconSize} shrink-0`} /> : null}
       {children}
       {iconEnd ? <Icon name={iconEnd} className={`${iconSize} shrink-0`} /> : null}
+    </>
+  );
+
+  if (disabled) {
+    return (
+      <button
+        type="button"
+        disabled
+        title={title}
+        className={classes({ variant, size, fullWidth, className })}
+      >
+        {inner}
+      </button>
+    );
+  }
+
+  return (
+    <Link
+      href={href}
+      title={title}
+      className={classes({ variant, size, fullWidth, className })}
+      {...rest}
+    >
+      {inner}
     </Link>
   );
 }

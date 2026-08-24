@@ -208,7 +208,8 @@
     "orderNumber": "Commande numéro {number}",
     "closeSheet": "Fermer",
     "openFilters": "Ouvrir les filtres",
-    "listUpdated": "{total, plural, =0 {Aucun résultat} one {# résultat} other {# résultats}}"
+    "listUpdated": "{total, plural, =0 {Aucun résultat} one {# résultat} other {# résultats}}",
+    "productName": "Produit {name}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -321,7 +322,8 @@
       "trashed": "Ce produit est à la corbeille. Il n’apparaît plus dans le catalogue.",
       "optionsProblemsTitle": "Options illisibles",
       "optionsProblemsBody": "Le document d’options enregistré contient des groupes que l’API n’a pas pu lire. Les paniers contenant ce produit refusent déjà de passer à la caisse.",
-      "optionsProblemsSaving": "Attention : enregistrer depuis cet écran réécrit uniquement les groupes lisibles — les groupes ci-dessous seront alors définitivement perdus."
+      "optionsProblemsSaving": "Attention : enregistrer depuis cet écran réécrit uniquement les groupes lisibles — les groupes ci-dessous seront alors définitivement perdus.",
+      "created": "Créé"
     },
     "delete": {
       "action": "Supprimer ce produit",
@@ -339,6 +341,28 @@
       "trashed": "Produit mis à la corbeille.",
       "deletedPermanently": "Produit supprimé définitivement.",
       "failed": "La suppression a échoué."
+    },
+    "all": "Tous",
+    "loading": "Chargement…",
+    "export": "Exporter",
+    "exportSelected": "Exporter la sélection",
+    "openFull": "Ouvrir",
+    "preview": "Aperçu",
+    "copySku": "Copier le SKU",
+    "chipValue": "{label} : {value}",
+    "featuredYes": "Oui",
+    "columns": {
+      "name": "Produit",
+      "sku": "SKU",
+      "category": "Catégorie",
+      "type": "Type",
+      "created": "Créé",
+      "modified": "Modifié",
+      "stock": "Stock",
+      "price": "Prix",
+      "status": "Statut",
+      "featured": "Vedette",
+      "id": "ID"
     }
   },
   "productStatus": {
@@ -2027,7 +2051,7 @@
       "actions": "Actions",
       "selectAll": "Tout sélectionner",
       "deselectAll": "Tout désélectionner",
-      "selected": "{count, plural, one {# sélectionnée} other {# sélectionnées}}",
+      "selected": "{count, plural, one {# ligne sélectionnée} other {# lignes sélectionnées}}",
       "clearSelection": "Désélectionner",
       "range": "{from}–{to} sur {total}",
       "rows": "Lignes",

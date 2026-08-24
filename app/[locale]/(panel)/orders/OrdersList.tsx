@@ -21,7 +21,8 @@ import { Menu } from "@/components/ui/Menu";
 import { Isolate } from "@/components/primitives/Ltr";
 import { buildColumns, orderRecord, type OrderColumnContext } from "./columns";
 import { OrderPeek } from "./OrderPeek";
-import { toCsv, downloadCsv } from "./export";
+import { downloadCsv } from "@/lib/csv";
+import { toCsv } from "./export";
 import { fetchOrders, ordersKey, type OrdersQuery } from "./query";
 
 type StatusFilter = "" | (typeof orderStatuses)[number];

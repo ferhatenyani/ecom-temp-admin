@@ -208,7 +208,8 @@
     "orderNumber": "الطلب رقم {number}",
     "closeSheet": "إغلاق",
     "openFilters": "فتح المرشِّحات",
-    "listUpdated": "{total, plural, =0 {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}"
+    "listUpdated": "{total, plural, =0 {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}",
+    "productName": "المنتج {name}"
   },
   "statusShort": {
     "pending": "الانتظار",
@@ -321,7 +322,8 @@
       "trashed": "هذا المنتج في المهملات ولم يعد يظهر في الكتالوج.",
       "optionsProblemsTitle": "خيارات غير قابلة للقراءة",
       "optionsProblemsBody": "يحتوي مستند الخيارات المحفوظ على مجموعات تعذّر على الواجهة البرمجية قراءتها. السلات التي تحتوي هذا المنتج ترفض بالفعل إتمام الشراء.",
-      "optionsProblemsSaving": "تنبيه: الحفظ من هذه الشاشة يعيد كتابة المجموعات المقروءة فقط — وستُفقد المجموعات أدناه نهائيًا."
+      "optionsProblemsSaving": "تنبيه: الحفظ من هذه الشاشة يعيد كتابة المجموعات المقروءة فقط — وستُفقد المجموعات أدناه نهائيًا.",
+      "created": "تاريخ الإنشاء"
     },
     "delete": {
       "action": "حذف هذا المنتج",
@@ -339,6 +341,28 @@
       "trashed": "نُقل المنتج إلى المهملات.",
       "deletedPermanently": "حُذف المنتج نهائيًا.",
       "failed": "فشل الحذف."
+    },
+    "all": "الكل",
+    "loading": "جارٍ التحميل…",
+    "export": "تصدير",
+    "exportSelected": "تصدير التحديد",
+    "openFull": "فتح",
+    "preview": "معاينة",
+    "copySku": "نسخ رمز SKU",
+    "chipValue": "{label}: {value}",
+    "featuredYes": "نعم",
+    "columns": {
+      "name": "المنتج",
+      "sku": "رمز SKU",
+      "category": "الفئة",
+      "type": "النوع",
+      "created": "تاريخ الإنشاء",
+      "modified": "آخر تعديل",
+      "stock": "المخزون",
+      "price": "السعر",
+      "status": "الحالة",
+      "featured": "مميّز",
+      "id": "المعرّف"
     }
   },
   "productStatus": {
@@ -2027,7 +2051,7 @@
       "actions": "إجراءات",
       "selectAll": "تحديد الكل",
       "deselectAll": "إلغاء تحديد الكل",
-      "selected": "{count, plural, zero {لم يتم التحديد} one {تم تحديد #} two {تم تحديد #} few {تم تحديد #} many {تم تحديد #} other {تم تحديد #}}",
+      "selected": "{count, plural, zero {لا صفوف محددة} one {صف واحد محدد} two {صفان محددان} few {# صفوف محددة} many {# صفًا محددًا} other {# صف محدد}}",
       "clearSelection": "إلغاء التحديد",
       "range": "{from}–{to} من {total}",
       "rows": "الصفوف",

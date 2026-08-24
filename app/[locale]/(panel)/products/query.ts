@@ -7,6 +7,15 @@ import { DEFAULT_SORT_KEY, sortFromKey } from "@/lib/product-status";
  * a refresh keeps the filter and the back button works. The query key mirrors it,
  * so the two can never disagree.
  *
+ * **Page and per-page do not.** They live in component state, which is a change
+ * from this screen's first version and is deliberate consistency rather than a
+ * preference: the orders list — the reference implementation for the redesign —
+ * holds both in `useState`, and a run that migrates twenty screens cannot afford
+ * two paging models. The argument for page-in-URL is real (a shareable link to
+ * page 4), and if it wins later it should win everywhere in one change rather
+ * than screen by screen. `TableFooter` is the one control involved, so that
+ * change is small; a panel where half the lists put the page in the URL is not.
+ *
  * `per_page` caps at 100 and **over 100 is a 400, not a clamp** — measured,
  * `?per_page=500` answers `400 {"params": {"per_page": "per_page must be between
  * 1 and 100"}}`, the same as `/orders`. 20 is the API's default and the right
@@ -38,6 +47,18 @@ export const FACETS = "attributes,price,category,tag,stock_status";
  */
 export type ProductsQuery = {
   search: string;
+  /**
+   * No control on the screen writes this, and it is still read, still sent and
+   * still removable as a chip.
+   *
+   * `search` already matches SKUs — measured, `?search=AC-TAP` narrows the list
+   * the same way `?sku=AC-TAP` does — so a second box beside the first would be
+   * two controls for one job, and the one a person reaches for first would be
+   * whichever was closer. But the parameter costs nothing to keep working, a
+   * saved link may carry it, and `e2e/products.spec.ts` navigates by it to
+   * resolve a detail URL without hard-coding an id that the backend's own suite
+   * recreates on every run.
+   */
   sku: string;
   /** One value, never a list — `?status=draft,publish` is a 400. */
   status: string;
@@ -52,8 +73,12 @@ export type ProductsQuery = {
   featured: string;
   /** taxonomy → comma-separated term slugs. Values within one attribute are alternatives. */
   attributes: Record<string, string>;
+  /** `"{orderby}-{order}"`, and only ever one of the five in `SORTS`. */
   sort: string;
+  /** Component state, not the URL. See the module docblock. */
   page: number;
+  /** Chosen in the table footer. Capped at 100. */
+  perPage: number;
 };
 
 export const EMPTY_QUERY: ProductsQuery = {
@@ -70,6 +95,7 @@ export const EMPTY_QUERY: ProductsQuery = {
   attributes: {},
   sort: DEFAULT_SORT_KEY,
   page: 1,
+  perPage: PER_PAGE,
 };
 
 /** The `attributes[pa_x]=a,b` params, read out of a URLSearchParams-like source. */
@@ -96,7 +122,11 @@ export function queryFromParams(params: URLSearchParams): ProductsQuery {
     featured: params.get("featured") ?? "",
     attributes: readAttributes(params.entries()),
     sort: params.get("sort") ?? DEFAULT_SORT_KEY,
-    page: Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1),
+    /* Not read from the URL. A `?page=` on an incoming link is ignored rather
+       than honoured, because honouring it here and never writing it back would
+       be a parameter that works once and then silently stops. */
+    page: 1,
+    perPage: PER_PAGE,
   };
 }
 
@@ -109,11 +139,15 @@ export function queryFromParams(params: URLSearchParams): ProductsQuery {
  * returns all 28 rows, identical to no filter at all. So a filter that does
  * nothing looks exactly like a filter that works, and the panel never sends one
  * it does not mean.
+ *
+ * `orderby`/`order` go through `sortFromKey`, which is the guard that keeps this
+ * to the five measured combinations: an unknown or never-measured key — `title
+ * desc`, notably — falls back to the default rather than being relayed.
  */
 export function toApiParams(query: ProductsQuery): URLSearchParams {
   const sort = sortFromKey(query.sort);
   const params = new URLSearchParams({
-    per_page: String(PER_PAGE),
+    per_page: String(query.perPage),
     page: String(query.page),
     orderby: sort.orderby,
     order: sort.order,
@@ -144,12 +178,11 @@ export function toApiParams(query: ProductsQuery): URLSearchParams {
   return params;
 }
 
-/** The URL the panel shows, which is the API's parameters minus the ones it always sends. */
+/** The URL the panel shows: the API's parameters minus the ones it always sends. */
 export function toUrlParams(query: ProductsQuery): URLSearchParams {
   const params = toApiParams(query);
-  for (const key of ["per_page", "facets", "orderby", "order"]) params.delete(key);
+  for (const key of ["per_page", "page", "facets", "orderby", "order"]) params.delete(key);
   if (query.sort !== DEFAULT_SORT_KEY) params.set("sort", query.sort);
-  if (query.page > 1) params.set("page", String(query.page)); else params.delete("page");
   return params;
 }
 
@@ -169,7 +202,28 @@ export function isFiltered(query: ProductsQuery): boolean {
   );
 }
 
-/** The query key mirrors the URL, so the two can never disagree. */
+/**
+ * How many filters the drawer is holding.
+ *
+ * Counted per **value**, not per dimension, so the button agrees with the chip
+ * row underneath it: two categories is two. Status and search are excluded
+ * because they have their own controls in the toolbar — a badge counting a filter
+ * the person can already see is a number that never goes to zero.
+ */
+export function drawerFilterCount(query: ProductsQuery): number {
+  const values = (list: string) => list.split(",").filter(Boolean).length;
+  return (
+    values(query.category) +
+    values(query.tag) +
+    (query.stockStatus !== "" ? 1 : 0) +
+    (query.minPrice !== "" || query.maxPrice !== "" ? 1 : 0) +
+    (query.onSale !== "" ? 1 : 0) +
+    (query.featured !== "" ? 1 : 0) +
+    Object.values(query.attributes).reduce((sum, slugs) => sum + values(slugs), 0)
+  );
+}
+
+/** The query key mirrors the request, so the two can never disagree. */
 export function productsKey(query: ProductsQuery) {
   return ["products", toApiParams(query).toString()] as const;
 }

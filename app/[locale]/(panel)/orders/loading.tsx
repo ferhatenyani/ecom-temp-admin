@@ -30,8 +30,8 @@ export default async function OrdersLoading() {
             </div>
             <div className="flex items-center gap-2">
               <Skeleton className="h-9 w-full rounded-ui-md sm:w-80" />
-              <Skeleton className="ms-auto hidden h-8 w-24 rounded-ui-md sm:block" />
-              <Skeleton className="hidden h-8 w-24 rounded-ui-md sm:block" />
+              <Skeleton className="ms-auto hidden h-8 w-24 rounded-ui-md md:block" />
+              <Skeleton className="hidden h-8 w-24 rounded-ui-md md:block" />
             </div>
           </div>
         }
