@@ -3,13 +3,18 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { useMutation } from "@tanstack/react-query";
 import type {
   AttributeTerm,
   GlobalAttribute,
   Product,
   ProductCategory,
+  ProductSeo,
   Variation,
 } from "@/lib/api/schemas/product";
+import { BrowserApiError, acWrite } from "@/lib/api/browser";
+// From the dependency-free module, not the schema: this is a client component,
+// and importing these through the Zod schema ships Zod's runtime to the browser.
 import {
   CATALOG_VISIBILITIES,
   PRODUCT_STATUSES,
@@ -23,24 +28,26 @@ import {
 } from "@/lib/product-status";
 import { describeAttribute, priceSpan, variationLabel } from "@/lib/products";
 import { formatMoney } from "@/lib/format/money";
-import { formatWhen } from "@/lib/format/date";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { SectionError } from "@/components/patterns/States";
-import { ListGroup, ListRow, ListValueRow } from "@/components/primitives/GroupedList";
+import { formatDate, formatWhen } from "@/lib/format/date";
+import { useOnline } from "@/lib/use-online";
+import { DetailGrid } from "@/components/ui/Detail";
+import { Card, DataList, DataRow } from "@/components/ui/Card";
+import { Badge, Dot } from "@/components/ui/Badge";
+import { Notice, SectionError, StaleBanner } from "@/components/ui/States";
 import {
-  DecimalField,
+  CheckRow,
+  ErrorSummary,
+  NumberField,
   ReadOnlyField,
-  SelectField,
-  SwitchField,
-  TextAreaField,
+  SaveBar,
+  Select,
+  Switch,
+  TextArea,
   TextField,
-} from "@/components/primitives/Field";
-import { Button } from "@/components/primitives/Button";
-import { StatusBadge, Dot } from "@/components/primitives/StatusBadge";
+  type FormFailure,
+} from "@/components/ui/Form";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
-import { Icon } from "@/components/primitives/Icon";
 import { useToast } from "@/components/primitives/Toast";
-import { DeleteAction } from "./DeleteAction";
 
 /**
  * The fields the panel writes.
@@ -69,6 +76,18 @@ import { DeleteAction } from "./DeleteAction";
  * and two variations came back with `attributes: {}` and could no longer be told
  * apart. Editing attributes belongs with the attributes screen, which can build
  * the whole list rather than a partial one.
+ *
+ * `options` is absent for the reason the warning banner now states outright — see
+ * the `options_problems` block further down. `tag_ids`, `image_id` and
+ * `gallery_image_ids` are absent because nothing on this screen edits them and a
+ * field the form sends but never shows is a field it can silently clobber.
+ *
+ * **`seo` is here and is new**, and it travels whole. `mustBeSeo` on the mock and
+ * the live API both refuse a partial block — `title`, `description`, `canonical`,
+ * `overrides` and a `robots` carrying `index`, `follow` and `directive` all have
+ * to be present — and partial behaviour is unmeasured anyway, so the draft holds
+ * the entire object and writes back the parts nothing on screen edited exactly as
+ * they were read.
  */
 type Draft = {
   name: string;
@@ -87,12 +106,19 @@ type Draft = {
   stock_status: string;
   weight: string;
   category_ids: number[];
+  seo: ProductSeo;
 };
 
 function draftOf(product: Product): Draft {
   return {
     name: product.name,
     slug: product.slug,
+    /*
+     * `trash` is readable and not writable — a product is trashed by DELETE and
+     * never by a PATCH, and `?status=trash` is a 400. So the picker's value is
+     * coerced to the status the product would return to, and the *stored* status
+     * is shown as a badge in the aside beside it.
+     */
     status: (product.status === "trash" ? "draft" : product.status) as ProductStatus,
     type: product.type,
     sku: product.sku,
@@ -107,13 +133,70 @@ function draftOf(product: Product): Draft {
     stock_quantity: product.stock_quantity === null ? "" : String(product.stock_quantity),
     stock_status: product.stock_status,
     weight: product.weight,
-    category_ids: product.category_ids,
+    /*
+     * Sorted, and the sort is what makes the dirty check honest rather than
+     * cosmetic: `dirty` is a structural comparison, so unticking a category and
+     * re-ticking it would otherwise move the id to the end of the array and leave
+     * a form that is identical to the stored record reporting unsaved changes. A
+     * category list is a set on both sides of the wire, so ordering it costs
+     * nothing.
+     */
+    category_ids: [...product.category_ids].sort((a, b) => a - b),
+    // Spread, not rebuilt: `productSeo` is a loose object and any key the API
+    // adds tomorrow travels back untouched rather than being dropped by a
+    // hand-written literal.
+    seo: { ...product.seo },
   };
+}
+
+/* ─────────────────────────────────────────────────────── the client's rules ───
+ *
+ * **English, and that is the point.** These three messages are quoted verbatim
+ * from the live API — "A product name cannot be emptied.", "Must be a number.",
+ * "Cannot be negative." — so a field that refuses locally and the same field
+ * refused by the server say the identical sentence, and nobody has to wonder
+ * whether they are looking at two different problems.
+ *
+ * **Nothing here is a rule the server does not hold.** In particular there is no
+ * `sale_price <= regular_price` check: nothing has measured whether the API
+ * rejects an inverted pair, and a client rule the server does not keep is the
+ * same defect as a control that does nothing — it refuses work the shop is
+ * allowed to do. `weight` gets no numeric rule either, for the same reason: the
+ * API validates it as a *string*, so "1,5 kg" is accepted there and would be
+ * refused here.
+ *
+ * **They do not block the save**, and that is deliberate. The API is the
+ * authority — the panel does not carry a second copy of the rules, which is the
+ * same position `OrderActions` takes on the status table — so these speak on blur
+ * to save a round trip and the request goes anyway. A `blockedReason` on the save
+ * bar is reserved for a state the server cannot resolve at all, which is being
+ * offline.
+ */
+
+const MONEY = /^-?\d+(\.\d+)?$/;
+const INTEGER = /^-?\d+$/;
+
+function requiredName(value: string): string | undefined {
+  return value.trim() === "" ? "A product name cannot be emptied." : undefined;
+}
+
+function money(value: string): string | undefined {
+  // Clearing a price is how a sale ends, so the empty string is a real value.
+  if (value === "") return undefined;
+  if (!MONEY.test(value)) return "Must be a number.";
+  return Number.parseFloat(value) < 0 ? "Cannot be negative." : undefined;
+}
+
+function quantity(value: string): string | undefined {
+  if (value === "") return undefined;
+  if (!INTEGER.test(value)) return "Must be a number.";
+  return Number.parseInt(value, 10) < 0 ? "Cannot be negative." : undefined;
 }
 
 export function ProductDetail({
   locale,
   product: initial,
+  fetchedAt,
   variations,
   categories,
   attributes,
@@ -121,8 +204,12 @@ export function ProductDetail({
 }: {
   locale: string;
   product: Product;
+  /** When the server rendered this page. The age §3.7's stale marker reports. */
+  fetchedAt: number;
+  /** `null` means the section could not load; `[]` means there are none. */
   variations: Variation[] | null;
-  categories: ProductCategory[];
+  /** `null` means the vocabulary could not load — see the note on the section. */
+  categories: ProductCategory[] | null;
   attributes: GlobalAttribute[];
   terms: Record<string, AttributeTerm[]>;
 }) {
@@ -131,497 +218,797 @@ export function ProductDetail({
   const tStatus = useTranslations("productStatus");
   const tStock = useTranslations("stockStatus");
   const tVisibility = useTranslations("catalogVisibility");
+  const tStates = useTranslations("states");
   const router = useRouter();
   const toast = useToast();
 
   const [product, setProduct] = useState(initial);
   const [draft, setDraft] = useState(() => draftOf(initial));
+  /** Keyed by the API's own field name, which is what a 400 sends. */
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [topError, setTopError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  /** A refusal that names no field at all — the 400 with no `details`, a 500. */
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const online = useOnline();
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
     // Clearing this field's error on edit, and only this field's: the API lists
     // every bad field at once and the others are still wrong.
+    clearError(key as string);
+  };
+
+  const clearError = (key: string) =>
     setErrors((current) => {
       if (!(key in current)) return current;
       const next = { ...current };
       delete next[key];
       return next;
     });
+
+  /** The SEO block is one API field, so its three controls clear one key. */
+  const setSeo = <K extends keyof ProductSeo>(key: K, value: ProductSeo[K]) => {
+    setDraft((current) => ({ ...current, seo: { ...current.seo, [key]: value } }));
+    clearError("seo");
   };
+
+  const toggleCategory = (id: number, on: boolean) =>
+    set(
+      "category_ids",
+      on
+        ? [...draft.category_ids, id].sort((a, b) => a - b)
+        : draft.category_ids.filter((current) => current !== id),
+    );
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(product));
   const currency = "DZD";
-  const money = (value: string) => formatMoney(value, currency, locale);
+  const asMoney = (value: string) => formatMoney(value, currency, locale);
 
-  async function save() {
-    setSaving(true);
-    setErrors({});
-    setTopError(null);
+  const save = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = { ...draft };
 
-    const body: Record<string, unknown> = {
-      ...draft,
-      // Only when the product manages stock. Measured: `stock_quantity` is
-      // silently dropped when `manage_stock` is false — a 200 with the field
-      // ignored — so sending it there would look like a save that worked.
-      ...(draft.manage_stock
-        ? { stock_quantity: draft.stock_quantity === "" ? null : Number(draft.stock_quantity) }
-        : {}),
-    };
-    if (!draft.manage_stock) delete body.stock_quantity;
+      /*
+       * **`stock_quantity` is dropped in silence when the row manages no stock** —
+       * a 200 with the field ignored, which looks exactly like a save that
+       * worked. So the key is removed from the body rather than sent and the
+       * answer trusted, and when it *is* sent an empty field goes as `null`
+       * rather than as 0: nothing being counted and a count of zero are different
+       * facts about a shelf.
+       */
+      if (draft.manage_stock) {
+        body.stock_quantity =
+          draft.stock_quantity === "" ? null : Number(draft.stock_quantity);
+      } else {
+        delete body.stock_quantity;
+      }
 
-    const response = await fetch(`/api/ac/products/${product.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const payload = (await response.json()) as {
-      success?: boolean;
-      data?: Product;
-      error?: { code?: string; message?: string; details?: Record<string, unknown> };
-    };
-
-    setSaving(false);
-
-    if (response.ok && payload.success !== false && payload.data) {
-      setProduct(payload.data);
-      setDraft(draftOf(payload.data));
+      return acWrite<Product>("PATCH", `/products/${product.id}`, body);
+    },
+    /* Cleared as the save starts, so a second failure with the same list passes
+       through empty and `ErrorSummary` re-announces it. */
+    onMutate: () => {
+      setErrors({});
+      setSaveError(null);
+    },
+    onSuccess: (next) => {
+      if (!next) {
+        setSaveError(tDetail("saveFailed"));
+        return;
+      }
+      setProduct(next);
+      setDraft(draftOf(next));
       toast.show(tDetail("saved"));
       // The list's cached page is now stale in one row. Refreshing the route is
       // cheaper and more honest than patching a cache entry by hand.
       router.refresh();
-      return;
-    }
+    },
+    onError: (error: unknown) => {
+      if (error instanceof BrowserApiError) {
+        /**
+         * A 400 lists **every** bad field, so all of them land on their own
+         * controls rather than being collapsed into one line — measured, four
+         * fields came back in a single response. The messages are the API's
+         * English; they name the problem precisely and a translated generic
+         * would throw that away.
+         */
+        const fields = error.fields;
+        if (fields && Object.keys(fields).length > 0) {
+          setErrors(fields);
+          return;
+        }
 
-    const details = payload.error?.details ?? {};
+        /**
+         * A duplicate SKU is a **409**, not a 400, and it names the SKU under
+         * `details.sku` rather than under `details.fields`. Measured:
+         * `{"code":"conflict","message":"That SKU is already in use.","details":{"sku":"AC-TAP-001"}}`.
+         * Mapped onto the SKU field, because that is the field the person has to
+         * change, and the 409's own message is worth surfacing verbatim.
+         */
+        if (error.status === 409 && typeof error.details.sku === "string") {
+          setErrors({ sku: error.message || tDetail("skuTaken") });
+          return;
+        }
 
-    /**
-     * A 400 lists **every** bad field, so all of them are rendered onto their
-     * own rows rather than collapsed into one line — measured, four fields came
-     * back in a single response. The messages are the API's English; they name
-     * the problem precisely and a translated generic would throw that away.
-     */
-    const fields = details.fields as Record<string, string> | undefined;
-    if (fields && Object.keys(fields).length > 0) {
-      setErrors(fields);
-      // A field the form does not render still has to be reachable, or the
-      // person sees a refusal with no cause anywhere on screen.
-      const orphans = Object.entries(fields).filter(([key]) => !(key in draft));
-      if (orphans.length > 0) {
-        setTopError(orphans.map(([key, message]) => `${key}: ${message}`).join(" · "));
+        setSaveError(error.message);
+        return;
       }
-      return;
-    }
 
-    /**
-     * A duplicate SKU is a **409**, not a 400, and it names the SKU under
-     * `details.sku` rather than under `details.fields`. Measured:
-     * `{"code":"conflict","message":"That SKU is already in use.","details":{"sku":"AC-TAP-001"}}`.
-     * Mapped onto the SKU field, because that is the field the person has to
-     * change, and the 409's own message is worth surfacing verbatim.
-     */
-    if (response.status === 409 && typeof details.sku === "string") {
-      setErrors({ sku: payload.error?.message ?? tDetail("skuTaken") });
-      return;
-    }
+      setSaveError(tDetail("saveFailed"));
+    },
+  });
 
-    setTopError(payload.error?.message ?? tDetail("saveFailed"));
-  }
+  /* ─────────────────────────────────────────────── the failures, as a summary ──
+   *
+   * §3.4: a form that failed submission shows a summary at the top listing each
+   * failure as a link to its field, with focus moved to it.
+   *
+   * **The orphan case is the one worth spelling out.** A 400 names every bad
+   * field including ones this form does not render — `tag_ids` and `image_id` are
+   * writable and have no control here, and `stock_quantity` has no control while
+   * the product manages no stock — and there is nowhere to send a person for
+   * those. `ErrorSummary` renders a failure with no `id` as text rather than as a
+   * link, which is the honest half; the label is what stops it reading as
+   * machinery. `FIELD_LABELS` therefore covers every *writable* key rather than
+   * only the rendered ones, and a key outside that set falls back to the raw name
+   * — a genuinely unknown field is a bug report, and the name is the only part of
+   * it worth carrying.
+   *
+   * This replaces a hand-rolled banner that joined `key: message` pairs with
+   * middots, which put `catalog_visibility` on screen as though it were a label.
+   */
+  const FIELD_LABELS: Record<string, string> = {
+    name: tDetail("name"),
+    slug: tDetail("slug"),
+    sku: tDetail("sku"),
+    type: tDetail("type"),
+    status: tDetail("status"),
+    featured: tDetail("featured"),
+    catalog_visibility: tDetail("visibility"),
+    regular_price: tDetail("regularPrice"),
+    sale_price: tDetail("salePrice"),
+    weight: tDetail("weight"),
+    manage_stock: tDetail("manageStock"),
+    stock_quantity: tDetail("stockQuantity"),
+    stock_status: tDetail("stockStatus"),
+    short_description: tDetail("shortDescription"),
+    description: tDetail("description"),
+    category_ids: tDetail("categories"),
+    seo: tDetail("seo"),
+    attributes: tDetail("attributes"),
+    options: tDetail("options"),
+    tag_ids: tDetail("tags"),
+    image_id: tDetail("image"),
+    gallery_image_ids: tDetail("gallery"),
+  };
+
+  const fieldId = (key: string) => `product-${key}`;
 
   const span = priceSpan((variations ?? []).map((v) => v.price));
-  const categoryName = new Map(categories.map((c) => [c.id, c.name]));
   const termMap = new Map(Object.entries(terms));
+  const problems = product.options_problems ?? [];
+
+  /*
+   * Every category the product carries, even one the vocabulary does not list.
+   * Without the union an id the `/product-categories` page did not return would
+   * have no checkbox, so it would read as unticked and the next save would drop
+   * it — a field cleared by a screen that never showed it.
+   */
+  const knownCategories = new Map((categories ?? []).map((c) => [c.id, c.name]));
+  const categoryRows: { id: number; name: string; count: number | null }[] = [
+    ...(categories ?? []).map((c) => ({ id: c.id, name: c.name, count: c.count })),
+    ...draft.category_ids
+      .filter((id) => !knownCategories.has(id))
+      .map((id) => ({ id, name: String(id), count: null })),
+  ];
+
+  /** Which keys have a control on screen right now, and can therefore be linked. */
+  const linkable = new Set<string>([
+    "name",
+    "slug",
+    "sku",
+    "type",
+    "status",
+    "featured",
+    "catalog_visibility",
+    "regular_price",
+    "sale_price",
+    "weight",
+    "manage_stock",
+    "stock_status",
+    "short_description",
+    "description",
+    "seo",
+    ...(draft.manage_stock ? ["stock_quantity"] : []),
+    ...(categories !== null && categoryRows.length > 0 ? ["category_ids"] : []),
+  ]);
+
+  const failures: FormFailure[] = Object.entries(errors).map(([key, message]) => ({
+    id: linkable.has(key) ? fieldId(key) : undefined,
+    label: FIELD_LABELS[key] ?? key,
+    message,
+  }));
 
   return (
-    <Scaffold
-      title={product.name}
-      back={{ href: `/${locale}/products`, label: t("title") }}
-    >
-      <div className="mx-auto max-w-3xl px-4">
-        {/*
-          `options_problems` first, because it is the only thing on this screen
-          that means something is broken *right now*. The API sends it only when
-          the stored option document has a group it could not read, and a cart
-          holding this product is already refusing to check out.
-        */}
-        {product.options_problems && product.options_problems.length > 0 ? (
-          <div
-            role="alert"
-            className="tone-warning tonal mb-6 flex flex-col gap-2 rounded-lg px-4 py-3"
-          >
-            <span className="flex items-center gap-2 text-headline">
-              <Icon name="alert" className="size-4 shrink-0" />
-              {tDetail("optionsProblemsTitle")}
-            </span>
-            <span className="text-footnote text-label">
-              {tDetail("optionsProblemsBody")}
-            </span>
-            <ul className="flex flex-col gap-1">
-              {product.options_problems.map((problem) => (
-                <li key={problem} className="text-footnote text-label-secondary">
-                  {problem}
-                </li>
-              ))}
-            </ul>
+    <div className="flex flex-col gap-4">
+      {/* §3.7's fifth state: the age of what is on screen, and the save bar
+          disabled below with the same reason. */}
+      {!online ? (
+        <StaleBanner time={formatWhen(new Date(fetchedAt).toISOString(), locale)} />
+      ) : null}
+
+      {/*
+        `options_problems` first, because it is the only thing on this screen that
+        means something is broken *right now*. The API sends it only when the
+        stored option document has a group it could not read, and a cart holding
+        this product is already refusing to check out.
+      */}
+      {problems.length > 0 ? (
+        <Notice role="alert" tone="warning" title={tDetail("optionsProblemsTitle")}>
+          <p className="text-ui-label">{tDetail("optionsProblemsBody")}</p>
+          <ul className="flex list-disc flex-col gap-1 ps-4 text-ui-label">
+            {problems.map((problem) => (
+              /* The API's own English, verbatim: it names the group by its
+                 1-based position in the stored document, which is the only handle
+                 there is — the broken group is absent from `options.groups`. */
+              <li key={problem} dir="auto">
+                {problem}
+              </li>
+            ))}
+          </ul>
+          {/*
+            **The copy this branch corrected.** It used to say that saving from
+            this screen rewrites only the readable groups and destroys the rest —
+            which is true of a whole-body PATCH containing `options`
+            (ADMIN_PANEL.md:1587-1596, and the mock reproduces it on product 208)
+            and is *not* true of this form, whose `Draft` has never contained
+            `options`. A warning about a destruction the screen cannot perform is
+            a warning that trains people to distrust the ones that are real.
+            Making the screen match the old copy instead was rejected: it would
+            mean an edit to a price silently deleting two option groups, with no
+            confirmation, as a side effect — which §3.1 would require a
+            `ConfirmDialog` for even if it were something anybody had asked for.
+          */}
+          <p className="text-ui-label">{tDetail("optionsProblemsSafe")}</p>
+        </Notice>
+      ) : null}
+
+      {product.status === "trash" ? (
+        <Notice tone="danger" title={tDetail("trashedTitle")}>
+          <p className="text-ui-label">{tDetail("trashed")}</p>
+        </Notice>
+      ) : null}
+
+      {saveError ? (
+        <Notice role="alert" tone="danger" title={tDetail("saveFailed")}>
+          <p className="text-ui-label">{saveError}</p>
+        </Notice>
+      ) : null}
+
+      <ErrorSummary failures={failures} />
+
+      <DetailGrid
+        main={
+          <>
+            {/* ------------------------------------------------ identity --- */}
+            <Card title={tDetail("identity")} footnote={tDetail("mediaUnavailable")}>
+              <div className="flex flex-col gap-4">
+                <TextField
+                  id={fieldId("name")}
+                  label={tDetail("name")}
+                  value={draft.name}
+                  onChange={(v) => set("name", v)}
+                  error={errors.name}
+                  validate={requiredName}
+                />
+                <TextField
+                  id={fieldId("sku")}
+                  label={tDetail("sku")}
+                  value={draft.sku}
+                  onChange={(v) => set("sku", v)}
+                  error={errors.sku}
+                  isolate
+                  hint={tDetail("skuHint")}
+                />
+                <TextField
+                  id={fieldId("slug")}
+                  label={tDetail("slug")}
+                  value={draft.slug}
+                  onChange={(v) => set("slug", v)}
+                  error={errors.slug}
+                  isolate
+                  hint={draft.slug === "" ? tDetail("slugEmpty") : undefined}
+                />
+                <Select
+                  id={fieldId("type")}
+                  label={tDetail("type")}
+                  value={draft.type}
+                  onChange={(v) => set("type", v)}
+                  options={PRODUCT_TYPES.map((s) => ({ value: s, label: t(`type.${s}`) }))}
+                  error={errors.type}
+                  hint={
+                    product.variations.length > 0
+                      ? tDetail("typeHasVariations")
+                      : undefined
+                  }
+                />
+              </div>
+            </Card>
+
+            {/* ------------------------------------------------- pricing --- */}
+            <Card
+              title={tDetail("pricing")}
+              /* A `description` and not a `footnote`: §3.4 wants help text
+                 written before the problem rather than after it, and this is the
+                 sentence that explains why both price fields on a variable
+                 product are empty. Under the heading it is read first; under the
+                 weight field it was read last, and looked like it belonged to
+                 the weight. */
+              description={
+                product.type === "variable" ? tDetail("pricingVariable") : undefined
+              }
+            >
+              <div className="flex flex-col gap-4">
+                {/* The pair shares a row where there is room for it and wraps at
+                    340px — `NumberField` carries the `flex-1` for exactly this. */}
+                <div className="flex flex-wrap gap-4">
+                  <NumberField
+                    id={fieldId("regular_price")}
+                    label={tDetail("regularPrice")}
+                    value={draft.regular_price}
+                    onChange={(v) => set("regular_price", v)}
+                    error={errors.regular_price}
+                    validate={money}
+                  />
+                  <NumberField
+                    id={fieldId("sale_price")}
+                    label={tDetail("salePrice")}
+                    value={draft.sale_price}
+                    onChange={(v) => set("sale_price", v)}
+                    error={errors.sale_price}
+                    validate={money}
+                  />
+                </div>
+                {/*
+                  The effective price is computed by the API and refused on write —
+                  measured, `price` is silently dropped. Shown read-only because on
+                  a variable product it is the only place the resolved figure
+                  appears, and because a form with a regular price of "" beside a
+                  list row reading 12 500 DA is otherwise unexplainable.
+                */}
+                <ReadOnlyField
+                  label={tDetail("effectivePrice")}
+                  value={
+                    product.price === "" ? (
+                      <span className="text-ui-subtle">{t("noPrice")}</span>
+                    ) : (
+                      <Ltr>{asMoney(product.price)}</Ltr>
+                    )
+                  }
+                  reason={tDetail("effectivePriceReason")}
+                />
+                {/* No `validate`: the API takes `weight` as a *string*, so a
+                    numeric rule here would refuse "1,5" where the shop is allowed
+                    to store it. `NumberField` is the keyboard, not a rule. */}
+                <NumberField
+                  id={fieldId("weight")}
+                  label={tDetail("weight")}
+                  value={draft.weight}
+                  onChange={(v) => set("weight", v)}
+                  error={errors.weight}
+                />
+              </div>
+            </Card>
+
+            {/* ----------------------------------------------- inventory --- */}
+            <Card title={tDetail("inventory")}>
+              <div className="flex flex-col gap-4">
+                <Switch
+                  id={fieldId("manage_stock")}
+                  label={tDetail("manageStock")}
+                  checked={draft.manage_stock}
+                  onChange={(v) => set("manage_stock", v)}
+                  hint={tDetail("manageStockHint")}
+                  error={errors.manage_stock}
+                />
+                {draft.manage_stock ? (
+                  <TextField
+                    id={fieldId("stock_quantity")}
+                    label={tDetail("stockQuantity")}
+                    value={draft.stock_quantity}
+                    onChange={(v) => set("stock_quantity", v)}
+                    error={errors.stock_quantity}
+                    validate={quantity}
+                    inputMode="numeric"
+                    isolate
+                  />
+                ) : null}
+                <Select
+                  id={fieldId("stock_status")}
+                  label={tDetail("stockStatus")}
+                  value={draft.stock_status}
+                  onChange={(v) => set("stock_status", v)}
+                  options={STOCK_STATUSES.map((s) => ({ value: s, label: tStock(s) }))}
+                  error={errors.stock_status}
+                />
+              </div>
+            </Card>
+
+            {/* --------------------------------------------- description --- */}
+            <Card title={tDetail("descriptions")} footnote={tDetail("htmlNote")}>
+              <div className="flex flex-col gap-4">
+                <TextArea
+                  id={fieldId("short_description")}
+                  label={tDetail("shortDescription")}
+                  value={draft.short_description}
+                  onChange={(v) => set("short_description", v)}
+                  error={errors.short_description}
+                  rows={3}
+                />
+                <TextArea
+                  id={fieldId("description")}
+                  label={tDetail("description")}
+                  value={draft.description}
+                  onChange={(v) => set("description", v)}
+                  error={errors.description}
+                  rows={6}
+                />
+              </div>
+            </Card>
+
+            {/* ----------------------------------------------------- SEO --- */}
             {/*
-              The part that is easy to get wrong and expensive to discover:
-              saving from this screen writes back only the groups the API could
-              read, so the unreadable ones are gone for good. Measured — after
-              one whole-object round trip `options_problems` disappeared and the
-              two broken groups with it.
+              Writable, and the whole `seo` object goes back on every save — the
+              API refuses a partial block and partial behaviour is unmeasured
+              anyway, so `robots` and `overrides` are carried through exactly as
+              they were read.
+
+              `overrides` is *surfaced* rather than edited: it is the API's own
+              record of which fields have stopped being derived from the product,
+              and a person editing a title deserves to know that the title will
+              now stay where they put it. Whether writing a field adds its name to
+              that list is the API's business and has not been measured, so the
+              panel reports what it was told and does not invent an entry.
             */}
-            <span className="text-footnote text-label">
-              {tDetail("optionsProblemsSaving")}
-            </span>
-          </div>
-        ) : null}
+            <Card
+              title={tDetail("seo")}
+              /* Under the heading rather than at the foot, and for a second
+                 reason beyond §3.4's: the last control in this card carries its
+                 own "derived from the product's status" line, and a card footnote
+                 landed directly beneath it — two greyed sentences in a row, both
+                 opening with the same word, describing different things. */
+              description={
+                draft.seo.overrides.length === 0
+                  ? tDetail("seoDerived")
+                  : tDetail("seoOverrides", {
+                      fields: draft.seo.overrides.join(", "),
+                    })
+              }
+            >
+              <div className="flex flex-col gap-4">
+                <TextField
+                  id={fieldId("seo")}
+                  label={tDetail("seoTitle")}
+                  value={draft.seo.title}
+                  onChange={(v) => setSeo("title", v)}
+                  error={errors.seo}
+                />
+                <TextArea
+                  label={tDetail("seoDescription")}
+                  value={draft.seo.description}
+                  onChange={(v) => setSeo("description", v)}
+                  rows={2}
+                />
+                <TextField
+                  label={tDetail("seoCanonical")}
+                  value={draft.seo.canonical}
+                  onChange={(v) => setSeo("canonical", v)}
+                  isolate
+                  hint={tDetail("seoCanonicalHint")}
+                />
+                {/* Read-only, and not for want of a control: `index` and `follow`
+                    are booleans while `directive` is the sentence derived from
+                    them, and nothing has measured whether the API recomputes one
+                    from the other. Writing a toggle would risk storing a pair that
+                    contradicts itself, which is worse than not offering it. */}
+                <ReadOnlyField
+                  label={tDetail("seoRobots")}
+                  value={<Ltr numeric={false}>{draft.seo.robots.directive}</Ltr>}
+                  reason={tDetail("seoRobotsReason")}
+                />
+              </div>
+            </Card>
 
-        {product.status === "trash" ? (
-          <div role="status" className="tone-danger tonal mb-6 rounded-lg px-4 py-3">
-            <span className="text-footnote">{tDetail("trashed")}</span>
-          </div>
-        ) : null}
-
-        {topError ? (
-          <div role="alert" className="tone-danger tonal mb-6 rounded-lg px-4 py-3">
-            <span className="text-footnote">{topError}</span>
-          </div>
-        ) : null}
-
-        {/* ------------------------------------------------ identity --- */}
-        <ListGroup title={tDetail("identity")}>
-          <TextField
-            label={tDetail("name")}
-            value={draft.name}
-            onChange={(v) => set("name", v)}
-            error={errors.name}
-          />
-          <TextField
-            label={tDetail("sku")}
-            value={draft.sku}
-            onChange={(v) => set("sku", v)}
-            error={errors.sku}
-            isolate
-            hint={tDetail("skuHint")}
-          />
-          <TextField
-            label={tDetail("slug")}
-            value={draft.slug}
-            onChange={(v) => set("slug", v)}
-            error={errors.slug}
-            isolate
-            hint={draft.slug === "" ? tDetail("slugEmpty") : undefined}
-          />
-          <SelectField
-            label={tDetail("status")}
-            value={draft.status}
-            onChange={(v) => set("status", v)}
-            options={PRODUCT_STATUSES.map((s) => ({ value: s, label: tStatus(s) }))}
-            error={errors.status}
-          />
-          <SelectField
-            label={tDetail("type")}
-            value={draft.type}
-            onChange={(v) => set("type", v)}
-            options={PRODUCT_TYPES.map((s) => ({ value: s, label: t(`type.${s}`) }))}
-            error={errors.type}
-            hint={product.variations.length > 0 ? tDetail("typeHasVariations") : undefined}
-          />
-          <SelectField
-            label={tDetail("visibility")}
-            value={draft.catalog_visibility}
-            onChange={(v) => set("catalog_visibility", v)}
-            options={CATALOG_VISIBILITIES.map((s) => ({ value: s, label: tVisibility(s) }))}
-            error={errors.catalog_visibility}
-          />
-          <SwitchField
-            label={tDetail("featured")}
-            checked={draft.featured}
-            onChange={(v) => set("featured", v)}
-          />
-        </ListGroup>
-
-        {/* ------------------------------------------------- pricing --- */}
-        <ListGroup
-          title={tDetail("pricing")}
-          footnote={
-            product.type === "variable" ? tDetail("pricingVariable") : undefined
-          }
-        >
-          <DecimalField
-            label={tDetail("regularPrice")}
-            value={draft.regular_price}
-            onChange={(v) => set("regular_price", v)}
-            error={errors.regular_price}
-          />
-          <DecimalField
-            label={tDetail("salePrice")}
-            value={draft.sale_price}
-            onChange={(v) => set("sale_price", v)}
-            error={errors.sale_price}
-          />
-          {/*
-            The effective price is computed by the API and refused on write —
-            measured, `price` is silently dropped. Shown as a read-only row
-            because on a variable product it is the only place the resolved
-            figure appears, and because a form with a regular price of "" beside
-            a list row reading 12 500 DA is otherwise unexplainable.
-          */}
-          <ReadOnlyField
-            label={tDetail("effectivePrice")}
-            value={
-              product.price === "" ? (
-                <span className="text-label-tertiary">{t("noPrice")}</span>
+            {/* ---------------------------------------------- attributes --- */}
+            {/*
+              Read-only, with the reason on screen rather than in a comment:
+              sending `attributes` on a variable product wipes every variation's
+              attribute map — measured on products 12 and 21 — so a partial editor
+              here is worse than none, and the attributes screen owns it.
+            */}
+            <Card
+              title={tDetail("attributes")}
+              /*
+               * One sentence: read-only everywhere in this panel, and the
+               * measured reason why.
+               *
+               * It used to branch to `localAttributeReason` — "a local attribute
+               * can be neither filtered nor counted" — which is taxonomy
+               * education rather than something a shopkeeper can act on, and on a
+               * product with a local attribute it was the *only* sentence, so the
+               * one thing a reader needed (why the list cannot be edited at all)
+               * was the half that went missing. The `Local` badge beside the
+               * values already carries the distinction visually.
+               */
+              footnote={tDetail("attributesLater")}
+            >
+              {product.attributes.length === 0 ? (
+                <p className="text-ui-body text-ui-muted">{tDetail("noAttributes")}</p>
               ) : (
-                <Ltr>{money(product.price)}</Ltr>
-              )
-            }
-            reason={tDetail("effectivePriceReason")}
-          />
-          <DecimalField
-            label={tDetail("weight")}
-            value={draft.weight}
-            onChange={(v) => set("weight", v)}
-            error={errors.weight}
-          />
-        </ListGroup>
-
-        {/* ----------------------------------------------- inventory --- */}
-        <ListGroup title={tDetail("inventory")}>
-          <SwitchField
-            label={tDetail("manageStock")}
-            checked={draft.manage_stock}
-            onChange={(v) => set("manage_stock", v)}
-            hint={tDetail("manageStockHint")}
-          />
-          {draft.manage_stock ? (
-            <TextField
-              label={tDetail("stockQuantity")}
-              value={draft.stock_quantity}
-              onChange={(v) => set("stock_quantity", v)}
-              error={errors.stock_quantity}
-              inputMode="numeric"
-              isolate
-            />
-          ) : null}
-          <SelectField
-            label={tDetail("stockStatus")}
-            value={draft.stock_status}
-            onChange={(v) => set("stock_status", v)}
-            options={STOCK_STATUSES.map((s) => ({ value: s, label: tStock(s) }))}
-            error={errors.stock_status}
-          />
-        </ListGroup>
-
-        {/* --------------------------------------------- description --- */}
-        <ListGroup title={tDetail("descriptions")} footnote={tDetail("htmlNote")}>
-          <TextAreaField
-            label={tDetail("shortDescription")}
-            value={draft.short_description}
-            onChange={(v) => set("short_description", v)}
-            error={errors.short_description}
-            rows={3}
-          />
-          <TextAreaField
-            label={tDetail("description")}
-            value={draft.description}
-            onChange={(v) => set("description", v)}
-            error={errors.description}
-            rows={6}
-          />
-        </ListGroup>
-
-        {/* ---------------------------------------------- categories --- */}
-        <ListGroup title={tDetail("organisation")}>
-          <ReadOnlyField
-            label={tDetail("categories")}
-            value={
-              product.category_ids.length === 0
-                ? "—"
-                : product.category_ids
-                    .map((id) => categoryName.get(id) ?? String(id))
-                    .join(" · ")
-            }
-            reason={tDetail("categoriesLater")}
-          />
-          {/*
-            Attributes are read-only here, and the reason is on screen rather
-            than in a comment: replacing the list on a variable product clears
-            every variation's attribute map, so a partial editor is worse than
-            none. The attributes screen owns this.
-          */}
-          <ReadOnlyField
-            label={tDetail("attributes")}
-            value={
-              product.attributes.length === 0 ? (
-                "—"
-              ) : (
-                <span className="flex flex-col gap-1">
+                <DataList>
                   {product.attributes.map((attribute) => {
                     const described = describeAttribute(attribute, attributes, termMap);
                     return (
-                      <span key={attribute.name} className="flex flex-wrap gap-1.5">
-                        <span className="text-label-secondary">{described.label} :</span>
-                        <span>{described.values.join(", ")}</span>
-                        {!described.global ? (
-                          <StatusBadge tone="neutral">{tDetail("localAttribute")}</StatusBadge>
-                        ) : null}
-                      </span>
+                      <DataRow key={attribute.name} label={described.label} stacked>
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {/* Attribute values are user content — "Bois d'olivier",
+                              "قطن" — so each resolves its own direction rather
+                              than inheriting the page's. */}
+                          <span dir="auto" className="min-w-0">
+                            {described.values.join(", ")}
+                          </span>
+                          {!described.global ? (
+                            <Badge tone="neutral">{tDetail("localAttribute")}</Badge>
+                          ) : null}
+                        </span>
+                      </DataRow>
                     );
                   })}
-                </span>
-              )
-            }
-            reason={
-              product.attributes.some((a) => a.id === 0)
-                ? tDetail("localAttributeReason")
-                : tDetail("attributesLater")
-            }
-          />
-        </ListGroup>
+                </DataList>
+              )}
+            </Card>
 
-        {/* ---------------------------------------------- variations --- */}
-        {product.variations.length > 0 ? (
-          <ListGroup
-            title={tDetail("variations")}
-            footnote={
-              span
-                ? tDetail("variationSpan", { min: money(span.min), max: money(span.max) })
-                : tDetail("variationsReadOnly")
-            }
-          >
-            {variations === null ? (
-              <ListRow>
-                <SectionError>{tDetail("sectionFailed")}</SectionError>
-              </ListRow>
-            ) : (
-              variations.map((v) => (
-                <ListRow key={v.id}>
-                  <span className="flex min-w-0 flex-1 flex-col gap-1 py-1">
-                    <span className="flex min-h-6 min-w-0 items-center gap-2">
-                      {/* Attribute values are user content — "Bois d'olivier",
-                          "قطن" — so the ellipsis follows the string's own
-                          direction rather than the page's. */}
-                      <span
-                        dir="auto"
-                        className="min-w-0 flex-1 truncate text-body text-label"
+            {/* ---------------------------------------------- variations --- */}
+            {/*
+              Read-only, and it is a boundary rather than a scope call:
+              `POST /products/{id}/variations` is refused by the panel's own
+              allowlist and `tests/boundary.test.ts` asserts the refusal. A route
+              no screen reaches must not be reachable by guessing a URL.
+            */}
+            {product.variations.length > 0 ? (
+              <Card
+                title={tDetail("variations")}
+                footnote={
+                  span
+                    ? tDetail("variationSpan", {
+                        min: asMoney(span.min),
+                        max: asMoney(span.max),
+                      })
+                    : tDetail("variationsReadOnly")
+                }
+              >
+                {variations === null ? (
+                  <SectionError>{tDetail("sectionFailed")}</SectionError>
+                ) : (
+                  <ul className="flex flex-col">
+                    {variations.map((v) => (
+                      <li
+                        key={v.id}
+                        className="flex min-w-0 flex-col gap-1 border-b border-ui-line py-2.5 first:pt-0 last:border-b-0 last:pb-0"
                       >
-                        {variationLabel(v, product, termMap).join(" · ") ||
-                          tDetail("variationNoAttributes")}
-                      </span>
-                      {v.status !== "publish" ? (
-                        <StatusBadge
-                          tone={PRODUCT_STATUS_TONE[v.status as ReadableStatus] ?? "neutral"}
-                        >
-                          {tStatus(v.status)}
-                        </StatusBadge>
-                      ) : null}
-                    </span>
-                    <span className="flex min-w-0 items-baseline gap-2">
-                      <Ltr className="min-w-0 flex-1 truncate text-subhead text-label-secondary">
-                        {/* `""` means the variation inherits its parent's SKU;
-                            the API reports what is stored so a read body can be
-                            written back, and the panel says which it is. */}
-                        {v.sku || tDetail("skuInherited")}
-                      </Ltr>
-                      <span className="flex shrink-0 items-center gap-1 text-subhead text-label-secondary">
-                        <Dot tone={STOCK_TONE[v.stock_status as StockStatus] ?? "warning"} />
-                        {v.manage_stock && v.stock_quantity !== null ? (
-                          <Isolate numeric>{t("inStock", { count: v.stock_quantity })}</Isolate>
-                        ) : (
-                          <span>{tStock(v.stock_status)}</span>
-                        )}
-                      </span>
-                      <Ltr className="shrink-0 text-subhead text-label">
-                        {money(v.price)}
-                      </Ltr>
-                    </span>
-                  </span>
-                </ListRow>
-              ))
-            )}
-          </ListGroup>
-        ) : null}
+                        {/*
+                          Two lines of two, rather than a label above a row of
+                          three. Measured on the 340px capture: the SKU, the stock
+                          and the price competing for one line left the SKU about
+                          60px and `truncate` cut `AC-CAT-0104-2` to `AC-CAT-010…`
+                          — a value on screen with no way to read it, which §2.1
+                          forbids by name. Pairing the price with the short
+                          attribute label frees the whole second line for the SKU
+                          and its stock.
+                        */}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            dir="auto"
+                            className="min-w-0 flex-1 truncate text-ui-compact text-ui-fg"
+                          >
+                            {variationLabel(v, product, termMap).join(" · ") ||
+                              tDetail("variationNoAttributes")}
+                          </span>
+                          {v.status !== "publish" ? (
+                            <Badge
+                              tone={
+                                PRODUCT_STATUS_TONE[v.status as ReadableStatus] ??
+                                "neutral"
+                              }
+                            >
+                              {tStatus(v.status)}
+                            </Badge>
+                          ) : null}
+                          <Ltr className="shrink-0 text-ui-compact text-ui-fg">
+                            {asMoney(v.price)}
+                          </Ltr>
+                        </span>
+                        <span className="flex min-w-0 items-baseline gap-3">
+                          {/* `""` means the variation inherits its parent's SKU;
+                              the API reports what is stored so a read body can be
+                              written back, and the panel says which it is.
+                              `break-all` rather than `truncate`, for the shop's
+                              60-character SKU: it wraps rather than being cut. */}
+                          {v.sku ? (
+                            <Ltr className="min-w-0 flex-1 break-all text-ui-label text-ui-muted">
+                              {v.sku}
+                            </Ltr>
+                          ) : (
+                            <span className="min-w-0 flex-1 text-ui-label text-ui-subtle">
+                              {tDetail("skuInherited")}
+                            </span>
+                          )}
+                          <span className="flex shrink-0 items-center gap-1.5 text-ui-label text-ui-muted">
+                            <Dot
+                              tone={STOCK_TONE[v.stock_status as StockStatus] ?? "warning"}
+                            />
+                            {v.manage_stock && v.stock_quantity !== null ? (
+                              <Isolate>{t("inStock", { count: v.stock_quantity })}</Isolate>
+                            ) : (
+                              <span>{tStock(v.stock_status)}</span>
+                            )}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            ) : null}
+          </>
+        }
+        aside={
+          <>
+            {/* --------------------------------------------- publication --- */}
+            {/*
+              Status, visibility and featured under **one** heading, and that is a
+              correction made from the screenshot rather than from the spec. As
+              two cards they read "Statut / Statut" and "Visibilité au catalogue /
+              Visibilité au catalogue" — a card title and the only control's label
+              are the same words twice, six pixels apart, on both. A heading that
+              names the group instead lets each control keep the visible label
+              §3.4 requires without the aside stuttering twice.
+            */}
+            <Card title={tDetail("publication")}>
+              <div className="flex flex-col gap-4">
+                <Select
+                  id={fieldId("status")}
+                  label={tDetail("status")}
+                  value={draft.status}
+                  onChange={(v) => set("status", v)}
+                  options={PRODUCT_STATUSES.map((s) => ({ value: s, label: tStatus(s) }))}
+                  error={errors.status}
+                />
+                <Select
+                  id={fieldId("catalog_visibility")}
+                  label={tDetail("visibility")}
+                  value={draft.catalog_visibility}
+                  onChange={(v) => set("catalog_visibility", v)}
+                  options={CATALOG_VISIBILITIES.map((s) => ({
+                    value: s,
+                    label: tVisibility(s),
+                  }))}
+                  error={errors.catalog_visibility}
+                />
+                <Switch
+                  id={fieldId("featured")}
+                  label={tDetail("featured")}
+                  checked={draft.featured}
+                  onChange={(v) => set("featured", v)}
+                  error={errors.featured}
+                />
+              </div>
+            </Card>
 
-        {/* ----------------------------------------------------- SEO --- */}
-        <ListGroup
-          title={tDetail("seo")}
-          footnote={
-            product.seo.overrides.length === 0 ? tDetail("seoDerived") : undefined
-          }
-        >
-          <ReadOnlyField label={tDetail("seoTitle")} value={product.seo.title || "—"} />
-          <ReadOnlyField
-            label={tDetail("seoDescription")}
-            value={product.seo.description || "—"}
-          />
-          <ReadOnlyField
-            label={tDetail("seoRobots")}
-            value={<Ltr numeric={false}>{product.seo.robots.directive}</Ltr>}
-          />
-          {product.seo.canonical ? (
-            <ReadOnlyField
-              label={tDetail("seoCanonical")}
-              value={<Ltr numeric={false}>{product.seo.canonical}</Ltr>}
-            />
-          ) : null}
-        </ListGroup>
+            {/* ----------------------------------------------- categories --- */}
+            {/*
+              **Writable, and it is the cheapest real feature on this screen**:
+              `category_ids` is measured writable, the vocabulary is already
+              fetched for the list's filter drawer, and a product's classification
+              is the field a shopkeeper changes most often after its price.
 
-        {/* -------------------------------------------------- record --- */}
-        <ListGroup title={tDetail("record")}>
-          <ListRow>
-            <span className="text-body text-label-secondary">{tDetail("status")}</span>
-            <span className="ms-auto">
-              <StatusBadge tone={PRODUCT_STATUS_TONE[product.status]}>
-                {tStatus(product.status)}
-              </StatusBadge>
-            </span>
-          </ListRow>
-          <ListValueRow
-            label={tDetail("modified")}
-            value={<Isolate>{formatWhen(product.date_modified, locale)}</Isolate>}
-          />
-          <ListValueRow
-            label={tDetail("identifier")}
-            value={<Ltr numeric>{product.id}</Ltr>}
-          />
-        </ListGroup>
+              A failed vocabulary is a `SectionError` rather than an empty list of
+              boxes, because an empty multi-select is indistinguishable from a
+              product with no categories and one save would make that true.
+            */}
+            <Card title={tDetail("categories")}>
+              {categories === null ? (
+                <SectionError>{tDetail("sectionFailed")}</SectionError>
+              ) : categoryRows.length === 0 ? (
+                <p className="text-ui-body text-ui-muted">{tDetail("noCategories")}</p>
+              ) : (
+                <div
+                  id={fieldId("category_ids")}
+                  role="group"
+                  aria-label={tDetail("categories")}
+                  /* Focusable only as a target: `ErrorSummary` links a failure to
+                     a DOM id and calls `.focus()`, and a bare `<div>` would
+                     swallow that silently. `-1` keeps it out of the tab order. */
+                  tabIndex={-1}
+                  /*
+                   * No cap and no inner scroller, which an earlier draft had at
+                   * `max-h-64`: it cut the seventh category in half with nothing
+                   * to say the list continued, and a scroll region nested inside
+                   * a column that already scrolls traps the wheel and hides rows.
+                   * The aside is a column; a long vocabulary makes it a long
+                   * column, which is legible.
+                   */
+                  className="ui-ring -mx-2 flex flex-col gap-1 rounded-ui-md outline-none"
+                >
+                  {categoryRows.map((category) => (
+                    <CheckRow
+                      key={category.id}
+                      checked={draft.category_ids.includes(category.id)}
+                      onChange={(on) => toggleCategory(category.id, on)}
+                      label={category.name}
+                      count={category.count}
+                    />
+                  ))}
+                </div>
+              )}
+            </Card>
 
-        <DeleteAction productId={product.id} locale={locale} name={product.name} />
-      </div>
+            {/* --------------------------------------------------- record --- */}
+            <Card title={tDetail("record")}>
+              <DataList>
+                <DataRow label={tDetail("storedStatus")}>
+                  {/* The **stored** status beside the picker's draft value. They
+                      differ on exactly one value — `trash`, which is readable and
+                      not writable — and that is the case worth seeing, so the
+                      label says *stored* rather than repeating "Statut" and
+                      leaving a reader to work out why the two disagree. */}
+                  <Badge tone={PRODUCT_STATUS_TONE[product.status]}>
+                    {tStatus(product.status)}
+                  </Badge>
+                </DataRow>
+                <DataRow label={tDetail("created")}>
+                  {/* `Isolate`, not `Ltr`: ICU puts RTL marks inside the Arabic
+                      form on purpose and forcing dir="ltr" over them renders the
+                      date wrong. See primitives/Ltr.tsx. */}
+                  <Isolate>{formatDate(product.date_created, locale)}</Isolate>
+                </DataRow>
+                <DataRow label={tDetail("modified")}>
+                  <Isolate>{formatWhen(product.date_modified, locale)}</Isolate>
+                </DataRow>
+                <DataRow label={tDetail("identifier")}>
+                  <Ltr>{product.id}</Ltr>
+                </DataRow>
+              </DataList>
+            </Card>
+          </>
+        }
+      />
 
       {/*
-        The save bar. Fixed above the tab bar rather than at the foot of a long
-        form: this form is nine sections tall at 390px, and a save button that
-        has to be scrolled to is a save button people lose.
+        The save bar. §3.4: a long form gets a sticky footer that appears only when
+        the form is dirty — and it is a *sticky* bar in the form's own column, not
+        the `position: fixed` one this screen used to carry, which had to know the
+        tab bar's height, the safe-area inset and the sidebar's width.
+
+        It sits after the grid rather than inside `main`, and that is the
+        difference between working and nearly working: three of this form's
+        controls are in the aside, which collapses **below** main at every width
+        under `lg`, so a bar anchored to the main column would go out of view at
+        exactly the moment someone ticked a category on a phone.
       */}
-      {dirty ? (
-        <div className="save-bar material-bar hairline-t fixed inset-x-0 z-20">
-          <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-            <Button
-              variant="plain"
-              onClick={() => {
-                setDraft(draftOf(product));
-                setErrors({});
-                setTopError(null);
-              }}
-            >
-              {tDetail("discard")}
-            </Button>
-            <Button
-              onClick={() => void save()}
-              loading={saving}
-              fullWidth
-              className="flex-1"
-            >
-              {saving ? tDetail("saving") : tDetail("save")}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </Scaffold>
+      <SaveBar
+        dirty={dirty}
+        saving={save.isPending}
+        onSave={() => save.mutate()}
+        onDiscard={() => {
+          setDraft(draftOf(product));
+          setErrors({});
+          setSaveError(null);
+        }}
+        /* §3.7: the write control is disabled with the same reason the stale
+           marker gives, rather than failing at the network and blaming itself. */
+        blockedReason={online ? undefined : tStates("offlineWrites")}
+      />
+    </div>
   );
 }

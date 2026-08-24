@@ -208,16 +208,56 @@ export function StatSkeleton({ count = 4, label }: { count?: number; label: stri
   );
 }
 
-/** A form section: label/field pairs at the real field height. */
-export function FormSkeleton({ fields = 4, label }: { fields?: number; label: string }) {
+/**
+ * A card of form fields — the shape the product detail's main column is made of,
+ * and the counterpart to `CardSkeleton` for a card that holds controls rather
+ * than a label/value list.
+ *
+ * **Every measurement is `Card`'s and `Form.tsx`'s, not a guess**, and it is a
+ * correction rather than a restyle: this used to be `p-5` with `gap-5` between
+ * `h-3` labels, which is not the box model of anything on screen. The real card
+ * is `flex flex-col gap-3 py-4 sm:py-5` with `px-4 sm:px-5` inside and a
+ * `--text-heading` title at a 1.5rem line box; a real field is `FieldFrame`'s
+ * `gap-1.5` column of a `--text-label` label at 1.125rem over a `.ui-field`
+ * control at 2.25rem, and the fields stack at 16px. `h-3` against an 18px label
+ * is 6px short per field, which is 42px across the seven this screen's identity
+ * card renders.
+ *
+ * `.ui-field` grows to 44px on a coarse pointer and `h-9` cannot, so the control
+ * block carries `.ui-field` itself rather than a fixed height — the placeholder
+ * and the control it stands in for are then the same height on a phone too.
+ *
+ * `titled` is the caller's because a card without a heading exists (a bare list),
+ * and `fields` is because the real cards differ — identity has four controls and
+ * inventory has three, and a placeholder that renders four for both shifts once.
+ */
+export function FormSkeleton({
+  fields = 4,
+  label,
+  titled = true,
+}: {
+  fields?: number;
+  label: string;
+  titled?: boolean;
+}) {
   return (
-    <SkeletonRegion label={label} className="ui-card flex flex-col gap-5 p-5">
-      {Array.from({ length: fields }, (_, i) => (
-        <div key={i} className="flex flex-col gap-2">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-9 w-full rounded-ui-md" />
+    <SkeletonRegion
+      label={label}
+      className="ui-card flex flex-col gap-3 overflow-hidden py-4 sm:py-5"
+    >
+      {titled ? (
+        <div className="px-4 sm:px-5">
+          <Skeleton className="h-6 w-32" />
         </div>
-      ))}
+      ) : null}
+      <div className="flex flex-col gap-4 px-4 sm:px-5">
+        {Array.from({ length: fields }, (_, i) => (
+          <div key={i} className="flex flex-col gap-1.5">
+            <Skeleton className={`h-4.5 ${CELL_WIDTHS[i % CELL_WIDTHS.length]}`} />
+            <Skeleton className="ui-field w-full rounded-ui-md" />
+          </div>
+        ))}
+      </div>
     </SkeletonRegion>
   );
 }

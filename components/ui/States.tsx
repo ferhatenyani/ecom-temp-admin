@@ -143,6 +143,55 @@ export function StaleBanner({ time }: { time: string }) {
   );
 }
 
+/**
+ * A standing notice about the record itself — not a failure, and not a toast.
+ *
+ * §3.1: "An error a person must act on is not a toast. It is inline, or a
+ * `Modal`." §3.7 wants the same of a state marker: on screen, and staying there.
+ * The product detail has two of these (a broken option document, a trashed
+ * record) and the order detail hand-rolled a third inside `OrderScreen`, which is
+ * three copies of the same box with three sets of padding — so it is a primitive
+ * on the second screen that needs it rather than a `<div>` on the fourth.
+ *
+ * `role` is the caller's because the two roles mean different things and only the
+ * caller knows which it has: `alert` interrupts and is for something that is
+ * wrong right now; `status` is polite and is for a condition the person should
+ * know about. A trashed product is a `status`; an unreadable option set — with
+ * carts already refusing to check out — is an `alert`.
+ *
+ * Tone is a paired `-fg`/`-bg` token per §3.5, never a hue mixed into its own
+ * text colour, and the icon means the colour is never the only signal.
+ */
+export function Notice({
+  tone,
+  title,
+  role = "status",
+  children,
+}: {
+  tone: "warning" | "danger";
+  title: string;
+  role?: "status" | "alert";
+  children?: ReactNode;
+}) {
+  const skin =
+    tone === "danger"
+      ? "border-ui-danger-fg bg-ui-danger-bg text-ui-danger-fg"
+      : "border-ui-warning-fg bg-ui-warning-bg text-ui-warning-fg";
+
+  return (
+    <div
+      role={role}
+      className={`flex items-start gap-2.5 rounded-ui-lg border px-4 py-3 ${skin}`}
+    >
+      <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <p className="text-ui-subheading">{title}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** A section that failed inside an otherwise working detail screen. */
 export function SectionError({ children }: { children: ReactNode }) {
   return (

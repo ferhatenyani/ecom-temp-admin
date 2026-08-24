@@ -32,9 +32,10 @@ export declare function respond(
 ): MockResponse;
 
 /**
- * Rebuild every mutable thing — order statuses, COD records, parcels, payments —
- * from the seeded baseline. Runs once at module load; the unit suite calls it
- * between tests so a write in one cannot be read by another.
+ * Rebuild every mutable thing — order statuses, COD records, parcels, payments,
+ * and the products a PATCH or a DELETE has rewritten — from the seeded baseline.
+ * Runs once at module load; the unit suite calls it between tests so a write in
+ * one cannot be read by another.
  */
 export declare function resetState(): void;
 

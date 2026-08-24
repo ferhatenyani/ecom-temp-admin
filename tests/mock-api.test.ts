@@ -44,14 +44,22 @@ import {
 } from "@/lib/api/schemas/payment";
 import {
   attributeTerms,
+  deleteResult,
   facets as facetsSchema,
   globalAttributes,
   product,
   productCategories,
   productList,
   productListMeta,
+  variationList,
 } from "@/lib/api/schemas/product";
-import { PRODUCT_STATUSES, STOCK_STATUSES } from "@/lib/product-status";
+import {
+  CATALOG_VISIBILITIES,
+  PRODUCT_STATUSES,
+  PRODUCT_TYPES,
+  STOCK_STATUSES,
+} from "@/lib/product-status";
+import { priceSpan, variationLabel } from "@/lib/products";
 import { customerDetail, customerList } from "@/lib/api/schemas/customer";
 import { inventoryItem, inventoryList } from "@/lib/api/schemas/inventory";
 import { coupon, couponDetail, couponList } from "@/lib/api/schemas/coupon";
@@ -65,8 +73,8 @@ function get(path: string, query = ""): MockResponse {
  * it — `POST /payments/{id}/verify` sends none at all, which is why `body` is
  * optional here rather than defaulted to `{}`.
  */
-function write(method: string, path: string, body?: unknown): MockResponse {
-  return respond(method, `${BASE_PATH}${path}`, new URLSearchParams(), body ?? null);
+function write(method: string, path: string, body?: unknown, query = ""): MockResponse {
+  return respond(method, `${BASE_PATH}${path}`, new URLSearchParams(query), body ?? null);
 }
 
 /**
@@ -507,7 +515,9 @@ describe("the writes", () => {
     expect(write("POST", "/orders/1023/payments", { provider: "chargily" }).status).toBe(404);
     // And a verb nobody wrote on a route that exists is a 404, not a silent read.
     expect(write("DELETE", "/orders/1023").status).toBe(404);
-    expect(write("PATCH", "/products/101", { status: "draft" }).status).toBe(404);
+    // `/products` writes now — `PATCH` and `DELETE` — and `POST` on it still
+    // does not, which is the pair "the product writes" below is built on.
+    expect(write("POST", "/products/101", { status: "draft" }).status).toBe(404);
     expect(write("POST", "/orders/1023/notes", { content: "x" }).status).toBe(404);
     expect(get("/orders/1023/cod/attempts").status).toBe(404);
   });
@@ -758,6 +768,551 @@ describe("GET /products", () => {
   });
 });
 
+/**
+ * The one sub-resource a product has, and the reason the depth guard on
+ * `/products` had to be relaxed properly rather than special-cased.
+ *
+ * Its shape disagrees with the parent's on purpose: `attributes` is an **object**
+ * here where the parent's is an array, and the values are lowercased slugs of the
+ * parent's options. A renderer that does not know which it is holding prints a
+ * lowercase `s` at a shopkeeper, which is what `variationLabel()` repairs — so it
+ * is the panel's own resolver, not a copy, that this asserts with.
+ */
+describe("GET /products/{id}/variations", () => {
+  it("parses the five bodies, including the two that carry an absence", () => {
+    const three = parseList(variationList, get("/products/104/variations", "per_page=100"));
+    const two = parseList(variationList, get("/products/120/variations", "per_page=100"));
+    expect(three.data).toHaveLength(3);
+    expect(two.data).toHaveLength(2);
+    expect(three.meta.total).toBe(3);
+
+    const all = [...three.data, ...two.data];
+    expect(all.every((row) => row.parent_id === 104 || row.parent_id === 120)).toBe(true);
+
+    // `""` means it inherits the parent's, and the API reports what is stored —
+    // so the row has to render without inventing a SKU.
+    expect(all.filter((row) => row.sku === "").length).toBeGreaterThan(0);
+    // And one manages no stock of its own, which is the other absence: null is
+    // not zero, and a variation that reads `0` is out of stock rather than
+    // uncounted.
+    const inherited = all.filter((row) => row.stock_quantity === null);
+    expect(inherited).toHaveLength(1);
+    expect(inherited[0].manage_stock).toBe(false);
+  });
+
+  it("keys attributes by the parent's own vocabulary, lowercased", () => {
+    const parent = parse(product, get("/products/104")).data;
+    const variations = parseList(variationList, get("/products/104/variations")).data;
+
+    for (const row of variations) {
+      // An object, not an array — the asymmetry the schema is explicit about.
+      expect(Array.isArray(row.attributes)).toBe(false);
+      expect(Object.keys(row.attributes)).toEqual(["taille"]);
+      // Stored lowercased, and resolvable back to the parent's own spelling by
+      // the panel's resolver. A fixture whose keys did not line up would make
+      // `variationLabel()` fall through to printing the raw slug and nothing
+      // here would notice.
+      const [label] = variationLabel(row, parent, new Map());
+      expect(parent.attributes[0].options).toContain(label);
+      expect(label).not.toBe(Object.values(row.attributes)[0]);
+    }
+  });
+
+  /**
+   * The variations are what a variable product's price *is* — its own
+   * `regular_price` is `""` — and `priceSpan()` returns **null** when every price
+   * is equal, so a fixture of one repeated figure would leave the detail's price
+   * range unreachable and uncapturable.
+   */
+  it("prices them apart, so the detail's range has something to render", () => {
+    const variations = parseList(variationList, get("/products/104/variations")).data;
+    const span = priceSpan(variations.map((row) => row.price));
+    expect(span).not.toBeNull();
+
+    const parent = parse(product, get("/products/104")).data;
+    expect(parent.regular_price).toBe("");
+    // The parent's own `price` is the resolved floor, not a second opinion.
+    expect(parent.price).toBe(span!.min);
+  });
+
+  it("answers a simple product with 200 and an empty list, not a 404", () => {
+    // Measured. The detail skips the request on 26 of 28 products because it
+    // would work and simply be waste — which is only true if it is not an error.
+    const { data, meta } = parseList(variationList, get("/products/101/variations"));
+    expect(data).toEqual([]);
+    expect(meta.total).toBe(0);
+  });
+
+  it("serves nothing deeper, and nothing under another name", () => {
+    expect(get("/products/101/variations/9030").status).toBe(404);
+    expect(get("/products/101/nonsense").status).toBe(404);
+    expect(get("/products/999999/variations").status).toBe(404);
+    // The one variation route the panel never calls stays unreachable too.
+    expect(write("PATCH", "/products/104/variations", { sku: "x" }).status).toBe(404);
+  });
+});
+
+/**
+ * **`PATCH /products/{id}`, and the split that makes it worth mocking.**
+ *
+ * A read-only key is dropped in silence and an unknown one is a 400 — two
+ * different answers to what looks like the same mistake. A client that treated
+ * them alike would either refuse a GET body it is supposed to be able to PATCH
+ * back, or swallow a typo'd field name and report a save that never happened.
+ */
+describe("the product writes", () => {
+  const SAVE = {
+    name: "Burnous en laine, tissé main",
+    slug: "burnous-en-laine-tisse-main",
+    status: "draft",
+    sku: "AC-CAT-0104-EDIT",
+    featured: true,
+    catalog_visibility: "hidden",
+    short_description: "<p>Court</p>",
+    description: "<p>Long</p>",
+    weight: "1.2",
+    category_ids: [12, 13],
+  };
+
+  it("writes every field it accepts, and the answer equals the next GET", () => {
+    const saved = parse(product, write("PATCH", "/products/104", SAVE)).data;
+    expect(saved).toMatchObject(SAVE);
+
+    // The read after the write is the whole point, and the *identity* of the two
+    // bodies is what a form that refetches depends on.
+    const reread = parse(product, get("/products/104")).data;
+    expect(reread).toEqual(saved);
+
+    // And the listing agrees with the detail, because a list that still showed
+    // the old name would be one screen contradicting another.
+    const listed = parseList(productList, get("/products", "per_page=100")).data;
+    expect(listed.find((row) => row.id === 104)?.name).toBe(SAVE.name);
+  });
+
+  /**
+   * The read-only half, and it has to be **silent**: a 200, no mention in the
+   * response, the field unchanged. This is what lets a client PATCH a GET body
+   * back without diffing it first.
+   */
+  it("drops every read-only field without saying so", () => {
+    const before = parse(product, get("/products/101")).data;
+
+    const response = write("PATCH", "/products/101", {
+      // One writable field, so the request is not refused for being empty.
+      name: "Miel de jujubier, 500 g",
+      price: "1.00",
+      on_sale: true,
+      permalink: "https://example.invalid/hijacked",
+      image: { id: 9, url: "https://example.invalid/i.png" },
+      gallery: [{ id: 10, url: "https://example.invalid/g.png" }],
+      variations: [1, 2, 3],
+      id: 999,
+      date_created: "2020-01-01T00:00:00+00:00",
+      date_modified: "2020-01-01T00:00:00+00:00",
+      bundle: { items: [], available: 0 },
+      options_problems: ["invented"],
+    });
+
+    expect(response.status).toBe(200);
+    const after = parse(product, response).data;
+    expect(after.id).toBe(101);
+    expect(after.price).toBe(before.price);
+    expect(after.on_sale).toBe(before.on_sale);
+    expect(after.permalink).toBe(before.permalink);
+    expect(after.image).toBeNull();
+    expect(after.gallery).toEqual([]);
+    expect(after.variations).toEqual(before.variations);
+    expect(after.date_created).toBe(before.date_created);
+    expect(after.date_modified).toBe(before.date_modified);
+    // Absent, not written: the three §83 keys stay off a product that has no
+    // option set, which is what makes them optional on the schema.
+    expect("bundle" in after).toBe(false);
+    expect("options_problems" in after).toBe(false);
+  });
+
+  /**
+   * **An unknown field is not a read-only one.** Both are keys the API will not
+   * write; only one of them is a mistake worth reporting, and the panel renders
+   * the difference — a named field lands on its own control, and a field the form
+   * does not render is surfaced at the top rather than swallowed.
+   */
+  it("answers a 400 for an unknown key and a 200 for a read-only one", () => {
+    expect(write("PATCH", "/products/104", { price: "1.00" }).status).toBe(400);
+
+    const error = apiError(write("PATCH", "/products/104", { name: "x", nonsense: 1 }));
+    expect(error.status).toBe(400);
+    expect(error.fields).toEqual({ nonsense: "Unknown field." });
+
+    // And nothing was written by the refused request.
+    expect(parse(product, get("/products/104")).data.name).not.toBe("x");
+  });
+
+  /**
+   * The measured trap: a PATCH whose every key is read-only answers 400 **with no
+   * `details` at all**, so "drop what is read-only" cannot be a client's only rule
+   * — if it drops everything, the refusal names nothing and the panel's own 400
+   * handling has no field list to render. That is why the form sends an explicit
+   * named subset.
+   */
+  it("refuses a body of nothing but read-only keys, naming nothing", () => {
+    const response = write("PATCH", "/products/104", {
+      id: 104,
+      price: "1.00",
+      permalink: "https://example.invalid/x",
+    });
+    expect(response.status).toBe(400);
+
+    // On the wire: the key is **absent**, not an empty object. A mock that
+    // emitted `details: {}` would let a screen read `details.fields` without
+    // checking and never find out.
+    const body = response.body as { error: Record<string, unknown> };
+    expect("details" in body.error).toBe(false);
+
+    const error = apiError(response);
+    expect(error.apiMessage).toBe("No supported fields were provided.");
+    expect(error.fields).toBeNull();
+
+    // An empty body is the same refusal, by the same route.
+    expect(write("PATCH", "/products/104", {}).status).toBe(400);
+  });
+
+  /**
+   * **A 200 that looks exactly like a save and is not.** `stock_quantity` is
+   * ignored when the row manages no stock, which is why the panel's form deletes
+   * the key from its own body rather than sending it and trusting the answer.
+   */
+  it("drops stock_quantity when the product manages no stock", () => {
+    const before = parse(product, get("/products/103")).data;
+    expect(before.manage_stock).toBe(false);
+    expect(before.stock_quantity).toBeNull();
+
+    const after = parse(product, write("PATCH", "/products/103", { stock_quantity: 99 })).data;
+    expect(after.stock_quantity).toBeNull();
+    expect(parse(product, get("/products/103")).data.stock_quantity).toBeNull();
+
+    // Switching stock management off does the same thing on a row that had a
+    // figure — `manage_stock: false` with a number beside it is a state the real
+    // API never serves.
+    const off = parse(
+      product,
+      write("PATCH", "/products/101", { manage_stock: false, stock_quantity: 99 }),
+    ).data;
+    expect(off.manage_stock).toBe(false);
+    expect(off.stock_quantity).toBeNull();
+
+    // And with management on, the same field is honoured.
+    const on = parse(
+      product,
+      write("PATCH", "/products/101", { manage_stock: true, stock_quantity: 7 }),
+    ).data;
+    expect(on.stock_quantity).toBe(7);
+  });
+
+  /**
+   * The silent repair the detail's warning banner is about: writing `options`
+   * replaces the stored document, so the groups the API could not read are gone
+   * and `options_problems` goes with them.
+   */
+  it("destroys options_problems the moment options is written", () => {
+    const before = parse(product, get("/products/208")).data;
+    expect(before.options_problems).toHaveLength(2);
+    // The position, not an id — the broken group is absent from `options.groups`,
+    // so nothing can link the warning to a row in an editor.
+    expect(before.options_problems?.[0]).toMatch(/^Option group 4 was dropped:/);
+    expect(before.options?.groups).toHaveLength(3);
+
+    const after = parse(
+      product,
+      write("PATCH", "/products/208", { options: before.options }),
+    ).data;
+    expect("options_problems" in after).toBe(false);
+    expect(parse(product, get("/products/208")).data.options_problems).toBeUndefined();
+
+    // A PATCH that does not carry `options` leaves the broken document alone,
+    // which is the state the banner is rendered from.
+    resetState();
+    const untouched = parse(product, write("PATCH", "/products/208", { featured: true })).data;
+    expect(untouched.options_problems).toHaveLength(2);
+  });
+
+  /**
+   * **The round trip the whole design rests on**: `GET` a product and `PATCH` the
+   * entire body back. Measured against the live API on the one product carrying
+   * an option set — all 32 keys, one 200 — which is what lets a form be built
+   * around the whole object instead of a diff.
+   */
+  it("takes a whole GET body back, on the product with the most keys", () => {
+    const whole = parse(product, get("/products/208")).data;
+    expect(Object.keys(whole).length).toBeGreaterThanOrEqual(32);
+
+    const response = write("PATCH", "/products/208", whole);
+    expect(response.status).toBe(200);
+
+    // Everything survives except the thing the round trip is measured to
+    // destroy: the unreadable groups, and the warning that named them.
+    const after = parse(product, response).data;
+    expect(after.name).toBe(whole.name);
+    expect(after.options).toEqual(whole.options);
+    expect("options_problems" in after).toBe(false);
+  });
+
+  /**
+   * A block is written whole or not at all. The three nested fields are the only
+   * writable ones the panel parses structurally, so a mock that stored a partial
+   * one would hand the next GET a body the panel's own boundary refuses — a
+   * failure the real API cannot produce and the harness must not manufacture.
+   */
+  it("refuses a half-written seo, attributes or options block", () => {
+    expect(apiError(write("PATCH", "/products/101", { seo: {} })).fields).toEqual({
+      seo: "Must carry title, description, canonical, robots and overrides.",
+    });
+    // The nested half counts too: `robots` has three required keys of its own.
+    const partialRobots = {
+      ...parse(product, get("/products/101")).data.seo,
+      robots: { index: true },
+    };
+    expect(write("PATCH", "/products/101", { seo: partialRobots }).status).toBe(400);
+
+    expect(write("PATCH", "/products/101", { attributes: [{ name: "Taille" }] }).status).toBe(400);
+    expect(write("PATCH", "/products/101", { options: {} }).status).toBe(400);
+    expect(write("PATCH", "/products/101", { options: { groups: [{}] } }).status).toBe(400);
+
+    // Null is a real request — it removes the option set — and is not the same
+    // as `{groups: []}`.
+    expect(write("PATCH", "/products/101", { options: null }).status).toBe(200);
+    expect(write("PATCH", "/products/101", { options: { groups: [] } }).status).toBe(200);
+
+    // And every seeded product's own block round-trips, which is the property
+    // that makes the refusals above safe to make.
+    for (const id of [101, 104, 201, 208, 211]) {
+      const seeded = parse(product, get(`/products/${id}`)).data;
+      expect(write("PATCH", `/products/${id}`, { seo: seeded.seo }).status).toBe(200);
+      expect(
+        write("PATCH", `/products/${id}`, { attributes: seeded.attributes }).status,
+      ).toBe(200);
+    }
+  });
+
+  /**
+   * The split itself, one field at a time — which is how it was measured against
+   * the live API, and the only way a list of names stays honest. A field that
+   * quietly changed sides would otherwise show up as nothing at all: the form
+   * would go on sending it and the panel would go on reporting a save.
+   */
+  it("accepts exactly the 22 measured writable fields", () => {
+    const writable: Record<string, unknown> = {
+      name: "Nom",
+      slug: "nom",
+      type: "simple",
+      status: "draft",
+      featured: true,
+      catalog_visibility: "visible",
+      // Empty rather than a string: every non-empty SKU in the shop is taken.
+      sku: "",
+      description: "<p>d</p>",
+      short_description: "<p>s</p>",
+      regular_price: "10.00",
+      sale_price: "",
+      manage_stock: true,
+      stock_quantity: 1,
+      stock_status: "instock",
+      weight: "0.5",
+      category_ids: [10],
+      seo: {
+        title: "t",
+        description: "d",
+        canonical: "",
+        robots: { index: true, follow: true, directive: "index, follow" },
+        overrides: ["title"],
+      },
+      options: null,
+      attributes: [],
+      tag_ids: [401],
+      image_id: 0,
+      gallery_image_ids: [],
+    };
+    expect(Object.keys(writable)).toHaveLength(22);
+
+    for (const [field, value] of Object.entries(writable)) {
+      const response = write("PATCH", "/products/101", { [field]: value });
+      expect(response.status, `${field} must be writable`).toBe(200);
+      // And it actually landed, rather than being accepted and ignored.
+      expect(parse(product, get("/products/101")).data[field as "name"]).toEqual(value);
+    }
+  });
+
+  it("drops exactly the 11 measured read-only fields, each on its own", () => {
+    const readOnly = [
+      "price",
+      "on_sale",
+      "permalink",
+      "image",
+      "gallery",
+      "variations",
+      "id",
+      "date_created",
+      "date_modified",
+      "bundle",
+      "options_problems",
+    ];
+    expect(readOnly).toHaveLength(11);
+
+    for (const field of readOnly) {
+      // Alone in the body, so what is left after the drop is nothing — which is
+      // the 400 that names nothing rather than a 400 naming the field.
+      const error = apiError(write("PATCH", "/products/101", { [field]: null }));
+      expect(error.status, `${field} must be dropped, not refused`).toBe(400);
+      expect(error.apiMessage).toBe("No supported fields were provided.");
+      expect(error.fields).toBeNull();
+    }
+  });
+
+  /** Nothing survives a process start, which is what `resetState()` stands in for. */
+  it("forgets every write when the state is rebuilt", () => {
+    const seeded = parse(product, get("/products/104")).data;
+    write("PATCH", "/products/104", { name: "Écrit" });
+    expect(parse(product, get("/products/104")).data.name).toBe("Écrit");
+
+    resetState();
+    expect(parse(product, get("/products/104")).data).toEqual(seeded);
+  });
+});
+
+/**
+ * The product refusals, each one a distinct screen state the form has to render,
+ * and each asserted for the shape of its `details` rather than for its status
+ * alone: the body is what the screen renders.
+ */
+describe("the product refusals, by fixture id", () => {
+  it("104 — lists every bad field at once, in English", () => {
+    const error = apiError(
+      write("PATCH", "/products/104", {
+        name: "",
+        regular_price: "-1",
+        stock_quantity: "twelve",
+        status: "archived",
+      }),
+    );
+    expect(error.status).toBe(400);
+    expect(error.code).toBe("rest_invalid_param");
+
+    // Every one of them, not the first — the form renders one message per
+    // control, and a 400 that named only the first would hide the rest.
+    expect(error.fields).toEqual({
+      name: "A product name cannot be emptied.",
+      regular_price: "Cannot be negative.",
+      stock_quantity: "Must be a number.",
+      status: `Must be one of: ${PRODUCT_STATUSES.join(", ")}.`,
+    });
+    expect(Object.keys(error.fields ?? {}).length).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * The mock keeps its own copy of the two vocabularies the panel's form offers —
+   * it imports nothing — so the refusal message is what pins the copies together.
+   * A list that drifted here would let a form offer a value the API refuses.
+   */
+  it("104 — refuses a type and a visibility the panel does not offer", () => {
+    expect(apiError(write("PATCH", "/products/104", { type: "grouped" })).fields).toEqual({
+      type: `Must be one of: ${PRODUCT_TYPES.join(", ")}.`,
+    });
+    expect(
+      apiError(write("PATCH", "/products/104", { catalog_visibility: "secret" })).fields,
+    ).toEqual({
+      catalog_visibility: `Must be one of: ${CATALOG_VISIBILITIES.join(", ")}.`,
+    });
+    // `trash` is readable and not writable: a product is trashed by DELETE.
+    expect(write("PATCH", "/products/104", { status: "trash" }).status).toBe(400);
+    expect(write("PATCH", "/products/104", { stock_status: "maybe" }).status).toBe(400);
+  });
+
+  /**
+   * **A duplicate SKU is a 409 and it reports under `details.sku`, not
+   * `details.fields`.** It still has to land on the SKU control, because that is
+   * the field the person has to change — which is only possible if the two
+   * shapes are told apart here.
+   */
+  it("104 — answers 409 for a SKU 101 already holds", () => {
+    const taken = parse(product, get("/products/101")).data.sku;
+    const error = apiError(write("PATCH", "/products/104", { sku: taken }));
+
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("conflict");
+    expect(error.apiMessage).toBe("That SKU is already in use.");
+    expect(error.conflict).toEqual({ sku: taken });
+    expect(error.fields).toBeNull();
+
+    // Its own SKU is not a duplicate of itself, and `""` is a real value rather
+    // than a collision with every other product that has none.
+    expect(write("PATCH", "/products/104", { sku: taken }, "").status).toBe(409);
+    const own = parse(product, get("/products/104")).data.sku;
+    expect(write("PATCH", "/products/104", { sku: own }).status).toBe(200);
+    expect(write("PATCH", "/products/104", { sku: "" }).status).toBe(200);
+  });
+
+  it("999999 — a product that does not exist refuses every verb", () => {
+    expect(write("PATCH", "/products/999999", { name: "x" }).status).toBe(404);
+    expect(write("DELETE", "/products/999999").status).toBe(404);
+    // And the collection itself takes no writes: nothing in the panel creates a
+    // product, so `POST /products` must stay unreachable.
+    expect(write("POST", "/products", { name: "Nouveau" }).status).toBe(404);
+  });
+});
+
+/**
+ * **`DELETE` and `?force=true` answer identical bodies.** Nothing in the response
+ * distinguishes the reversible act from the irreversible one — the panel knows
+ * only because it knows what it asked for, which is why the permanent path sits
+ * behind a typed confirmation of the product's own name. The difference is
+ * visible on the next GET and nowhere else.
+ */
+describe("DELETE /products/{id}", () => {
+  it("answers the same body for a trash and for a permanent delete", () => {
+    const trashed = write("DELETE", "/products/209");
+    expect(parse(deleteResult, trashed).data).toEqual({ id: 209, deleted: true });
+
+    const forced = write("DELETE", "/products/209", null, "force=true");
+    expect(forced.body).toEqual(trashed.body);
+    expect(forced.status).toBe(trashed.status);
+  });
+
+  it("trashes: the next GET is 200 with status trash, and the listing loses it", () => {
+    expect(write("DELETE", "/products/209").status).toBe(200);
+
+    const after = parse(product, get("/products/209")).data;
+    expect(after.status).toBe("trash");
+    expect(parseList(productList, get("/products", "per_page=100")).data
+      .some((row) => row.id === 209)).toBe(false);
+
+    // A trashed product is in no stockroom either.
+    expect(parseList(inventoryList, get("/inventory", "per_page=100")).data
+      .some((row) => row.id === 209)).toBe(false);
+  });
+
+  it("is idempotent, and a second trash never escalates to permanent", () => {
+    write("DELETE", "/products/209");
+    expect(write("DELETE", "/products/209").status).toBe(200);
+    expect(write("DELETE", "/products/209", null, "force=false").status).toBe(200);
+    // Still readable — the repeat did not quietly become the irreversible one.
+    expect(parse(product, get("/products/209")).data.status).toBe("trash");
+  });
+
+  it("forces: the next GET is a 404, and stays one", () => {
+    expect(write("DELETE", "/products/209", null, "force=true").status).toBe(200);
+    expect(get("/products/209").status).toBe(404);
+    expect(get("/products/209/variations").status).toBe(404);
+    expect(write("PATCH", "/products/209", { name: "x" }).status).toBe(404);
+    expect(write("DELETE", "/products/209").status).toBe(404);
+  });
+
+  it("keeps a trashed product's SKU reserved", () => {
+    const sku = parse(product, get("/products/209")).data.sku;
+    write("DELETE", "/products/209");
+    // WooCommerce holds the SKU with the row, so the conflict survives the trash.
+    expect(write("PATCH", "/products/104", { sku }).status).toBe(409);
+  });
+});
+
 describe("the catalogue vocabularies", () => {
   it("serves /product-categories flat, with a tree and a usage count", () => {
     const { data, meta } = parseList(
@@ -815,7 +1370,10 @@ describe("the catalogue vocabularies", () => {
     expect(get("/orders/1000/nonsense").status).toBe(404);
     expect(get("/orders/1000/notes/1").status).toBe(404);
     expect(get("/customers/20/orders").status).toBe(404);
-    expect(get("/products/101/variations").status).toBe(404);
+    // `/products/{id}/variations` used to be on this list and is a real route
+    // now — a fourth segment under it took its place, because the point was
+    // never that guard's number.
+    expect(get("/products/101/variations/9030").status).toBe(404);
     expect(get("/inventory/low-stock/anything").status).toBe(404);
     expect(get("/locations/wilayas/16/communes/1").status).toBe(404);
     expect(get("/locations/communes").status).toBe(404);

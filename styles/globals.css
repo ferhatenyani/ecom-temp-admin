@@ -451,6 +451,22 @@
    * came to this screen to do should not require scrolling past everything they
    * did not change. It appears only when there is something to save, so an
    * unedited product keeps the full viewport.
+   *
+   * **Retired, and still here — deliberately.** DESIGN.md §7 lists this class
+   * among the ones deleted from this file, and the product detail it was written
+   * for no longer uses it: `SaveBar` in `components/ui/Form.tsx` is `position:
+   * sticky` inside the form's own column and knows nothing about the tab bar, the
+   * safe inset or the sidebar's width, which are the three numbers below.
+   *
+   * But it is **not** used only by that screen. Eight forms still on the old
+   * visual system carry it — settings, the coupon form, the user detail and the
+   * new-user form, the inventory item, the CMS page form, the homepage editor and
+   * the menu editor — plus the `scripts/shots.mjs` capture that measures one.
+   * Deleting the rule would not remove their bars, it would unstick them: each is
+   * `fixed inset-x-0` with no block-end of its own, so all eight would jump to the
+   * top of the viewport. It goes with the teardown pass at the end of the
+   * redesign run, when the last of those eight has migrated — `grep -rn save-bar`
+   * is the check.
    */
   .save-bar {
     inset-block-end: calc(3.25rem + env(safe-area-inset-bottom, 0px));
@@ -770,10 +786,49 @@
     box-shadow: 0 0 0 3px var(--color-ui-selection);
   }
 
+  /* -------------------------------------------------------------- fields ---
+   * A form control is 36px on a pointer and 44px on touch — DESIGN.md §3.4's
+   * two figures, and §5's floor for the second.
+   *
+   * Declared here rather than as a `size` prop on every control in
+   * `components/ui/Form.tsx`, because the choice is not the caller's to make: a
+   * screen does not know which pointer the person is using, and the one that
+   * hard-codes `min-h-9` is right on a laptop and 8px short on the phone the
+   * shop is actually run from. The old iOS `Field` had the same hole.
+   */
+  .ui-field {
+    min-block-size: 2.25rem;
+  }
+  @media (pointer: coarse) {
+    .ui-field {
+      min-block-size: 2.75rem;
+    }
+  }
+
   /* ---------------------------------------------------------------- tap ---
    * A small icon gets a real hit area from a pseudo-element rather than by
    * growing the icon. 44px on touch, 32px on a pointer — the pointer figure is
    * still above WCAG 2.5.8's 24px floor.
+   *
+   * **The two transforms were swapped, and the products-detail branch is where
+   * that finally showed.** `inset-inline: 50%` with an explicit `width` is
+   * over-constrained, so the browser keeps the *start* offset and drops the end
+   * one: in LTR the box begins at the control's midpoint and runs a full width
+   * further, and only a `translate(-50%)` pulls it back over the control. It
+   * carried `translate(50%)` instead, which pushed it the other way — a 34px box
+   * spanning 17px to 68px on a 34px control. In RTL the start edge is the right
+   * one, so there the correcting sign is positive; the file had exactly the
+   * opposite pair.
+   *
+   * Nothing rendered, because the pseudo-element has no paint of its own. What it
+   * cost was the two things it exists for: at `pointer: coarse` the whole of the
+   * extra hit area landed to one side of the icon rather than around it, and the
+   * overhang joined the document's scrollable overflow. That stayed invisible
+   * while every icon button in the panel had a wider control after it in its row
+   * — the overhang fell inside the row. `products/[id]`'s header is the first
+   * with an icon-only button *last* at the inline end, and the harness caught it
+   * immediately: `scrollWidth 777 ≠ clientWidth 768` at 768px, and 1441 ≠ 1440 at
+   * 1440, which is the overhang minus each width's gutter to the pixel.
    */
   .ui-tap {
     position: relative;
@@ -787,10 +842,10 @@
     min-height: 32px;
     width: 100%;
     height: 100%;
-    transform: translate(50%, -50%);
+    transform: translate(-50%, -50%);
   }
   [dir="rtl"] .ui-tap::after {
-    transform: translate(-50%, -50%);
+    transform: translate(50%, -50%);
   }
   @media (pointer: coarse) {
     .ui-tap::after {

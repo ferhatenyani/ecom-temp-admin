@@ -63,6 +63,13 @@
  *                    published rows only — and every group but `category` and
  *                    `tag` excludes its own filter, which is the API's own
  *                    inconsistency and not a bug to tidy up here
+ *   the product      real: `PATCH /products/{id}` is stateful and reproduces the
+ *   writes           measured writable/read-only split — a read-only key is
+ *                    dropped in silence, an unknown one is a 400, and a body of
+ *                    nothing but read-only keys is a 400 that names nothing.
+ *                    `DELETE` trashes, `?force=true` removes, and the two answer
+ *                    identical bodies. See "Which product id produces which
+ *                    answer" beside them
  *
  * ── Determinism ──────────────────────────────────────────────────────────────
  *
@@ -173,6 +180,21 @@ const list = (rows) =>
 const fail = (status, code, message, details = {}) => ({
   status,
   body: { success: false, error: { code, message, details } },
+});
+
+/**
+ * A failure with **no `details` key at all**, which is a shape the API really
+ * produces and is not the same as an empty one.
+ *
+ * `PATCH /products/{id}` with nothing but read-only keys answers 400 `"No
+ * supported fields were provided."` and names nothing — measured, and the reason
+ * the product form sends an explicit named subset rather than the GET body minus
+ * what it believes is read-only. A mock that emitted `details: {}` here would let
+ * a screen read `details.fields` without checking and never find out.
+ */
+const bareFail = (status, code, message) => ({
+  status,
+  body: { success: false, error: { code, message } },
 });
 
 const notFound = () =>
@@ -599,6 +621,8 @@ function seeded({
   categories,
   tags = [],
   attributes = [],
+  options,
+  optionsProblems,
 }) {
   const onSale = sale !== "";
   return {
@@ -644,8 +668,75 @@ function seeded({
     },
     date_created: iso(minutesAgo),
     date_modified: iso(Math.max(1, minutesAgo - 300)),
+    /*
+     * §83's keys are **absent** on a product with no option set — not null,
+     * absent — which is why they are spread in rather than written out with a
+     * default. The schema has all three optional for exactly this reason, and a
+     * fixture that carried `options: null` on all 39 rows would make the
+     * distinction untestable.
+     */
+    ...(options === undefined ? {} : { options }),
+    ...(optionsProblems === undefined ? {} : { options_problems: optionsProblems }),
   };
 }
+
+/**
+ * ── The one product with a broken option set ─────────────────────────────────
+ *
+ * Nothing in this shop carried `options`, `bundle` or `options_problems`, so the
+ * detail's warning banner had no fixture to render from and the round trip it
+ * warns about could not be reached at all.
+ *
+ * `options_problems` names the group by its **1-based position in the stored
+ * document**, not by an id — measured verbatim, `"Option group 4 was dropped:
+ * Must be one of: choice, text, bundle."` The position is all there is to go on
+ * precisely because the broken group is *absent* from `options.groups`, so
+ * nothing can link the warning to a row in an editor. Three readable groups plus
+ * two unreadable ones is therefore a document of five: positions 4 and 5.
+ *
+ * The three that survive are one of each type, because the editor renders them
+ * differently and a fixture with three `choice` groups would exercise a third of
+ * it. A negative `price_delta` is on purpose — §83 allows one, and a control that
+ * refuses it is a control nobody could have caught here.
+ */
+const BROKEN_OPTION_SET = {
+  groups: [
+    {
+      id: "grp_gravure",
+      type: "choice",
+      label: "Gravure",
+      required: false,
+      position: 0,
+      choices: [
+        { id: "ch_none", label: "Sans gravure", price_delta: "0.00", image_id: 0 },
+        { id: "ch_initiales", label: "Initiales", price_delta: "450.00", image_id: 0 },
+        // Negative, and a real one: a discount for taking the undecorated piece.
+        { id: "ch_brut", label: "Finition brute", price_delta: "-200.00", image_id: 0 },
+      ],
+    },
+    {
+      id: "grp_message",
+      type: "text",
+      label: "Message sur la carte",
+      required: false,
+      position: 1,
+      max_length: 120,
+    },
+    {
+      id: "grp_coffret",
+      type: "bundle",
+      label: "Coffret cadeau",
+      required: false,
+      position: 2,
+      components: [{ product_id: 209, quantity: 1 }],
+    },
+  ],
+};
+
+const OPTION_PROBLEMS = [
+  "Option group 4 was dropped: Must be one of: choice, text, bundle.",
+  "Option group 5 was dropped: Must be one of: choice, text, bundle.",
+];
 
 /**
  * Three of the eleven are newer than the 28 and land at the head of the list;
@@ -749,6 +840,10 @@ const BACK_CATALOGUE = [
     categories: [14],
     tags: [401, 404],
     attributes: [carries(MATIERE, ["bois-dolivier"], 0)],
+    // The only product in the shop with an option set, and its document is
+    // broken — which is the state the detail's warning banner exists for.
+    options: BROKEN_OPTION_SET,
+    optionsProblems: OPTION_PROBLEMS,
   }),
   seeded({
     id: 209,
@@ -1089,6 +1184,74 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
   };
 });
 
+/* ------------------------------------------------------------- variations --- */
+
+/**
+ * The five variation bodies behind `GET /products/{id}/variations`, and the one
+ * place their stock figures exist.
+ *
+ * **`attributes` is an object here where the parent's is an array** — `{"taille":
+ * "s"}` against `[{name: "Taille", options: ["S","M","L"]}]` — and the values are
+ * lowercased slugs of the parent's options. lib/api/schemas/product.ts says so
+ * and `variationLabel()` in lib/products.ts is the repair: printing the stored
+ * value puts a lowercase `s` in front of a shopkeeper.
+ *
+ * Two rows carry an absence rather than a value, and both are measured states a
+ * screen has to render:
+ *
+ *   `sku: ""`             slot 0 of each parent — a variation need carry no SKU
+ *                         of its own, and inherits the parent's.
+ *   `stock_quantity: null` 9032 alone, because it does not manage its own stock;
+ *                         its parent does, which is what the inventory row's
+ *                         `stock_managed_by_id` is for.
+ *
+ * The prices are a spread rather than one figure repeated: `priceSpan()` returns
+ * **null** when every price is equal, so a fixture of identical prices leaves the
+ * detail's price-range state uncapturable. The floor is the parent's own `price`,
+ * which is the resolved figure a variable product reports.
+ *
+ * **The five `int()` draws happen here rather than in the inventory rows below,
+ * and that is load-bearing.** They are the last five calls into the one shared
+ * mulberry32; drawing them in this order at this point keeps every collection
+ * above byte-identical to what the earlier branches were verified against.
+ */
+const INHERITED_STOCK_VARIATION = 9032;
+
+const VARIATIONS = [...VARIATION_COUNTS.keys()].flatMap((parentIndex) => {
+  const parent = PRODUCTS[parentIndex];
+  const [attribute] = parent.attributes;
+
+  return parent.variations.map((id, slot) => {
+    const drawn = int(0, 25);
+    const managed = id !== INHERITED_STOCK_VARIATION;
+    const regular = (Number.parseFloat(parent.price) + slot * 200).toFixed(2);
+
+    return {
+      id,
+      parent_id: parent.id,
+      sku: slot === 0 ? "" : `${parent.sku}-${slot + 1}`,
+      status: "publish",
+      description: "",
+      price: regular,
+      regular_price: regular,
+      sale_price: "",
+      on_sale: false,
+      manage_stock: managed,
+      stock_quantity: managed ? drawn : null,
+      stock_status: managed ? (drawn > 0 ? "instock" : "outofstock") : parent.stock_status,
+      weight: "",
+      attributes: { [slugify(attribute.name)]: slugify(attribute.options[slot]) },
+      image_id: 0,
+      image: null,
+      date_created: parent.date_created,
+      date_modified: parent.date_modified,
+    };
+  });
+});
+
+const variationsOf = (product) =>
+  VARIATIONS.filter((variation) => variation.parent_id === product.id);
+
 /* -------------------------------------------------------------- inventory --- */
 
 /**
@@ -1098,50 +1261,60 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
  * on all but one, 5 on "Miel de jujubier" — so there is no shop-wide threshold
  * to display anywhere; it is keyed on that product rather than on a row index
  * so it stays on it as the catalogue grows around it.
+ *
+ * Computed per request rather than at load, because `/products` writes: a PATCH
+ * that changes a stock figure and an inventory row that went on reporting the
+ * seeded one would be two screens contradicting each other about the same shelf.
  */
-const INVENTORY = [
-  ...LISTED.map((product) => {
-    const threshold = product.id === PRODUCTS[0].id ? 5 : 2;
-    return {
-      id: product.id,
-      parent_id: 0,
-      type: product.type,
-      name: product.name,
-      sku: product.sku,
-      manage_stock: product.manage_stock,
-      managing_stock: product.manage_stock,
-      stock_managed_by_id: product.id,
-      stock_quantity: product.stock_quantity,
-      stock_status: product.stock_status,
-      backorders: "no",
-      low_stock_amount: threshold,
-      low_stock: product.stock_quantity !== null && product.stock_quantity <= threshold,
-    };
-  }),
-  ...[...VARIATION_COUNTS.keys()].flatMap((parentIndex) => {
-    const parent = PRODUCTS[parentIndex];
-    return parent.variations.map((variationId, slot) => {
-      const quantity = int(0, 25);
+function inventoryRows() {
+  return [
+    ...listed().map((product) => {
+      const threshold = product.id === PRODUCTS[0].id ? 5 : 2;
       return {
-        id: variationId,
+        id: product.id,
+        parent_id: 0,
+        type: product.type,
+        name: product.name,
+        sku: product.sku,
+        manage_stock: product.manage_stock,
+        managing_stock: product.manage_stock,
+        stock_managed_by_id: product.id,
+        stock_quantity: product.stock_quantity,
+        stock_status: product.stock_status,
+        backorders: "no",
+        low_stock_amount: threshold,
+        low_stock: product.stock_quantity !== null && product.stock_quantity <= threshold,
+      };
+    }),
+    ...VARIATIONS.map((variation) => {
+      const parent = productById(variation.parent_id);
+      const slot = parent.variations.indexOf(variation.id);
+      // A variation that manages no stock of its own is stocked *by its parent*,
+      // and both fields say so — which is the whole reason a row carries
+      // `managing_stock` beside `manage_stock` and an id beside both.
+      const quantity = variation.manage_stock
+        ? variation.stock_quantity
+        : parent.stock_quantity;
+      return {
+        id: variation.id,
         parent_id: parent.id,
         type: "variation",
-        name: `${parent.name} — ${["S", "M", "L"][slot]}`,
+        name: `${parent.name} — ${parent.attributes[0].options[slot]}`,
         // `""` is possible: a variation need carry no SKU of its own, and the
         // row must render without inventing the parent's.
-        sku: slot === 0 ? "" : `${parent.sku}-${slot + 1}`,
-        manage_stock: true,
-        managing_stock: true,
-        stock_managed_by_id: variationId,
+        sku: variation.sku,
+        manage_stock: variation.manage_stock,
+        managing_stock: variation.manage_stock,
+        stock_managed_by_id: variation.manage_stock ? variation.id : parent.id,
         stock_quantity: quantity,
-        stock_status: quantity > 0 ? "instock" : "outofstock",
+        stock_status: variation.stock_status,
         backorders: slot === 0 ? "notify" : "no",
         low_stock_amount: 2,
-        low_stock: quantity <= 2,
+        low_stock: quantity !== null && quantity <= 2,
       };
-    });
-  }),
-];
+    }),
+  ];
+}
 
 /* ---------------------------------------------------------------- coupons --- */
 
@@ -1769,6 +1942,10 @@ const state = {
   shipments: new Map(),
   payments: new Map(),
   nextShipmentId: 0,
+  /** Product id → the whole row as it reads now. Empty until something PATCHes. */
+  products: new Map(),
+  /** Force-deleted product ids. A permanent delete is the one thing that 404s. */
+  gone: new Set(),
 };
 
 export function resetState() {
@@ -1778,6 +1955,8 @@ export function resetState() {
   state.payments = seedPayments();
   // Above the two seeded ids and far enough from them to read as new.
   state.nextShipmentId = 7100;
+  state.products = new Map();
+  state.gone = new Set();
 }
 
 resetState();
@@ -1785,6 +1964,31 @@ resetState();
 const statusOf = (order) => state.statuses.get(order.id) ?? order.status;
 const shipmentsOf = (orderId) => state.shipments.get(orderId) ?? [];
 const paymentsOf = (orderId) => state.payments.get(orderId) ?? [];
+
+/**
+ * The catalogue as it reads **now**: every seeded row replaced by whatever a
+ * PATCH wrote over it, and the force-deleted ones gone entirely.
+ *
+ * `CATALOGUE` and `LISTED` above stay the *seeds* and are still what the
+ * vocabularies count — `CATEGORIES`, `TAGS` and `TERMS` publish a `count`
+ * computed once at load. The real API recounts on every read, so a PATCH that
+ * moves a product between categories leaves those counts stale here. Named
+ * rather than hidden: the alternative is recomputing three vocabularies per
+ * request to move a number no screen writes.
+ */
+const catalogue = () =>
+  CATALOGUE.filter((product) => !state.gone.has(product.id)).map(
+    (product) => state.products.get(product.id) ?? product,
+  );
+
+/** What `/products` lists: everything readable except the trash. */
+const listed = () => catalogue().filter((product) => product.status !== "trash");
+
+/** One row by id, through the write state. Undefined once it has been forced. */
+const productById = (id) =>
+  id === null || state.gone.has(id)
+    ? undefined
+    : (state.products.get(id) ?? CATALOGUE.find((product) => product.id === id));
 
 /**
  * An order at a new status, with everything the seed derives from it recomputed.
@@ -2464,7 +2668,7 @@ function facetsFor(params, filters) {
   if (asked.size === 0) return null;
 
   const base = (dimension = null) =>
-    LISTED.filter(
+    listed().filter(
       (product) =>
         product.status === "publish" &&
         matchesProduct(
@@ -2552,12 +2756,341 @@ function productsListing(params) {
   const parsed = parseProductFilters(params);
   if (parsed.error) return parsed.error;
 
-  const rows = LISTED.filter((product) => matchesProduct(product, parsed.filters));
+  const rows = listed().filter((product) => matchesProduct(product, parsed.filters));
   const page = paginate(sortProducts(rows, params), params);
   if (page.error) return page.error;
 
   const facets = facetsFor(params, parsed.filters);
   return ok(page.rows, facets === null ? page.meta : { ...page.meta, facets });
+}
+
+/* --------------------------------------------------------- product writes --- */
+
+/*
+ * ── Which product id produces which answer ───────────────────────────────────
+ *
+ * The same table the order detail has, for the same reason: a screen cannot be
+ * verified against a state it can never reach, and a `find()` that moves quietly
+ * takes the table's meaning with it. Every id below is written out.
+ *
+ *   id    request                                    answer
+ *   ────  ─────────────────────────────────────────  ──────────────────────────
+ *   104   GET  /variations                           200 — 3 bodies, one with
+ *                                                    `sku: ""`, one with
+ *                                                    `stock_quantity: null`
+ *   120   GET  /variations                           200 — the other 2
+ *   101   GET  /variations                           200 `[]` — simple product
+ *   208   GET  /products/208                         200 with `options` **and**
+ *                                                    `options_problems` (2)
+ *   208   PATCH {options: {groups: […]}}             200 — and `options_problems`
+ *                                                    is gone: the silent repair
+ *   104   PATCH {name:"", regular_price:"-1"}        400 fields{name,
+ *                                                    regular_price} — two at once
+ *   104   PATCH {sku:"AC-CAT-0101"}                  409 details.**sku**, not
+ *                                                    details.fields (101 has it)
+ *   104   PATCH {nonsense: 1}                        400 fields{nonsense:
+ *                                                    "Unknown field."}
+ *   104   PATCH {price:"1", id: 104}                 400 "No supported fields
+ *                                                    were provided.", **no
+ *                                                    `details` at all**
+ *   103   PATCH {stock_quantity: 99}                 200 — silently dropped, the
+ *                                                    row manages no stock
+ *   209   DELETE                                     200 {id, deleted:true};
+ *                                                    the next GET is 200
+ *                                                    `status:"trash"`
+ *   209   DELETE ?force=true                         the **identical** body; the
+ *                                                    next GET is 404
+ *
+ * 104 is the variable product with three variations and 120 the one with two.
+ * 103 is one of the eight rows that manage no stock. 101 holds `AC-CAT-0101`,
+ * which is what makes the 409 above reachable without inventing a SKU.
+ *
+ * The orders table above pins its ids to constants because the seeds *use* them;
+ * these are used by nothing but this table and by the unit suite, so they stay
+ * written out here and are pinned there instead — a literal that stops matching
+ * fails a test, which is the property that matters.
+ */
+
+/**
+ * `PATCH`/`POST` accept exactly these two — measured, `grouped` is a 400 — and
+ * these four visibilities. lib/product-status.ts holds the same two lists for
+ * the panel; this file imports nothing, so they are written out rather than
+ * shared, and the test asserts the pair agree.
+ */
+const PRODUCT_TYPES = ["simple", "variable"];
+const CATALOG_VISIBILITIES = ["visible", "catalog", "search", "hidden"];
+
+/**
+ * **Read-only and unknown are different answers, and that is the whole point of
+ * this pair of lists.**
+ *
+ * A read-only key is dropped in silence: no 400, no mention in the response, the
+ * product simply comes back with that field unchanged. An unknown key is a 400.
+ * A client that treated them alike would either refuse a GET body it is supposed
+ * to be able to PATCH back, or swallow a typo'd field name and report a save
+ * that never happened.
+ *
+ * Both lists are the measured ones, quoted at ADMIN_PANEL.md:1619-1624 and in
+ * `ProductDetail`'s own docblock. `options_problems` is on the read-only list and
+ * is *also* destroyed by writing `options` — those are two different mechanisms
+ * and the second is the one the warning banner is about.
+ */
+const PRODUCT_READ_ONLY = [
+  "price",
+  "on_sale",
+  "permalink",
+  "image",
+  "gallery",
+  "variations",
+  "id",
+  "date_created",
+  "date_modified",
+  "bundle",
+  "options_problems",
+];
+
+/**
+ * One rule per writable field, answering an English sentence or null.
+ *
+ * **The messages are English on a panel that is French and Arabic**, deliberately
+ * — measured, and the panel renders them verbatim beside a localised label
+ * because they name the problem precisely and a translated generic ("Ce champ est
+ * invalide") throws away the only actionable part. Three of them are quoted from
+ * the live API: "Must be a number.", "Cannot be negative.", "A product name
+ * cannot be emptied."
+ */
+const mustBeText = (value) => (typeof value === "string" ? null : "Must be a string.");
+const mustBeFlag = (value) => (typeof value === "boolean" ? null : "Must be true or false.");
+const mustBeOneOf = (values) => (value) =>
+  typeof value === "string" && values.includes(value)
+    ? null
+    : `Must be one of: ${values.join(", ")}.`;
+
+/** Money stays a decimal string, so `1200` — a number — is as wrong as `"abc"`. */
+const mustBeMoney = (value) => {
+  if (typeof value !== "string") return "Must be a number.";
+  if (value === "") return null; // clearing a price is how a sale ends
+  if (!/^-?\d+(\.\d+)?$/.test(value)) return "Must be a number.";
+  return Number.parseFloat(value) < 0 ? "Cannot be negative." : null;
+};
+
+const mustBeQuantity = (value) => {
+  if (value === null) return null; // a real value: nothing is being counted
+  if (typeof value !== "number" || !Number.isInteger(value)) return "Must be a number.";
+  return value < 0 ? "Cannot be negative." : null;
+};
+
+const mustBeIds = (value) =>
+  Array.isArray(value) && value.every((entry) => Number.isInteger(entry))
+    ? null
+    : "Must be a list of ids.";
+
+const mustBeObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? null
+    : "Must be an object.";
+
+/**
+ * The three fields that carry a **nested shape**, and the one rule they share:
+ * a block is written whole or not at all.
+ *
+ * This is not defensiveness for its own sake. `seo`, `attributes` and `options`
+ * are the only writable fields the panel's own boundary parses structurally, so a
+ * mock that stored a partial one would hand the *next* GET a body
+ * `lib/api/schemas/product.ts` refuses — a screen breaking at its boundary
+ * against a shape the real API would never have stored. The harness exists to
+ * catch that class of thing, not to manufacture it.
+ *
+ * The measured use is unaffected: `GET` then `PATCH` the whole object back sends
+ * every one of these complete, which is the round trip ADMIN_PANEL.md:1612 says
+ * answers 200 on all 32 keys.
+ */
+const mustBeSeo = (value) => {
+  if (mustBeObject(value) !== null) return "Must be an object.";
+  const robots = ["index", "follow", "directive"];
+  const whole =
+    ["title", "description", "canonical", "overrides"].every((key) => key in value) &&
+    mustBeObject(value.robots) === null &&
+    robots.every((key) => key in value.robots);
+  return whole ? null : "Must carry title, description, canonical, robots and overrides.";
+};
+
+const mustBeAttributes = (value) => {
+  if (!Array.isArray(value)) return "Must be a list of attributes.";
+  const whole = value.every(
+    (entry) =>
+      mustBeObject(entry) === null &&
+      ["id", "name", "options", "visible", "variation", "position"].every(
+        (key) => key in entry,
+      ),
+  );
+  return whole ? null : "Each attribute must carry id, name, options, visible, variation and position.";
+};
+
+/** Null removes the option set altogether, which is not `{groups: []}`. */
+const mustBeOptions = (value) => {
+  if (value === null) return null;
+  if (mustBeObject(value) !== null) return "Must be an object.";
+  const whole =
+    Array.isArray(value.groups) &&
+    value.groups.every((group) => mustBeObject(group) === null && typeof group.id === "string");
+  return whole ? null : "Must carry a groups list, each group with an id.";
+};
+
+const PRODUCT_FIELD_RULES = {
+  name: (value) =>
+    typeof value !== "string"
+      ? "Must be a string."
+      : value.trim() === ""
+        ? "A product name cannot be emptied."
+        : null,
+  slug: mustBeText,
+  type: mustBeOneOf(PRODUCT_TYPES),
+  // `trash` is readable and **not writable** — a product is trashed by DELETE,
+  // never by a PATCH, which is why the two lists differ by exactly that value.
+  status: mustBeOneOf(PRODUCT_STATUSES),
+  featured: mustBeFlag,
+  catalog_visibility: mustBeOneOf(CATALOG_VISIBILITIES),
+  sku: mustBeText,
+  description: mustBeText,
+  short_description: mustBeText,
+  regular_price: mustBeMoney,
+  sale_price: mustBeMoney,
+  manage_stock: mustBeFlag,
+  stock_quantity: mustBeQuantity,
+  stock_status: mustBeOneOf(STOCK_STATUSES),
+  weight: mustBeText,
+  category_ids: mustBeIds,
+  seo: mustBeSeo,
+  options: mustBeOptions,
+  attributes: mustBeAttributes,
+  tag_ids: mustBeIds,
+  image_id: (value) => (Number.isInteger(value) ? null : "Must be a number."),
+  gallery_image_ids: mustBeIds,
+};
+
+/**
+ * `PATCH /products/{id}`.
+ *
+ * The order of the gates is the order the API applies them, so the reason on
+ * screen is the reason the server would have given:
+ *
+ *   1. every bad field at once   400 `details.fields` — unknown keys and invalid
+ *                                values in one object, because the form renders
+ *                                one message per control and a 400 that named
+ *                                only the first would hide the rest
+ *   2. nothing supported left    400, **no `details`**
+ *   3. a duplicate SKU           409 `details.sku` — *not* `details.fields`,
+ *                                measured, and it still has to land on the SKU
+ *                                control because that is the field to change
+ *
+ * What is deliberately **not** here: a clock. `date_modified` keeps its seeded
+ * value through a write, the way an order's does, because there is no `Date.now()`
+ * anywhere in this file and a screenshot has to be byte-stable.
+ */
+function patchProduct(current, body) {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+  }
+
+  const fields = {};
+  const writes = {};
+  for (const [key, value] of Object.entries(body)) {
+    // Silently. Not a 400, not a mention in the response — this is what lets a
+    // client PATCH a GET body back without diffing it first.
+    if (PRODUCT_READ_ONLY.includes(key)) continue;
+
+    const rule = PRODUCT_FIELD_RULES[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem === null) writes[key] = value;
+    else fields[key] = problem;
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+  }
+  if (Object.keys(writes).length === 0) {
+    // The message names nothing because the API's own names nothing, which is
+    // exactly why "drop what is read-only" cannot be a client's only rule.
+    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+  }
+
+  if (typeof writes.sku === "string" && writes.sku !== "") {
+    // A trashed product still holds its SKU, so the search is over the whole
+    // catalogue rather than the listed part.
+    const taken = catalogue().find(
+      (product) => product.id !== current.id && product.sku === writes.sku,
+    );
+    if (taken !== undefined) {
+      return conflict("That SKU is already in use.", { sku: writes.sku });
+    }
+  }
+
+  const next = { ...current, ...writes };
+
+  /*
+   * **`stock_quantity` is dropped when the row manages no stock** — a 200 that
+   * looks exactly like a save and is not. Measured, and the reason the panel's
+   * form deletes the key from its own body rather than sending it and trusting
+   * the answer.
+   *
+   * It lands as null rather than as the previous figure because that is the
+   * catalogue's own invariant — 8 of 28 rows, `manage_stock: false` and
+   * `stock_quantity: null` together — and a mock that could produce an unmanaged
+   * row carrying a number would let a screen render a stock count the real API
+   * never serves.
+   */
+  if (!(writes.manage_stock ?? current.manage_stock)) next.stock_quantity = null;
+
+  /*
+   * The silent repair the detail's warning banner is about: writing `options`
+   * replaces the stored document, so the groups the API could not read are gone
+   * and `options_problems` goes with them. Measured — after one whole-body round
+   * trip the field had disappeared and so had both broken groups.
+   */
+  if ("options" in writes) delete next.options_problems;
+
+  /*
+   * `price` is read-only *and* derived — the sale price when there is one, the
+   * regular price otherwise — so a PATCH of `sale_price` that left `price`
+   * behind would put two contradicting figures on one row. A variable product is
+   * left alone: its `price` is resolved from the variations and its
+   * `regular_price` is `""`.
+   */
+  if (next.variations.length === 0) {
+    next.on_sale = next.sale_price !== "";
+    next.price = next.on_sale ? next.sale_price : next.regular_price;
+  }
+
+  state.products.set(current.id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /products/{id}`, and `?force=true`.
+ *
+ * **The two answer identical bodies.** Nothing in the response distinguishes the
+ * reversible act from the irreversible one — the panel knows only because it
+ * knows what it asked for, which is why the permanent path sits behind a typed
+ * confirmation of the product's own name. The difference is visible on the *next*
+ * GET and nowhere else: a trashed product answers 200 with `status: "trash"` and
+ * a forced one answers 404.
+ *
+ * Trashing is idempotent and never escalates: a second DELETE on an already
+ * trashed product is the same 200 and does **not** become permanent.
+ */
+function deleteProduct(current, params) {
+  if (BOOLEANS.get(params.get("force") ?? "") === true) {
+    state.products.delete(current.id);
+    state.gone.add(current.id);
+  } else {
+    state.products.set(current.id, { ...current, status: "trash" });
+  }
+  return ok({ id: current.id, deleted: true });
 }
 
 /* ------------------------------------------------------------------ route --- */
@@ -2590,7 +3123,7 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
    * silently reads is worse than a 404, because a screen would look like it had
    * saved.
    */
-  const WRITES = ["orders", "shipments", "payments"];
+  const WRITES = ["orders", "shipments", "payments", "products"];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
   if (segments.length === 2 && collection === "auth" && second === "me") {
@@ -2752,15 +3285,48 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     case "products": {
-      if (segments.length > 2) return notFound();
-      if (second !== undefined) {
-        const id = numericId(second);
-        // The whole catalogue, not the listed part: a trashed product answers
-        // 200 with `status: "trash"` here and appears in no listing at all.
-        const row = id === null ? undefined : CATALOGUE.find((p) => p.id === id);
-        return row === undefined ? notFound() : ok(row);
+      /*
+       * Depth is stated here rather than guarded once at the top, the way
+       * `/attributes/{id}/terms` and `/orders/{id}/notes` are. The flat
+       * `segments.length > 2` that used to sit on this line made
+       * `/products/{id}/variations` unreachable no matter how it was written,
+       * and raising it to `> 3` without naming the sub-resource would have
+       * served the *product* for `/products/{id}/anything` — a 200 for a route
+       * nobody wrote, which is the quiet wrong answer this file must not give.
+       */
+      if (segments.length > 3) return notFound();
+
+      if (second === undefined) {
+        // **`POST /products` stays a 404.** lib/api/allowlist.ts refuses it
+        // deliberately — nothing in the panel creates a product — and a fixture
+        // that answered would be an invitation to build the screen.
+        return method === "GET" ? productsListing(searchParams) : notFound();
       }
-      return productsListing(searchParams);
+
+      // The whole catalogue, not the listed part: a trashed product answers
+      // 200 with `status: "trash"` here and appears in no listing at all.
+      const row = productById(numericId(second));
+      if (row === undefined) return notFound();
+
+      if (segments.length === 3) {
+        // The only sub-resource a product has. Paginated, because the detail
+        // asks it for `per_page=100`, and **200 with `[]` on a simple
+        // product** — measured, so the request is waste rather than an error.
+        if (method !== "GET" || segments[2] !== "variations") return notFound();
+        const page = paginate(variationsOf(row), searchParams);
+        return page.error ?? ok(page.rows, page.meta);
+      }
+
+      switch (method) {
+        case "GET":
+          return ok(row);
+        case "PATCH":
+          return patchProduct(row, body);
+        case "DELETE":
+          return deleteProduct(row, searchParams);
+        default:
+          return notFound();
+      }
     }
 
     case "product-categories":
@@ -2838,11 +3404,11 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
        * reaches must stay unreachable.
        */
       if (segments.length === 2 && second === "low-stock") {
-        const low = INVENTORY.filter((row) => row.low_stock);
+        const low = inventoryRows().filter((row) => row.low_stock);
         const page = paginate(low, searchParams);
         return page.error ?? ok(page.rows, page.meta);
       }
-      return collectionOf(INVENTORY, {});
+      return collectionOf(inventoryRows(), {});
 
     case "coupons":
       return collectionOf(COUPONS, {

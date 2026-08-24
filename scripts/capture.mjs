@@ -86,11 +86,24 @@ const LOCALES = ["fr", "ar"];
  * confirmed COD record, a finished parcel from a provider `/shipping/providers`
  * does not list, and two payments in two states. Every section of the detail has
  * something in it, which is what makes one capture worth taking.
+ *
+ * `/products/104` is the second, on the same rule: it is the variable product, so
+ * its variations section has three rows in it — one whose SKU is inherited and
+ * blank, one that manages no stock of its own, and a price range across the three
+ * — where 37 of the 39 products would render that section as nothing at all.
+ *
+ * **`/products/208` is deliberately not here, and it is the one worth knowing
+ * about.** It is the only product carrying a broken option set, so it is the only
+ * route that renders the `options_problems` warning — a state, not a screen, and
+ * one capture per screen is what this list is for. Capture it by name:
+ *
+ *     node scripts/capture.mjs /products/208
  */
 const DEFAULT_ROUTES = [
   "/orders",
   "/orders/1023",
   "/products",
+  "/products/104",
   "/customers",
   "/inventory",
   "/coupons",
