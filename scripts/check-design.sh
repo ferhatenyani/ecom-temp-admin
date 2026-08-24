@@ -24,8 +24,8 @@ cd "$(dirname "$0")/.." || exit 2
 # the admin branch, floor 216; 248 at the products-list redesign, floor 241; 252
 # at the orders-detail redesign, floor 245; 253 at the products-detail redesign,
 # floor 246; 259 at the customers redesign, floor 252; 266 at the inventory
-# redesign, floor 259.
-FLOOR=259
+# redesign, floor 259; 270 at the coupons redesign, floor 263.
+FLOOR=263
 failures=0
 checks=0
 

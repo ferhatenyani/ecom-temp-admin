@@ -154,17 +154,39 @@ function Box({
  * reach it. A zero is rendered, never hidden: a facet omits its zero-count
  * values and the panel puts them back, because a value that disappears when you
  * select its sibling is a dead end.
+ *
+ * ## `secondary` and `badge`, added on the coupons branch
+ *
+ * A row was a label and a count, which is the whole of what a product facet is.
+ * The coupon restriction picker is the second caller and it is not that shape: a
+ * product row carries a SKU under its name — or "sans référence" when it has none
+ * — a category row carries "3 produits", and a draft product is badged so nobody
+ * restricts a live coupon to something no shopper can buy. Wired to `label` and
+ * `count` alone, that picker would have shipped with three of those four facts
+ * silently dropped.
+ *
+ * Both render **inside the `<label>`**, which is the same rationale the `count`
+ * docblock above gives: what is in the label is in the control's accessible name,
+ * and a SKU rendered beside it is a SKU a screen reader never reaches. So the row
+ * announces "Tapis berbère AC-TAP-001", which is what a person needs in order to
+ * tell two similar names apart — which is what a SKU is for.
  */
 export function CheckRow({
   checked,
   onChange,
   label,
+  /** A second line under the label — a SKU, a count of children, an absence. */
+  secondary,
+  /** A `Badge` beside the label. A state worth knowing before ticking the row. */
+  badge,
   count,
   disabled = false,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
+  secondary?: ReactNode;
+  badge?: ReactNode;
   /** `null` for a dimension the API does not count — a flag, a boolean. */
   count?: number | null;
   disabled?: boolean;
@@ -183,8 +205,18 @@ export function CheckRow({
         className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
       />
       <Box checked={checked} round={false} />
-      <span dir="auto" className="min-w-0 flex-1 truncate">
-        {label}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-center gap-2">
+          <span dir="auto" className="min-w-0 truncate">
+            {label}
+          </span>
+          {badge}
+        </span>
+        {secondary ? (
+          <span className="min-w-0 truncate text-ui-caption text-ui-subtle">
+            {secondary}
+          </span>
+        ) : null}
       </span>
       {typeof count === "number" ? (
         <span data-numeric="" className="shrink-0 text-ui-caption text-ui-subtle">
@@ -514,6 +546,14 @@ export function TextField({
  *
  * `flex-1` is its own, not the frame's: the price band renders two of these side
  * by side in a `flex-wrap` row and they have to share the width.
+ *
+ * **`name` is forwarded, added on the coupons branch.** `TextField` has always
+ * taken one; this wrapper's own prop list did not, so it dropped it on the way
+ * through and `input[name="amount"]` — which `e2e/coupons.spec.ts` fills twice —
+ * was unreachable. The only way to get it was to bypass the primitive and
+ * hand-roll an `<input>`, which loses the documented `isolate`,
+ * `inputMode="decimal"` and `flex-1` in one go. A wrapper that silently narrows
+ * the thing it wraps is a fork with extra steps.
  */
 export function NumberField(props: {
   id?: string;
@@ -525,6 +565,8 @@ export function NumberField(props: {
   error?: string;
   validate?: (value: string) => string | undefined;
   disabled?: boolean;
+  /** The form-control name. See above — dropped here until the coupons branch. */
+  name?: string;
 }) {
   return <TextField {...props} isolate inputMode="decimal" className="flex-1" />;
 }
@@ -553,12 +595,38 @@ export function NumberField(props: {
  * half-entered date reports an **empty** value rather than a partial one — so
  * latching on change would let a "required" rule fire at the moment someone has
  * filled in the year and not yet the month.
+ *
+ * ## `echo`, added on the coupons branch — and it is a measured defence
+ *
+ * **A native date input follows the *browser's* locale and there is no way to
+ * change it.** The Arabic panel renders `mm/dd/yyyy`: a US ordering, in a
+ * right-to-left screen, for a shop in Algeria. `lang` is the only hint the
+ * platform offers and Chromium was measured on 2026-08-19 not to honour it; the
+ * control's internals cannot be styled or relabelled either.
+ *
+ * So the value is echoed underneath in the page's own language, and a person can
+ * confirm the date they set without having to trust a format they do not
+ * recognise. That readback is a second piece of text and this frame has one text
+ * slot — `hint`, which the coupon expiry also needs ("valid through the whole of
+ * the named day; leave empty for none"). One caller putting both through `hint`
+ * would have concatenated two unrelated sentences; the alternative was a
+ * hand-rolled `<input type="date">` beside the primitive, which is what the screen
+ * this replaces did and is how it lost the hydration guard, `aria-describedby`
+ * and the error frame.
+ *
+ * It sits directly under the control and above `hint`, because it is about the
+ * value that is there rather than about what a valid one looks like. `Isolate`
+ * rather than `Ltr` is the caller's job: this is `Intl`-formatted text, and
+ * forcing a direction over the marks ICU inserts renders an Arabic date as
+ * `17ص 12:03 .2026/08/`.
  */
 export function DateField({
   id: givenId,
   label,
   value,
   onChange,
+  /** The value read back in the page's own language. See above. */
+  echo,
   hint,
   error,
   validate,
@@ -572,6 +640,7 @@ export function DateField({
   /** `Y-m-d`, or the empty string. */
   value: string;
   onChange: (next: string) => void;
+  echo?: ReactNode;
   hint?: string;
   error?: string;
   validate?: (value: string) => string | undefined;
@@ -610,6 +679,7 @@ export function DateField({
         style={{ unicodeBidi: "isolate" }}
         className={`${CONTROL} ${borderFor(Boolean(field.shown))}`}
       />
+      {echo ? <p className="text-ui-label text-ui-fg">{echo}</p> : null}
     </FieldFrame>
   );
 }
@@ -1158,9 +1228,35 @@ export function ErrorSummary({
  * The label does not change while saving. §3.3: the spinner replaces the leading
  * icon, the label stays and the width is held — a button that becomes
  * "Enregistrement…" mid-click resizes under the pointer that is still on it.
+ *
+ * ## `persistent`, added on the coupons branch
+ *
+ * §3.4 specifies **two** footers and this component had only ever implemented the
+ * second: "actions pin to the bottom of the form in a bordered footer, primary
+ * inline-end" *and* "long forms get a sticky footer that appears only when the
+ * form is dirty". The first is the shape a form has when there is nothing to
+ * compare it against, and the coupon create screen is exactly that — a blank
+ * object, where "unsaved changes" is the wrong frame and the primary has to be
+ * reachable from first paint or the screen has no way to submit at all.
+ *
+ * The second caller is a trashed coupon: `GET` answers 200 with `status:"trash"`,
+ * the status picker offers only the two live states, so the form opens already
+ * coerced to `draft` and *clean*. Saving is the restore path, and gating it on
+ * dirtiness would mean a person had to change some unrelated field before the
+ * screen would let them do the one thing it is for.
+ *
+ * **When persistent and clean the message slot stays empty.** A blank create form
+ * has nothing to report, and printing "unsaved changes" over a form nobody has
+ * touched is the same class of untruth as a stale marker on a screen that cannot
+ * go stale.
  */
 export function SaveBar({
   dirty,
+  /**
+   * Render when clean too, with an empty message. For a form whose primary must
+   * be reachable from first paint — a create screen, a restore. See above.
+   */
+  persistent = false,
   saving = false,
   onSave,
   onDiscard,
@@ -1175,6 +1271,7 @@ export function SaveBar({
   blockedReason,
 }: {
   dirty: boolean;
+  persistent?: boolean;
   saving?: boolean;
   onSave: () => void;
   onDiscard?: () => void;
@@ -1183,15 +1280,28 @@ export function SaveBar({
 }) {
   const t = useTranslations("ui.form");
 
-  if (!dirty) return null;
+  if (!dirty && !persistent) return null;
 
   return (
     <div
       data-testid="save-bar"
       className="ui-card ui-safe-b sticky bottom-0 z-10 flex flex-wrap items-center gap-3 px-4 pt-3 shadow-ui-sm"
     >
-      <p className="min-w-0 flex-1 text-ui-label text-ui-muted">{t("unsaved")}</p>
-      {onDiscard ? (
+      {/* Kept in the tree when it says nothing, so the row keeps its layout and
+          the buttons do not jump inline-start the moment a persistent bar goes
+          dirty. */}
+      <p className="min-w-0 flex-1 text-ui-label text-ui-muted">
+        {dirty ? t("unsaved") : null}
+      </p>
+      {/*
+        `dirty &&`, not `onDiscard` alone. The two were the same test until
+        `persistent` existed — the bar never rendered clean, so a discard could
+        never be offered against nothing to discard. A persistent bar on an
+        untouched form did offer it: §3.3's "a control that cannot act is not
+        rendered", failed by the primitive rather than by a screen. Callers that
+        pass no `onDiscard` are unaffected.
+      */}
+      {dirty && onDiscard ? (
         <Button variant="ghost" onClick={onDiscard} disabled={saving}>
           {t("discard")}
         </Button>

@@ -178,6 +178,7 @@
       "ac_manage_orders": "Commandes",
       "ac_manage_products": "Produits",
       "ac_manage_customers": "Clients",
+      "ac_manage_coupons": "Codes promo",
       "ac_manage_inventory": "Stock",
       "ac_manage_settings": "Réglages",
       "ac_manage_users": "Utilisateurs",
@@ -216,6 +217,7 @@
     "listUpdated": "{total, plural, =0 {Aucun résultat} one {# résultat} other {# résultats}}",
     "productName": "Produit {name}",
     "customerName": "Client {name}",
+    "couponCode": "Code promo {code}",
     "stockItem": "Article {name}"
   },
   "statusShort": {
@@ -684,12 +686,12 @@
   },
   "coupons": {
     "title": "Codes promo",
+    "loading": "Chargement…",
     "createTitle": "Nouveau code promo",
     "refresh": "Actualiser",
+    "actions": "Actions",
     "create": "Créer",
-    "cancel": "Annuler",
-    "save": "Enregistrer",
-    "revert": "Rétablir",
+    "new": "Nouveau code promo",
     "saved": "Code promo enregistré.",
     "created": "Code promo créé.",
     "trashed": "Code promo mis à la corbeille.",
@@ -697,20 +699,29 @@
     "trash": "Mettre à la corbeille",
     "deleteForever": "Supprimer définitivement",
     "count": "{total, plural, =0 {Aucun code promo} one {# code promo} other {# codes promo}}",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "searchLabel": "Rechercher un code",
     "searchPlaceholder": "Code promo",
     "clearSearch": "Effacer la recherche",
     "statusLabel": "Filtrer par statut",
+    "columns": {
+      "code": "Code",
+      "description": "Description",
+      "discount": "Remise",
+      "type": "Type",
+      "minimum": "Panier minimum",
+      "usage": "Utilisations",
+      "expires": "Expiration",
+      "restrictions": "Restrictions",
+      "id": "Identifiant"
+    },
     "expired": "Expiré",
     "freeShipping": "Livraison offerte",
-    "percentValue": "{amount} %",
     "noDescription": "Sans description",
     "minimumShort": "À partir de {amount}",
     "restrictedShort": "{count, plural, one {# restriction} other {# restrictions}}",
     "notFound": "Ce code promo n’existe pas. Une suppression définitive est irréversible ; une mise à la corbeille, non.",
-    "trashedBanner": "Ce code promo est à la corbeille. Il ne s’applique plus, mais il garde son code — recréer le même code renverra un conflit.",
+    "trashedBanner": "Ce code promo est à la corbeille. Il ne s’applique plus, mais il garde son code — recréer le même code renverra un conflit. L’enregistrer depuis cet écran le sort de la corbeille en brouillon.",
+    "staleTitle": "Restrictions cassées",
     "staleRestrictions": "{count, plural, one {# restriction pointe vers un élément supprimé} other {# restrictions pointent vers des éléments supprimés}}. Le code promo ne s’applique donc à rien.",
     "duplicateCode": "Le code « {code} » est déjà utilisé. Les codes sont enregistrés en minuscules, donc la casse ne les distingue pas.",
     "usageOf": "{count} sur {limit}",
@@ -780,9 +791,10 @@
       "product_categories": "Catégories concernées",
       "excluded_product_categories": "Catégories exclues",
       "any": "Tous",
+      "none": "Aucun",
       "excludes": "Exclusion",
-      "selected": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
-      "missingOne": "Élément supprimé (#{id})"
+      "missingOne": "Élément supprimé (#{id})",
+      "unknownOne": "Élément #{id}"
     },
     "picker": {
       "description": "Touchez une ligne pour l’ajouter ou la retirer.",
@@ -802,11 +814,12 @@
       "trashTitle": "Mettre ce code à la corbeille ?",
       "trashBody": "Il cesse de s’appliquer mais garde son code, et peut être restauré.",
       "deleteTitle": "Supprimer définitivement ?",
-      "deleteBody": "Irréversible. Le code redeviendra disponible pour un nouveau code promo."
+      "deleteBody": "Irréversible. Le code redeviendra disponible pour un nouveau code promo.",
+      "typeCode": "Saisissez « {code} » pour confirmer."
     },
     "empty": {
       "none": "Aucun code promo pour le moment.",
-      "noResults": "Aucun code promo ne correspond.",
+      "noResults": "Aucun code promo ne correspond. La recherche porte sur le code, pas sur la description.",
       "clear": "Effacer les filtres"
     }
   },

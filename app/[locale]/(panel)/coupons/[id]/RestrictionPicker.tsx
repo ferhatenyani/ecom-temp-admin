@@ -1,17 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { EligibleCategory, EligibleProduct } from "@/lib/api/schemas/coupon";
 import { acRead } from "@/lib/api/browser";
-import { Sheet } from "@/components/primitives/Sheet";
-import { Button } from "@/components/primitives/Button";
-import { Icon } from "@/components/primitives/Icon";
+import { Drawer } from "@/components/ui/Overlay";
+import { Button, IconButton } from "@/components/ui/Button";
+import { CheckRow } from "@/components/ui/Form";
+import { SearchField } from "@/components/ui/FilterBar";
+import { Badge } from "@/components/ui/Badge";
+import { EmptyState, ErrorState } from "@/components/ui/States";
+import { Skeleton, SkeletonRegion } from "@/components/ui/Skeleton";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { SectionError } from "@/components/patterns/States";
-import { useHydrated } from "@/lib/use-hydrated";
 import { PICKER_PER_PAGE, pickerKey, pickerParams } from "../query";
 
 /**
@@ -38,10 +39,27 @@ import { PICKER_PER_PAGE, pickerKey, pickerParams } from "../query";
  * [999999]}` answered 200 and the coupon then applied to nothing while looking,
  * in every response and on every screen, exactly like a coupon that worked. The
  * write is validated now, but a text field that can produce a 400 the user cannot
- * diagnose is still the wrong control: a person does not know a product's id, and
- * the HIG's own rule is to offer a choice rather than ask for typed data whenever
- * a choice is possible.
+ * diagnose is still the wrong control: a person does not know a product's id.
+ *
+ * ## What the redesign changed
+ *
+ * **A `Drawer`, not a bottom `Sheet`.** §3.1 gives the drawer exactly this job —
+ * context beside the page — and the sheet it replaces was one iOS control doing
+ * four unrelated ones.
+ *
+ * **Real checkboxes.** The rows were `<button role="checkbox">`, which announces
+ * correctly and then behaves like neither: no space-to-toggle from the browser,
+ * no form association. `Form.tsx`'s `CheckRow` is a real `<input type="checkbox">`
+ * behind a drawn box, and it grew `secondary` and `badge` on this branch so the
+ * SKU line, the "sans référence" fallback, the category's product count and the
+ * draft badge all survived the migration instead of being quietly dropped.
+ *
+ * **The search is submit-gated.** It fired a request per keystroke, and a coupon
+ * form can open this four times — so typing `AC-TAP-001` was eleven requests
+ * against a budget of 600/min shared across every tab the person has open.
+ * `SearchField` submits on Enter and carries its own clear button.
  */
+
 /**
  * One row shape for both routes. A product carries a SKU and a status; a category
  * carries a product count. Nothing carries a price — see the docblock above.
@@ -61,33 +79,62 @@ export function RestrictionPicker({
   title,
   selected,
   onCommit,
+  returnFocusTo,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   kind: "products" | "categories";
   title: string;
-  /** The ids currently on the coupon. The sheet edits a copy and commits on save. */
+  /** The ids currently on the coupon. The drawer edits a copy and commits on apply. */
   selected: number[];
-  onCommit: (ids: number[]) => void;
+  /**
+   * The committed ids, **and the names this picker displayed for them**.
+   *
+   * The second argument is the fix for a real defect: the form used to render its
+   * ids from the draft and their names from the last *saved* response, so adding
+   * a product to a coupon that already had one showed the old name beside the new
+   * count. The picker is the only thing that knows the name of an id it has just
+   * added — the form cannot resolve one without a request — so it hands them over
+   * rather than leaving the form to guess or to lie.
+   */
+  onCommit: (ids: number[], names: Map<number, string>) => void;
+  /** The row button focus returns to. See `useOpenerFocus` in Overlay.tsx. */
+  returnFocusTo?: string;
 }) {
   const t = useTranslations("coupons");
-  const hydrated = useHydrated();
+  const tTable = useTranslations("ui.table");
 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   /*
-   * A draft, committed on "apply" rather than on every tap.
+   * A draft, committed on "apply" rather than on every tick.
    *
-   * The alternative — writing straight through to the form — makes the sheet's
-   * cancel button a lie, and this sheet is reached from a form that already has
+   * The alternative — writing straight through to the form — makes the drawer's
+   * cancel button a lie, and this drawer is reached from a form that already has
    * its own dirty state and save bar. Two levels of undo with one level of
    * cancelling is how a person loses a selection they thought they had discarded.
    *
-   * Keyed on `open` so reopening the sheet re-seeds from the coupon rather than
+   * Keyed on `open` so reopening re-seeds from the coupon rather than
    * resurrecting a draft the person cancelled.
    */
   const [draft, setDraft] = useState<number[]>(selected);
   const [seededFor, setSeededFor] = useState(open);
+
+  /**
+   * Every name this drawer has put on screen since it opened.
+   *
+   * A person can search, tick a row, search again and apply — so the rows
+   * rendered *at* the moment of commit are not all the rows the commit covers. A
+   * ref rather than state because nothing renders from it: it is read once, by
+   * `onCommit`, and emptied when the drawer opens.
+   */
+  const seen = useRef(new Map<number, string>());
+
+  /* Emptied in an effect rather than in the re-seed block below, because a ref
+     read or written during render is a value React is free to discard. */
+  useEffect(() => {
+    if (open) seen.current = new Map();
+  }, [open]);
 
   if (open !== seededFor) {
     setSeededFor(open);
@@ -98,7 +145,7 @@ export function RestrictionPicker({
     }
   }
 
-  const { data, isPending, isError, error } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: pickerKey(kind, search, page),
     queryFn: async () => {
       /*
@@ -144,7 +191,7 @@ export function RestrictionPicker({
         total,
       };
     },
-    // Nothing is fetched until the sheet is open: a coupon form usually saves
+    // Nothing is fetched until the drawer is open: a coupon form usually saves
     // without anyone touching the restrictions, and this is two requests.
     enabled: open,
     placeholderData: keepPreviousData,
@@ -154,69 +201,65 @@ export function RestrictionPicker({
   const total = data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PICKER_PER_PAGE));
 
+  /* Recorded after paint, not during it: writing to a ref while rendering makes
+     the render impure and the value it captures depends on how often React
+     chooses to re-run it. Keyed on `data` rather than on `rows`, which is a fresh
+     array on every render and would make this an effect that never settles. */
+  useEffect(() => {
+    for (const row of data?.rows ?? []) seen.current.set(row.id, row.name);
+  }, [data]);
+
   const toggle = (id: number) =>
     setDraft((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
 
   return (
-    <Sheet
+    <Drawer
       open={open}
       onOpenChange={onOpenChange}
       title={title}
       description={t("picker.description")}
+      size="sm"
+      returnFocusTo={returnFocusTo}
       footer={
-        <div className="flex items-center gap-3">
-          <Button variant="plain" onClick={() => onOpenChange(false)} className="flex-1">
+        <>
+          {/* Cancel first in DOM order, so it is the first tab stop and, on a
+              phone, the lower of the two — `OverlayFrame` reverses the column. */}
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {t("picker.cancel")}
           </Button>
           <Button
-            variant="filled"
             onClick={() => {
-              onCommit(draft);
+              onCommit(draft, seen.current);
               onOpenChange(false);
             }}
-            className="flex-1"
           >
             {/*
               The count is on the button because it is the thing that changed and
-              the sheet is tall enough that the selected rows may all be scrolled
-              off. `Ltr` because a bare numeral inside Arabic text reorders.
+              the list is tall enough that the ticked rows may all be scrolled
+              off. `Isolate`, not `Ltr`: a translated string carrying a number.
             */}
             <Isolate numeric>{t("picker.apply", { count: draft.length })}</Isolate>
           </Button>
-        </div>
+        </>
       }
     >
       <div className="flex flex-col gap-3">
-        <form
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
+        <SearchField
+          value={search}
+          onSubmit={(next) => {
+            setSearch(next);
             setPage(1);
           }}
-          className="flex items-center gap-2 rounded-md bg-surface-2 px-3"
-        >
-          <Icon name="search" className="size-4 shrink-0 text-label-secondary" />
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            disabled={!hydrated}
-            aria-busy={!hydrated || undefined}
-            placeholder={
-              kind === "products" ? t("picker.searchProducts") : t("picker.searchCategories")
-            }
-            aria-label={
-              kind === "products" ? t("picker.searchProducts") : t("picker.searchCategories")
-            }
-            enterKeyHint="search"
-            className="min-h-11 min-w-0 flex-1 bg-transparent text-body text-label outline-none placeholder:text-label-tertiary disabled:opacity-40"
-          />
-        </form>
+          placeholder={
+            kind === "products" ? t("picker.searchProducts") : t("picker.searchCategories")
+          }
+          label={
+            kind === "products" ? t("picker.searchProducts") : t("picker.searchCategories")
+          }
+          clearLabel={t("clearSearch")}
+        />
 
         {/*
           The product search matches the SKU as well as the name, and says so.
@@ -226,121 +269,92 @@ export function RestrictionPicker({
           lookup in; this line is how a person finds out they can use it.
         */}
         {kind === "products" ? (
-          <p className="px-1 text-caption text-label-tertiary">{t("picker.skuHint")}</p>
+          <p className="text-ui-label text-ui-muted">{t("picker.skuHint")}</p>
         ) : null}
 
         {isError ? (
-          <SectionError>{(error as Error).message}</SectionError>
+          <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : isPending ? (
-          <div role="status" aria-busy="true" className="overflow-hidden rounded-lg bg-surface">
+          /* Six rows at the real row's height: `CheckRow` wears `.ui-field`, which
+             is 36px on a pointer and 44px on touch, so the placeholder grows with
+             it rather than settling upward on a phone. */
+          <SkeletonRegion label={t("loading")} className="flex flex-col gap-1">
             {Array.from({ length: 6 }, (_, i) => (
-              <div key={i} className="list-row flex items-center gap-3 px-4 py-3">
-                <div className="skeleton size-5 shrink-0 rounded-sm" />
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="skeleton h-5 w-40 rounded-sm" />
-                  <div className="skeleton h-4 w-24 rounded-sm" />
-                </div>
-              </div>
+              <Skeleton key={i} className="ui-field w-full rounded-ui-md" />
             ))}
-          </div>
+          </SkeletonRegion>
         ) : rows.length === 0 ? (
-          <p className="rounded-lg bg-surface px-4 py-8 text-center text-body text-label-secondary">
-            {search === "" ? t("picker.none") : t("picker.noResults")}
-          </p>
+          <EmptyState
+            icon={search === "" ? "box" : "search"}
+            message={search === "" ? t("picker.none") : t("picker.noResults")}
+            action={
+              search === ""
+                ? undefined
+                : { label: t("clearSearch"), onClick: () => setSearch("") }
+            }
+          />
         ) : (
-          <div className="overflow-hidden rounded-lg bg-surface">
-            {rows.map((row) => {
-              const checked = draft.includes(row.id);
-
-              return (
-                <button
-                  key={row.id}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={checked}
-                  disabled={!hydrated}
-                  onClick={() => toggle(row.id)}
-                  className="list-row press-row flex min-h-11 w-full items-center gap-3 px-4 py-3 text-start disabled:opacity-40"
-                >
-                  {/*
-                    A drawn checkbox rather than a native one: the row is the
-                    target, at 44px, and a native input inside a button is not a
-                    control anyone can style consistently across both engines.
-                    `aria-checked` on the button is what a screen reader reads.
-                  */}
-                  <span
-                    aria-hidden="true"
-                    className={`flex size-5 shrink-0 items-center justify-center rounded-sm ${
-                      checked ? "bg-accent" : "bg-fill"
-                    }`}
-                  >
-                    {checked ? <Icon name="check" className="size-3.5 text-bg" /> : null}
-                  </span>
-
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="flex min-h-6 items-center gap-2">
-                      {/* Product and category names are user content in whichever
-                          language they were typed — `dir="auto"` so the ellipsis
-                          lands at the name's own end in both locales. */}
-                      <span dir="auto" className="truncate text-body text-label">
-                        {row.name}
-                      </span>
-                      {/*
-                        A draft product is a legitimate restriction — a shop sets
-                        a launch discount up before the product goes live — so it
-                        is offered rather than filtered out, and badged so nobody
-                        restricts a live coupon to something no shopper can buy.
-                      */}
-                      {row.status === "draft" ? (
-                        <StatusBadge tone="warning" className="shrink-0">
-                          {t("status.draft")}
-                        </StatusBadge>
-                      ) : null}
-                    </span>
-
-                    <span className="text-footnote text-label-secondary">
-                      {row.sku !== null && row.sku !== "" ? (
-                        // A SKU is an identifier and reorders inside Arabic text.
-                        <Ltr numeric={false} className="truncate">
-                          {row.sku}
-                        </Ltr>
-                      ) : row.count !== null ? (
-                        <Isolate numeric>{t("picker.productCount", { count: row.count })}</Isolate>
-                      ) : (
-                        <span className="text-label-tertiary">{t("picker.noSku")}</span>
-                      )}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
+          <div className="flex flex-col gap-1">
+            {rows.map((row) => (
+              <CheckRow
+                key={row.id}
+                checked={draft.includes(row.id)}
+                onChange={() => toggle(row.id)}
+                label={row.name}
+                /*
+                  A draft product is a legitimate restriction — a shop sets a
+                  launch discount up before the product goes live — so it is
+                  offered rather than filtered out, and badged so nobody restricts
+                  a live coupon to something no shopper can buy.
+                */
+                badge={
+                  row.status === "draft" ? (
+                    <Badge tone="warning">{t("status.draft")}</Badge>
+                  ) : undefined
+                }
+                secondary={
+                  row.sku !== null && row.sku !== "" ? (
+                    // A SKU is an identifier and reorders inside Arabic text.
+                    <Ltr numeric={false}>{row.sku}</Ltr>
+                  ) : row.count !== null ? (
+                    <Isolate numeric>{t("picker.productCount", { count: row.count })}</Isolate>
+                  ) : (
+                    t("picker.noSku")
+                  )
+                }
+              />
+            ))}
           </div>
         )}
 
         {total > PICKER_PER_PAGE ? (
-          <nav className="flex items-center justify-between gap-3">
-            <Button
-              variant="plain"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              {t("picker.previous")}
-            </Button>
-            <span className="text-footnote text-label-secondary">
-              <Ltr numeric>
-                {page} / {pageCount}
-              </Ltr>
-            </span>
-            <Button
-              variant="plain"
-              disabled={page >= pageCount}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              {t("picker.next")}
-            </Button>
+          <nav aria-label={tTable("pageOf", { page, pages: pageCount })}>
+            <div className="flex items-center justify-between gap-3">
+              <IconButton
+                label={t("picker.previous")}
+                icon="back"
+                flipInRtl
+                variant="secondary"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              />
+              <span className="text-ui-label text-ui-muted" data-numeric="">
+                {tTable("pageOf", { page, pages: pageCount })}
+              </span>
+              <IconButton
+                label={t("picker.next")}
+                icon="chevron"
+                flipInRtl
+                variant="secondary"
+                size="sm"
+                disabled={page >= pageCount}
+                onClick={() => setPage((p) => p + 1)}
+              />
+            </div>
           </nav>
         ) : null}
       </div>
-    </Sheet>
+    </Drawer>
   );
 }

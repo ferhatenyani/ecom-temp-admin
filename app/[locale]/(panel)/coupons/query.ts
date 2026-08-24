@@ -8,6 +8,15 @@ import type { Coupon } from "@/lib/api/schemas/coupon";
  * `order` and pagination. `?code=` and `?discount_type=` are **not** parameters —
  * both come back 200 with all six rows, which is this API's standard trap and the
  * reason each one was sent on its own rather than assumed from the documentation.
+ *
+ * **`?search=` matches the code and nothing else**, and the screen says so rather
+ * than implying otherwise. `?search=fidélité` — a word that appears only in a
+ * description — returns 0 rows while `?search=bienvenue` returns 1. The customers
+ * list is why this is stated at all: a search box that claimed two fields the API
+ * had never been seen to match shipped for three branches there and made an
+ * entire empty state unreachable. So the field is labelled "rechercher un code",
+ * and `empty.noResults` repeats the limit — because the person who needs that
+ * sentence is the one already looking at no results.
  */
 
 /**
@@ -24,12 +33,41 @@ import type { Coupon } from "@/lib/api/schemas/coupon";
 export const STATUS_FILTERS = ["", ...COUPON_STATUSES] as const;
 export type StatusFilter = (typeof STATUS_FILTERS)[number];
 
-/** `date, id, code, usage`, as the 400 enumerates them. */
-export const ORDERBY = ["date", "code", "usage"] as const;
-export type OrderBy = (typeof ORDERBY)[number];
-
+/**
+ * `date, id, code, usage`, as the 400 enumerates them — and **nothing on this
+ * screen sorts.**
+ *
+ * `orderby` is accepted, validated and then ignored: all four values return an
+ * identical id sequence, measured against the mock in `tests/mock-api.test.ts`,
+ * which reproduces the live router's behaviour on purpose so a sort cannot be
+ * "verified" here and shipped broken. This is Orders' and Customers' position
+ * rather than Products', which ships sortable headers off five re-measured
+ * combinations. So no column carries a `sortKey`, the list passes no
+ * `onSortChange`, and no header announces `aria-sort`.
+ *
+ * The guard below stays regardless, and it is the only reason this list is kept:
+ * a hand-edited or stale URL must not be able to provoke a 400 the screen then
+ * has to render as an error.
+ */
 const ACCEPTED_ORDERBY = ["date", "id", "code", "usage"] as const;
+export type OrderBy = (typeof ACCEPTED_ORDERBY)[number];
 
+/**
+ * Page size, and the three the footer offers.
+ *
+ * **Page and per-page live in the URL here, as they do on customers** — the
+ * arrangement `TableFooter` is written against, so the control can be used as-is
+ * rather than wrapped. The reason is the same one: this list has two filters, so
+ * the URL is short enough that the reading position is worth carrying in it. The
+ * products list holds both in component state because its nine filter dimensions
+ * make the shareable URL the *filter* rather than the position.
+ *
+ * All three values are ≤ 100, which is not decoration: **`per_page=101` is a
+ * measured 400, not a clamp**, on this collection and on both picker routes. A
+ * stale `?per_page=37` falls back rather than travelling, because the control
+ * could not represent it afterwards.
+ */
+export const PER_PAGE_OPTIONS = [20, 50, 100] as const;
 export const PER_PAGE = 20;
 
 export type CouponsQuery = {
@@ -38,6 +76,7 @@ export type CouponsQuery = {
   orderby: OrderBy;
   order: "asc" | "desc";
   page: number;
+  perPage: number;
 };
 
 export const EMPTY_QUERY: CouponsQuery = {
@@ -46,6 +85,7 @@ export const EMPTY_QUERY: CouponsQuery = {
   orderby: "date",
   order: "desc",
   page: 1,
+  perPage: PER_PAGE,
 };
 
 function positive(value: string | null): number {
@@ -55,6 +95,7 @@ function positive(value: string | null): number {
 export function queryFromParams(params: URLSearchParams): CouponsQuery {
   const status = params.get("status") ?? "";
   const orderby = params.get("orderby") ?? "";
+  const perPage = Number.parseInt(params.get("per_page") ?? "", 10);
 
   return {
     search: params.get("search") ?? "",
@@ -71,12 +112,16 @@ export function queryFromParams(params: URLSearchParams): CouponsQuery {
       : "date",
     order: params.get("order") === "asc" ? "asc" : "desc",
     page: positive(params.get("page")),
+    /* Falls back rather than travelling: the footer's select could not represent
+       a `?per_page=37`, and a control that cannot show the state it is in is a
+       control that lies about it. */
+    perPage: (PER_PAGE_OPTIONS as readonly number[]).includes(perPage) ? perPage : PER_PAGE,
   };
 }
 
 export function listParams(query: CouponsQuery): URLSearchParams {
   const params = new URLSearchParams({
-    per_page: String(PER_PAGE),
+    per_page: String(query.perPage),
     page: String(query.page),
     orderby: query.orderby,
     order: query.order,
@@ -98,6 +143,7 @@ export function toUrlParams(query: CouponsQuery): URLSearchParams {
   if (query.orderby !== EMPTY_QUERY.orderby) params.set("orderby", query.orderby);
   if (query.order !== EMPTY_QUERY.order) params.set("order", query.order);
   if (query.page > 1) params.set("page", String(query.page));
+  if (query.perPage !== EMPTY_QUERY.perPage) params.set("per_page", String(query.perPage));
   return params;
 }
 

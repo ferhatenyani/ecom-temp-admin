@@ -5,12 +5,19 @@ import { ApiError } from "@/lib/api/errors";
 import { couponList } from "@/lib/api/schemas/coupon";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { SHOP_CURRENCY } from "@/lib/format/money";
 import { CouponsList } from "./CouponsList";
 import { listParams, queryFromParams } from "./query";
 
+/**
+ * The coupon list.
+ *
+ * A Server Component fetches the first page with the sealed credential and
+ * streams it, so first paint carries data — the arrangement orders, products,
+ * inventory and customers all use.
+ */
 export default async function CouponsPage({
   params,
   searchParams,
@@ -31,15 +38,20 @@ export default async function CouponsPage({
    * `/customers`, and a **Marketing Manager is 200 here** while being 403 there.
    * The ready-made forbidden fixture from the last two branches works for neither
    * screen on its own.
+   *
+   * A 403 is a screen state, never a logout. Only a 401 clears the session.
    */
   if (!has(me, "ac_manage_coupons")) {
     const t = await getTranslations("coupons");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No subtitle, so `coupons-count` is absent rather than reporting a
+            total nobody was allowed to read. The suite asserts that. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_coupons" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -52,6 +64,8 @@ export default async function CouponsPage({
 
   const initial = await acFetch(couponList, session, `/coupons?${listParams(query)}`).catch(
     (error: unknown) => {
+      // A failed first page renders through the client's error state rather than
+      // crashing the route; the client retries against the same URL.
       if (error instanceof ApiError) return null;
       throw error;
     },
