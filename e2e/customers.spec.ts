@@ -35,23 +35,23 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.waitForURL(new RegExp(`/${locale}/(orders|products)`));
 }
 
-/**
- * The segmented control's `<input type="radio">` is `sr-only`, so a pointer
- * reaches it through its `<label>` and Playwright must do the same — an
- * actionability check on a visually hidden input never passes, and clicking the
- * role directly reports the label span "intercepts pointer events". The
- * inventory suite documents the same thing.
- */
-async function selectTab(page: Page, label: string) {
-  await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
-}
-
 async function openCustomers(page: Page, locale: string, query = "") {
   await page.goto(`/${locale}/customers${query}`);
   await page.waitForSelector('[data-testid="customers-count"]');
 }
 
-/** The detail URL for an email, resolved through the list rather than guessed. */
+/**
+ * The detail URL for an email, resolved through the list rather than guessed.
+ *
+ * **The row's identifying cell is a real `<a href>`**, which is what this walks.
+ * There is no peek drawer on this screen — `lib/api/schemas/customer.ts:7-13`
+ * measures that the detail is the row *plus* `statistics`, so a preview would
+ * cost a request to show the one thing the row already implies — so the row
+ * navigates, and the anchor is what gives that a keyboard path and a middle
+ * click. The anchor lives only in the table presentation: both the table and the
+ * record list are in the DOM at every width, and a link in each would double
+ * every count below.
+ */
 async function openByEmail(page: Page, locale: string, email: string) {
   await openCustomers(page, locale, `?search=${encodeURIComponent(email)}`);
   const row = page.locator('a[href*="/customers/"]').first();
@@ -165,11 +165,18 @@ test.describe("the customer detail", () => {
     await expect(page.locator("body")).toContainText("L’absence de réponse vaut refus");
   });
 
-  test("lists this customer's orders behind its own segment", async ({ page }) => {
+  /**
+   * **The orders are on the page, not behind a tab.** `Segmented` is retired and
+   * nothing replaces it: three stacked cards, because tabs would hide content
+   * behind a click on a screen that is empty for 11 of the 16 customers. The
+   * request is still not spent for nothing — the parent skips it when
+   * `statistics.total_orders` is 0, which is what the report is for.
+   */
+  test("lists this customer's orders on the detail itself", async ({ page }) => {
     await signIn(page, "fr");
     await openByEmail(page, "fr", "ac_cus_shopper@example.test");
 
-    await selectTab(page, "Commandes");
+    await expect(page.locator("body")).toContainText("Commandes de ce client");
     // `/customers/{id}/orders` returns the identical shape to `/orders`, verified
     // by deep key-set equality, so these rows link into the orders screen.
     await expect(page.locator('a[href*="/orders/"]').first()).toBeVisible();

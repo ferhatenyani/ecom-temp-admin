@@ -5,8 +5,8 @@ import { ApiError } from "@/lib/api/errors";
 import { customerList } from "@/lib/api/schemas/customer";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { CustomersList } from "./CustomersList";
 import { listParams, queryFromParams } from "./query";
 
@@ -52,11 +52,14 @@ export default async function CustomersPage({
   if (!has(me, "ac_manage_customers")) {
     const t = await getTranslations("customers");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No subtitle, so `customers-count` is absent rather than reporting a
+            total nobody was allowed to read. The suite asserts that. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_customers" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

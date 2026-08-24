@@ -21,18 +21,31 @@ import type { Customer } from "@/lib/api/schemas/customer";
 /**
  * `orderby`'s four values, exactly as the 400 enumerates them.
  *
- * **Two of them cannot be told apart in this shop, and one sorts by something the
- * payload never carries.** `display_name` and `user_email` returned byte-identical
- * sequences across all 16 rows, because every customer's `display_name` *is* their
- * username and every username is the local part of their email. And `display_name`
- * is not a field on a customer: the list has `first_name`, `last_name`, `username`
- * and `email`, and no `display_name` at all.
+ * **The screen ships no sort control at all**, and the two below are the pair
+ * that would have been offerable if it did — kept because they are what a URL
+ * may legitimately carry and what the guard below narrows to.
  *
- * So a control offering "sort by name" would sort by a key the reader cannot see,
- * in an order that looks wrong for the four customers who *do* have names — Amina
- * Benali sorts under `ac_cus_shopper`. The panel offers `registered` and
- * `user_email`, names the second one after what it visibly sorts by, and leaves
- * the other two out rather than shipping a sort nobody can explain.
+ * The reason there is no control is an absence rather than a finding: **nothing
+ * anywhere records a positive control on this collection.** No measurement shows
+ * that `orderby=user_email` or `orderby=registered` returns a different id
+ * sequence from the unparameterised request, and this run treats anything
+ * unverified as not working — Products ships sortable headers off five
+ * re-measured combinations, Orders ships none for exactly this reason, and this
+ * is Orders' situation.
+ *
+ * **What *was* measured is a narrower thing, and it is easy to misread as the
+ * other one.** `display_name` and `user_email` returned byte-identical sequences
+ * **to each other** across all 16 rows, because every customer's `display_name`
+ * *is* their username and every username is the local part of their email. Two
+ * values agreeing with each other says nothing about whether either agrees with
+ * the default order. And `display_name` is not a field on a customer at all: the
+ * list has `first_name`, `last_name`, `username` and `email` — so a control
+ * offering "sort by name" would also be sorting by a key the reader cannot see,
+ * putting Amina Benali under `ac_cus_shopper`.
+ *
+ * `scripts/mock-api.mjs:3512-3534` reproduces the API's behaviour deliberately:
+ * it validates `orderby` and then ignores it, so a sort cannot be "verified"
+ * against the harness and shipped broken.
  */
 export const ORDERBY = ["registered", "user_email"] as const;
 export type OrderBy = (typeof ORDERBY)[number];
@@ -40,6 +53,20 @@ export type OrderBy = (typeof ORDERBY)[number];
 /** Every value the API accepts, for the guard. Wider than what the UI offers. */
 const ACCEPTED_ORDERBY = ["registered", "ID", "display_name", "user_email"] as const;
 
+/**
+ * Page size, and the three the footer offers.
+ *
+ * **Page and per-page live in the URL here, unlike the products list**, which
+ * holds both in component state. That screen has a reason this one does not: its
+ * filter set is nine dimensions wide and it wanted the shareable URL to be the
+ * *filter*, not the reading position. `/customers` has one filter, so the URL is
+ * short enough that the position is worth carrying — a support agent pasting
+ * "page 3 of the customers sorted by e-mail" into a chat gets page 3.
+ *
+ * The three values are `TableFooter`'s own; a stale `?per_page=37` falls back
+ * rather than travelling, because the control could not represent it afterwards.
+ */
+export const PER_PAGE_OPTIONS = [20, 50, 100] as const;
 export const PER_PAGE = 20;
 
 export type CustomersQuery = {
@@ -48,6 +75,7 @@ export type CustomersQuery = {
   /** `"asc"` or `"desc"`. Anything else is a 400. */
   order: "asc" | "desc";
   page: number;
+  perPage: number;
 };
 
 export const EMPTY_QUERY: CustomersQuery = {
@@ -55,6 +83,7 @@ export const EMPTY_QUERY: CustomersQuery = {
   orderby: "registered",
   order: "desc",
   page: 1,
+  perPage: PER_PAGE,
 };
 
 function positive(value: string | null): number {
@@ -64,6 +93,7 @@ function positive(value: string | null): number {
 export function queryFromParams(params: URLSearchParams): CustomersQuery {
   const orderby = params.get("orderby") ?? "";
   const order = params.get("order");
+  const perPage = Number.parseInt(params.get("per_page") ?? "", 10);
 
   return {
     search: params.get("search") ?? "",
@@ -79,13 +109,14 @@ export function queryFromParams(params: URLSearchParams): CustomersQuery {
       : "registered",
     order: order === "asc" ? "asc" : "desc",
     page: positive(params.get("page")),
+    perPage: (PER_PAGE_OPTIONS as readonly number[]).includes(perPage) ? perPage : PER_PAGE,
   };
 }
 
 /** The list request. */
 export function listParams(query: CustomersQuery): URLSearchParams {
   const params = new URLSearchParams({
-    per_page: String(PER_PAGE),
+    per_page: String(query.perPage),
     page: String(query.page),
     orderby: query.orderby,
     order: query.order,
@@ -102,6 +133,7 @@ export function toUrlParams(query: CustomersQuery): URLSearchParams {
   if (query.orderby !== EMPTY_QUERY.orderby) params.set("orderby", query.orderby);
   if (query.order !== EMPTY_QUERY.order) params.set("order", query.order);
   if (query.page > 1) params.set("page", String(query.page));
+  if (query.perPage !== EMPTY_QUERY.perPage) params.set("per_page", String(query.perPage));
   return params;
 }
 

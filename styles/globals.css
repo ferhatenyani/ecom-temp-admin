@@ -786,6 +786,31 @@
     box-shadow: 0 0 0 3px var(--color-ui-selection);
   }
 
+  /*
+   * The same ring again, driven by focus landing on a *descendant*.
+   *
+   * A composed control draws its border on a wrapper and takes focus on an
+   * input inside it — `SearchField` is a `<form>` around a bare `<input>` whose
+   * own outline is suppressed. Neither `.ui-ring` nor `.ui-ring-peer` reaches
+   * that: the first keys off the element's own `:focus-visible` and the second
+   * off a preceding sibling.
+   *
+   * Without this the wrapper had `focus-within:shadow-ui-sm` standing in — the
+   * *popover* elevation token used as a focus indicator. §3.4 specifies an
+   * accent border plus a 3px `--color-selection` ring, and §5 makes focus
+   * visibility a floor rather than a preference; a soft 2px drop shadow is
+   * neither the specified treatment nor a reliable one against `--color-surface`
+   * in dark, where §1.6 already records that shadows are near-useless.
+   *
+   * `:focus-within` rather than `:focus-visible-within`, which does not exist:
+   * the inner control here is a text input, and a text input focused by any
+   * means is one a person is about to type into.
+   */
+  .ui-ring-within:focus-within {
+    border-color: var(--color-ui-accent);
+    box-shadow: 0 0 0 3px var(--color-ui-selection);
+  }
+
   /* -------------------------------------------------------------- fields ---
    * A form control is 36px on a pointer and 44px on touch — DESIGN.md §3.4's
    * two figures, and §5's floor for the second.

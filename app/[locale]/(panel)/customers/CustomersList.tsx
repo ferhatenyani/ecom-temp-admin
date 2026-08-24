@@ -1,32 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { Customer } from "@/lib/api/schemas/customer";
 import { acRead } from "@/lib/api/browser";
-import { customerName, looksLikeAName } from "@/lib/customers";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
-import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
-import { Segmented } from "@/components/primitives/Segmented";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
+import { looksLikeAName } from "@/lib/customers";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
-import { CustomerRow } from "./CustomerRow";
-import { RowSkeleton } from "../inventory/RowSkeleton";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
-  ORDERBY,
-  PER_PAGE,
+  DataTable,
+  TableControls,
+  TableFooter,
+  useTablePreferences,
+} from "@/components/ui/DataTable";
+import { FilterRow, SearchField } from "@/components/ui/FilterBar";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { RecordListSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
+import { ButtonLink, IconButton } from "@/components/ui/Button";
+import { Isolate } from "@/components/primitives/Ltr";
+import { buildColumns, customerRecord, type CustomerColumnContext } from "./columns";
+import {
   customersKey,
   isFiltered,
   listParams,
   queryFromParams,
   toUrlParams,
   type CustomersQuery,
-  type OrderBy,
 } from "./query";
 
 async function fetchCustomers(query: CustomersQuery) {
@@ -35,21 +37,39 @@ async function fetchCustomers(query: CustomersQuery) {
 }
 
 /**
- * The customer list.
+ * The customer list, rebuilt on the new design system.
  *
- * **There is no filter sheet, and its absence is the design.** `/customers` takes
- * `search`, `orderby`, `order` and pagination — measured one parameter at a time
- * against the live router — and nothing else. No paying-customer filter, no date
- * range, no consent. So the screen carries a search field and a sort control and
- * stops, because this API's failure mode is that **an unknown parameter answers
- * 200 with the full result set**: `?role=administrator` returns all 16 rows,
- * identical to no filter at all. A control that silently does nothing is
- * indistinguishable, on screen, from one that works.
+ * ## There is one control, and its absence of siblings is the design
+ *
+ * `/customers` takes `search`, `orderby`, `order` and pagination — measured one
+ * parameter at a time against the live router — and nothing else. No
+ * paying-customer filter, no date range, no consent filter. So there is no
+ * filter drawer here at all, because this API's failure mode is that **an
+ * unknown parameter answers 200 with the full result set**: `?role=administrator`
+ * returns all 16 rows, identical to no filter at all, and a control that
+ * silently does nothing is indistinguishable on screen from one that works.
  *
  * The consequence worth stating out loud: 4 of the 16 are `is_paying_customer`
  * and there is no way to ask the API for them, so "our best customers" is not a
  * screen this endpoint can produce. The rows are badged and that is the whole of
  * what the panel can honestly offer.
+ *
+ * There are no filter chips either, for a smaller reason: with one filter the
+ * chip would sit beside the search box repeating the term already visible in it.
+ *
+ * **And no sortable columns**, which is Orders' position rather than Products'.
+ * `orderby` is accepted here and validated here, and nothing anywhere records a
+ * positive control showing that either offerable value actually reorders a
+ * result set. `columns.tsx` carries the full argument and the reason `query.ts`
+ * reads as though it does. The `orderby`/`order` guard in `query.ts` stays
+ * regardless: a stale or hand-edited URL must not be able to provoke a 400 this
+ * screen then has to render as an error.
+ *
+ * ## The row navigates, and there is no peek
+ *
+ * The first list in this run where the default does not apply. `columns.tsx`
+ * carries the argument: the detail is the row **plus `statistics`**, so a free
+ * preview would show nothing new and a useful one costs a request per open.
  */
 export function CustomersList({
   locale,
@@ -63,22 +83,26 @@ export function CustomersList({
   initialTotal: number | null;
 }) {
   const t = useTranslations("customers");
+  const tA11y = useTranslations("a11y");
+  const tStates = useTranslations("states");
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const query = queryFromParams(new URLSearchParams(searchParams.toString()));
-  const [searchDraft, setSearchDraft] = useState(query.search);
+  /* Every piece of list state lives in the URL on this screen — see `query.ts`
+     for why it differs from the products list, which holds page and per-page in
+     component state. */
+  const query = useMemo(
+    () => queryFromParams(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
 
-  const commit = (next: CustomersQuery, options: { resetPage?: boolean } = {}) => {
-    const target = options.resetPage === false ? next : { ...next, page: 1 };
-    const params = toUrlParams(target);
-    // `push`, not `replace` — filter state in the URL is only half the promise
-    // and a working back button is the other half.
-    router.push(`/${locale}/customers${params.size > 0 ? `?${params}` : ""}`, {
-      scroll: false,
-    });
-  };
-
+  /*
+   * The fifth state. When the browser is certain it is offline, the rows on
+   * screen are as old as the last successful fetch and staleness is never
+   * silent. `navigator.onLine` is trusted in one direction only — it reports the
+   * interface rather than reachability — which is why the refresh control stays
+   * enabled below.
+   */
   const online = useOnline();
 
   const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
@@ -86,26 +110,46 @@ export function CustomersList({
     queryFn: () => fetchCustomers(query),
     initialData:
       initialCustomers !== null &&
-      customersKey(query).join("|") === customersKey(initialQuery).join("|")
+      customersKey(query)[1] === customersKey(initialQuery)[1]
         ? { customers: initialCustomers, total: initialTotal ?? initialCustomers.length }
         : undefined,
+    /* Keeps the previous page on screen while the next loads, so changing the
+       search or the page never flashes a skeleton over content still valid. */
     placeholderData: keepPreviousData,
   });
 
   const customers = data?.customers ?? [];
   const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
   const filtered = isFiltered(query);
 
   /*
+   * Not wrapped in `useCallback`. The React Compiler is on in this project and
+   * memoizes this already; a manual dependency list disagreeing with the
+   * compiler's inference makes it skip optimising the whole component.
+   */
+  function commit(next: CustomersQuery) {
+    const params = toUrlParams(next);
+    /* `push`, not `replace`. Filter state living in the URL is only half the
+       promise; the other half is that the back button works, and `replace`
+       overwrites the current entry so going back from a searched list skips the
+       unsearched one. This suite asserts it. */
+    router.push(`/${locale}/customers${params.size > 0 ? `?${params}` : ""}`, {
+      scroll: false,
+    });
+  }
+
+  /* A new filter resets to page one; paging and per-page do not. */
+  const commitFilter = (next: CustomersQuery) => commit({ ...next, page: 1 });
+
+  /**
    * **The search box says what it searches, and it is not the name.**
    *
    * Measured with a positive control on 2026-08-19: customer 26 was given the
    * names `Zqxwvu Plmokn`; `?search=Zqxwvu` returned 0 rows and
-   * `?search=cus_fresh` returned 1. `?search=` matches `user_login`, `user_email`
-   * and `display_name` — never `first_name` or `last_name` — so Amina Benali, the
-   * one richly-populated customer in this shop, cannot be found by typing her
-   * name.
+   * `?search=cus_fresh` returned 1. `?search=` matches `user_login`,
+   * `user_email` and `display_name` — never `first_name` or `last_name` — so
+   * Amina Benali, the one richly-populated customer in this shop, cannot be
+   * found by typing her name.
    *
    * A box labelled "search customers" is therefore a promise the endpoint breaks,
    * and it breaks it silently: an unmatched search is an ordinary empty list. The
@@ -114,94 +158,129 @@ export function CustomersList({
    */
   const searchIsName = filtered && looksLikeAName(query.search);
 
+  const ctx: CustomerColumnContext = useMemo(() => ({ locale, t }), [locale, t]);
+  const columns = useMemo(() => buildColumns(ctx), [ctx]);
+
+  /* Held here rather than inside `DataTable` so the controls sit in the toolbar
+     beside the search field instead of floating above the card. */
+  const preferences = useTablePreferences("customers", columns);
+
+  const clearSearch = () => commitFilter({ ...query, search: "" });
+  const offlineReason = tStates("offlineWrites");
+
   return (
-    <Scaffold
-      title={t("title")}
-      trailing={
-        <button
-          type="button"
-          onClick={() => void refetch()}
-          aria-label={t("refresh")}
-          className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-        >
-          <Icon name="refresh" className={isFetching ? "size-5 spin" : "size-5"} />
-        </button>
-      }
-      toolbar={
-        <div className="flex flex-col gap-3">
-          <form
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              commit({ ...query, search: searchDraft.trim() });
-            }}
-            className="flex items-center gap-2 rounded-md bg-surface-2 px-3"
-          >
-            <Icon name="search" className="size-4 shrink-0 text-label-secondary" />
-            <input
-              type="search"
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
-              placeholder={t("searchPlaceholder")}
-              aria-label={t("searchLabel")}
-              enterKeyHint="search"
-              className="min-h-11 min-w-0 flex-1 bg-transparent text-body text-label outline-none placeholder:text-label-tertiary"
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("title")}
+        /*
+         * The visible count, and the testid five assertions reach for — including
+         * one that measures glyph positions to prove an Arabic sentence starts at
+         * the right. `Isolate` and never `Ltr`: this is a translated sentence with
+         * a number in it, not an identifier, and forcing LTR laid "16 عميلًا" out
+         * from the left. README:435-438 records that rule burning sixteen call
+         * sites.
+         */
+        subtitle={
+          <span data-testid="customers-count">
+            <Isolate>{t("count", { total })}</Isolate>
+          </span>
+        }
+        actions={
+          <>
+            <IconButton
+              label={t("refresh")}
+              icon="refresh"
+              variant="secondary"
+              onClick={() => void refetch()}
+              loading={isFetching}
             />
-            {searchDraft ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchDraft("");
-                  commit({ ...query, search: "" });
-                }}
-                aria-label={t("clearSearch")}
-                className="press flex size-8 items-center justify-center rounded-full text-label-secondary"
-              >
-                <Icon name="close" className="size-4" />
-              </button>
-            ) : null}
-          </form>
+            {/* A real link, so the browser performs the download and the
+                credential is attached server-side — never in the document. Its
+                capability is `ac_manage_customers`, the same one gating this
+                whole screen, so there is no second gate to apply.
 
-          {/*
-            Two sorts, not four. The API accepts `ID` and `display_name` as well,
-            and neither is offerable: `display_name` is not a field on a customer
-            — the payload has `username`, `first_name` and `last_name` and no
-            `display_name` at all — and it returned a byte-identical sequence to
-            `user_email` across all 16 rows, because every display name here *is*
-            the username and every username is the local part of the email. A
-            "sort by name" control would sort by a key the reader cannot see, and
-            put Amina Benali under A-C.
-          */}
-          <Segmented<OrderBy>
-            segments={ORDERBY.map((value) => ({ value, label: t(`sort.${value}`) }))}
-            value={ORDERBY.includes(query.orderby) ? query.orderby : "registered"}
-            onChange={(orderby) => commit({ ...query, orderby })}
-            label={t("sortLabel")}
-          />
-        </div>
-      }
-    >
-      {!online && dataUpdatedAt > 0 ? (
-        <div className="mx-auto max-w-3xl">
+                Disabled while the browser reports itself offline: this one
+                genuinely leaves the page, and navigating to a route that cannot
+                answer replaces the panel with the browser's own error page. */}
+            <ButtonLink
+              href="/api/export/customers"
+              variant="secondary"
+              icon="download"
+              prefetch={false}
+              disabled={!online}
+              title={online ? undefined : offlineReason}
+            >
+              {t("export")}
+            </ButtonLink>
+          </>
+        }
+        toolbar={
+          <FilterRow>
+            <SearchField
+              value={query.search}
+              onSubmit={(next) => commitFilter({ ...query, search: next })}
+              placeholder={t("searchPlaceholder")}
+              /* Names the two fields the endpoint actually matches. */
+              label={t("searchLabel")}
+              clearLabel={t("clearSearch")}
+            />
+            <div className="ms-auto">
+              <TableControls
+                columns={columns}
+                visible={preferences.visible}
+                onVisibleChange={preferences.setVisible}
+                density={preferences.density}
+                onDensityChange={preferences.setDensity}
+              />
+            </div>
+          </FilterRow>
+        }
+      />
+
+      <PageBody width="full">
+        {!online && dataUpdatedAt > 0 ? (
           <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
-        </div>
-      ) : null}
+        ) : null}
 
-      <div className="mx-auto max-w-3xl px-4">
-        <p
-          aria-live="polite"
-          className="mb-2 px-1 text-footnote text-label-secondary"
-          data-testid="customers-count"
-        >
-          <Isolate numeric>{t("count", { total })}</Isolate>
+        {/* A live region, so a search that changes the result count announces it.
+            Its own testid: `customers-count` above is the *visible* count and is
+            what the suite asserts on, and two elements sharing one testid is a
+            strict-mode violation the moment either is queried. */}
+        <p aria-live="polite" className="sr-only" data-testid="customers-live">
+          {tA11y("listUpdated", { total })}
         </p>
 
         {isPending && customers.length === 0 ? (
-          <RowSkeleton />
+          <>
+            <div className="hidden md:block">
+              <TableSkeleton rows={8} cols={6} label={t("loading")} />
+            </div>
+            {/* The card and its padding are `DataTable`'s below `md`, so the
+                skeleton wears them too — otherwise the rows shift 8px inward the
+                moment the data lands. */}
+            <div className="ui-card p-2 md:hidden">
+              <RecordListSkeleton rows={6} label={t("loading")} />
+            </div>
+          </>
         ) : isError ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : customers.length === 0 ? (
           <EmptyState
+            icon={filtered ? "search" : "customers"}
+            /*
+             * **Two empty states, and the second one is the point.**
+             *
+             * `lib/customers.ts:45-60` measures that `?search=` never matches a
+             * first or last name, so searching for a person by name returns an
+             * ordinary empty list with nothing to say the field never had a
+             * chance. `looksLikeAName()` catches that case and the message names
+             * what is actually searched instead of reporting "no results".
+             *
+             * No-data offers nothing, and that is correct rather than
+             * unfinished: `POST /customers` is not on the proxy allowlist and no
+             * screen in this panel creates a customer — a shopper registers on
+             * the storefront — so a "New customer" button here would 404.
+             */
             message={
               filtered
                 ? searchIsName
@@ -209,64 +288,37 @@ export function CustomersList({
                   : t("empty.noResults")
                 : t("empty.none")
             }
-            action={
-              filtered
-                ? {
-                    label: t("empty.clear"),
-                    onClick: () => {
-                      setSearchDraft("");
-                      commit({ ...query, search: "" });
-                    },
-                  }
-                : undefined
-            }
+            action={filtered ? { label: t("empty.clear"), onClick: clearSearch } : undefined}
           />
         ) : (
-          <>
-            <ListGroup>
-              {customers.map((customer) => (
-                <ListLinkRow
-                  key={customer.id}
-                  href={`/${locale}/customers/${customer.id}`}
-                  ariaLabel={customerName(customer).text}
-                >
-                  <CustomerRow customer={customer} />
-                </ListLinkRow>
-              ))}
-            </ListGroup>
-
-            {total > PER_PAGE ? (
-              <nav className="mb-8 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  disabled={query.page <= 1}
-                  onClick={() =>
-                    commit({ ...query, page: Math.max(1, query.page - 1) }, { resetPage: false })
-                  }
-                  aria-label={t("previousPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="back" flipInRtl className="size-5" />
-                </button>
-                <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>
-                    {query.page} / {pageCount}
-                  </Ltr>
-                </span>
-                <button
-                  type="button"
-                  disabled={query.page >= pageCount}
-                  onClick={() => commit({ ...query, page: query.page + 1 }, { resetPage: false })}
-                  aria-label={t("nextPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="chevron" flipInRtl className="size-5" />
-                </button>
-              </nav>
-            ) : null}
-          </>
+          <DataTable
+            preferences={preferences}
+            rows={customers}
+            columns={columns}
+            rowKey={(customer) => String(customer.id)}
+            rowLabel={(customer) => tA11y("customerName", { name: customer.email })}
+            record={(customer) => customerRecord(customer, ctx)}
+            /* Navigates rather than previewing — see `columns.tsx`. The name cell
+               is a real anchor on top of this, for the keyboard and the middle
+               click; it stops propagation so only one push happens. */
+            onRowClick={(customer) => router.push(`/${locale}/customers/${customer.id}`)}
+            /* No `sort` and no `onSortChange` — `columns.tsx` carries the whole
+               argument. Passing neither is what keeps `aria-sort` off the
+               headers too: the primitive gates the attribute on a handler
+               existing, precisely so a table cannot announce itself sortable by
+               columns nothing on screen can sort. */
+            footer={
+              <TableFooter
+                page={query.page}
+                perPage={query.perPage}
+                total={total}
+                onPageChange={(page) => commit({ ...query, page })}
+                onPerPageChange={(perPage) => commit({ ...query, perPage, page: 1 })}
+              />
+            }
+          />
         )}
-      </div>
-    </Scaffold>
+      </PageBody>
+    </div>
   );
 }

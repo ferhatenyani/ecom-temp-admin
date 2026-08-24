@@ -214,7 +214,8 @@
     "closeSheet": "Fermer",
     "openFilters": "Ouvrir les filtres",
     "listUpdated": "{total, plural, =0 {Aucun résultat} one {# résultat} other {# résultats}}",
-    "productName": "Produit {name}"
+    "productName": "Produit {name}",
+    "customerName": "Client {name}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -573,26 +574,26 @@
   "customers": {
     "title": "Clients",
     "refresh": "Actualiser",
+    "export": "Exporter",
+    "loading": "Chargement…",
     "count": "{total, plural, =0 {Aucun client} one {# client} other {# clients}}",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "paying": "Client payant",
     "noName": "Nom non renseigné",
     "noAddress": "Aucune adresse enregistrée.",
     "notFound": "Ce client n’existe pas, ou l’identifiant appartient à un compte du personnel — ceux-ci ne figurent pas ici.",
+    "registeredOn": "Inscrit le {date}",
     "searchLabel": "Rechercher par e-mail ou identifiant",
     "searchPlaceholder": "E-mail ou identifiant",
     "clearSearch": "Effacer la recherche",
-    "sortLabel": "Trier les clients",
-    "sort": {
+    "columns": {
+      "name": "Client",
+      "email": "E-mail",
+      "phone": "Téléphone",
+      "city": "Ville",
+      "consent": "Consentement",
       "registered": "Inscription",
-      "user_email": "E-mail"
-    },
-    "tabLabel": "Section du client",
-    "tab": {
-      "profile": "Profil",
-      "orders": "Commandes",
-      "notifications": "Notifications"
+      "modified": "Modifié",
+      "id": "N° client"
     },
     "section": {
       "identity": "Identité",
@@ -611,6 +612,7 @@
       "id": "Numéro client",
       "phone": "Téléphone",
       "registered": "Inscrit le",
+      "modified": "Modifié le",
       "company": "Société",
       "address": "Adresse",
       "country": "Pays"
@@ -628,7 +630,6 @@
       "onlyOrder": "Seule commande"
     },
     "consent": {
-      "label": "Consentement marketing",
       "granted": "Accordé",
       "withdrawn": "Retiré",
       "never": "Jamais demandé",
@@ -644,11 +645,10 @@
       "question": "Ce client peut-il recevoir des e-mails marketing ?"
     },
     "orders": {
+      "section": "Commandes de ce client",
       "count": "{total, plural, =0 {Aucune commande} one {# commande} other {# commandes}}",
-      "never": "Ce client n’a jamais commandé.",
       "none": "Aucune commande sur cette page.",
-      "previous": "Précédent",
-      "next": "Suivant"
+      "failed": "Impossible de charger les commandes de ce client."
     },
     "empty": {
       "none": "Aucun client pour le moment.",
@@ -1538,8 +1538,10 @@
       "none": "Aucune notification pour ce client.",
       "noneNote": "Une notification est créée par une commande ou un paiement, jamais à la main.",
       "noEmail": "Ce client n’a pas d’adresse e-mail, il n’y a donc rien à rapprocher.",
-      "scopeNote": "Les messages adressés à ce client. Les alertes envoyées à la boutique au sujet de ses commandes n’y figurent pas."
-    }
+      "scopeNote": "Les messages adressés à ce client. Les alertes envoyées à la boutique au sujet de ses commandes n’y figurent pas.",
+      "failed": "Impossible de charger les notifications de ce client."
+    },
+    "customerRowLabel": "{event} — {date}"
   },
   "campaigns": {
     "title": "Marketing",

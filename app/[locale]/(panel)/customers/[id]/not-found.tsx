@@ -1,6 +1,6 @@
 import { getLocale, getTranslations } from "next-intl/server";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { Icon } from "@/components/primitives/Icon";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/States";
 
 /**
  * A 404 on a customer id.
@@ -12,6 +12,11 @@ import { Icon } from "@/components/primitives/Icon";
  * screen instead of disclosing whether that account exists, which is the answer
  * an id-guessing probe wants. The other way is the ordinary one: a customer
  * deleted since the list was rendered.
+ *
+ * `EmptyState` rather than `ErrorState`, and the difference is not cosmetic:
+ * `ErrorState` opens with "something went wrong" and offers a retry, and neither
+ * is true here. Nothing went wrong and there is nothing to retry. The way out is
+ * the header's back link, which is rendered at every width.
  */
 export default async function CustomerNotFound() {
   // A not-found boundary receives no params, so the locale comes from next-intl's
@@ -21,17 +26,15 @@ export default async function CustomerNotFound() {
   const tCustomers = await getTranslations({ locale, namespace: "customers" });
 
   return (
-    <Scaffold
-      title={tCustomers("title")}
-      back={{ href: `/${locale}/customers`, label: tCustomers("title") }}
-    >
-      <div className="px-4">
-        <div className="rounded-lg bg-surface px-6 py-12 text-center">
-          <Icon name="alert" className="mx-auto size-8 text-label-tertiary" />
-          <h2 className="mt-4 text-title-3 text-label">{t("notFoundTitle")}</h2>
-          <p className="mt-2 text-body text-label-secondary">{tCustomers("notFound")}</p>
-        </div>
-      </div>
-    </Scaffold>
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("notFoundTitle")}
+        back={{ href: `/${locale}/customers`, label: tCustomers("title") }}
+        divided={false}
+      />
+      <PageBody width="detail">
+        <EmptyState icon="alert" message={tCustomers("notFound")} />
+      </PageBody>
+    </div>
   );
 }
