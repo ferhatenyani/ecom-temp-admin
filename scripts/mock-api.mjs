@@ -54,13 +54,19 @@
  *   status           real on /orders (single value, a comma list is a 400) and
  *                    real on /products, whose own set is publish/draft/pending/
  *                    private — `?status=trash` is a 400 there, and a trashed
- *                    product still reads back from `/products/{id}` with a 200
- *   search           real on /orders, /products, /customers — substring, and
- *                    accent-folded, because MySQL's collation is: `?search=Chérif`
- *                    matches `nadia.cherif@…`. **On /customers it does not match
- *                    a name** — see "What ?search= on /customers does not match",
- *                    which is the single most carefully measured fact on that
- *                    screen and the one this file got wrong for three branches
+ *                    product still reads back from `/products/{id}` with a 200.
+ *                    Real on /coupons too, and **three-state there**: publish,
+ *                    draft, and *absent meaning both* — which is not a synonym
+ *                    for either. `trash` is a 400 and a trashed coupon still
+ *                    reads back 200, the same asymmetry products have
+ *   search           real on /orders, /products, /customers, /coupons —
+ *                    substring, and accent-folded, because MySQL's collation is:
+ *                    `?search=Chérif` matches `nadia.cherif@…`. **On /customers
+ *                    it does not match a name** — see "What ?search= on
+ *                    /customers does not match", which is the single most
+ *                    carefully measured fact on that screen and the one this file
+ *                    got wrong for three branches. On /coupons it is the **code
+ *                    only**, which is the same restraint for the same reason
  *   the nine filters real on /products: sku, category, tag, min_price,
  *                    max_price, stock_status, on_sale, featured and
  *                    `attributes[taxonomy]=slug,slug`
@@ -75,6 +81,21 @@
  *                    `DELETE` trashes, `?force=true` removes, and the two answer
  *                    identical bodies. See "Which product id produces which
  *                    answer" beside them
+ *   the coupon       real, and its rules are **not** the product's: a read-only
+ *   writes           key is *refused* rather than dropped, `PATCH {}` is a 200
+ *                    no-op rather than a 400, a duplicate code is a 409 under
+ *                    `details.code` carrying the lower-cased form, and trash
+ *                    keeps the code while `?force=true` frees it. `POST` is
+ *                    served here and is a 404 on /products, which the allowlist
+ *                    decides rather than this file. See "Which coupon id
+ *                    produces which refusal"
+ *   the two pickers  real: `/coupons/eligible-products` and
+ *                    `/coupons/eligible-categories`, four and five fields, no
+ *                    price and no stock — they exist because a Marketing Manager
+ *                    holds `ac_manage_coupons` and not `ac_manage_products`, so
+ *                    a picker built on /products would 403 the one role whose job
+ *                    coupons are. The product search matches **SKU**, which
+ *                    WordPress's own `s` does not
  *
  * ── Determinism ──────────────────────────────────────────────────────────────
  *
@@ -1951,10 +1972,49 @@ const allMovements = () => [...state.movements, ...MOVEMENTS];
 /* ---------------------------------------------------------------- coupons --- */
 
 /**
- * Four, and the two null-versus-zero directions run on the same object:
- * `amount: "0.00"` is a real coupon — a zero discount with free shipping — while
- * a threshold of zero is stored as null and can never read back as `"0.00"`.
+ * ── Six, and the last two exist to reach states the first four cannot ────────
+ *
+ * The two null-versus-zero directions run on the same object and are the reason
+ * the first four are shaped the way they are: `amount: "0.00"` is a real coupon
+ * — a zero discount with free shipping — while a threshold of zero is stored as
+ * null and can never read back as `"0.00"`.
+ *
+ * **301 to 304 are untouched.** lib/api/schemas/coupon.ts and lib/coupons.ts both
+ * say `usage_count` is `0` on all four, and a fixture that quietly repaired one
+ * of them would make those two docblocks wrong about the collection they were
+ * written against. The states they cannot reach are added as *new* rows instead:
+ *
+ *   305  a **stale restriction** — `missing: true` on one product id and one
+ *        category id. `missing` is on every restriction row rather than only the
+ *        broken ones, because a client that filtered it out would silently delete
+ *        the restriction the next time the form saved, and until this row existed
+ *        the warning that says so had no fixture and had never been rendered.
+ *        Also `usage_count: 37` against a limit of 50 — *used*, not exhausted.
+ *   306  **trashed**, and exhausted: `usage_count` equal to `usage_limit`. A
+ *        trashed coupon is absent from every listing and still reads back from
+ *        `/coupons/{id}` with a 200 and `status: "trash"`, which is why
+ *        `READABLE_COUPON_STATUSES` is wider than what `?status=` accepts. It is
+ *        also what makes the permanent-delete path reachable at all.
+ *
+ * `usage_count` is read-only on every route here, exactly as it is on the API —
+ * redemption is `POST /cart/coupons`, on the storefront — so these two rows are
+ * the only way the *used* and *exhausted* renderings can be seen. A non-zero
+ * count is a state the real API certainly serves, unlike a capability nobody has
+ * measured; what no route here may do is *move* one.
  */
+
+/**
+ * The two ids that resolve to nothing, written out because that is the whole
+ * point of them. 8842 is the number lib/coupons.ts uses in `refLabel()`'s own
+ * docblock — *an id printed where a name goes reads as a product called 8842* —
+ * so the fixture and the rule that exists for it name the same thing.
+ *
+ * Neither collides with anything else in this file: products run to 211, the
+ * ledger's archive to 3131, variations in the 9000s and movements in the 60000s.
+ */
+const STALE_RESTRICTION_PRODUCT = 8842;
+const STALE_RESTRICTION_CATEGORY = 8843;
+
 const COUPONS = [
   {
     id: 301,
@@ -2058,6 +2118,64 @@ const COUPONS = [
     date_created: iso(20_000),
     date_modified: iso(600),
   },
+  {
+    id: 305,
+    code: "artisans-fideles",
+    status: "publish",
+    discount_type: "fixed_cart",
+    amount: "1500.00",
+    description: "Programme fidélité",
+    date_expires: null,
+    minimum_amount: "8000.00",
+    maximum_amount: null,
+    usage_limit: 50,
+    usage_limit_per_user: 2,
+    limit_usage_to_x_items: null,
+    // Used and not exhausted, which is the middle of the three usage renderings
+    // and the one no fixture could reach.
+    usage_count: 37,
+    individual_use: false,
+    free_shipping: false,
+    exclude_sale_items: false,
+    // One id that resolves and one that does not, in each of the two kinds — so
+    // `missingRefs()` returns two rows across two fields rather than one, and a
+    // banner that only looked at the first field would still be caught.
+    product_ids: [PRODUCTS[0].id, STALE_RESTRICTION_PRODUCT],
+    excluded_product_ids: [],
+    product_categories: [13, STALE_RESTRICTION_CATEGORY],
+    excluded_product_categories: [],
+    email_restrictions: [],
+    date_created: iso(15_000),
+    date_modified: iso(300),
+  },
+  {
+    id: 306,
+    code: "ramadan2026",
+    // Reachable by id and by nothing else: no `?status=` can list it.
+    status: "trash",
+    discount_type: "percent",
+    amount: "20.00",
+    description: "Opération Ramadan, retirée",
+    date_expires: "2026-04-30T00:00:00+00:00",
+    minimum_amount: null,
+    maximum_amount: null,
+    usage_limit: 100,
+    usage_limit_per_user: 1,
+    limit_usage_to_x_items: null,
+    // Exhausted: `usage()` reports `exhausted: true` only when the count has
+    // reached the limit, and nothing else in this shop can make it do that.
+    usage_count: 100,
+    individual_use: true,
+    free_shipping: false,
+    exclude_sale_items: false,
+    product_ids: [],
+    excluded_product_ids: [],
+    product_categories: [],
+    excluded_product_categories: [],
+    email_restrictions: [],
+    date_created: iso(80_000),
+    date_modified: iso(2400),
+  },
 ];
 
 /**
@@ -2065,24 +2183,44 @@ const COUPONS = [
  * the way a customer's `statistics` is. `missing` is on every row rather than
  * only the broken ones: an id that resolves to nothing keeps its place, because
  * a client that dropped it would delete the restriction on the next save.
+ *
+ * **Both sides resolve against the real collections**, which is the repair this
+ * branch made. A category used to be synthesised as `Catégorie ${id}` with
+ * `missing: false` on *any* number, so every id in the shop resolved, the name
+ * on screen was a number in French clothing, and the missing case was
+ * unreachable through the half of the block that has the most ids in it.
+ *
+ * **A row that resolves to nothing carries `id`, `name: null` and `missing` and
+ * nothing else.** The product arm used to publish `status: "trash"` for an id
+ * that matched no product, which is an answer about a row it could not find —
+ * a trashed product and a deleted one are different things, and only one of them
+ * has a status. Both extra keys are optional on `restrictionRef` for exactly
+ * this reason.
+ *
+ * Products resolve through `productById()` rather than the seed array, so the
+ * whole catalogue counts — a coupon may legitimately be restricted to a draft —
+ * and so a product force-deleted in this process makes the restriction naming it
+ * go stale, which is the way one really becomes stale.
  */
 function restrictionsFor(coupon) {
   const productRef = (id) => {
-    const product = PRODUCTS.find((candidate) => candidate.id === id);
+    const product = productById(id);
+    if (product === undefined) return { id, name: null, missing: true };
     return {
       id,
-      name: product?.name ?? null,
-      missing: product === undefined,
-      sku: product?.sku ?? null,
-      status: product?.status ?? "trash",
+      name: product.name,
+      missing: false,
+      // `""` is a real SKU-less product and the schema's null is that absence.
+      sku: product.sku === "" ? null : product.sku,
+      status: product.status,
     };
   };
-  const categoryRef = (id) => ({
-    id,
-    name: `Catégorie ${id}`,
-    missing: false,
-    slug: `categorie-${id}`,
-  });
+
+  const categoryRef = (id) => {
+    const category = CATEGORIES.find((candidate) => candidate.id === id);
+    if (category === undefined) return { id, name: null, missing: true };
+    return { id, name: category.name, missing: false, slug: category.slug };
+  };
 
   return {
     product_ids: coupon.product_ids.map(productRef),
@@ -2604,6 +2742,20 @@ const state = {
   /** Movements this process has written, newest first. Prepended to the archive. */
   movements: [],
   nextMovementId: 0,
+  /**
+   * Coupon id → the whole row as it reads now. Holds both the seeded rows a
+   * PATCH or a trash has rewritten **and** the rows `POST /coupons` created, so
+   * one lookup answers for either.
+   */
+  coupons: new Map(),
+  /** Ids created in this process, newest first — the head of the list. */
+  createdCoupons: [],
+  /**
+   * Force-deleted coupon ids. The distinction this set exists for: a trashed
+   * coupon keeps its code and still collides, and a forced one frees it.
+   */
+  couponsGone: new Set(),
+  nextCouponId: 0,
 };
 
 export function resetState() {
@@ -2621,6 +2773,12 @@ export function resetState() {
   // Above the 1154 seeded ids, and the same figure in every process, which is
   // what keeps a screenshot of a written movement byte-stable.
   state.nextMovementId = MOVEMENT_ID_BASE + MOVEMENT_COUNT + 46;
+  state.coupons = new Map();
+  state.createdCoupons = [];
+  state.couponsGone = new Set();
+  // Above the six seeded ids and far enough from them to read as new — the same
+  // rule `nextShipmentId` follows, and the same figure in every process.
+  state.nextCouponId = 320;
 }
 
 resetState();
@@ -4657,6 +4815,673 @@ function patchInventory(row, body) {
   return ok(inventoryRows().find((candidate) => candidate.id === row.id));
 }
 
+/* ---------------------------------------------------------- coupon queries --- */
+
+/**
+ * `?status=` on coupons, and **it has three states where the other collections
+ * have two.**
+ *
+ * Absent is not a synonym for either value: no `?status=` returns publish *and*
+ * draft together, `publish` returns one, `draft` returns the other. Measured, and
+ * app/[locale]/(panel)/coupons/query.ts:14-23 is built on it — the segmented
+ * control's first segment sends **nothing**, because `?status=` with an empty
+ * value would leave a meaningless parameter in every URL for a request that means
+ * the same thing.
+ *
+ * `?status=trash` is a **400**, while a trashed coupon reads back from
+ * `/coupons/{id}` with a 200. That asymmetry is why `READABLE_COUPON_STATUSES` in
+ * lib/coupon-status.ts has an entry `COUPON_STATUSES` does not, and it is the
+ * same shape `/products` has for the same reason.
+ *
+ * The two lists are written out rather than imported — this file imports nothing
+ * — and the unit suite asserts they still agree with lib/coupon-status.ts, which
+ * is the arrangement `PRODUCT_TYPES` above is held to.
+ */
+const COUPON_STATUSES = ["publish", "draft"];
+const DISCOUNT_TYPES = ["percent", "fixed_cart", "fixed_product"];
+
+/**
+ * **The empty string is the first named option in the refusal**, and that is not
+ * a typo to tidy up. The "no filter" sentinel is inside the enum the router
+ * validates against, so the real 400 reads
+ *
+ *     status is not one of , publish, and draft
+ *
+ * — an offer of something that is not a status. lib/coupon-status.ts:18-25
+ * records it, and a message shown to a person is worth knowing about first.
+ */
+const COUPON_STATUS_FILTERS = ["", ...COUPON_STATUSES];
+
+/**
+ * **`orderby` is validated and then ignored**, which is the `/customers` shape
+ * rather than the `/orders` one, and this collection did neither: it answered 200
+ * to `?orderby=zzz` and to every other value.
+ *
+ * app/[locale]/(panel)/coupons/query.ts:27-31 names these four as the set *the
+ * 400 enumerates*, and `queryFromParams()` carries a guard whose only purpose is
+ * to stop a stale or hand-edited URL provoking that 400 — a guard that could have
+ * been deleted with nothing anywhere noticing while this mock answered 200.
+ *
+ * Ignored after validating, on the header's rule: nothing measured says either
+ * sort does anything, and a mock that sorted would let an agent verify a control
+ * against the harness and ship one that does not work. Note the panel offers
+ * three of these four — `id` is accepted and is not in the control.
+ */
+const COUPON_ORDERBY = ["date", "id", "code", "usage"];
+
+/** Every coupon this process can see, newest first, read through the writes. */
+const allCoupons = () =>
+  [
+    ...state.createdCoupons.map((id) => state.coupons.get(id)),
+    ...COUPONS.map((row) => state.coupons.get(row.id) ?? row),
+  ].filter((row) => !state.couponsGone.has(row.id));
+
+/**
+ * One coupon by id, **including a trashed one** — that is the whole point of it
+ * — and undefined once it has been forced, which is the only path to a 404.
+ */
+const couponById = (id) =>
+  id === null ? undefined : allCoupons().find((row) => row.id === id);
+
+/** The single-coupon shape. The list must never carry this key. */
+const withRestrictions = (row) => ({ ...row, restrictions: restrictionsFor(row) });
+
+function filterCouponStatus(rows, params) {
+  const status = params.get("status");
+  if (status === null || status === "") {
+    // Publish **and** draft. Not "everything": the trash is unlistable.
+    return { rows: rows.filter((row) => row.status !== "trash") };
+  }
+  if (!COUPON_STATUSES.includes(status)) {
+    const message = `status is not one of ${oxford(COUPON_STATUS_FILTERS)}`;
+    return {
+      error: fail(400, "rest_invalid_param", message, { params: { status: message } }),
+    };
+  }
+  return { rows: rows.filter((row) => row.status === status) };
+}
+
+/**
+ * `GET /coupons`.
+ *
+ * **`?search=` matches the code and nothing else here**, and that is the
+ * deliberately *less* capable direction. app/[locale]/(panel)/coupons/query.ts:7
+ * records `search` as a measured parameter, and nothing anywhere records which
+ * fields it reads — WordPress's own `s` on a post type would take the title and
+ * the content, which would be the code and the description. The customers
+ * collection is why this file will not assume the second half: a search list that
+ * carried two fields the API has never been seen to match shipped for three
+ * branches and made an entire empty state unreachable. Narrower here means a
+ * control verified against this mock still works against the shop; wider would
+ * mean the reverse.
+ *
+ * Folded, like every other search in this file, because the collation behind them
+ * is the same one.
+ */
+function couponsListing(params) {
+  const sort = checkSort(params, COUPON_ORDERBY);
+  if (sort !== null) return sort;
+
+  const filtered = filterCouponStatus(allCoupons(), params);
+  if (filtered.error) return filtered.error;
+
+  const rows = searchRows(filtered.rows, params, (row) => [row.code]);
+
+  // `orderby` and `order` are read by nothing past the validation above.
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/**
+ * ── The two picker routes, and why they are not the catalogue ────────────────
+ *
+ * `GET /coupons/eligible-products` and `/coupons/eligible-categories` exist
+ * because `/products` and `/product-categories` are **`ac_manage_products`, which
+ * a Marketing Manager does not hold** — one of the three roles that can manage
+ * coupons, and the one whose job coupons are. Built on the catalogue routes, the
+ * restriction picker would 403 for exactly that role.
+ *
+ * So a row here is **strictly less than a catalogue row**: id, name, SKU and
+ * status, and no price, no stock, no cost. Widening `ac_manage_products` would
+ * have handed the role the whole catalogue in order to give it a label, which is
+ * the trade these two routes exist to refuse — and a mock that served the product
+ * body through them would erase the distinction entirely.
+ *
+ * **The product search matches the SKU as well as the name**, which WordPress's
+ * own `s` does not: it reads the title and the content, so a shop that knows a
+ * product by `AC-CAT-0104` would type it and get an empty picker. That is the one
+ * capability here that is *more* than the catalogue's, it is measured
+ * (ADMIN_PANEL.md:1946-1948), and it is the reason the route was not simply
+ * `/products` behind a second capability.
+ *
+ * The category search takes the **name only**. Nothing measured says the slug is
+ * read, and this is the same restraint the code-only search above shows.
+ *
+ * `sku: null` is unreachable in this shop and the schema allows it: every row in
+ * this catalogue carries a SKU. Reproducing it would mean emptying one, and the
+ * SKUs here are load-bearing — the 60-character one the overflow assertion needs,
+ * and `AC-CAT-0101`, which is what makes the products 409 reachable.
+ */
+function eligibleProductsListing(params) {
+  // The listed catalogue: a trashed product cannot be picked, and a draft can —
+  // a coupon may legitimately be restricted to one.
+  const rows = listed().map((product) => ({
+    id: product.id,
+    name: product.name,
+    sku: product.sku === "" ? null : product.sku,
+    status: product.status,
+  }));
+
+  const term = fold((params.get("search") ?? "").trim());
+  const matched =
+    term === ""
+      ? rows
+      : rows.filter((row) => fold(`${row.name} ${row.sku ?? ""}`).includes(term));
+
+  const page = paginate(matched, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+function eligibleCategoriesListing(params) {
+  /*
+   * Five keys, written out rather than spread. `CATEGORIES` carries a
+   * `description` this route does not, and a mock that let it through would be
+   * publishing a field the picker's schema does not describe — the same reason
+   * the product rows above are mapped rather than passed along.
+   */
+  const rows = CATEGORIES.map((category) => ({
+    id: category.id,
+    name: category.name,
+    slug: category.slug,
+    parent: category.parent,
+    count: category.count,
+  }));
+
+  const term = fold((params.get("search") ?? "").trim());
+  const matched = term === "" ? rows : rows.filter((row) => fold(row.name).includes(term));
+
+  const page = paginate(matched, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/* ----------------------------------------------------------- coupon writes --- */
+
+/*
+ * ── Which coupon id produces which refusal ───────────────────────────────────
+ *
+ * The fourth table in this file, on the same rule as the other three: a screen
+ * cannot be verified against a state it can never reach, and every id below is
+ * written out because a literal that stops matching fails a test while a `find()`
+ * moves quietly and takes the table's meaning with it.
+ *
+ *   id    request                                    answer
+ *   ────  ─────────────────────────────────────────  ──────────────────────────
+ *   —     POST  {code:"BIENVENUE10", amount:"5"}     409 details.**code**, and it
+ *                                                    carries `bienvenue10`
+ *   —     POST  {code:"x"}                           400 fields{amount} — before
+ *                                                    the uniqueness check
+ *   —     POST  {code:"BIENVENUE10"}                 400 fields{amount} **only**:
+ *                                                    the order is measured, so a
+ *                                                    duplicate with no amount
+ *                                                    reports the amount alone
+ *   301   PATCH {}                                   **200** no-op — not the 400
+ *                                                    a product's `{}` gets
+ *   301   PATCH {restrictions:{…}}                   400 fields{restrictions} —
+ *                                                    emitted on every single
+ *                                                    read and refused on write
+ *   301   PATCH {usage_count: 5}                     400 fields{usage_count}
+ *   301   PATCH {maximum_discount:"50"}              400 fields{maximum_discount}
+ *                                                    — no such field exists
+ *   301   PATCH {date_expires:"31/12/2026"}          400 — wrong format
+ *   301   PATCH {date_expires:"2026-02-30"}          400 — a **different**
+ *                                                    message: no such date
+ *   301   PATCH {amount:"-5"}                        400 fields{amount}
+ *   301   PATCH {minimum_amount:"-1"}                400 fields{minimum_amount};
+ *                                                    it used to answer 200 and
+ *                                                    **erase** the real minimum
+ *   301   PATCH {minimum_amount:0}                   200, and reads back **null**
+ *   301   PATCH {date_expires:"2026-12-31"}          200, reads back
+ *                                                    `2026-12-31T00:00:00+00:00`
+ *   305   PATCH {product_ids:[101,8842]}             400 fields{product_ids}
+ *                                                    naming 8842 — its own body,
+ *                                                    refused
+ *   306   GET                                        200 `status:"trash"`
+ *   302   DELETE                                     200 {id,deleted:true}; the
+ *                                                    next GET is 200 `trash` and
+ *                                                    `livraison` is **still
+ *                                                    taken**
+ *   302   DELETE ?force=true                         the identical body; the next
+ *                                                    GET is 404 and `livraison`
+ *                                                    is free
+ *
+ * 301 is `bienvenue10`, 302 is the zero-amount `livraison`, 305 carries the two
+ * stale ids and 306 is the trashed one.
+ */
+
+/**
+ * **Read-only *and refused*, which is the opposite of a product's rule**, and the
+ * difference is measured rather than tidy.
+ *
+ * A product drops a read-only key in silence, so a client may PATCH a GET body
+ * back without diffing it. A coupon refuses one, which is why `CouponForm` sends a
+ * named subset — and `restrictions` is the trap: it is emitted on **every**
+ * single-coupon response, including the answer to the write itself, so the
+ * obvious "save what I was given" round trip fails on the field the API had just
+ * handed over. The backend's own suite caught that the day the block was added.
+ *
+ * `used_by` is on the list and is emitted by nothing, so *who* redeemed a coupon
+ * is unanswerable; it is refused here so a client cannot discover the field by
+ * having a write accepted.
+ */
+const COUPON_READ_ONLY = [
+  "id",
+  "usage_count",
+  "used_by",
+  "date_created",
+  "date_modified",
+  "restrictions",
+];
+
+/** The four, mirroring `RESTRICTION_FIELDS` in lib/coupon-status.ts. */
+const COUPON_RESTRICTION_FIELDS = [
+  "product_ids",
+  "excluded_product_ids",
+  "product_categories",
+  "excluded_product_categories",
+];
+
+/** Which of the four name products and which name categories. */
+const COUPON_RESTRICTION_KIND = {
+  product_ids: "products",
+  excluded_product_ids: "products",
+  product_categories: "categories",
+  excluded_product_categories: "categories",
+};
+
+/** The code as it will actually be stored — `normalizeCode()` in lib/coupons.ts. */
+const normalizeCouponCode = (value) => String(value).trim().toLowerCase();
+
+const DECIMAL = /^-?\d+(\.\d+)?$/;
+
+/**
+ * `amount` — and `""` is **not** a value here.
+ *
+ * `"0.00"` is a real coupon, so a zero cannot mean absence on this field, which
+ * is the exact inverse of the two thresholds below. "Must not be negative." is
+ * the API's own sentence, quoted.
+ */
+const mustBeAmount = (value) => {
+  if (typeof value !== "string" || !DECIMAL.test(value)) return "Must be a number.";
+  return Number.parseFloat(value) < 0 ? "Must not be negative." : null;
+};
+
+/**
+ * A threshold — `minimum_amount` and `maximum_amount`.
+ *
+ * **Zero is an absence here and a value on `amount`.** Clearing is expressible
+ * three ways — `null`, `""` and `0` — all measured, which is why a bare number is
+ * accepted on these two and not on `amount`.
+ *
+ * A negative used to be the worst of both worlds: the clearing arm read `<= 0.0`,
+ * so `{"minimum_amount": "-1"}` answered 200 and **erased a real 15 000 DA
+ * minimum** while a negative `amount` was refused by name. Fixed in `ecom-temp`,
+ * and reproduced as fixed — a mock that swallowed it would let the panel ship the
+ * silent-erasure path again.
+ */
+const mustBeThreshold = (value) => {
+  if (value === null || value === "") return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "Must be a number.";
+    return value < 0 ? "Must not be negative." : null;
+  }
+  if (typeof value !== "string" || !DECIMAL.test(value)) return "Must be a number.";
+  return Number.parseFloat(value) < 0 ? "Must not be negative." : null;
+};
+
+/**
+ * `usage_limit`, `usage_limit_per_user`, `limit_usage_to_x_items` — a whole
+ * number or null, and null is "no limit" rather than zero.
+ *
+ * **The negative refusal here is shaped, not measured.** Nothing published a
+ * figure for what a negative usage limit does; the two money fields above were
+ * measured and these were not. Refusing is the conservative direction — a control
+ * built against it sends nothing worse to the shop — and it is flagged rather
+ * than presented as measurement.
+ */
+const mustBeCount = (value) => {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value)) return "Must be a whole number.";
+  return value < 0 ? "Must not be negative." : null;
+};
+
+/**
+ * `date_expires`, and **the two refusals are different sentences on purpose**:
+ * `31/12/2026` is the wrong notation and `2026-02-30` is a date that does not
+ * exist. Measured as two, and a mock that answered one message for both would let
+ * a form print "check the format" at somebody who typed a real-looking February
+ * 30th.
+ *
+ * The full ISO form is accepted as well as `Y-m-d` — measured — which is what lets
+ * a client post back what it was given. What it is *read* as is the other half of
+ * the asymmetry, and `applyCouponWrites()` below is where that happens.
+ */
+const mustBeExpiry = (value) => {
+  if (value === null || value === "") return null; // clears the expiry
+  if (typeof value !== "string") return "Must be a date in YYYY-MM-DD form.";
+
+  const day = value.slice(0, 10);
+  if (!YMD.test(day)) return "Must be a date in YYYY-MM-DD form.";
+
+  const [year, month, date] = day.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, date));
+  const real =
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === date;
+  return real ? null : "That date does not exist.";
+};
+
+const mustBeEmails = (value) =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? null
+    : "Must be a list of email addresses.";
+
+const COUPON_FIELD_RULES = {
+  code: mustBeText,
+  // `trash` is readable and **not writable** — a coupon is trashed by DELETE,
+  // exactly as a product is, which is why this list is the filterable pair.
+  status: mustBeOneOf(COUPON_STATUSES),
+  discount_type: mustBeOneOf(DISCOUNT_TYPES),
+  amount: mustBeAmount,
+  description: mustBeText,
+  date_expires: mustBeExpiry,
+  minimum_amount: mustBeThreshold,
+  maximum_amount: mustBeThreshold,
+  usage_limit: mustBeCount,
+  usage_limit_per_user: mustBeCount,
+  limit_usage_to_x_items: mustBeCount,
+  individual_use: mustBeFlag,
+  free_shipping: mustBeFlag,
+  exclude_sale_items: mustBeFlag,
+  email_restrictions: mustBeEmails,
+  product_ids: mustBeIds,
+  excluded_product_ids: mustBeIds,
+  product_categories: mustBeIds,
+  excluded_product_categories: mustBeIds,
+};
+
+/**
+ * What a restriction id may name: the same rows the pickers offer, so a form
+ * cannot commit a selection its own picker could not have made.
+ */
+const eligibleProductIds = () => new Set(listed().map((product) => product.id));
+const eligibleCategoryIds = () => new Set(CATEGORIES.map((category) => category.id));
+
+/**
+ * Read a write body, validating as it goes.
+ *
+ * The gates are in the order the API applies them, so the reason on screen is the
+ * reason the server would have given:
+ *
+ *   1. every bad field at once   400 `details.fields` — read-only keys, unknown
+ *                                keys and invalid values in one object, because
+ *                                the form renders one message per control
+ *   2. **`amount` on a POST**    part of the same pass, and therefore *before*
+ *                                the uniqueness check — measured, and the reason
+ *                                a duplicate code with no amount reports only the
+ *                                amount
+ *   3. the restriction ids       400 per field, naming the offending ids
+ *   4. a duplicate code          409 `details.code` — the caller's job, below
+ *
+ * **The ids were stored blind before this existed**: `{"product_ids": [999999]}`
+ * answered 200 and the coupon then applied to nothing while looking, in every
+ * response and on every screen, exactly like a coupon that worked. Reads stay
+ * tolerant — `restrictionsFor()` above keeps a stale id with `missing: true` —
+ * because validating writes cannot make reads total.
+ *
+ * A body that is not an object at all is read as `{}` rather than refused, which
+ * makes `PATCH` with no body the same 200 no-op `PATCH {}` is. That is the one
+ * forgiving reading here and it is unmeasured; it is the shape the measured
+ * no-op implies, and it is written down rather than left to be discovered.
+ */
+function readCouponBody(body, creating) {
+  const source =
+    body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (COUPON_READ_ONLY.includes(key)) {
+      // Refused, **not** dropped. See `COUPON_READ_ONLY`.
+      fields[key] = "Read-only.";
+      continue;
+    }
+    const rule = COUPON_FIELD_RULES[key];
+    if (rule === undefined) {
+      // `maximum_discount` lands here, which is what "refused by name" means:
+      // WooCommerce has no such field, and `maximum_amount` caps the cart rather
+      // than the discount.
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem === null) writes[key] = value;
+    else fields[key] = problem;
+  }
+
+  if (creating) {
+    // Measured: required, and checked in this pass rather than after the
+    // uniqueness check.
+    if (!("amount" in writes) && fields.amount === undefined) fields.amount = "Required.";
+    /*
+     * **`code` being required is an inference, not a measurement.** Nothing
+     * published a refusal for a POST without one. A coupon's code *is* its
+     * `post_title` and the duplicate check runs on it, so a codeless coupon
+     * would collide with the next codeless coupon — but the API has not been
+     * seen to say so. Refusing is the conservative direction and it is flagged
+     * here rather than presented as measured.
+     */
+    const code = "code" in writes ? normalizeCouponCode(writes.code) : "";
+    if (code === "" && fields.code === undefined) fields.code = "Required.";
+  }
+
+  for (const field of COUPON_RESTRICTION_FIELDS) {
+    if (!(field in writes)) continue;
+    const products = COUPON_RESTRICTION_KIND[field] === "products";
+    const known = products ? eligibleProductIds() : eligibleCategoryIds();
+    const unknown = writes[field].filter((id) => !known.has(id));
+    if (unknown.length === 0) continue;
+    // Named, because "one of these ids is wrong" is not something a person can
+    // act on when the field holds twenty of them.
+    fields[field] = products
+      ? `No product was found for: ${unknown.join(", ")}.`
+      : `No category was found for: ${unknown.join(", ")}.`;
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return {
+      error: invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields),
+    };
+  }
+  return { writes };
+}
+
+/** A decimal string, which is how every money field on a coupon reads back. */
+const decimal = (value) => Number.parseFloat(String(value)).toFixed(2);
+
+/**
+ * The stored row after a write, and the three normalisations that make a read
+ * differ from what was sent.
+ *
+ *   `code`         folded. `BRIEF-TEST-99` comes back `brief-test-99`, which is
+ *                  why the form folds as the user types.
+ *   thresholds     a zero **stores as null**, so `"0.00"` can never be read back
+ *                  from `minimum_amount` — the inverse of `amount`, on the same
+ *                  object.
+ *   `date_expires` written `Y-m-d`, read back **full ISO**. This is the asymmetry
+ *                  that silently deletes a date: an `<input type="date">` bound
+ *                  to the response renders empty, and the next save posts `""`,
+ *                  which clears it. A mock that echoed `Y-m-d` back would make
+ *                  `expiryInputValue()` look like defensive padding.
+ *
+ * No clock: `date_modified` keeps its seeded value through a write, the way a
+ * product's and an order's do, because a screenshot has to be byte-stable.
+ */
+function applyCouponWrites(current, writes) {
+  const next = { ...current };
+
+  for (const [key, value] of Object.entries(writes)) {
+    switch (key) {
+      case "code":
+        next.code = normalizeCouponCode(value);
+        break;
+      case "amount":
+        next.amount = decimal(value);
+        break;
+      case "minimum_amount":
+      case "maximum_amount":
+        next[key] =
+          value === null || value === "" || Number.parseFloat(String(value)) === 0
+            ? null
+            : decimal(value);
+        break;
+      case "date_expires":
+        next.date_expires =
+          value === null || value === ""
+            ? null
+            : `${String(value).slice(0, 10)}T00:00:00+00:00`;
+        break;
+      default:
+        next[key] = value;
+    }
+  }
+
+  return next;
+}
+
+/**
+ * The uniqueness check, over **every** coupon this process can see including the
+ * trashed ones.
+ *
+ * That is the whole difference between the two deletes: trashing is reversible
+ * and keeps the code, so recreating with it is a 409; `?force=true` is permanent
+ * and frees it. The 409 carries the **lower-cased** form, because the API folds
+ * on save and the check runs against the folded value — so `BIENVENUE10` collides
+ * with `bienvenue10` and the message names a code the person recognises.
+ */
+function couponCodeConflict(code, exceptId) {
+  const taken = allCoupons().find((row) => row.id !== exceptId && row.code === code);
+  return taken === undefined
+    ? null
+    : conflict("That coupon code is already in use.", { code });
+}
+
+/**
+ * A coupon as `POST /coupons` starts it, before the body is applied.
+ *
+ * `status` defaults to `publish`, which is WooCommerce's own default for a
+ * created post and is what the form always sends anyway. `usage_count` starts at
+ * 0 and no route here can move it — redemption is `POST /cart/coupons`, on the
+ * storefront — which is why the two non-zero fixtures are seeded rather than
+ * written.
+ */
+const blankCoupon = (id) => ({
+  id,
+  code: "",
+  status: "publish",
+  discount_type: "percent",
+  amount: "0.00",
+  description: "",
+  date_expires: null,
+  minimum_amount: null,
+  maximum_amount: null,
+  usage_limit: null,
+  usage_limit_per_user: null,
+  limit_usage_to_x_items: null,
+  usage_count: 0,
+  individual_use: false,
+  free_shipping: false,
+  exclude_sale_items: false,
+  product_ids: [],
+  excluded_product_ids: [],
+  product_categories: [],
+  excluded_product_categories: [],
+  email_restrictions: [],
+  // The fixture epoch, because there is no clock. Every coupon a process creates
+  // carries the same stamp, which is the price of a byte-stable screenshot.
+  date_created: iso(0),
+  date_modified: null,
+});
+
+function createCoupon(body) {
+  const parsed = readCouponBody(body, true);
+  if (parsed.error) return parsed.error;
+
+  const code = normalizeCouponCode(parsed.writes.code);
+  const clash = couponCodeConflict(code, null);
+  if (clash !== null) return clash;
+
+  const id = state.nextCouponId++;
+  const created = applyCouponWrites(blankCoupon(id), parsed.writes);
+  state.coupons.set(id, created);
+  state.createdCoupons = [id, ...state.createdCoupons];
+
+  // `restrictions` is emitted by POST as well as by GET — which is exactly what
+  // makes it the round-trip trap it is.
+  return ok(withRestrictions(created));
+}
+
+function patchCoupon(current, body) {
+  const parsed = readCouponBody(body, false);
+  if (parsed.error) return parsed.error;
+
+  /*
+   * **`PATCH {}` is a 200 no-op**, and this is the line that says so. A product's
+   * `{}` is a 400 that names nothing; a coupon's is the coupon back unchanged.
+   * Three collections, three rules — the third is an order's COD, which
+   * round-trips whole. A mock that shared one rule between them would make two of
+   * the three screens wrong about their own save button.
+   */
+  if (Object.keys(parsed.writes).length === 0) return ok(withRestrictions(current));
+
+  if ("code" in parsed.writes) {
+    const clash = couponCodeConflict(normalizeCouponCode(parsed.writes.code), current.id);
+    if (clash !== null) return clash;
+  }
+
+  const next = applyCouponWrites(current, parsed.writes);
+  state.coupons.set(current.id, next);
+  return ok(withRestrictions(next));
+}
+
+/**
+ * `DELETE /coupons/{id}`, and `?force=true`.
+ *
+ * **Two acts with different consequences, answering identical bodies.** Nothing
+ * in the response distinguishes them — the panel knows only because it knows what
+ * it asked for, which is why the permanent path sits behind a confirmation. The
+ * difference is visible on the *next* request and nowhere else:
+ *
+ *   trash          the coupon leaves every listing, `GET /coupons/{id}` is a
+ *                  **200 with `status: "trash"`**, and the code is still taken
+ *   ?force=true    `GET /coupons/{id}` is a **404** — the only path to one — and
+ *                  the code is free to be used again
+ *
+ * Trashing is idempotent and never escalates: a second DELETE on an already
+ * trashed coupon is the same 200 and does not become permanent.
+ */
+function deleteCoupon(current, params) {
+  if (BOOLEANS.get(params.get("force") ?? "") === true) {
+    state.coupons.delete(current.id);
+    state.createdCoupons = state.createdCoupons.filter((id) => id !== current.id);
+    state.couponsGone.add(current.id);
+  } else {
+    state.coupons.set(current.id, { ...current, status: "trash" });
+  }
+  return ok({ id: current.id, deleted: true });
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -4687,7 +5512,7 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
    * silently reads is worse than a 404, because a screen would look like it had
    * saved.
    */
-  const WRITES = ["orders", "shipments", "payments", "products", "inventory"];
+  const WRITES = ["orders", "shipments", "payments", "products", "inventory", "coupons"];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
   if (segments.length === 2 && collection === "auth" && second === "me") {
@@ -4894,10 +5719,23 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     case "product-categories":
-      // Paginated — the panel asks for `per_page=100` — and flat, with `parent`
-      // carrying the tree and `count` the unfiltered usage the facet's own
-      // counts are merged against.
-      return collectionOf(CATEGORIES, {});
+      /*
+       * **The list only, and `/product-categories/{id}` is a 404 on purpose.**
+       *
+       * lib/api/allowlist.ts:63 is `rule("/product-categories", "GET")` and
+       * carries no id rule, so the panel's own proxy answers `{allowed: false,
+       * reason: "path"}` for a single category — the same position `POST
+       * /payments` and `POST /products` are in, and held to the same rule here:
+       * a fixture that answered would let a screen resolve one category by id,
+       * render green against this harness, and 404 at the proxy in production.
+       *
+       * The vocabulary is fetched whole (`per_page=100`) and merged, which is
+       * what the facet's counts are merged against, so nothing needs the detail.
+       *
+       * Paginated and flat, with `parent` carrying the tree and `count` the
+       * unfiltered usage.
+       */
+      return segments.length === 1 ? collectionOf(CATEGORIES, {}) : notFound();
 
     case "attributes": {
       const attributeOf = () => ATTRIBUTES.find((a) => a.id === numericId(second));
@@ -4920,10 +5758,22 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         return page.error ?? ok(page.rows, page.meta);
       }
 
-      if (second !== undefined) {
-        const attribute = attributeOf();
-        return attribute === undefined ? notFound() : ok(attribute);
-      }
+      /*
+       * **`/attributes/{id}` is a 404, and only `/attributes/{id}/terms` is
+       * served.** lib/api/allowlist.ts:64-65 carries `/attributes` and
+       * `/attributes/\d+/terms` and nothing between them, so a single attribute
+       * is refused by the panel's own proxy — `{allowed: false, reason: "path"}`.
+       *
+       * The route may well exist at the API; the allowlist is a statement about
+       * what this panel may reach, not about what the shop has. Either way a
+       * screen built on it would render here and fail at the proxy, which is the
+       * same reason `POST /payments` is unreachable in this file even though it
+       * is the one write the payments API really offers.
+       *
+       * The list above carries `slug` and `taxonomy` on every row, so nothing
+       * needs to resolve one attribute by id to tell the two apart.
+       */
+      if (second !== undefined) return notFound();
 
       // Unpaginated, like /locations/wilayas: the panel fetches this with no
       // params at all, and a default `per_page` of 10 would silently drop the
@@ -5079,10 +5929,53 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       }
     }
 
-    case "coupons":
-      return collectionOf(COUPONS, {
-        detail: (coupon) => ({ ...coupon, restrictions: restrictionsFor(coupon) }),
-      });
+    case "coupons": {
+      // Depth is stated here, the way `/products` and `/orders` state theirs. A
+      // coupon has no sub-resource at all: the two picker routes are siblings.
+      if (segments.length > 2) return notFound();
+
+      if (second === undefined) {
+        /*
+         * **`POST /coupons` is served where `POST /products` is a 404**, and the
+         * difference is deliberate on both sides. lib/api/allowlist.ts:114-129
+         * carries the reason: this screen really does create, because a coupon
+         * has no counterpart to a product's variations, media or option sets to
+         * leave half-built behind an empty object.
+         */
+        if (method === "POST") return createCoupon(body);
+        return method === "GET" ? couponsListing(searchParams) : notFound();
+      }
+
+      /*
+       * Both pickers are matched **before** the id branch and by name. Ordering
+       * is not what makes that safe — `numericId` refuses a word, so they could
+       * never be read as ids — but a named match is what keeps
+       * `/coupons/anything-else` a 404 rather than something that falls through.
+       * GET only: the allowlist gives them no other verb.
+       */
+      if (second === "eligible-products") {
+        return method === "GET" ? eligibleProductsListing(searchParams) : notFound();
+      }
+      if (second === "eligible-categories") {
+        return method === "GET" ? eligibleCategoriesListing(searchParams) : notFound();
+      }
+
+      // The whole collection, not the listed part: a trashed coupon answers 200
+      // with `status: "trash"` here and appears in no listing at all.
+      const row = couponById(numericId(second));
+      if (row === undefined) return notFound();
+
+      switch (method) {
+        case "GET":
+          return ok(withRestrictions(row));
+        case "PATCH":
+          return patchCoupon(row, body);
+        case "DELETE":
+          return deleteCoupon(row, searchParams);
+        default:
+          return notFound();
+      }
+    }
 
     default:
       return notFound();

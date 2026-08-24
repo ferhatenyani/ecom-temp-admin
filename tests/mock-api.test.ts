@@ -78,7 +78,22 @@ import {
   movementSummary,
 } from "@/lib/api/schemas/inventory";
 import { ALL_REASONS } from "@/lib/movement-reason";
-import { coupon, couponDetail, couponList } from "@/lib/api/schemas/coupon";
+import {
+  coupon,
+  couponDetail,
+  couponList,
+  eligibleCategoryList,
+  eligibleProductList,
+} from "@/lib/api/schemas/coupon";
+import { COUPON_STATUSES, DISCOUNT_TYPES } from "@/lib/coupon-status";
+import {
+  expiryInputValue,
+  missingRefs,
+  normalizeCode,
+  refLabel,
+  threshold,
+  usage,
+} from "@/lib/coupons";
 
 function get(path: string, query = ""): MockResponse {
   return respond("GET", `${BASE_PATH}${path}`, new URLSearchParams(query));
@@ -2489,8 +2504,9 @@ describe("GET /inventory", () => {
 
 describe("GET /coupons", () => {
   it("parses the list, and keeps zero and null apart", () => {
+    // Five listed: the trashed one is in no listing at all.
     const { data, meta } = parseList(couponList, get("/coupons", "per_page=100"));
-    expect(meta.total).toBe(4);
+    expect(meta.total).toBe(5);
     // `"0.00"` is a real coupon; a threshold of zero is stored as null and can
     // never read back as `"0.00"`. Both directions on one object.
     expect(data.some((row) => row.amount === "0.00" && row.free_shipping)).toBe(true);
@@ -2510,6 +2526,550 @@ describe("GET /coupons", () => {
     // The list schema still parses a detail body — loose objects — which is why
     // the absence above is asserted rather than inferred from a parse failure.
     expect(parse(coupon, get("/coupons/302")).data.code).toBe("livraison");
+  });
+
+  /**
+   * **The vocabularies are written out in the mock and imported here**, which is
+   * the arrangement `PRODUCT_TYPES` is held to: the mock imports nothing, so the
+   * only thing keeping the two copies together is an assertion.
+   */
+  it("agrees with lib/coupon-status.ts about the two vocabularies", () => {
+    // Every discount type the panel knows is writable here, and a fourth is not.
+    for (const discount_type of DISCOUNT_TYPES) {
+      expect(write("PATCH", "/coupons/301", { discount_type }).status).toBe(200);
+    }
+    expect(write("PATCH", "/coupons/301", { discount_type: "grouped" }).status).toBe(400);
+
+    // And nothing in the shop carries a type outside the three.
+    const { data } = parseList(couponList, get("/coupons", "per_page=100"));
+    expect(data.every((row) => (DISCOUNT_TYPES as readonly string[]).includes(row.discount_type)))
+      .toBe(true);
+
+    // The filterable pair — writable and filterable are the same two here, and
+    // `trash` is neither, because a coupon is trashed by DELETE and never by a
+    // PATCH. That is the exact split products has.
+    for (const status of COUPON_STATUSES) {
+      expect(get("/coupons", `status=${status}`).status).toBe(200);
+      expect(write("PATCH", "/coupons/301", { status }).status).toBe(200);
+    }
+    expect(write("PATCH", "/coupons/301", { status: "trash" }).status).toBe(400);
+
+    // The refusal names them in the panel's own order, empty string first.
+    const refused = apiError(get("/coupons", "status=trash"));
+    expect(refused.params?.status).toBe("status is not one of , publish, and draft");
+  });
+
+  /**
+   * **Three states, and the first sends nothing.** Absent is not a synonym for
+   * either value — it is publish *and* draft — which is why the segmented
+   * control's first segment omits the parameter rather than sending an empty one.
+   * While the mock passed neither `search` nor `status` to its collection helper,
+   * every one of these four requests answered with the same rows.
+   */
+  it("filters by status in three states, the first of which sends nothing", () => {
+    const totals = (query: string) =>
+      parseList(couponList, get("/coupons", `per_page=100&${query}`)).meta.total;
+
+    const all = totals("");
+    const published = totals("status=publish");
+    const drafted = totals("status=draft");
+
+    expect(published).toBe(4);
+    expect(drafted).toBe(1);
+    // The default carries both, and is therefore neither of them.
+    expect(all).toBe(published + drafted);
+    expect(all).not.toBe(published);
+    expect(all).not.toBe(drafted);
+
+    // `?status=` with an empty value is the same request as no parameter.
+    expect(totals("status=")).toBe(all);
+  });
+
+  /**
+   * `?status=trash` is a **400** while a trashed coupon reads back with a **200**,
+   * which is why `READABLE_COUPON_STATUSES` is wider than `COUPON_STATUSES`. A
+   * schema without `trash` would fail at its own boundary the moment somebody
+   * trashed a coupon and the detail reloaded underneath them.
+   */
+  it("refuses trash as a filter and serves it as a row", () => {
+    expect(get("/coupons", "status=trash").status).toBe(400);
+
+    const { data } = parse(couponDetail, get("/coupons/306"));
+    expect(data.status).toBe("trash");
+    // And it is in no listing, under any of the three states.
+    for (const query of ["", "status=publish", "status=draft"]) {
+      const rows = parseList(couponList, get("/coupons", `per_page=100&${query}`)).data;
+      expect(rows.some((row) => row.id === 306)).toBe(false);
+    }
+  });
+
+  /**
+   * **The code only.** Deliberately narrower than WordPress's own `s`, which
+   * would read the description too: nothing measured says which fields this
+   * search covers, and the customers collection is why this file will not guess
+   * the wider answer.
+   */
+  it("searches the code, and narrows to it", () => {
+    const search = (term: string) =>
+      parseList(couponList, get("/coupons", `per_page=100&search=${term}`));
+
+    expect(search("livraison").meta.total).toBe(1);
+    expect(search("livraison").data[0].code).toBe("livraison");
+    // A prefix matches, because it is a substring search.
+    expect(search("bienvenue").meta.total).toBe(1);
+    // And a word that appears only in a description does not.
+    expect(search("fidélité").meta.total).toBe(0);
+    expect(search("zzz").meta.total).toBe(0);
+  });
+
+  /**
+   * **Validated and then ignored**, which is the `/customers` shape rather than
+   * the `/orders` one. app/[locale]/(panel)/coupons/query.ts names these four as
+   * the set the 400 enumerates, and `queryFromParams()` carries a guard whose
+   * only purpose is to stop a stale URL provoking that 400 — a guard that could
+   * have been deleted with nothing noticing while this mock answered 200.
+   */
+  it("validates orderby and then ignores it", () => {
+    const ids = (query: string) =>
+      parseList(couponList, get("/coupons", `per_page=100&${query}`)).data.map((r) => r.id);
+
+    for (const orderby of ["date", "id", "code", "usage"]) {
+      expect(get("/coupons", `orderby=${orderby}`).status).toBe(200);
+      expect(ids(`orderby=${orderby}&order=asc`)).toEqual(ids(""));
+    }
+
+    const refused = apiError(get("/coupons", "orderby=nonsense"));
+    expect(refused.status).toBe(400);
+    expect(refused.params?.orderby).toContain("orderby is not one of");
+    expect(get("/coupons", "order=sideways").status).toBe(400);
+  });
+
+  it("refuses a per_page over 100 rather than clamping it", () => {
+    expect(get("/coupons", "per_page=101").status).toBe(400);
+    expect(get("/coupons/eligible-products", "per_page=101").status).toBe(400);
+    expect(get("/coupons/eligible-categories", "per_page=101").status).toBe(400);
+  });
+
+  /**
+   * **The stale restriction, which is the fixture this branch exists for.**
+   *
+   * `missing` is on every restriction row rather than only the broken ones,
+   * because a client that filtered it out would silently delete the restriction
+   * the next time the form saved. No fixture had one, so the warning that says so
+   * had never been rendered.
+   */
+  it("resolves restrictions against the real collections, and keeps the stale ids", () => {
+    const { data } = parse(couponDetail, get("/coupons/305"));
+    const { product_ids: products, product_categories: categories } = data.restrictions;
+
+    expect(products).toHaveLength(2);
+    expect(categories).toHaveLength(2);
+
+    // The halves that resolve carry a real name off the real collection — not a
+    // number in French clothing, which is what the category arm used to emit.
+    expect(refLabel(products[0])).toEqual({ named: true, text: "Miel de jujubier, 500 g" });
+    expect(refLabel(categories[0])).toEqual({ named: true, text: "Tapis" });
+    expect(categories[0].slug).toBe("tapis");
+
+    // The halves that do not resolve keep their place, and say nothing they
+    // cannot know: no name, no status, no slug.
+    expect(products[1].missing).toBe(true);
+    expect(products[1].name).toBeNull();
+    expect(products[1]).not.toHaveProperty("status");
+    expect(categories[1].missing).toBe(true);
+    expect(categories[1]).not.toHaveProperty("slug");
+
+    // Which is what the form's warning is built from: two rows, across two fields.
+    expect(missingRefs(data.restrictions).map((ref) => ref.id)).toEqual([8842, 8843]);
+  });
+
+  /**
+   * `usage_count` is 0 on the four original fixtures and no route can move it, so
+   * the *used* and *exhausted* renderings had no data that could reach them.
+   */
+  it("reaches the used and the exhausted renderings", () => {
+    const used = usage(parse(coupon, get("/coupons/305")).data);
+    expect(used).toEqual({ limited: true, count: 37, limit: 50, exhausted: false });
+
+    const spent = usage(parse(coupon, get("/coupons/306")).data);
+    expect(spent.limited && spent.exhausted).toBe(true);
+
+    // And the four originals are untouched, which is what lib/coupons.ts and
+    // lib/api/schemas/coupon.ts both say about them.
+    for (const id of [301, 302, 303, 304]) {
+      expect(parse(coupon, get(`/coupons/${id}`)).data.usage_count).toBe(0);
+    }
+  });
+});
+
+/**
+ * ── The two picker routes ────────────────────────────────────────────────────
+ *
+ * They exist because `/products` and `/product-categories` are
+ * `ac_manage_products`, which a **Marketing Manager does not hold** while holding
+ * `ac_manage_coupons` — one of the three roles that can manage coupons, and the
+ * one whose job coupons are. Both schemas were unexercised by anything until now.
+ */
+describe("the coupon pickers", () => {
+  it("serves eligible products as strictly less than the catalogue", () => {
+    const { data, meta } = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "per_page=100"),
+    );
+
+    // The listed catalogue: a draft is pickable, a trashed product is not.
+    expect(meta.total).toBe(38);
+    expect(data.some((row) => row.status === "draft")).toBe(true);
+    expect(data.some((row) => row.status === "trash")).toBe(false);
+
+    /*
+     * **Four fields and no fifth.** The whole point of the route is that it
+     * discloses less than the catalogue, so a price or a stock figure leaking
+     * through would erase the reason it was added rather than widening
+     * `ac_manage_products`.
+     */
+    for (const row of data) {
+      expect(Object.keys(row).sort()).toEqual(["id", "name", "sku", "status"]);
+    }
+  });
+
+  /**
+   * **The SKU search, which WordPress's own `s` does not do**: it reads the title
+   * and the content, so a shop that knows a product by `AC-CAT-0104` would type
+   * it and get an empty picker.
+   */
+  it("finds an eligible product by its SKU as well as its name", () => {
+    const bySku = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "search=AC-CAT-0104"),
+    );
+    expect(bySku.meta.total).toBe(1);
+    expect(bySku.data[0].id).toBe(104);
+
+    const byName = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "search=burnous"),
+    );
+    expect(byName.data[0].id).toBe(104);
+
+    // Folded, like every other search here: the collation behind them is the same.
+    expect(
+      parseList(eligibleProductList, get("/coupons/eligible-products", "search=THE VERT"))
+        .meta.total,
+    ).toBe(
+      parseList(eligibleProductList, get("/coupons/eligible-products", "search=thé vert"))
+        .meta.total,
+    );
+  });
+
+  it("serves eligible categories joined to the real vocabulary", () => {
+    const { data, meta } = parseList(
+      eligibleCategoryList,
+      get("/coupons/eligible-categories", "per_page=100"),
+    );
+    expect(meta.total).toBe(7);
+
+    const tapis = data.find((row) => row.id === 13);
+    expect(tapis?.name).toBe("Tapis");
+    expect(tapis?.parent).toBe(12);
+
+    // Five fields: `description` is on the vocabulary and not on this row.
+    for (const row of data) {
+      expect(Object.keys(row).sort()).toEqual(["count", "id", "name", "parent", "slug"]);
+    }
+
+    expect(
+      parseList(eligibleCategoryList, get("/coupons/eligible-categories", "search=tapis"))
+        .meta.total,
+    ).toBe(1);
+  });
+
+  /** GET only. The allowlist gives these two no other verb. */
+  it("refuses every verb but GET on both pickers", () => {
+    expect(write("POST", "/coupons/eligible-products", {}).status).toBe(404);
+    expect(write("DELETE", "/coupons/eligible-categories").status).toBe(404);
+    // And neither has a sub-resource.
+    expect(get("/coupons/eligible-products/1").status).toBe(404);
+  });
+});
+
+/**
+ * ── The coupon writes ────────────────────────────────────────────────────────
+ *
+ * Every one of these was a 404 before this branch, so the create form, the save
+ * button and both delete paths were verified against nothing at all.
+ */
+describe("the coupon writes", () => {
+  const CREATE = { code: "ETE-2026", amount: "5" };
+
+  it("creates a coupon, folding the code as it stores it", () => {
+    const { data } = parse(couponDetail, write("POST", "/coupons", CREATE));
+
+    // `BRIEF-TEST-99` comes back `brief-test-99`: the API folds on save, which is
+    // why the form folds as the user types.
+    expect(data.code).toBe(normalizeCode(CREATE.code));
+    expect(data.code).toBe("ete-2026");
+    expect(data.amount).toBe("5.00");
+    // A created coupon carries `restrictions`, exactly as a GET does.
+    expect(data.restrictions.product_ids).toEqual([]);
+
+    // And it is readable, and listed.
+    const listed = parseList(couponList, get("/coupons", "per_page=100"));
+    expect(listed.data.some((row) => row.id === data.id)).toBe(true);
+    expect(parse(coupon, get(`/coupons/${data.id}`)).data.code).toBe("ete-2026");
+  });
+
+  /**
+   * **`amount` is required, and validated before the uniqueness check.** The
+   * order is measured and it is the whole assertion: a duplicate code with a
+   * missing amount reports only the amount.
+   */
+  it("requires amount on create, and checks it before uniqueness", () => {
+    const missing = apiError(write("POST", "/coupons", { code: "quelque-chose" }));
+    expect(missing.status).toBe(400);
+    expect(missing.fields).toEqual({ amount: "Required." });
+
+    // The same body with a code that *would* collide is still the 400, and names
+    // the amount alone — never the conflict.
+    const both = apiError(write("POST", "/coupons", { code: "BIENVENUE10" }));
+    expect(both.status).toBe(400);
+    expect(both.fields).toEqual({ amount: "Required." });
+    expect(both.details.code).toBeUndefined();
+  });
+
+  /**
+   * **A duplicate code is a 409 under `details.code`, carrying the LOWER-CASED
+   * form.** The API folds on save and the duplicate check runs against the folded
+   * value, so `BIENVENUE10` collides with the stored `bienvenue10` — and the
+   * message names the second, which is the code the person will recognise.
+   */
+  it("refuses a duplicate code with the folded form under details.code", () => {
+    const refused = apiError(write("POST", "/coupons", { code: "BIENVENUE10", amount: "5" }));
+    expect(refused.status).toBe(409);
+    expect(refused.details.code).toBe("bienvenue10");
+    expect(refused.details.code).toBe(normalizeCode("BIENVENUE10"));
+    // Not `details.fields` — the same shape a duplicate SKU has on products.
+    expect(refused.fields).toBeNull();
+
+    // Nothing was created.
+    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(5);
+
+    // And a PATCH onto another coupon's code is the same refusal.
+    const collided = apiError(write("PATCH", "/coupons/302", { code: "BIENVENUE10" }));
+    expect(collided.status).toBe(409);
+    expect(collided.details.code).toBe("bienvenue10");
+    // While a coupon may keep its own code.
+    expect(parse(couponDetail, write("PATCH", "/coupons/301", { code: "bienvenue10" })).data.code)
+      .toBe("bienvenue10");
+  });
+
+  /**
+   * **`PATCH {}` is a 200 no-op, not a 400.** Three collections, three rules: a
+   * coupon's `{}` is a no-op, a product's is a 400 that names nothing, and an
+   * order's COD round-trips whole. A mock that shared one rule between them would
+   * make two of the three screens wrong about their own save button.
+   */
+  it("answers an empty patch with a 200 no-op", () => {
+    const before = parse(couponDetail, get("/coupons/301")).data;
+    const { data } = parse(couponDetail, write("PATCH", "/coupons/301", {}));
+    expect(data).toEqual(before);
+
+    // A product's, for contrast, is a 400 with no `details` at all.
+    expect(write("PATCH", "/products/104", {}).status).toBe(400);
+  });
+
+  /**
+   * **Read-only and refused, which is the opposite of a product's rule** — and
+   * `restrictions` is the trap: it is emitted on every single-coupon response,
+   * including the answer to the write itself, so "save what I was given" fails on
+   * the field the API had just handed over.
+   */
+  it("refuses every read-only field by name", () => {
+    for (const [field, value] of [
+      ["id", 999],
+      ["usage_count", 5],
+      ["used_by", []],
+      ["date_created", "2026-01-01T00:00:00+00:00"],
+      ["date_modified", null],
+    ] as const) {
+      const refused = apiError(write("PATCH", "/coupons/301", { [field]: value }));
+      expect(refused.status).toBe(400);
+      expect(refused.fields).toHaveProperty(field);
+    }
+
+    // The whole GET body back, which is the round trip the form must not make.
+    const body = parse(couponDetail, get("/coupons/301")).data;
+    const refused = apiError(write("PATCH", "/coupons/301", body));
+    expect(refused.status).toBe(400);
+    expect(refused.fields).toHaveProperty("restrictions");
+  });
+
+  /** `maximum_discount` does not exist. Refused by name, so a client hears why. */
+  it("refuses an unknown field, maximum_discount included", () => {
+    const refused = apiError(write("PATCH", "/coupons/301", { maximum_discount: "50" }));
+    expect(refused.status).toBe(400);
+    expect(refused.fields).toEqual({ maximum_discount: "Unknown field." });
+    expect(apiError(write("PATCH", "/coupons/301", { nonsense: 1 })).fields)
+      .toEqual({ nonsense: "Unknown field." });
+  });
+
+  /**
+   * **400 per restriction field, naming the offending ids.** The ids used to be
+   * stored blind — `{"product_ids": [999999]}` answered 200 and the coupon then
+   * applied to nothing while looking, in every response and on every screen,
+   * exactly like a coupon that worked.
+   */
+  it("refuses restriction ids that resolve to nothing, and names them", () => {
+    const refused = apiError(
+      write("PATCH", "/coupons/301", { product_ids: [101, 999999] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.fields?.product_ids).toContain("999999");
+    // Named per field, so a form with four pickers can bind four messages.
+    const both = apiError(
+      write("PATCH", "/coupons/301", {
+        product_ids: [999999],
+        excluded_product_categories: [4242],
+      }),
+    );
+    expect(Object.keys(both.fields ?? {}).sort()).toEqual([
+      "excluded_product_categories",
+      "product_ids",
+    ]);
+
+    /*
+     * **The stale coupon's own body is refused**, which is the point of the
+     * fixture: reads stay tolerant and writes do not, so the form has to strip a
+     * missing ref rather than post it back.
+     */
+    const own = parse(couponDetail, get("/coupons/305")).data;
+    const echoed = apiError(write("PATCH", "/coupons/305", { product_ids: own.product_ids }));
+    expect(echoed.fields?.product_ids).toContain("8842");
+    // And the same field with the stale id removed is a 200.
+    expect(write("PATCH", "/coupons/305", { product_ids: [101] }).status).toBe(200);
+
+    // A draft is a legal restriction; a trashed product is not pickable.
+    expect(write("PATCH", "/coupons/301", { product_ids: [210] }).status).toBe(200);
+    expect(write("PATCH", "/coupons/301", { product_ids: [211] }).status).toBe(400);
+  });
+
+  /**
+   * **Two refusals, two sentences.** `31/12/2026` is the wrong notation and
+   * `2026-02-30` is a date that does not exist — measured as different messages,
+   * and a form printing "check the format" at somebody who typed a real-looking
+   * February 30th would be the mock's fault.
+   */
+  it("refuses a mis-formatted date and an impossible one differently", () => {
+    const format = apiError(write("PATCH", "/coupons/301", { date_expires: "31/12/2026" }));
+    const impossible = apiError(write("PATCH", "/coupons/301", { date_expires: "2026-02-30" }));
+
+    expect(format.status).toBe(400);
+    expect(impossible.status).toBe(400);
+    expect(format.fields?.date_expires).not.toBe(impossible.fields?.date_expires);
+    expect(impossible.fields?.date_expires).toContain("does not exist");
+  });
+
+  /**
+   * **The asymmetry that silently deletes a date.** Written `Y-m-d`, read back as
+   * full ISO — so a date input bound to the response renders empty, and the next
+   * save posts `""`, which clears it. `expiryInputValue()` is the repair, and it
+   * can only be verified against a mock that reproduces the asymmetry.
+   */
+  it("writes an expiry as Y-m-d and reads it back as full ISO", () => {
+    const { data } = parse(couponDetail, write("PATCH", "/coupons/301", {
+      date_expires: "2026-12-31",
+    }));
+    expect(data.date_expires).toBe("2026-12-31T00:00:00+00:00");
+
+    // Which no date input can display — and this is the function that repairs it.
+    expect(expiryInputValue(data.date_expires)).toBe("2026-12-31");
+
+    // The full ISO form is accepted back, so a client may post what it was given.
+    expect(
+      parse(couponDetail, write("PATCH", "/coupons/301", { date_expires: data.date_expires }))
+        .data.date_expires,
+    ).toBe("2026-12-31T00:00:00+00:00");
+
+    // And both clearing forms really clear it.
+    for (const cleared of [null, ""]) {
+      expect(
+        parse(couponDetail, write("PATCH", "/coupons/301", { date_expires: cleared }))
+          .data.date_expires,
+      ).toBeNull();
+    }
+  });
+
+  /**
+   * **Zero and null run in opposite directions on the same object.** A negative
+   * threshold used to be the worst of both: the clearing arm read `<= 0.0`, so
+   * `{"minimum_amount": "-1"}` answered 200 and erased a real 15 000 DA minimum
+   * while a negative `amount` was refused by name.
+   */
+  it("refuses negatives and folds a zero threshold to null", () => {
+    expect(apiError(write("PATCH", "/coupons/301", { amount: "-5" })).fields)
+      .toEqual({ amount: "Must not be negative." });
+    expect(apiError(write("PATCH", "/coupons/301", { minimum_amount: "-1" })).fields)
+      .toEqual({ minimum_amount: "Must not be negative." });
+    expect(apiError(write("PATCH", "/coupons/301", { usage_limit: -1 })).status).toBe(400);
+
+    // The minimum it would have erased is still there.
+    expect(parse(coupon, get("/coupons/301")).data.minimum_amount).toBe("2000.00");
+
+    // Zero clears, and can never be read back as `"0.00"` — all three forms.
+    for (const cleared of [0, "0", ""] as const) {
+      const { data } = parse(couponDetail, write("PATCH", "/coupons/301", {
+        minimum_amount: cleared,
+      }));
+      expect(data.minimum_amount).toBeNull();
+      expect(threshold(data.minimum_amount)).toEqual({ set: false });
+    }
+
+    // While `amount: "0.00"` is a real coupon on the very same object.
+    const { data } = parse(couponDetail, write("PATCH", "/coupons/301", { amount: "0" }));
+    expect(data.amount).toBe("0.00");
+  });
+
+  /**
+   * **Two acts with different consequences, answering identical bodies.** Trash
+   * is reversible and keeps the code; `?force=true` is permanent, frees the code,
+   * and is the only path to a 404.
+   */
+  it("trashes reversibly and forces permanently", () => {
+    const trashed = parse(deleteResult, write("DELETE", "/coupons/302"));
+    expect(trashed.data).toEqual({ id: 302, deleted: true });
+
+    // A trashed coupon reads back 200 with `status: "trash"` and leaves the list.
+    expect(parse(couponDetail, get("/coupons/302")).data.status).toBe("trash");
+    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(4);
+
+    // **It keeps its code**, so recreating with it is a 409.
+    const clash = apiError(write("POST", "/coupons", { code: "livraison", amount: "1" }));
+    expect(clash.status).toBe(409);
+    expect(clash.details.code).toBe("livraison");
+
+    // Trashing is idempotent and never escalates to permanent.
+    expect(write("DELETE", "/coupons/302").status).toBe(200);
+    expect(get("/coupons/302").status).toBe(200);
+
+    // `?force=true` answers the **identical body** and is visible only afterwards.
+    const forced = parse(deleteResult, write("DELETE", "/coupons/302", null, "force=true"));
+    expect(forced.data).toEqual(trashed.data);
+    expect(get("/coupons/302").status).toBe(404);
+
+    // And now the code is free.
+    const remade = parse(couponDetail, write("POST", "/coupons", {
+      code: "livraison",
+      amount: "1",
+    }));
+    expect(remade.data.code).toBe("livraison");
+  });
+
+  /** A coupon has no sub-resource, and an id that never existed is a 404. */
+  it("keeps everything else on the collection unreachable", () => {
+    expect(get("/coupons/999").status).toBe(404);
+    expect(get("/coupons/301/anything").status).toBe(404);
+    expect(write("PATCH", "/coupons", {}).status).toBe(404);
+    expect(write("POST", "/coupons/301", {}).status).toBe(404);
   });
 });
 
@@ -2631,6 +3191,19 @@ const COVERED = [
   "product",
   "customer",
   "inventory",
+  /*
+   * **`coupon` was on this list while naming none of its gaps**, and the list is
+   * the only thing that decides what "covered" means — so it meant the list and
+   * the detail, and the module's other three schemas were exercised by nothing.
+   * `eligibleProduct` and `eligibleCategory` described two routes that were 404s,
+   * and `restrictions` was served with every category id synthesised, so
+   * `missing: true` could not be produced at all on the half of the block that
+   * carries the most ids.
+   *
+   * Now: the list, the detail, both pickers, `POST`, `PATCH`, both deletes and
+   * every refusal each of them can answer. What is left is named below rather
+   * than left implied.
+   */
   "coupon",
   // Both moved out of UNCOVERED with the order detail's sub-resources: the mock
   // now serves `/shipping/providers`, an order's parcels and its payments, plus
@@ -2689,6 +3262,28 @@ describe("what the newly-covered modules still do not serve", () => {
     expect(get("/notifications/1").status).toBe(404);
     expect(get("/notifications/4100").status).toBe(404);
     expect(write("POST", "/notifications/4100/retry").status).toBe(404);
+  });
+
+  /**
+   * **What the coupon module still cannot express, now that its routes are all
+   * served.** Neither of these is a missing endpoint, and both are worth naming
+   * so "covered" does not quietly come to mean "complete":
+   *
+   *   `usage_count` cannot be **moved**. Redemption is `POST /cart/coupons`, on
+   *   the storefront, and no panel route touches it — so 305 and 306 carry their
+   *   counts as seeds and a screen can never watch one change.
+   *
+   *   `used_by` is on the API's read-only list and is emitted by nothing at all,
+   *   so *who* redeemed a coupon is unanswerable here for the same reason it is
+   *   unanswerable in the shop. The mock refuses it on write and never sends it,
+   *   which is the honest reproduction of a field that exists and says nothing.
+   */
+  it("leaves the coupon redemption story unanswerable, as the API does", () => {
+    expect(get("/cart/coupons").status).toBe(404);
+    expect(write("POST", "/cart/coupons", { code: "bienvenue10" }).status).toBe(404);
+
+    const { data } = parse(couponDetail, get("/coupons/301"));
+    expect(data).not.toHaveProperty("used_by");
   });
 });
 

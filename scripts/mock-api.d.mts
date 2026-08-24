@@ -33,9 +33,13 @@ export declare function respond(
 
 /**
  * Rebuild every mutable thing — order statuses, COD records, parcels, payments,
- * and the products a PATCH or a DELETE has rewritten — from the seeded baseline.
- * Runs once at module load; the unit suite calls it between tests so a write in
- * one cannot be read by another.
+ * the products a PATCH or a DELETE has rewritten, and the coupons a POST, a PATCH
+ * or either delete has — from the seeded baseline. Runs once at module load; the
+ * unit suite calls it between tests so a write in one cannot be read by another.
+ *
+ * A coupon is the one collection where a *create* is undone by this, which is
+ * what keeps `nextCouponId` handing out the same id in every process and a
+ * screenshot of a created coupon byte-stable.
  */
 export declare function resetState(): void;
 

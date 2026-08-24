@@ -129,6 +129,34 @@ const LOCALES = ["fr", "ar"];
  * one capture per screen is what this list is for. Capture it by name:
  *
  *     node scripts/capture.mjs /products/208
+ *
+ * `/coupons/303` is the coupon detail, chosen on the same rule as 1023 and 104:
+ * it is the richest of the six rather than the tidiest. A draft, so the status
+ * badge is not the neutral one every other row carries; two product restrictions
+ * and a category, so all four restriction sections have something to resolve; an
+ * expiry, which is the field whose read shape a date input cannot display; a
+ * `limit_usage_to_x_items`, which nothing else sets; and an 80-character unbroken
+ * email in `email_restrictions`, which is what the 340px overflow assertion has to
+ * catch on this screen.
+ *
+ * `/coupons/new` is the same form against an empty coupon and is a **different
+ * screen**, not a state of this one: no code, no id, a create button where the
+ * delete controls are, and every field at its default. It is the one route in the
+ * panel that renders a form with nothing behind it.
+ *
+ * **`/coupons/305` is deliberately not here, and it is this collection's `208`.**
+ * It is the only coupon carrying restriction ids that resolve to nothing — one
+ * product and one category — so it is the only route that renders the stale
+ * restriction warning, and until it existed that banner had never been captured
+ * at all. It is also the only coupon with a non-zero `usage_count`, so the *used*
+ * rendering of the allowance is on the same screen. A state, not a screen:
+ *
+ *     node scripts/capture.mjs /coupons/305
+ *
+ * `/coupons/306` is the trashed one — its banner and its permanent-delete path —
+ * and it is reachable by id and by no listing, which is the point of it:
+ *
+ *     node scripts/capture.mjs /coupons/306
  */
 const DEFAULT_ROUTES = [
   "/orders",
@@ -147,6 +175,8 @@ const DEFAULT_ROUTES = [
          node scripts/capture.mjs /inventory/103 /inventory/9032          */
   "/inventory/201",
   "/coupons",
+  "/coupons/303",
+  "/coupons/new",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
