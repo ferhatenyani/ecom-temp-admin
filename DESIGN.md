@@ -641,6 +641,27 @@ system, restyled per §1.
 5. **Stale / offline** — a visible marker carrying the age of the data, and every
    write control disabled with that same reason.
 
+   > **Amended on the customers branch: the marker is required wherever the data
+   > on screen can age, which is not every screen.**
+   >
+   > This used to read as an unconditional fifth state, and §8's checklist still
+   > asks for it on every page. That is right for anything holding a client cache
+   > — every list in the panel, and any detail with a refresh control or a write
+   > — because there the pixels can outlive the fetch that produced them.
+   >
+   > The customer detail is the first screen in the run where none of that is
+   > true: it is a Server Component with no writes, nothing polling, and no
+   > refresh control, so what is on screen is exactly as old as the navigation
+   > that fetched it and cannot drift from it. A banner reporting that age would
+   > be true and useless, and the half of the rule that does the real work —
+   > "every write control disabled with that same reason" — has nothing to
+   > disable. Its two paged sub-sections surface their own failure inline if the
+   > network goes while somebody is paging, which is the honest signal there.
+   >
+   > So: a screen that can hold data older than its own last fetch shows the
+   > marker. A screen that cannot says so in its own docblock, and this is the
+   > sentence it points at.
+
 ---
 
 ## 4. Motion

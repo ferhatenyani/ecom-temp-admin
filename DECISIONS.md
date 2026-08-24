@@ -20,7 +20,7 @@ than left to look like an oversight.
 [x]  2. Products — list
 [x]  3. Orders — detail
 [x]  4. Products — detail + form
-[ ]  5. Customers — list + detail
+[x]  5. Customers — list + detail
 [ ]  6. Inventory — list + detail
 [ ]  7. Coupons — list + form
 [ ]  8. Shipping
@@ -338,3 +338,153 @@ layer.
 - **Found, not fixed:** `ConfirmDialog` focuses its × button rather than Cancel,
   contradicting §3.1. Radix's `FocusScope` wins over `autoFocus`. Harmless —
   both are non-destructive — but it needs a second focus prop on `Modal`.
+
+
+---
+
+## 5. Customers — list + detail — 2026-08-24
+
+The first screen in the run where the peek default does not apply, and the first
+whose detail is a *report* rather than a form.
+
+- Layout — list: `PageHeader` + `PageBody width="full"`; `DataTable` at `md`+,
+  `RecordList` below, one `columns.tsx` feeding both.
+- Layout — detail: `PageBody width="split"` + `DetailGrid`. Main is the
+  statistics report, this customer's orders and their notification queue; the
+  aside is identity, consent and the two addresses.
+- Columns / sections: client · e-mail · phone · registered · id by default;
+  city, consent and modified behind the picker. `is_paying_customer` is a badge
+  beside the name rather than a column of its own — 4 of 16 carry it, **there is
+  no filter for it**, and under a header a sparse column reads as missing data.
+- Filters: **search, and nothing else, and the absence is the design.**
+  `query.ts` measures the whole parameter set — `search`, `orderby`, `order`,
+  pagination. No paying filter, no date range, no consent filter, and an unknown
+  parameter answers 200 with the full result set (`?role=administrator` returns
+  all 16 rows), so any other control would be indistinguishable from one that
+  works. No chip row either: with one filter the chip repeats the term already
+  visible in the box beside it.
+- Sorting: **none, and this is Orders' position rather than Products'.** The
+  first draft shipped `registered` and `user_email` as sortable headers; they
+  are removed. `orderby` is accepted and validated on this collection
+  (`?orderby=zzz` is a 400), and **nothing anywhere records a positive
+  control** — no measurement showing either value returns a different id
+  sequence from the unparameterised request. What `query.ts` records is that
+  `display_name` and `user_email` were byte-identical **to each other**, with a
+  genuine data explanation (every `display_name` is the username, every username
+  is the local part of the e-mail); two values agreeing with each other says
+  nothing about whether either agrees with the default order. Products ships
+  headers off five combinations re-measured after a backend repair; Orders ships
+  none for exactly this reason. `registered` stays in the default column set on
+  its own merits — the list is already in that order and it is worth seeing —
+  not as a control. `ORDERBY`, `ACCEPTED_ORDERBY` and the `queryFromParams`
+  guard all stay: a stale or hand-edited `?orderby=` must still not provoke a
+  400 the screen renders as an error. Passing no `onSortChange` also keeps
+  `aria-sort` off the headers, which the primitive gates on a handler existing.
+- Row click: **navigates. No peek drawer, and this is the first screen where the
+  default is wrong.** `lib/api/schemas/customer.ts:7-13` measures that the
+  detail is the row **plus `statistics`** — the first collection here where the
+  two routes disagree — so a free preview would show nothing the row lacks, and
+  a useful one costs a request per open against a 600/min budget shared across
+  every open tab. The identifying cell is therefore a real `<a href>`, which is
+  the keyboard path and the middle click the peek was providing. It lives only
+  in the table: both presentations are in the DOM at every width, so an anchor
+  in each would double every `a[href*="/customers/"]` the suite counts.
+- Detail data: page one of the orders and of the notification queue are fetched
+  **server-side**, in parallel, each caught alone — `null` (this section could
+  not load) distinct from `[]` (there is nothing here), the order detail's
+  arrangement. Both are conditional: the orders read is skipped when
+  `statistics.total_orders` is 0 (11 of 16), the notifications read when there
+  is no address to join on. The two small client components exist only for their
+  pagers. A side effect worth knowing: `scripts/capture.mjs`'s docblock says a
+  capture of `/customers/24` reaches neither sub-resource because both were
+  behind tabs. It now reaches both — the harness serves 12 requests each.
+- Omitted deliberately:
+  - **A row-actions `Menu`** — it would hold one item. No write ships and no
+    delete route exists, so the 40px column would repeat the row click.
+  - **Tabs** — `Segmented` is retired and nothing replaces it. Three stacked
+    cards, because a tab hides content behind a click on a screen that is empty
+    for 11 of the 16.
+  - **`StatGroup`/`Stat`** — DESIGN.md §3.2 specifies them and they do not
+    exist. Their consumers are the six analytics screens, and building a
+    primitive on the one screen that has just been told not to use it would be
+    speculative. See the next item for why this screen must not use it.
+  - **A 4-up stat row** — `lib/api/schemas/customer.ts:119-137` is explicit:
+    `total_orders` sits beside `total_revenue`, and dividing them is arithmetic
+    the API does not do (revenue counts only the *completed* orders). Four bare
+    numbers under four short labels is the single layout most likely to invite
+    that. Scope-labelled `DataRow`s and the footnote instead.
+  - **Any write** — `PATCH /customers/{id}` is allowlisted, specified and has
+    never been built. `marketing_consent` in particular is refused on PATCH *by
+    design*, so the consent card is a value with a stated reason naming the
+    shopper's own route, never a disabled toggle.
+  - **A selection column and a client-side selection export** — the products
+    list has both; here the header's `/api/export/customers` link is the whole
+    of it. Selection would exist to offer a second export of the same rows.
+  - **A stale marker**, which is the one §3.7 item this detail does not carry.
+    The marker exists to pair an age with the writes it disables; there are no
+    writes, nothing polls, and there is no refresh control, so the data is
+    exactly as old as the navigation that fetched it.
+- **The 340px money clipping, and what it actually was.** The brief reported the
+  statistics money rows clipping mid-number at 340 — "7 100,0" for `7 100,00 DA`
+  — found by capturing the detail for the first time. Reproduced and traced: the
+  cause is a three-instruction geometry that both `ListValueRow` (the retired
+  row that was captured) and `DataRow` share — `shrink-0` on the label,
+  `min-w-0` on the value, no wrapping — which adds up to *the label always
+  wins*, and `Card`'s `overflow-hidden` does the cutting. `dd.scrollWidth`
+  equals `clientWidth` throughout, so nothing measures it but the text's own
+  extent.
+  Fixed in `DataRow`, so all ~20 detail screens inherit it: the row is
+  `flex-wrap` with `gap-y`, the label takes `min-w-0` instead of `shrink-0`, the
+  value takes `ms-auto` (which replaces `justify-between` and still works on a
+  line of one) and `break-words`. Measured at 340 on `/customers/24`, both
+  halves forced to the retired row's `--text-body`: the old geometry clips 6px
+  off `‏7.100,00 د.ج.‏` in Arabic, the new one wraps the value onto its own line
+  and clips nothing (41px → 67px row). At `DataRow`'s own 13/14px the French
+  rows have 38px and 53px of slack and never clipped — which is why this is a
+  structural fix rather than a type-size one.
+- Notes:
+  - **`CustomerRow.tsx` and `CustomerDetail.tsx` are gone.** The first was a
+    retired-primitive row and its name-kind styling moved into `columns.tsx`;
+    the second was 660 lines defining eight components inside one function body,
+    re-created every render, now six files.
+  - The cross-screen `RowSkeleton` import from `../inventory` is broken. The
+    list uses `TableSkeleton`/`RecordListSkeleton`.
+  - **The notifications section shares the reader and no longer the row.**
+    `notifications/query.ts` is data and sharing it is correct; `NotificationRow`
+    is UI built on retired primitives, and importing it would have left an island
+    of them inside a migrated detail.
+  - `query.ts` gained `perPage`, and page and per-page both live in the URL here
+    rather than in component state as on products — one filter makes the URL
+    short enough that the reading position is worth carrying.
+  - Two table columns had no width cap, which an auto-layout `white-space:
+    nowrap` table turns into a column as wide as its widest cell:
+    "Abdelkrim-Mohammed-El-Hadj Benyoucef-Bouchentouf-Belkacemi" took the table
+    425px past its own container at 768 and 9px past it at 1440. Capped at
+    `max-w-64`; the inner scroll is now 247px at 768, against products' 328 and
+    orders' 207 at the same width.
+  - The record card measured 94px against `RecordListSkeleton`'s 96 — 12px of
+    shift across the six it draws — because the third line held no
+    `--text-compact` child and the taller child wins the line box. The trailing
+    id carries it now.
+  - Seven notification links on customer 24 all read "Commande confirmée": the
+    queue holds one row per event per order, so the visible label repeats by
+    construction. They carry an `aria-label` naming the event *and* its date.
+  - Message keys that lost their last caller are deleted: `previousPage`,
+    `nextPage`, `sortLabel`, `sort.*`, `tabLabel`, `tab.*`, `orders.previous`,
+    `orders.next`, `orders.never` and `consent.label`.
+- **The brief asked for sorting and it is not here.** Raised rather than
+  complied with, and accepted: `scripts/mock-api.mjs:3512-3534` states the
+  opposite of the brief in as many words — it validates `orderby` and then
+  ignores it, deliberately, "because nothing measured says either sort does
+  anything, and a mock that sorted would let an agent verify a control against
+  the harness and ship one that does not work." Whoever measures `orderby` on
+  `/customers` next can settle it; the primitive is ready and the column
+  definitions need one field each.
+- **Found and fixed in the primitive, so Products inherits it:** `SearchField`
+  gave its focused state `focus-within:shadow-ui-sm` — the *popover* elevation
+  token standing in for a focus indicator — where §3.4 specifies an accent
+  border plus a 3px `--color-selection` ring, and §5 makes focus visibility a
+  floor rather than a preference. Neither `.ui-ring` nor `.ui-ring-peer` reaches
+  it: the border is on the `<form>` and the focus lands on the `<input>` inside,
+  whose own outline is suppressed. `.ui-ring-within` is the third member of that
+  family in `globals.css`. Both search fields in the panel now show the ring.

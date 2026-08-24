@@ -118,7 +118,19 @@ export function SearchField({
         event.preventDefault();
         onSubmit(draft.trim());
       }}
-      className="ui-interactive flex min-w-0 flex-1 items-center gap-1.5 rounded-ui-md border border-ui-line-control bg-ui-surface ps-2.5 pe-1 focus-within:border-ui-accent focus-within:shadow-ui-sm sm:max-w-80"
+      /*
+       * `.ui-ring-within`, not `focus-within:shadow-ui-sm`.
+       *
+       * The border and the focus both belong to this control and neither belongs
+       * to the same element: the box is drawn here and the focus lands on the
+       * `<input>` inside, whose own outline is suppressed by `outline-none`. This
+       * used to answer that with the *popover* elevation token, so the panel's
+       * search fields signalled focus with a soft drop shadow where §3.4
+       * specifies an accent border and a 3px `--color-selection` ring — and §5
+       * makes focus visibility a floor, not a preference. The utility is in
+       * `globals.css` beside `.ui-ring` and `.ui-ring-peer`.
+       */
+      className="ui-interactive ui-ring-within flex min-w-0 flex-1 items-center gap-1.5 rounded-ui-md border border-ui-line-control bg-ui-surface ps-2.5 pe-1 sm:max-w-80"
     >
       <Icon name="search" className="size-4 shrink-0 text-ui-subtle" />
       <input
