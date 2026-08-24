@@ -534,8 +534,30 @@ link         accent, underline on hover
   `--text-label --color-danger-fg`, `aria-describedby` wired, `aria-invalid` set.
 - Validation on blur, then on every change once a field has errored. Never on
   first keystroke.
+
+  **The layer owns the timing; the screen owns the rule.** `components/ui/Form.tsx`
+  takes a `validate` predicate per field and decides when its verdict may appear —
+  because the rule above is three pieces of state per field, which is exactly the
+  amount of bookkeeping a screen author gets right on the first field and drops on
+  the ninth. Nothing in the panel implemented it while every screen owned both
+  halves.
+
+  **A control with no half-entered state latches on change, not on blur.** The
+  rule is written for a keystroke, and "never on first keystroke" is protecting a
+  value that is not finished being typed. A `<select>` has no such state — a
+  selection is a complete act — so holding its refusal until the person tabs away
+  only delays it. A date input is the exception that proves it: it looks discrete,
+  but a half-entered date reports an **empty** value rather than a partial one, so
+  latching on change would let a "required" rule fire between the year and the
+  month. Dates wait for the blur.
 - A form that failed submission shows an error summary at the top listing each
   failure as a link to its field, focus moved to the summary.
+
+  A failure whose field is **not on screen** is listed as text rather than as a
+  link. A 400 names every bad field including ones the form does not render, and
+  an orphan still has to be readable — but there is nowhere to send the person, and
+  a link that goes nowhere is worse than a line that does not claim to.
+  `ErrorSummary` is the primitive.
 - Required is marked on the label. Optional fields are marked "(optional)" when
   most of the form is required — pick one convention per form and hold it.
 - Grouped in bordered sections with an `--text-heading` and an optional
@@ -550,6 +572,13 @@ link         accent, underline on hover
   same note.
 - Actions pin to the bottom of the form in a bordered footer, primary inline-end.
   Long forms get a sticky footer that appears only when the form is dirty.
+
+  **`position: sticky`, and the word is load-bearing.** The retired iOS `.save-bar`
+  was `fixed`, so it had to know the tab bar's height, the safe-area inset and the
+  sidebar's width — three numbers in `globals.css` that the redesigned shell
+  invalidates. `SaveBar` in `components/ui/Form.tsx` sits inside the form's own
+  column and knows none of them: it rests at the foot of a short form and pins to
+  the viewport while a long one scrolls. `data-testid="save-bar"` is the handle.
 
 ### 3.5 Status and badges
 

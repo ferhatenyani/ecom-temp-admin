@@ -2068,6 +2068,13 @@
       "pageOf": "{page} / {pages}",
       "previousPage": "الصفحة السابقة",
       "nextPage": "الصفحة التالية"
+    },
+    "form": {
+      "unsaved": "تغييرات غير محفوظة.",
+      "save": "حفظ",
+      "discard": "التراجع عن التغييرات",
+      "summary": "{count, plural, zero {لا شيء يمنع الحفظ.} one {حقل واحد يمنع الحفظ.} two {حقلان يمنعان الحفظ.} few {# حقول تمنع الحفظ.} many {# حقلًا يمنع الحفظ.} other {# حقل يمنع الحفظ.}}",
+      "summaryItem": "{label}: {message}"
     }
   }
 }

@@ -2068,6 +2068,13 @@
       "pageOf": "{page} / {pages}",
       "previousPage": "Page précédente",
       "nextPage": "Page suivante"
+    },
+    "form": {
+      "unsaved": "Modifications non enregistrées.",
+      "save": "Enregistrer",
+      "discard": "Annuler les modifications",
+      "summary": "{count, plural, one {Un champ empêche l’enregistrement.} other {# champs empêchent l’enregistrement.}}",
+      "summaryItem": "{label} — {message}"
     }
   }
 }

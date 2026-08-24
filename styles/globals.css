@@ -770,6 +770,25 @@
     box-shadow: 0 0 0 3px var(--color-ui-selection);
   }
 
+  /* -------------------------------------------------------------- fields ---
+   * A form control is 36px on a pointer and 44px on touch — DESIGN.md §3.4's
+   * two figures, and §5's floor for the second.
+   *
+   * Declared here rather than as a `size` prop on every control in
+   * `components/ui/Form.tsx`, because the choice is not the caller's to make: a
+   * screen does not know which pointer the person is using, and the one that
+   * hard-codes `min-h-9` is right on a laptop and 8px short on the phone the
+   * shop is actually run from. The old iOS `Field` had the same hole.
+   */
+  .ui-field {
+    min-block-size: 2.25rem;
+  }
+  @media (pointer: coarse) {
+    .ui-field {
+      min-block-size: 2.75rem;
+    }
+  }
+
   /* ---------------------------------------------------------------- tap ---
    * A small icon gets a real hit area from a pseudo-element rather than by
    * growing the icon. 44px on touch, 32px on a pointer — the pointer figure is
