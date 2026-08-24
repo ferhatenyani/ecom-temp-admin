@@ -71,7 +71,19 @@ export function PageHeader({
         */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h1 className="truncate text-ui-title text-ui-fg xl:text-ui-display">
+            {/*
+              `dir="auto"`, because a detail screen's title is the *record's* name
+              — a product, a customer, a page — and §6 says a user-supplied string
+              in chrome resolves its own direction. Without it a French product
+              name in the Arabic panel inherits RTL, and `truncate` then puts the
+              ellipsis at the wrong end of a name that was already laid out
+              backwards. A translated title is unaffected: `auto` resolves from the
+              first strong character, which is the locale's own script.
+            */}
+            <h1
+              dir="auto"
+              className="truncate text-ui-title text-ui-fg xl:text-ui-display"
+            >
               {title}
             </h1>
             {subtitle ? (

@@ -297,27 +297,46 @@ test.describe("the products list", () => {
   });
 });
 
+/**
+ * The name field, by its label rather than by DOM order.
+ *
+ * `input[type=text]").first()` assumed the name was the first text input on the
+ * screen, which was true of a single 640px column of grouped sections and is not
+ * true of a two-column detail: the aside's controls are in the same document, and
+ * which one comes first is a layout decision rather than a promise. Every
+ * assertion below means exactly what it meant before — this only stops it
+ * depending on something the layout never agreed to hold still.
+ */
+function nameField(page: Page) {
+  return page.getByLabel(/^(Nom|الاسم)$/);
+}
+
+/** The sticky save bar, by the handle `components/ui/Form.tsx` publishes. */
+function saveBar(page: Page) {
+  return page.locator('[data-testid="save-bar"]');
+}
+
 test.describe("the product detail and its write path", () => {
   test("renders the whole object and saves it back", async ({ page }) => {
     await signIn(page, "fr");
     await openBySku(page, "fr", "AC-TAP-001");
 
-    const name = page.locator("input[type=text]").first();
+    const name = nameField(page);
     const original = await name.inputValue();
     expect(original).not.toBe("");
 
     // The save bar appears only once something changed.
-    await expect(page.locator(".save-bar")).toBeHidden();
+    await expect(saveBar(page)).toBeHidden();
     await name.fill(`${original} ✓`);
-    await expect(page.locator(".save-bar")).toBeVisible();
+    await expect(saveBar(page)).toBeVisible();
 
     await page.getByRole("button", { name: "Enregistrer" }).click();
     await expect(page.getByText("Produit enregistré.")).toBeVisible();
-    await expect(page.locator(".save-bar")).toBeHidden();
+    await expect(saveBar(page)).toBeHidden();
 
     // It persisted: a reload reads it back from the API rather than from state.
     await page.reload();
-    await expect(page.locator("input[type=text]").first()).toHaveValue(`${original} ✓`);
+    await expect(nameField(page)).toHaveValue(`${original} ✓`);
 
     /*
      * Put it back, so the suite is re-runnable.
@@ -332,8 +351,8 @@ test.describe("the product detail and its write path", () => {
      * control: a form that genuinely refuses to go dirty still fails here.
      */
     await expect(async () => {
-      await page.locator("input[type=text]").first().fill(original);
-      await expect(page.locator(".save-bar")).toBeVisible({ timeout: 1_000 });
+      await nameField(page).fill(original);
+      await expect(saveBar(page)).toBeVisible({ timeout: 1_000 });
     }).toPass({ timeout: 10_000 });
 
     await page.getByRole("button", { name: "Enregistrer" }).click();
@@ -351,7 +370,7 @@ test.describe("the product detail and its write path", () => {
 
     // Two fields wrong at once: a name that cannot be emptied and a price that
     // is not a number.
-    await page.locator("input[type=text]").first().fill("");
+    await nameField(page).fill("");
     const price = page.getByLabel("Prix habituel");
     await price.fill("pas-un-nombre");
 
@@ -359,12 +378,12 @@ test.describe("the product detail and its write path", () => {
 
     // Both, not one, and each on its own control.
     await expect(page.locator('[aria-invalid="true"]')).toHaveCount(2);
-    await expect(page.getByText(/cannot be emptied/i)).toBeVisible();
-    await expect(page.getByText(/Must be a number/i)).toBeVisible();
+    await expect(page.getByText(/cannot be emptied/i).first()).toBeVisible();
+    await expect(page.getByText(/Must be a number/i).first()).toBeVisible();
 
     // Editing one field clears its error and leaves the other's alone — the API
     // said both were wrong and only one has been addressed.
-    await page.locator("input[type=text]").first().fill("Tapis berbère de Ghardaïa 200x140");
+    await nameField(page).fill("Tapis berbère de Ghardaïa 200x140");
     await expect(page.locator('[aria-invalid="true"]')).toHaveCount(1);
   });
 
@@ -400,6 +419,14 @@ test.describe("the product detail and its write path", () => {
    * `DELETE` trashes and `?force=true` is permanent, and they get different
    * confirmations — measured, the two answer the **identical** body, so nothing
    * but the panel's own knowledge of what it asked for distinguishes them.
+   *
+   * **The container changed and the assertions did not.** The two acts used to
+   * live in an `ActionSheet`, which is a `role="dialog"`; DESIGN.md §0 retires it
+   * and they are now a header `Menu`, which is a `role="menu"` full of
+   * `menuitem`s — so `getByRole("dialog")` matched nothing and the old test would
+   * have timed out on a screen that works. What it checks is unchanged: both acts
+   * are offered, the permanent one opens its own confirmation, and that
+   * confirmation refuses until the product's name is typed exactly.
    */
   test("permanent deletion is behind a different confirmation from a trash", async ({
     page,
@@ -409,19 +436,23 @@ test.describe("the product detail and its write path", () => {
 
     await page.getByRole("button", { name: "Supprimer ce produit" }).click();
 
-    const sheet = page.getByRole("dialog");
-    await expect(sheet.getByText("Mettre à la corbeille")).toBeVisible();
-    await expect(sheet.getByText("Supprimer définitivement")).toBeVisible();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem", { name: "Mettre à la corbeille" })).toBeVisible();
+    const permanent = menu.getByRole("menuitem", { name: "Supprimer définitivement" });
+    await expect(permanent).toBeVisible();
 
-    await sheet.getByText("Supprimer définitivement").click();
+    await permanent.click();
 
     // The permanent path asks for the product's name and refuses until it matches.
-    const confirm = page.getByRole("dialog").getByRole("button", {
-      name: "Supprimer définitivement",
-    });
+    const dialog = page.getByRole("dialog");
+    const confirm = dialog.getByRole("button", { name: "Supprimer définitivement" });
     await expect(confirm).toBeDisabled();
 
-    await page.getByRole("dialog").locator("input[type=text]").fill("pas le bon nom");
+    /* `getByRole("textbox")` rather than `input[type=text]`: `ConfirmDialog`'s
+       typed guard is an `<input>` with no `type` attribute at all, and the CSS
+       attribute selector matches only an attribute that is present. The role is
+       what both spellings share. */
+    await dialog.getByRole("textbox").fill("pas le bon nom");
     await expect(confirm).toBeDisabled();
 
     // Deliberately not completing it: this test proves the guard, and a suite

@@ -19,7 +19,7 @@ than left to look like an oversight.
 [x]  1. Orders — list        (inherited; merged before this run began)
 [x]  2. Products — list
 [x]  3. Orders — detail
-[ ]  4. Products — detail + form
+[x]  4. Products — detail + form
 [ ]  5. Customers — list + detail
 [ ]  6. Inventory — list + detail
 [ ]  7. Coupons — list + form
@@ -265,3 +265,76 @@ The screen that sets the detail patterns for the ~20 detail screens after it.
   default; measured, Radix's `FocusScope` focuses the header Close button first.
   Both are non-destructive so the guard against Enter-on-an-unread-dialog holds.
   Fixing it needs a second focus prop on `Modal`.
+
+---
+
+## 4. Products — detail + form — 2026-08-24
+
+The panel's only real editing surface, and the screen that finished the form
+layer.
+
+- Layout: `DetailGrid`. Main is identity · pricing · stock · descriptions · SEO ·
+  attributes (read-only) · variations (read-only). Aside is publication ·
+  categories · the saved record's dates and id. §2.3's "Form, 640px" row means a
+  page that is *only* a form; a product detail is a detail screen that happens
+  to contain inputs, and the peek drawer already covers the glanceable half.
+- **Save is a sticky bar that appears only when dirty, not a header primary
+  action — and that deliberately differs from the orders detail.** The header
+  rule established on page 3 is about a control acting on the record's *state*;
+  §3.4 legislates a long form's save separately. Coupons, settings, staff-new
+  and the content page form inherit this one.
+- Filters / sorting / bulk: n/a.
+- Row click: n/a.
+- Writes: categories became a writable multi-select — measured writable, the
+  vocabulary was already fetched, and it was the cheapest real feature here.
+  SEO writable, always sending the **complete** `seo` object because partial
+  behaviour is unmeasured, with `overrides[]` surfaced so a person can see which
+  fields stopped being derived.
+- Omitted deliberately:
+  - **The options editor.** ADMIN_PANEL.md calls it the hardest component in the
+    panel and every number in its spec is unmeasured — no product in this shop
+    has an option set.
+  - **The media picker**, for three independent reasons: a Product Manager is
+    403 on `GET /media`, every product has `image: null`, and the list branch
+    already dropped the thumbnail column for the same reason. The absence is
+    stated on screen so it does not read as a missing feature.
+  - **Variation writes** — `POST /products/{id}/variations` is allowlist-refused
+    and `tests/boundary.test.ts:197` asserts it.
+  - **Attribute writes** — sending `attributes` on a variable product wipes every
+    variation's attribute map, measured on products 12 and 21.
+  - **A `sale_price <= regular_price` rule.** Nothing has measured whether the
+    API rejects it, and a client rule the server does not hold is the same
+    defect as a control that does nothing. Client rules also never block submit:
+    a disabled Save would make the 400 fan-out unreachable, and the API stays
+    the authority.
+- Notes:
+  - **The `options_problems` banner was a lie and the copy was fixed rather than
+    the screen.** It told the reader that saving destroys the broken option
+    groups; the `Draft` never sends `options`, so this screen's save cannot
+    trigger that repair. Making the screen match the old copy would have meant a
+    price edit silently deleting two option groups as a side effect — a
+    destructive act nobody asked for, which §3.1 would gate behind a
+    `ConfirmDialog` anyway.
+  - **Three strings named destinations that do not exist**, and one of them was
+    written on this branch, in that same banner. There is no Attributs screen in
+    this panel and none on the 41-page checklist; variations are editable
+    nowhere. Copy that sends someone to a screen they cannot reach is worse than
+    saying nothing — it reads as a missing feature rather than a deliberate
+    absence. All three now state the true scope: read-only *in the panel*.
+  - **`.ui-tap::after` had its LTR and RTL transforms swapped**, so every icon
+    button in the panel had its 44px hit area sitting entirely to one side of
+    the control. Pre-existing and invisible for as long as every icon button
+    happened to have a wider control after it; this header's is last, so the
+    overhang joined the document's scroll width and the capture failed
+    `777 ≠ 768`. Caught by the harness, findable by nothing else here.
+  - `.save-bar` stays in `globals.css`: eight unmigrated forms still use it, and
+    they are `fixed inset-x-0` with no block-end of their own, so deleting the
+    rule would unstick their bars to the top of the viewport rather than remove
+    them. Teardown owns it.
+  - The attribute-terms requests used to fire serially *after* the main
+    `Promise.all`. They are folded in, and skipped entirely unless the product
+    carries a global attribute — `/products/104` now fires zero `/attributes`
+    requests where it fired three.
+- **Found, not fixed:** `ConfirmDialog` focuses its × button rather than Cancel,
+  contradicting §3.1. Radix's `FocusScope` wins over `autoFocus`. Harmless —
+  both are non-destructive — but it needs a second focus prop on `Modal`.
