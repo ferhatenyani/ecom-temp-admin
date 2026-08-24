@@ -1,106 +1,89 @@
-import type { InventoryItem, Movement, MovementSummary } from "@/lib/api/schemas/inventory";
-import { isKnownReason } from "@/lib/movement-reason";
+import type { InventoryItem } from "@/lib/api/schemas/inventory";
+import { acRead } from "@/lib/api/browser";
 
 /**
- * One route, three views, and the view is in the URL like every other piece of
- * filter state in this panel.
+ * The stock list's own query, and **only** the stock list's.
  *
- * **Low stock is the default and the segmented control is how the screen says
- * so.** docs/ADMIN_PANEL.md's line is "built for a phone in a warehouse; the
- * default screen is low stock, not the full list", and a control whose first
- * segment is already selected states that without a second route to get lost in.
- * The full list and the ledger are one tap away and neither is where the screen
- * opens.
+ * The ledger used to live here behind a `view: "moves"` discriminator, and it
+ * moved out with the route — `inventory/movements/query.ts` is its half now. The
+ * old file's own docblock said why the two parameter sets had to stay separate:
+ * they share no parameter, `/inventory` and `/inventory/movements` accept
+ * entirely different ones, and **an unknown query parameter is ignored with a
+ * 200** on this API (`/inventory?nonsense=zzz` returns all 28 rows, identical to
+ * no filter at all). Keeping both in one object made it possible for a stock
+ * filter to survive a switch to the ledger and silently do nothing. Two routes
+ * make that unrepresentable rather than merely discouraged.
+ *
+ * A *known* parameter with a bad value does refuse: `?stock_status=zzz` is a 400.
+ * So the panel can send a wrong value and hear about it, and can send a wrong
+ * *name* and hear nothing.
  */
-export const VIEWS = ["low", "all", "moves"] as const;
+
+/**
+ * Two views, one endpoint each.
+ *
+ * `all` is `/inventory` and takes the whole filter set. `low` is
+ * `/inventory/low-stock` and takes **pagination only** — verified against the
+ * live router, which registers `lowStockArgs()` as exactly that. That is why the
+ * low tab renders neither the search field nor the filter button rather than
+ * disabling them: not rendering a control that cannot act is the rule the nav
+ * already follows for capabilities, and here it is load-bearing, because a
+ * parameter this endpoint does not know answers 200 with the full report.
+ *
+ * The order is the tab order — All first, the way the orders and products strips
+ * read. The *default* is `low`, which is a different question and is
+ * `DEFAULT_VIEW` below.
+ */
+export const VIEWS = ["all", "low"] as const;
 export type View = (typeof VIEWS)[number];
 
+/**
+ * docs/ADMIN_PANEL.md: "built for a phone in a warehouse; the default screen is
+ * low stock, not the full list." The tab strip states that by opening with its
+ * second tab active, which is unusual and is the point — arriving at `/inventory`
+ * is arriving at a report, and the strip says which one.
+ */
+export const DEFAULT_VIEW: View = "low";
+
 export function viewFromParam(value: string | null | undefined): View {
-  return (VIEWS as readonly string[]).includes(value ?? "") ? (value as View) : "low";
+  return (VIEWS as readonly string[]).includes(value ?? "") ? (value as View) : DEFAULT_VIEW;
 }
 
 /**
- * 20 for the stock lists, which is the API's own default and the right size for a
- * phone. **`per_page` caps at 100 and 101 is a 400, not a clamp** — measured on
+ * 20, the API's own default, and `TableFooter` offers 50 and 100 beside it.
+ * **`per_page` caps at 100 and 101 is a 400, not a clamp** — measured on
  * `/inventory/movements`, the same behaviour `/orders` and `/products` have.
  */
 export const PER_PAGE = 20;
 
-/**
- * The ledger's page size is the same 20, against 1154 rows and 58 pages.
- *
- * docs/ADMIN_PANEL.md warns that an import writes one movement per line and that
- * pagination "has to expect that". It does: nothing here accumulates pages in
- * memory, `?page=999` answers 200 with an empty array rather than an error
- * (measured), and the page control is driven by `meta.total_pages` so it stops
- * where the data does.
- */
-export const MOVES_PER_PAGE = 20;
+const PER_PAGE_CHOICES = [20, 50, 100];
 
-/**
- * What the three views filter by.
- *
- * The stock filters and the ledger filters are separate sets on purpose — they
- * share no parameter and `/inventory` and `/inventory/movements` accept entirely
- * different ones. Keeping them in one object with a `view` discriminator would
- * let a stock filter survive a switch to the ledger and silently do nothing,
- * which is the failure mode this API makes easy: **an unknown query parameter is
- * ignored with a 200**, verified here as everywhere else — `/inventory?nonsense=zzz`
- * returns all 28 rows, identical to no filter at all.
- *
- * A *known* parameter with a bad value is different and does refuse:
- * `?stock_status=zzz` and `?reason=zzz` are both 400. So the panel can send a
- * wrong value and hear about it, and can send a wrong *name* and hear nothing.
- */
 export type InventoryQuery = {
   view: View;
-
-  /* --- the stock views ------------------------------------------------- */
   search: string;
   /** `""`, `"instock"`, `"outofstock"`, `"onbackorder"`. Not on the low view. */
   stockStatus: string;
   /** `""` | `"true"` | `"false"` — absent is not `false`, and both filter. */
   manageStock: string;
   page: number;
-
-  /* --- the ledger ------------------------------------------------------ */
-  /** One of the nine, or `""`. The union, not the six a person may write. */
-  reason: string;
-  /** A product id, set by tapping through from an item. */
-  productId: string;
-  /** `"me"` when the ledger is filtered to the signed-in actor, else `""`. */
-  actor: string;
-  /** `YYYY-MM-DD`. Anything else is a 400 — the API validates the format. */
-  dateFrom: string;
-  dateTo: string;
-  movesPage: number;
+  perPage: number;
 };
 
 export const EMPTY_QUERY: InventoryQuery = {
-  view: "low",
+  view: DEFAULT_VIEW,
   search: "",
   stockStatus: "",
   manageStock: "",
   page: 1,
-  reason: "",
-  productId: "",
-  actor: "",
-  dateFrom: "",
-  dateTo: "",
-  movesPage: 1,
+  perPage: PER_PAGE,
 };
 
 function positive(value: string | null): number {
   return Math.max(1, Number.parseInt(value ?? "1", 10) || 1);
 }
 
-/** `YYYY-MM-DD` and nothing else — the API answers 400 to any other shape. */
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 export function queryFromParams(params: URLSearchParams): InventoryQuery {
-  const reason = params.get("reason") ?? "";
-  const dateFrom = params.get("date_from") ?? "";
-  const dateTo = params.get("date_to") ?? "";
+  const perPage = Number.parseInt(params.get("per_page") ?? "", 10);
 
   return {
     view: viewFromParam(params.get("view")),
@@ -108,14 +91,10 @@ export function queryFromParams(params: URLSearchParams): InventoryQuery {
     stockStatus: params.get("stock_status") ?? "",
     manageStock: params.get("manage_stock") ?? "",
     page: positive(params.get("page")),
-    // A hand-edited or stale URL must not be able to provoke a 400 the screen
-    // then has to render as an error. An unknown reason is dropped, not sent.
-    reason: isKnownReason(reason) ? reason : "",
-    productId: /^\d+$/.test(params.get("product_id") ?? "") ? params.get("product_id")! : "",
-    actor: params.get("actor") === "me" ? "me" : "",
-    dateFrom: ISO_DATE.test(dateFrom) ? dateFrom : "",
-    dateTo: ISO_DATE.test(dateTo) ? dateTo : "",
-    movesPage: positive(params.get("moves_page")),
+    /* Clamped to what the footer offers rather than passed through: 101 is a 400
+       on this API and a hand-edited URL must not be able to provoke one that the
+       screen then has to render as an error. */
+    perPage: PER_PAGE_CHOICES.includes(perPage) ? perPage : PER_PAGE,
   };
 }
 
@@ -133,7 +112,7 @@ export function queryFromParams(params: URLSearchParams): InventoryQuery {
  */
 export function stockParams(query: InventoryQuery): URLSearchParams {
   const params = new URLSearchParams({
-    per_page: String(PER_PAGE),
+    per_page: String(query.perPage),
     page: String(query.page),
     include_variations: "true",
   });
@@ -145,61 +124,19 @@ export function stockParams(query: InventoryQuery): URLSearchParams {
 }
 
 /**
- * The low-stock request.
- *
- * `/inventory/low-stock` takes **pagination and `status` only** — verified
- * against the live router, which registers `lowStockArgs()` as exactly that. It
- * has no search, no `stock_status` and no `include_variations`, so the low view
- * renders none of those controls rather than rendering ones that would be
- * silently ignored.
+ * The low-stock request. Pagination and nothing else — see `VIEWS`.
  */
 export function lowStockParams(query: InventoryQuery): URLSearchParams {
-  return new URLSearchParams({ per_page: String(PER_PAGE), page: String(query.page) });
-}
-
-/**
- * The ledger request.
- *
- * `actor=me` becomes `?actor_id={my id}` — the id comes from `/auth/me`, which
- * every role can read, and is the one identity filter the panel can honestly
- * offer. See `movementActor()` for why it is a filter and not a column.
- */
-export function movementParams(query: InventoryQuery, meId: number | null): URLSearchParams {
-  const params = new URLSearchParams({
-    per_page: String(MOVES_PER_PAGE),
-    page: String(query.movesPage),
+  return new URLSearchParams({
+    per_page: String(query.perPage),
+    page: String(query.page),
   });
-
-  if (query.reason !== "") params.set("reason", query.reason);
-  if (query.productId !== "") params.set("product_id", query.productId);
-  if (query.dateFrom !== "") params.set("date_from", query.dateFrom);
-  if (query.dateTo !== "") params.set("date_to", query.dateTo);
-  if (query.actor === "me" && meId !== null) params.set("actor_id", String(meId));
-  return params;
-}
-
-/** The summary takes the ledger's filters minus its pagination. */
-export function summaryParams(query: InventoryQuery, meId: number | null): URLSearchParams {
-  const params = movementParams(query, meId);
-  params.delete("per_page");
-  params.delete("page");
-  return params;
 }
 
 /** The URL the panel shows: only what differs from the defaults. */
 export function toUrlParams(query: InventoryQuery): URLSearchParams {
   const params = new URLSearchParams();
-  if (query.view !== "low") params.set("view", query.view);
-
-  if (query.view === "moves") {
-    if (query.reason !== "") params.set("reason", query.reason);
-    if (query.productId !== "") params.set("product_id", query.productId);
-    if (query.actor !== "") params.set("actor", query.actor);
-    if (query.dateFrom !== "") params.set("date_from", query.dateFrom);
-    if (query.dateTo !== "") params.set("date_to", query.dateTo);
-    if (query.movesPage > 1) params.set("moves_page", String(query.movesPage));
-    return params;
-  }
+  if (query.view !== DEFAULT_VIEW) params.set("view", query.view);
 
   if (query.view === "all") {
     if (query.search !== "") params.set("search", query.search);
@@ -207,28 +144,43 @@ export function toUrlParams(query: InventoryQuery): URLSearchParams {
     if (query.manageStock !== "") params.set("manage_stock", query.manageStock);
   }
   if (query.page > 1) params.set("page", String(query.page));
+  if (query.perPage !== PER_PAGE) params.set("per_page", String(query.perPage));
   return params;
 }
 
-/** Whether the *current view* is narrowed, which is what the empty state asks. */
+/**
+ * Whether the *current view* is narrowed, which is what the empty state asks.
+ *
+ * `low` is unconditionally false, and that is correct rather than an oversight:
+ * the report takes no filters, so there is nothing an empty low-stock screen
+ * could offer to clear. What it used to leave unanswered is the *other* way a
+ * list can be empty with rows behind it — a page past the last one — and that is
+ * `isOverPaged()` below rather than a lie told here.
+ */
 export function isFiltered(query: InventoryQuery): boolean {
-  if (query.view === "moves") {
-    return (
-      query.reason !== "" ||
-      query.productId !== "" ||
-      query.actor !== "" ||
-      query.dateFrom !== "" ||
-      query.dateTo !== ""
-    );
-  }
   if (query.view === "low") return false;
   return query.search !== "" || query.stockStatus !== "" || query.manageStock !== "";
+}
+
+/**
+ * An empty page that is not an empty result.
+ *
+ * `?page=3` of a two-page report answers 200 with an empty array — measured, the
+ * same behaviour `/inventory/movements` has — so the list renders its empty state
+ * with a page control that is not on screen, because the footer lives inside the
+ * table that was not drawn. On the `all` view "clear the filters" was at least a
+ * way out; on `low` `isFiltered()` is false by construction and the browser's
+ * back button was the only escape from a screen the panel itself had navigated
+ * to. So the empty state offers the first page whenever the reader is past it,
+ * on both views, and that answer does not depend on there being a filter.
+ */
+export function isOverPaged(query: InventoryQuery): boolean {
+  return query.page > 1;
 }
 
 /* ------------------------------------------------------------- fetching --- */
 
 export type StockPage = { items: InventoryItem[]; total: number };
-export type MovementsPage = { movements: Movement[]; total: number };
 
 /** The query key mirrors the request, so the two can never disagree. */
 export function stockKey(query: InventoryQuery) {
@@ -237,80 +189,19 @@ export function stockKey(query: InventoryQuery) {
     : (["inventory", "all", stockParams(query).toString()] as const);
 }
 
-export function movementsKey(query: InventoryQuery, meId: number | null) {
-  return ["inventory", "moves", movementParams(query, meId).toString()] as const;
-}
-
-export function summaryKey(query: InventoryQuery, meId: number | null) {
-  return ["inventory", "summary", summaryParams(query, meId).toString()] as const;
-}
-
 /**
- * Reads go through the proxy, which attaches the credential server-side. The
- * browser never holds one.
- *
- * The API's own parameter message is surfaced rather than a generic line, and it
- * arrives under `details.params` — **which has two shapes on this API**. For a
- * bad value it is an object of messages (`{"per_page": "per_page must be between
- * 1 and 100"}`); for a missing required parameter it is an *array* of names
- * (`{"params": ["sku"]}`, measured on `/inventory/lookup` with no `sku`). Both
- * are handled, because a panel that renders `[object Object]` at a person in a
- * stockroom has told them nothing.
+ * Reads go through the proxy, which attaches the credential server-side; the
+ * browser never holds one. `acRead` is the shared reader — this module used to
+ * carry its own copy, and `lib/api/browser.ts` records what that cost: the copy
+ * that handles `details.params` arriving as an *array* was not always the copy
+ * whose screen someone tested, and `/inventory/lookup` is the one endpoint
+ * measured to send that shape.
  */
-async function read<T>(path: string): Promise<{ data: T; total: number }> {
-  const response = await fetch(`/api/ac${path}`, { headers: { Accept: "application/json" } });
-  const body = (await response.json()) as {
-    success?: boolean;
-    data?: unknown;
-    meta?: { total?: number };
-    error?: { code?: string; message?: string; details?: Record<string, unknown> };
-  };
-
-  if (!response.ok || body.success === false) {
-    const details = body.error?.details ?? {};
-    const params = details.params;
-    const fields = details.fields as Record<string, string> | undefined;
-
-    const fromParams = Array.isArray(params)
-      ? undefined // a list of missing names, not a message — the generic line is better
-      : params && typeof params === "object"
-        ? Object.values(params as Record<string, string>)[0]
-        : undefined;
-
-    const first = fromParams ?? (fields && Object.values(fields)[0]) ?? body.error?.message;
-    const error = new Error(first ?? `Request failed (${response.status})`);
-    Object.assign(error, { status: response.status, code: body.error?.code });
-    throw error;
-  }
-
-  return { data: (body.data ?? []) as T, total: body.meta?.total ?? 0 };
-}
-
 export async function fetchStock(query: InventoryQuery): Promise<StockPage> {
   const path =
     query.view === "low"
       ? `/inventory/low-stock?${lowStockParams(query)}`
       : `/inventory?${stockParams(query)}`;
-  const { data, total } = await read<InventoryItem[]>(path);
+  const { data, total } = await acRead<InventoryItem[]>(path);
   return { items: data, total };
-}
-
-export async function fetchMovements(
-  query: InventoryQuery,
-  meId: number | null,
-): Promise<MovementsPage> {
-  const { data, total } = await read<Movement[]>(
-    `/inventory/movements?${movementParams(query, meId)}`,
-  );
-  return { movements: data, total };
-}
-
-export async function fetchSummary(
-  query: InventoryQuery,
-  meId: number | null,
-): Promise<MovementSummary> {
-  const { data } = await read<MovementSummary>(
-    `/inventory/movements/summary?${summaryParams(query, meId)}`,
-  );
-  return data;
 }

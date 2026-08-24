@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * Low stock, the lookup, the adjustment and the ledger.
@@ -11,6 +11,25 @@ import { test, expect, type Page } from "@playwright/test";
  * **Products are found by SKU, never by id**, for the reason the products suite
  * records: the backend's own suites delete and recreate their fixtures on every
  * run over there, so an id is stable only until the next one.
+ *
+ * ## What the redesign changed in here, and what it did not
+ *
+ * Every assertion below is the one that was there before. What moved is the
+ * *selectors*, and three structural facts they depended on:
+ *
+ *   1. **`Segmented` is retired.** The three views were one radio group; the two
+ *      stock views are now `FilterTabs` — buttons in a `nav` carrying
+ *      `aria-current="page"`, deliberately not `role="tab"` — and the ledger is
+ *      its own route at `/inventory/movements`. The adjustment's three modes are
+ *      a real `ChoiceGroup`, so they *are* radios and `check()` works on them.
+ *   2. **Both presentations are in the DOM at every width.** `DataTable` renders
+ *      the table and the record list together and hides one with CSS, so every
+ *      cell exists twice and a bare `getByText` is a strict-mode violation.
+ *      `shown()` below is the answer.
+ *   3. **`.list-row` was `GroupedList`'s.** Rows are `<tr>` and `<li>` now, and
+ *      the three values those assertions actually cared about carry test ids of
+ *      their own — a selector that depends on nothing else on the page ever
+ *      matching is a selector that breaks for an unrelated reason.
  */
 const USER = process.env.AC_STAFF_USER;
 const PASS = process.env.AC_STAFF_PASS;
@@ -44,7 +63,7 @@ async function openInventory(page: Page, locale: string, query = "") {
  * against a filter that demonstrably returns 34.
  */
 async function openMoves(page: Page, locale: string, query = "") {
-  await page.goto(`/${locale}/inventory?view=moves${query}`);
+  await page.goto(`/${locale}/inventory/movements${query}`);
   await page.waitForSelector('[data-testid="movements-count"]');
   // The count element renders immediately with a total of zero while the client
   // query is still pending, so waiting on the element is waiting on a
@@ -52,6 +71,43 @@ async function openMoves(page: Page, locale: string, query = "") {
   await expect(page.getByTestId("movements-count")).toContainText(/\d/, {
     timeout: 15000,
   });
+}
+
+/**
+ * The one **painted** copy of something both presentations render.
+ *
+ * `DataTable` keeps the table and the record list in the DOM together and hides
+ * one per breakpoint, so every value exists twice and this suite runs at four
+ * viewports — three phones and a 1440px desktop. Filtering to what is actually
+ * visible picks whichever presentation the running project is showing, without
+ * the test having to know which.
+ */
+function shown(locator: Locator): Locator {
+  return locator.filter({ visible: true }).first();
+}
+
+/** A stock row, whichever presentation is painted. `<tbody>` is the table's. */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr");
+}
+
+/**
+ * A tab in the view strip.
+ *
+ * `FilterTabs` deliberately does **not** claim `role="tab"`: there is no
+ * tabpanel, the filter is a query parameter and the list re-fetches, so these are
+ * buttons in a `nav` with `aria-current`. Scoped to that nav, because "Tout" is a
+ * common enough word to collide with a button elsewhere on the page.
+ */
+function tab(page: Page, label: string): Locator {
+  return page
+    .getByRole("navigation", { name: /Vue du stock|عرض المخزون/ })
+    .getByRole("button", { name: label, exact: true });
+}
+
+/** One of the adjustment's three modes — a real radio, so `check()` works. */
+async function selectMode(page: Page, label: string) {
+  await page.getByRole("radio", { name: label, exact: true }).check();
 }
 
 /** A count line — "1 155 mouvements" — as a number. The separator is U+202F. */
@@ -74,15 +130,6 @@ async function currentQuantity(page: Page): Promise<number> {
   return Number(match[1]);
 }
 
-/**
- * The segmented control's `<input type="radio">` is `sr-only`, so a pointer
- * reaches it through its `<label>` and Playwright must do the same — an
- * actionability check on a visually hidden input never passes.
- */
-async function selectView(page: Page, label: string) {
-  await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
-}
-
 /** The item screen for a SKU, reached through the lookup field it is built for. */
 async function lookUp(page: Page, locale: string, sku: string) {
   await openInventory(page, locale);
@@ -93,19 +140,23 @@ async function lookUp(page: Page, locale: string, sku: string) {
 test.describe("the default screen", () => {
   /**
    * docs/ADMIN_PANEL.md: "built for a phone in a warehouse; the default screen is
-   * low stock, not the full list". The segmented control is how the screen says
-   * that, so the assertion is that it opens on that segment with fewer rows than
-   * the catalogue holds.
+   * low stock, not the full list". The tab strip is how the screen says that, so
+   * the assertion is that it opens on that tab with fewer rows than the catalogue
+   * holds.
    */
   test("opens on low stock, not on the full list", async ({ page }) => {
     await signIn(page, "fr");
     await openInventory(page, "fr");
 
-    await expect(page.getByRole("radio", { name: "Stock faible" })).toBeChecked();
-    const low = await page.locator('a[href*="/inventory/"]').count();
+    await expect(tab(page, "Stock faible")).toHaveAttribute("aria-current", "page");
+    const low = await rows(page).count();
+
+    // The identifying cell is a real anchor — the keyboard path and the middle
+    // click the peek drawer would have provided. There is no peek here.
+    await expect(rows(page).first().locator('a[href*="/inventory/"]')).toHaveCount(1);
 
     await openInventory(page, "fr", "?view=all");
-    const all = await page.locator('a[href*="/inventory/"]').count();
+    const all = await rows(page).count();
 
     expect(low).toBeGreaterThan(0);
     expect(all).toBeGreaterThan(low);
@@ -123,10 +174,10 @@ test.describe("the default screen", () => {
   }) => {
     await signIn(page, "fr");
     await openInventory(page, "fr");
-    await expect(page.getByText("AC-BUR-010-L")).toBeVisible();
+    await expect(shown(page.getByText("AC-BUR-010-L"))).toBeVisible();
 
     await openInventory(page, "fr", "?view=all&search=Burnous");
-    await expect(page.getByText("AC-BUR-010-L")).toBeVisible();
+    await expect(shown(page.getByText("AC-BUR-010-L"))).toBeVisible();
   });
 
   /**
@@ -139,13 +190,12 @@ test.describe("the default screen", () => {
     await signIn(page, "fr");
     await openInventory(page, "fr", "?view=all&manage_stock=false");
 
-    const rows = page.locator('a[href*="/inventory/"]');
-    expect(await rows.count()).toBeGreaterThan(0);
-    await expect(rows.first().getByText("Non suivi")).toBeVisible();
+    expect(await rows(page).count()).toBeGreaterThan(0);
+    await expect(rows(page).first()).toContainText("Non suivi");
 
     // The positive control: a tracked product with a real zero renders the zero.
     await openInventory(page, "fr", "?view=all&stock_status=outofstock");
-    await expect(page.locator('a[href*="/inventory/"]').first()).toContainText("0");
+    await expect(rows(page).first()).toContainText("0");
   });
 
   /**
@@ -157,7 +207,7 @@ test.describe("the default screen", () => {
     await signIn(page, "fr");
     await openInventory(page, "fr");
 
-    const row = page.locator('a[href*="/inventory/"]', { hasText: "AC-BUR-010-L" });
+    const row = rows(page).filter({ hasText: "AC-BUR-010-L" });
     await expect(row).toContainText("Burnous en laine");
     await expect(row).not.toContainText("Burnous en laine - L");
     await expect(row).not.toContainText("— L");
@@ -166,11 +216,51 @@ test.describe("the default screen", () => {
   test("the back button returns to the previous view", async ({ page }) => {
     await signIn(page, "fr");
     await openInventory(page, "fr");
-    await selectView(page, "Tout");
+    await tab(page, "Tout").click();
     await expect(page).toHaveURL(/view=all/);
 
     await page.goBack();
     await expect(page).not.toHaveURL(/view=all/);
+  });
+
+  /**
+   * **The low-stock report takes no filters and the screen renders none.**
+   * `/inventory/low-stock` registers pagination only, and an unknown query
+   * parameter on this API answers 200 with the full result set — so a control
+   * that silently does nothing is indistinguishable from one that works. Not
+   * rendering it is the only honest option, and the sentence explaining where the
+   * filters went is what keeps that from reading as a missing feature.
+   */
+  test("the low view renders no search and no filter button, and says why", async ({
+    page,
+  }) => {
+    await signIn(page, "fr");
+    await openInventory(page, "fr");
+
+    await expect(page.getByRole("searchbox", { name: /Rechercher un article/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Filtres" })).toHaveCount(0);
+    await expect(page.getByText(/ce rapport n’en accepte aucun/)).toBeVisible();
+
+    // The positive control: both are there on the tab that can use them.
+    await openInventory(page, "fr", "?view=all");
+    await expect(page.getByRole("searchbox", { name: /Rechercher un article/ })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Filtres" })).toHaveCount(1);
+  });
+
+  /**
+   * A page past the last one answers 200 with an empty array, and the page
+   * control lives inside the table that was not drawn. On the low view there are
+   * no filters to clear by construction, so before this branch the browser's back
+   * button was the only way out of a screen the panel had navigated to itself.
+   */
+  test("an over-paged report offers the way back", async ({ page }) => {
+    await signIn(page, "fr");
+    await openInventory(page, "fr", "?page=99");
+
+    await expect(rows(page)).toHaveCount(0);
+    await page.getByRole("button", { name: "Revenir à la première page" }).click();
+    await expect(page).not.toHaveURL(/page=99/);
+    expect(await rows(page).count()).toBeGreaterThan(0);
   });
 });
 
@@ -217,17 +307,17 @@ test.describe("the adjustment", () => {
     const preview = page.locator("#adjust-preview");
     const quantity = page.getByLabel("Quantité", { exact: true });
 
-    await selectView(page, "Ajouter");
+    await selectMode(page, "Ajouter");
     await quantity.fill("2");
     const now = await currentQuantity(page);
     await expect(preview).toContainText(`${now} → ${now + 2}`);
 
-    await selectView(page, "Retirer");
+    await selectMode(page, "Retirer");
     await expect(preview).toContainText(`${now} → ${now - 2}`);
 
     // `set` states an absolute, so the figure typed is the figure reached — the
     // one mode where the two sides of the arrow are unrelated.
-    await selectView(page, "Définir");
+    await selectMode(page, "Définir");
     await expect(preview).toContainText(`${now} → 2`);
   });
 
@@ -255,7 +345,7 @@ test.describe("the adjustment", () => {
     await page.waitForURL(/\/inventory\/\d+/);
     const url = page.url();
 
-    await selectView(page, "Ajouter");
+    await selectMode(page, "Ajouter");
     await page.getByLabel("Quantité", { exact: true }).fill("2");
     const before = await currentQuantity(page);
 
@@ -274,8 +364,8 @@ test.describe("the adjustment", () => {
 
     /*
      * And the movement reached the ledger. Asserted on the note rather than on a
-     * row count — the item's ledger shows the five most recent movements, so a
-     * sixth replaces the oldest and the count never changes — and on the note
+     * row count — the item's ledger card shows the five most recent movements, so
+     * a sixth replaces the oldest and the count never changes — and on the note
      * rather than on the reason, because `Réapprovisionnement` is also an
      * `<option>` in the reason picker, present and hidden on every render.
      */
@@ -284,7 +374,7 @@ test.describe("the adjustment", () => {
     // Put the shelf back where it was. A suite that leaves the shop's stock
     // somewhere else is a suite that changes what the next run measures.
     await page.goto(url);
-    await selectView(page, "Définir");
+    await selectMode(page, "Définir");
     await page.getByLabel("Nouvelle quantité", { exact: true }).fill(String(before));
     await page.getByRole("button", { name: "Enregistrer l’ajustement" }).click();
     await expect
@@ -304,15 +394,14 @@ test.describe("the adjustment", () => {
     await lookUp(page, "fr", "AC-EPI-009");
     await page.waitForURL(/\/inventory\/\d+/);
 
-    await selectView(page, "Retirer");
+    await selectMode(page, "Retirer");
     const now = await currentQuantity(page);
     await page.getByLabel("Quantité", { exact: true }).fill("99");
     await page.getByRole("button", { name: "Enregistrer l’ajustement" }).click();
 
-    // `details.projected` is the number the person has to change, so it is the
-    // number on screen — computed from the shelf rather than hard-coded.
     // The API's `details.projected` verbatim — a negative the person has to
-    // close, not a generic "conflict".
+    // close, not a generic "conflict" — computed from the shelf rather than
+    // hard-coded.
     await expect(page.getByTestId("adjust-conflict")).toContainText(String(now - 99));
     // The screen stays; a 409 is never a bounce.
     await expect(page).toHaveURL(/\/inventory\/\d+/);
@@ -361,7 +450,7 @@ test.describe("the ledger", () => {
     await openMoves(page, "fr");
     const unfiltered = await page.getByTestId("movements-count").innerText();
 
-    await openMoves(page, "fr", "&reason=damage");
+    await openMoves(page, "fr", "?reason=damage");
     const filtered = await page.getByTestId("movements-count").innerText();
 
     expect(countOf(filtered)).toBeGreaterThan(0);
@@ -372,6 +461,9 @@ test.describe("the ledger", () => {
    * **The filter offers all nine reasons, not the summary's seven.** The summary
    * omits every reason with no rows, so a picker built from it silently loses
    * `customer_return` and `other` — the facet lesson, in a second place.
+   *
+   * They are radios rather than checkboxes now: `?reason=` takes one value, and a
+   * row of checkboxes would have claimed otherwise.
    */
   test("offers every reason, including the two the summary omits", async ({ page }) => {
     await signIn(page, "fr");
@@ -390,7 +482,7 @@ test.describe("the ledger", () => {
       "Fiche produit",
     ]) {
       await expect(
-        page.getByRole("checkbox", { name: label, exact: true }),
+        page.getByRole("radio", { name: label, exact: true }),
       ).toBeVisible();
     }
   });
@@ -402,15 +494,14 @@ test.describe("the ledger", () => {
    */
   test("names an order or a person, and never a raw actor id", async ({ page }) => {
     await signIn(page, "fr");
-    await openMoves(page, "fr", "&reason=order_reduced");
+    await openMoves(page, "fr", "?reason=order_reduced");
 
-    const row = page.locator(".list-row").first();
     // The space between the word and the id is U+00A0, which `\s` matches and a
     // literal space does not.
-    await expect(row).toContainText(/Commande\s\d+/);
+    await expect(shown(page.getByTestId("movement-actor"))).toContainText(/Commande\s\d+/);
 
-    await openMoves(page, "fr", "&reason=correction");
-    await expect(page.locator(".list-row").first()).toContainText(/Vous|collègue/);
+    await openMoves(page, "fr", "?reason=correction");
+    await expect(shown(page.getByTestId("movement-actor"))).toContainText(/Vous|collègue/);
   });
 
   test("filters to my own movements, and that filter really filters", async ({ page }) => {
@@ -418,13 +509,36 @@ test.describe("the ledger", () => {
     await openMoves(page, "fr");
     const all = await page.getByTestId("movements-count").innerText();
 
-    await openMoves(page, "fr", "&actor=me");
+    await openMoves(page, "fr", "?actor=me");
     const mine = await page.getByTestId("movements-count").innerText();
 
     expect(countOf(mine)).toBeGreaterThan(0);
     expect(countOf(mine)).toBeLessThan(countOf(all));
     // Every row that is a person is now me.
-    await expect(page.locator(".list-row").first()).toContainText(/Vous|Commande\s\d+/);
+    await expect(shown(page.getByTestId("movement-actor"))).toContainText(
+      /Vous|Commande\s\d+/,
+    );
+  });
+
+  /**
+   * **The ledger is a route now, not a third view of the list**, and the only way
+   * in is from the two screens a person is standing on when they want it. There is
+   * deliberately no nav entry: the sidebar is already sixteen items.
+   */
+  test("is reached from the list header and carries a way back", async ({ page }) => {
+    await signIn(page, "fr");
+    await openInventory(page, "fr");
+
+    await page.getByRole("link", { name: "Mouvements" }).click();
+    await page.waitForURL(/\/inventory\/movements/);
+    await expect(page.getByRole("heading", { name: "Journal des mouvements" })).toBeVisible();
+
+    /* `.last()`: at `lg`+ the sidebar's own nav item carries the same name and
+       the same href and sits earlier in the DOM, so the header's back link is
+       the second. Below `lg` the sidebar is a Drawer and is not in the DOM at
+       all until it is opened, and the back link is the only match. */
+    await page.getByRole("link", { name: "Stock", exact: true }).last().click();
+    await expect(page).toHaveURL(/\/inventory$/);
   });
 });
 
@@ -440,14 +554,28 @@ test.describe("Arabic", () => {
 
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
 
-    const arrow = await page.locator('[dir="ltr"]', { hasText: "→" }).first().innerText();
-    expect(arrow).toMatch(/^\d+\s*→\s*\d+$/);
+    /*
+     * The arrow is `Ltr`: two bare numbers and a glyph, with no translated word
+     * sharing the element, and it must not flip — it points from an earlier value
+     * to a later one, which is a fact about time rather than about reading
+     * direction.
+     */
+    const change = shown(page.getByTestId("movement-change"));
+    await expect(change).toHaveAttribute("dir", "ltr");
+    expect((await change.innerText()).trim()).toMatch(/^\d+\s*→\s*\d+$/);
 
-    const product = await page
-      .locator('[dir="ltr"]', { hasText: /المنتج/ })
-      .first()
-      .innerText();
-    expect(product).toMatch(/^المنتج\s*\d+$/);
+    /*
+     * The product label is `Isolate` — `dir="auto"` — and that is a **correction**
+     * this branch makes rather than a regression. "المنتج 20" is a translated word
+     * with a number in it, not a bare identifier, and `Ltr` forced it to lay out
+     * from the left; DECISIONS.md §5 records the same defect being found in
+     * sixteen call sites on the customers branch. The isolation stays, so the
+     * digits still cannot be reordered by the text around them, and the assertion
+     * that matters — the rendered string — is unchanged.
+     */
+    const product = shown(page.getByTestId("movement-product"));
+    await expect(product).toHaveAttribute("dir", "auto");
+    expect((await product.innerText()).trim()).toMatch(/^المنتج\s*\d+$/);
   });
 
   /**
@@ -467,9 +595,9 @@ test.describe("Arabic", () => {
      * test that quietly stops asserting anything as the fixtures age.
      */
     const twoDaysAgo = new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 10);
-    await openMoves(page, "ar", `&date_to=${twoDaysAgo}`);
+    await openMoves(page, "ar", `?date_to=${twoDaysAgo}`);
 
-    const stamp = await page.getByTestId("movement-time").first().innerText();
+    const stamp = await shown(page.getByTestId("movement-time")).innerText();
 
     // The RLMs ICU inserted are still there — stripping them would be the other
     // wrong fix — and the components are in their formatted order.
@@ -479,18 +607,18 @@ test.describe("Arabic", () => {
 
   test("renders without horizontal overflow", async ({ page }) => {
     await signIn(page, "ar");
-    for (const view of ["", "?view=all", "?view=moves"]) {
-      await page.goto(`/ar/inventory${view}`);
-      await page.waitForSelector(
-        view === "?view=moves"
-          ? '[data-testid="movements-count"]'
-          : '[data-testid="inventory-count"]',
-      );
+    for (const [route, marker] of [
+      ["/ar/inventory", "inventory-count"],
+      ["/ar/inventory?view=all", "inventory-count"],
+      ["/ar/inventory/movements", "movements-count"],
+    ] as const) {
+      await page.goto(route);
+      await page.waitForSelector(`[data-testid="${marker}"]`);
       const overflow = await page.evaluate(
         () =>
           document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
-      expect(overflow, `overflow on ${view || "low"}`).toBeLessThanOrEqual(1);
+      expect(overflow, `overflow on ${route}`).toBeLessThanOrEqual(1);
     }
   });
 });
@@ -518,6 +646,11 @@ test.describe("the forbidden state", () => {
     await expect(page.getByText(/permission Stock/)).toBeVisible();
     await expect(page).not.toHaveURL(/login/);
 
+    // And so does the ledger, which is its own route now.
+    await page.goto("/fr/inventory/movements");
+    await expect(page.getByText(/permission Stock/)).toBeVisible();
+    await expect(page).not.toHaveURL(/login/);
+
     // Still signed in: a screen they can reach still works.
     await page.goto("/fr/orders");
     await expect(page).not.toHaveURL(/login/);
@@ -531,30 +664,35 @@ test.describe("the loading state", () => {
    * in flight.
    *
    * Arabic matters on its own — `[dir="rtl"]` sets the root font size a step
-   * larger, so every line box grows and the row is 75px against the Latin 71. A
-   * skeleton built from fixed pixel heights would match in French and be 4px
-   * short per row in Arabic, over twenty rows.
+   * larger, so every line box grows and the rows grow with it. A skeleton built
+   * from fixed pixel heights would match in French and be short in Arabic, over
+   * twenty rows.
+   *
+   * Both sides are read at whichever presentation the running project paints:
+   * `DataTable` keeps a table and a record list in the DOM together, and
+   * `TableSkeleton` and `RecordListSkeleton` mirror one each. The real row is a
+   * `<tr>` or an `<li>`; the placeholder is a `.ui-row` band or a `.ui-card`.
    */
   for (const locale of ["fr", "ar"]) {
     test(`the skeleton row matches the real row in ${locale}`, async ({ page }) => {
       await signIn(page, locale);
-      await openInventory(page, locale);
-      const real = await page
-        .locator('a[href*="/inventory/"]')
-        .first()
-        .evaluate((el) => el.getBoundingClientRect().height);
+      await openMoves(page, locale);
+      const real = await shown(page.locator("tbody tr, li.ui-card")).evaluate(
+        (el) => el.getBoundingClientRect().height,
+      );
 
-      // The ledger is never prefetched by the server, so blocking the proxy
-      // leaves the client query pending, which is the skeleton.
+      // The ledger's rows are client-fetched, so blocking the proxy leaves the
+      // query pending, which is the skeleton.
       await page.route("**/api/ac/inventory/movements?**", () => {});
-      await page.goto(`/${locale}/inventory?view=moves`, {
+      await page.goto(`/${locale}/inventory/movements`, {
         waitUntil: "domcontentloaded",
       });
       await page.waitForSelector('[role="status"][aria-busy="true"]');
-      const skeleton = await page
-        .locator('[role="status"][aria-busy="true"] > div')
-        .first()
-        .evaluate((el) => el.getBoundingClientRect().height);
+      const skeleton = await shown(
+        page.locator(
+          '[role="status"][aria-busy="true"] .ui-row, [role="status"][aria-busy="true"] > .ui-card',
+        ),
+      ).evaluate((el) => el.getBoundingClientRect().height);
 
       expect(Math.abs(real - skeleton)).toBeLessThanOrEqual(1);
     });

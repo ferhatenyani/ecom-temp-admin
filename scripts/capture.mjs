@@ -138,6 +138,14 @@ const DEFAULT_ROUTES = [
   "/customers",
   "/customers/24",
   "/inventory",
+  /* 201 tracks its own stock and refuses backorders, so it is the row whose
+     adjust form can reach both refusals. 103 manages no stock at all and 9032
+     inherits its parent's — the two states `displayQuantity()` and
+     `adjustTarget()` exist for — and both are worth capturing by name rather
+     than by default:
+
+         node scripts/capture.mjs /inventory/103 /inventory/9032          */
+  "/inventory/201",
   "/coupons",
 ];
 
