@@ -220,22 +220,49 @@ rows instead of five.
 
 ---
 
-## 7. Coupons — mock only
+## 7. Coupons — mock done, screens not built
 
-The write surface is mocked and verified; the screens are not built.
-
-Ready for whoever picks this up: `search` and three-state `status` now filter,
-`eligible-products`/`eligible-categories` are served, and the writes reproduce
-rules that are **not** the product rules — a read-only key is refused rather than
-dropped, `PATCH {}` is a 200 no-op, and a duplicate code is a 409 under
-`details.code` carrying the lower-cased form. Fixtures exist for a stale
+The write surface is mocked and verified. `search` and three-state `status` now
+filter, `eligible-products`/`eligible-categories` are served, and the writes
+reproduce rules that are **not** the product rules — a read-only key is refused
+rather than dropped, `PATCH {}` is a 200 no-op, and a duplicate code is a 409
+under `details.code` carrying the lower-cased form. Fixtures exist for a stale
 restriction, a trashed coupon and a non-zero usage count.
 
-**Known bug to fix when building it:** a 400 on a restriction id currently
-renders nowhere — errors are keyed by field, the restriction rows render none,
-and the orphan fallback only fires for keys *not* in the draft. `product_ids` is
-in the draft, so that refusal is a silent failed save. Also, the restriction rows
-mix draft counts with saved names.
+**Decisions already resolved** (from the scout; build to them):
+
+- List: `DataTable`/`RecordList` + `columns.tsx`, status `FilterTabs` — three
+  states, the first sending nothing, because absent means publish AND draft.
+  Search. **No sorting** — `orderby` is validated with no positive control.
+- **No peek** — the detail is the row plus `restrictions`, the test customers
+  failed. Identifying cell is a real `<a href>`, table presentation only.
+- **One component** for `/new` and `/{id}`, not two.
+- **`PageBody width="form"` (640), not `DetailGrid`** — §2.3 lists coupon in the
+  form row, and unlike products this screen has no read-only report half.
+- Restriction picker: a **`Drawer`** with real checkboxes via `Form.tsx`'s
+  `CheckRow` (the current `role="checkbox"` on a `<button>` is what the new form
+  layer retires), and its search **submit-gated** — it currently fires a request
+  per keystroke and can be opened four times per form.
+- Sticky `SaveBar` when dirty. Delete in a header `Menu` → `ConfirmDialog`;
+  permanent delete requires typing the identifier.
+- `loading.tsx` for all three routes. Drop the list's `StaleBanner` (no writes to
+  disable). Delete the dead `coupons.percentValue` key.
+
+**Two real bugs to fix:**
+1. **A 400 on a restriction id renders nowhere — a silent failed save.** Errors
+   are keyed by field, the restriction rows render none, and the orphan fallback
+   only fires for keys *not* in the draft. `product_ids` is in the draft. Wire
+   `ErrorSummary`; the mock produces this refusal, so verify it lands.
+2. The restriction rows **mix draft counts with saved names** — add a product to
+   a field that already had one and it shows the old names beside the new count.
+
+**Measurements that must survive:** `amount: "0.00"` is a real coupon while a
+zero threshold is stored as null and can never read back as `"0.00"` — both
+directions on one object. `date_expires` is written `Y-m-d` and read back full
+ISO, so only `expiryInputValue()` may put it in a control. `missing` is on every
+restriction row, not just broken ones, because filtering stale ids out would
+silently delete them on the next save. The code folds on keystroke so the 409
+names a code the person recognises.
 
 ---
 
