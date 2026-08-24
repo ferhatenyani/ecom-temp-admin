@@ -4,6 +4,18 @@
  *   node scripts/capture.mjs /orders /products
  *   node scripts/capture.mjs --all
  *   npm run test:harness -- /orders
+ *   MOCK_IDENTITY=reduced node scripts/capture.mjs /orders/1023
+ *
+ * **The last line is how a forbidden state gets captured.** The mock's default
+ * identity holds all thirteen capabilities, which is what a harness whose job is
+ * to render screens needs and is also why no screen could be captured in the
+ * forbidden state DESIGN.md §3.7 requires of every one of them. `MOCK_IDENTITY`
+ * is read by `scripts/mock-api.mjs` at module load — so it is a whole run, not a
+ * per-capture switch — and `reduced` drops `ac_manage_shipping` and
+ * `ac_manage_payments`, which is what makes the order detail's parcels and
+ * payments sections absent rather than empty. Its screenshots land beside the
+ * default run's with an `-reduced` suffix, so capture one run then the other and
+ * compare the pair in the same folder.
  *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
@@ -44,6 +56,18 @@ const MOCK = `http://127.0.0.1:${MOCK_PORT}`;
 const OUT = resolve(ROOT, ".impeccable/harness");
 
 /**
+ * A reduced-identity run writes **beside** the default one rather than over it:
+ * same route directory, an `-<identity>` suffix on the file. The whole point of
+ * capturing a forbidden state is to hold it against the permitted one, and a run
+ * that overwrote the first would leave nothing to compare.
+ *
+ * A suffix rather than a directory of its own, because `.gitignore` covers
+ * `.impeccable/harness/` and a sibling directory would arrive untracked.
+ */
+const IDENTITY = process.env.MOCK_IDENTITY ?? "full";
+const SUFFIX = IDENTITY === "full" ? "" : `-${IDENTITY}`;
+
+/**
  * 340 is below the narrowest phone Apple ships and is deliberately the floor:
  * the widths that break are the ones nobody designs at. 768 is the tablet
  * breakpoint and 1440 is where the sidebar is persistent.
@@ -52,8 +76,25 @@ const WIDTHS = [340, 768, 1440];
 const THEMES = ["light", "dark"];
 const LOCALES = ["fr", "ar"];
 
-/** What `--all` means: the screens the mock's endpoints can actually serve. */
-const DEFAULT_ROUTES = ["/orders", "/products", "/customers", "/inventory", "/coupons"];
+/**
+ * What `--all` means: the screens the mock's endpoints can actually serve.
+ *
+ * `/orders/1023` is the one detail here, and the id is not arbitrary. It is the
+ * richest order in the fixture shop — three line items all carrying the
+ * 60-character SKU, a customer whose name is Arabic with a Latin order number
+ * inside it, a customer note, three order notes, a seven-entry timeline, a
+ * confirmed COD record, a finished parcel from a provider `/shipping/providers`
+ * does not list, and two payments in two states. Every section of the detail has
+ * something in it, which is what makes one capture worth taking.
+ */
+const DEFAULT_ROUTES = [
+  "/orders",
+  "/orders/1023",
+  "/products",
+  "/customers",
+  "/inventory",
+  "/coupons",
+];
 
 /* -------------------------------------------------------------- the cookie --- */
 
@@ -229,7 +270,7 @@ async function capture(browser, cookie, route, width, theme, locale) {
 
     const dir = resolve(OUT, slugOf(route));
     mkdirSync(dir, { recursive: true });
-    const file = resolve(dir, `${width}-${theme}-${locale}.png`);
+    const file = resolve(dir, `${width}-${theme}-${locale}${SUFFIX}.png`);
     await page.screenshot({ path: file, fullPage: true });
 
     const measured = await page.evaluate(() => ({
@@ -355,7 +396,7 @@ try {
   browser = await chromium.launch();
 
   console.log(
-    `capture: build ${buildId}, panel ${PANEL}, mock ${MOCK}${BASE_PATH}\n` +
+    `capture: build ${buildId}, panel ${PANEL}, mock ${MOCK}${BASE_PATH}, identity ${IDENTITY}\n` +
       `capture: ${routes.length} route(s) × ${WIDTHS.length} widths × ${THEMES.length} themes ×` +
       ` ${LOCALES.length} locales = ${routes.length * WIDTHS.length * THEMES.length * LOCALES.length} captures\n`,
   );

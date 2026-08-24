@@ -107,11 +107,11 @@
       "noNotes": "Aucune note.",
       "system": "Système",
       "editableNo": "Les articles ne peuvent plus être modifiés : le stock a été décrémenté.",
-      "editableYes": "Les articles sont encore modifiables.",
       "sectionFailed": "Cette section n’a pas pu être chargée.",
       "parcelSeparate": "Le statut du colis est distinct de celui de la commande.",
       "wilaya": "Wilaya",
-      "customerNotes": "Notes du client"
+      "customerNotes": "Notes du client",
+      "item": "Article"
     },
     "changeStatus": {
       "action": "Changer le statut",
@@ -126,7 +126,11 @@
       "refused": "Ce changement a été refusé.",
       "refusedFromTo": "Une commande ne peut pas passer de {from} à {to}.",
       "allowedAre": "Changements autorisés :",
-      "allowedNone": "Aucun changement n’est possible depuis ce statut."
+      "allowedNone": "Aucun changement n’est possible depuis ce statut.",
+      "confirmTitle": "Passer la commande à {status} ?",
+      "confirmBody": "{status} est un statut terminal : plus aucun changement ne sera possible ensuite.",
+      "confirmCancel": "Annuler la commande",
+      "confirmRefund": "Rembourser la commande"
     },
     "clearSearch": "Effacer la recherche",
     "refresh": "Actualiser",
@@ -147,7 +151,8 @@
       "total": "Total",
       "status": "Statut",
       "id": "ID"
-    }
+    },
+    "readOnly": "Vous n’avez pas la permission de modifier cette commande."
   },
   "status": {
     "pending": "En attente",
@@ -885,7 +890,12 @@
     "parcelsForOrder": "Colis",
     "noParcelsForOrder": "Aucun colis pour cette commande.",
     "parcelSeparate": "Le statut du colis ne fait jamais avancer la commande.",
-    "cancelShort": "Annuler"
+    "cancelShort": "Annuler",
+    "destination": "Destination",
+    "destinationNote": "Le transporteur a besoin d’une destination explicite : elle n’est pas reprise de l’adresse de la commande.",
+    "carriage": "Acheminement",
+    "pickDestinationFirst": "Choisissez une wilaya et une commune.",
+    "noTracking": "Sans numéro de suivi"
   },
   "payments": {
     "title": "Paiements",
@@ -904,12 +914,10 @@
     "verifying": "Vérification…",
     "verified": "Vérifié — le fournisseur indique {status}",
     "verifyFailed": "La vérification a échoué.",
-    "verifyNote": "La vérification interroge le fournisseur et enregistre sa réponse. C’est cette réponse qui fait foi, jamais un retour du navigateur.",
     "report": "Réponse du fournisseur",
     "reportStatus": "Statut retenu",
     "reportProviderStatus": "Terme du fournisseur",
     "reportNoAmount": "Le fournisseur n’a renvoyé aucun montant.",
-    "settledNote": "Un paiement encaissé n’est pas terminé : seul un remboursement peut encore le suivre.",
     "several": "Plusieurs transactions par commande sont normales — un lien de paiement abandonné en laisse une derrière lui.",
     "count": "{count, plural, =0 {aucune transaction} one {# transaction} other {# transactions}}",
     "verifyShort": "Vérifier"
@@ -962,7 +970,9 @@
     "rateCancellation": "Annulation",
     "rateDelivery": "Livraison",
     "rateReturn": "Retour",
-    "rateBase": "Rapporté aux {total} commandes concernées."
+    "rateBase": "Rapporté aux {total} commandes concernées.",
+    "reasonHint": "Ce que le client a dit. Facultatif, {limit} caractères au maximum.",
+    "reasonCount": "{count} / {limit}"
   },
   "analytics": {
     "title": "Analyses",

@@ -107,11 +107,11 @@
       "noNotes": "لا ملاحظات.",
       "system": "النظام",
       "editableNo": "لا يمكن تعديل العناصر: تم خصم المخزون.",
-      "editableYes": "لا يزال بالإمكان تعديل العناصر.",
       "sectionFailed": "تعذّر تحميل هذا القسم.",
       "parcelSeparate": "حالة الشحنة مستقلة عن حالة الطلب.",
       "wilaya": "الولاية",
-      "customerNotes": "ملاحظات العميل"
+      "customerNotes": "ملاحظات العميل",
+      "item": "العنصر"
     },
     "changeStatus": {
       "action": "تغيير الحالة",
@@ -126,7 +126,11 @@
       "refused": "تم رفض هذا التغيير.",
       "refusedFromTo": "لا يمكن للطلب الانتقال من {from} إلى {to}.",
       "allowedAre": "التغييرات المسموح بها:",
-      "allowedNone": "لا يمكن أي تغيير من هذه الحالة."
+      "allowedNone": "لا يمكن أي تغيير من هذه الحالة.",
+      "confirmTitle": "نقل الطلب إلى {status}؟",
+      "confirmBody": "{status} حالة نهائية: لن يكون أي تغيير ممكنًا بعدها.",
+      "confirmCancel": "إلغاء الطلب",
+      "confirmRefund": "استرجاع مبلغ الطلب"
     },
     "clearSearch": "إزالة البحث",
     "refresh": "تحديث",
@@ -147,7 +151,8 @@
       "total": "الإجمالي",
       "status": "الحالة",
       "id": "المعرف"
-    }
+    },
+    "readOnly": "ليست لديك صلاحية تعديل هذا الطلب."
   },
   "status": {
     "pending": "في الانتظار",
@@ -885,7 +890,12 @@
     "parcelsForOrder": "الطرود",
     "noParcelsForOrder": "لا توجد طرود لهذه الطلبية.",
     "parcelSeparate": "حالة الطرد لا تُحرّك الطلبية أبدًا.",
-    "cancelShort": "إلغاء"
+    "cancelShort": "إلغاء",
+    "destination": "الوجهة",
+    "destinationNote": "يحتاج الناقل إلى وجهة صريحة: لا تُؤخذ من عنوان الطلب.",
+    "carriage": "طريقة الإرسال",
+    "pickDestinationFirst": "اختر ولاية وبلدية.",
+    "noTracking": "بلا رقم تتبّع"
   },
   "payments": {
     "title": "المدفوعات",
@@ -904,12 +914,10 @@
     "verifying": "جارٍ التحقق…",
     "verified": "تم التحقق — المزوّد يقول {status}",
     "verifyFailed": "فشل التحقق.",
-    "verifyNote": "التحقق يسأل المزوّد ويسجّل جوابه. هذا الجواب هو المرجع، لا ما يعود من المتصفح.",
     "report": "جواب المزوّد",
     "reportStatus": "الحالة المعتمدة",
     "reportProviderStatus": "مصطلح المزوّد",
     "reportNoAmount": "لم يُرجع المزوّد أي مبلغ.",
-    "settledNote": "الدفعة المحصّلة ليست منتهية: لا يزال الاسترجاع ممكنًا بعدها.",
     "several": "تعدد المعاملات على الطلب الواحد أمر طبيعي — رابط دفع متروك يترك واحدة خلفه.",
     "count": "{count, plural, zero {لا معاملات} one {معاملة واحدة} two {معاملتان} few {# معاملات} many {# معاملة} other {# معاملة}}",
     "verifyShort": "تحقّق"
@@ -962,7 +970,9 @@
     "rateCancellation": "الإلغاء",
     "rateDelivery": "التسليم",
     "rateReturn": "الإرجاع",
-    "rateBase": "منسوبة إلى {total} طلب معني."
+    "rateBase": "منسوبة إلى {total} طلب معني.",
+    "reasonHint": "ما قاله العميل. اختياري، {limit} حرفًا كحد أقصى.",
+    "reasonCount": "{count} / {limit}"
   },
   "analytics": {
     "title": "التحليلات",

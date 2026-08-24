@@ -292,10 +292,25 @@ navigation model for phones.
   Dismisses on navigation, on backdrop, on Escape.
 - The bottom tab bar is gone. It is not coming back.
 
-**Top bar, all sizes:** breadcrumb (`lg`+), global search opening the command
-palette (`⌘K` / `Ctrl K`), theme toggle, account menu. It scrolls away with the
-page; it is not sticky. A sticky top bar plus a sticky table header eats 104px
-of a 768px-tall laptop viewport.
+**Top bar, below `lg` only:** global search opening the command palette
+(`⌘K` / `Ctrl K`), theme toggle, account menu. It scrolls away with the page; it
+is not sticky. A sticky top bar plus a sticky table header eats 104px of a
+768px-tall laptop viewport.
+
+> **Amended on the orders-detail branch — there is no breadcrumb, because at
+> `lg`+ there is no bar to put one in.**
+>
+> This section used to say "Top bar, all sizes: breadcrumb (`lg`+), …". That was
+> written against a shell that does not exist: `AppShell` renders the top bar
+> `lg:hidden`, because at `lg`+ the sidebar replaces it entirely. So the
+> breadcrumb was specified for a piece of chrome that is absent at exactly the
+> widths it was specified for, and no screen ever rendered one.
+>
+> The consequence was live and not theoretical: with `PageHeader`'s `back` link
+> also `lg:hidden` — §2.4 said it was only needed below `lg` — a detail screen on
+> a desktop had **no way back to its list** except the sidebar's own nav item,
+> which discards whatever filter the person arrived with. `back` is now rendered
+> at every width. See §2.4.
 
 ### 2.3 Content widths and gutters
 
@@ -314,6 +329,14 @@ Gutters: **16px** base · **24px** `sm`+ · **32px** `xl`+.
 Two-column detail collapses to one below `lg`, aside content moving **below**
 main — never above. On an order screen the reader came for the items, not for
 the metadata card.
+
+`DetailGrid` in `components/ui/Detail.tsx` is the primitive, and `main`/`aside`
+are props rather than children precisely so DOM order — which is the collapse
+order — cannot be got wrong by a caller who writes the summary first because it
+reads first. `PageBody width="split"` caps the pair at **1152px**, which is
+derived rather than chosen: 768 (the single-column detail width above) + 24
+(the gutter) + 360 (the aside). The main column at its widest is exactly as wide
+as it would be if the aside were not there.
 
 ### 2.4 The page header
 
@@ -335,8 +358,18 @@ Orders                                    [ Export ]  [ + New order ]
   Stack only when every action carries a label and the row genuinely overflows.
 - A `border-b border-default` closes the block on list pages; detail pages omit
   it and let the first card do the separating.
-- Breadcrumb lives in the top bar at `lg`+, not here. Below `lg`, a single
-  back link sits above the title.
+- **A single back link sits above the title, at every width.** Amended on the
+  orders-detail branch; this used to read "Breadcrumb lives in the top bar at
+  `lg`+, not here. Below `lg`, a single back link sits above the title." The
+  breadcrumb half of that was written for a top bar that `AppShell` renders
+  `lg:hidden` — see §2.2 — so at `lg`+ neither the breadcrumb nor the back link
+  existed and a detail screen had no way back to its list.
+- **On a detail screen the primary action lives here, never in the aside.**
+  Below `lg` the aside collapses beneath a body whose length is the record's —
+  a three-item order and a thirty-item order put the same button at two very
+  different scroll offsets — and the panel's most-used control cannot sit at the
+  bottom of a page whose height is data-dependent. The aside carries status
+  *badges* and dates, which are display, not action.
 
 ---
 

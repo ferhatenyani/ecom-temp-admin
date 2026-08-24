@@ -26,6 +26,47 @@ async function signIn(page: Page, locale: string) {
   await page.waitForSelector('[data-testid="orders-count"]');
 }
 
+/**
+ * The rows, in whichever presentation this project's viewport is showing.
+ *
+ * This replaces `a[href*="/orders/"]`, which appeared ten times in this file and
+ * no longer identifies anything: the redesigned list is a `DataTable` at `md`+
+ * and a stacked `RecordList` below it, and **neither emits a row anchor**. A row
+ * opens a preview drawer rather than navigating, so the only order links on the
+ * screen are inside that drawer and inside each row's action menu.
+ *
+ * Both presentations are always in the DOM with one hidden per breakpoint, so a
+ * bare `tbody tr` counts correctly and then times out clicking a row that is
+ * `display: none`. `filter({ visible: true })` is what makes one selector honest
+ * at every width. Same helper, same reasoning, as `e2e/products.spec.ts`.
+ */
+function rows(page: Page) {
+  return page.locator("tbody tr, main li.ui-card").filter({ visible: true });
+}
+
+/** The status tab strip. Replaces `getByRole("radiogroup")`, which was
+ *  `Segmented`; `FilterTabs` is a `<nav>` of buttons with `aria-current`. */
+function statusTabs(page: Page) {
+  return page.getByRole("navigation", { name: /^(Statut|الحالة)$/ });
+}
+
+/**
+ * Open the full detail for the first row.
+ *
+ * Two clicks now instead of one, and the extra one is the point: a row opens the
+ * peek, and the peek is what carries the link to the full page.
+ */
+async function openFirstOrder(page: Page) {
+  const row = rows(page).first();
+  await expect(row).toBeVisible();
+  await row.click();
+
+  const peek = page.getByRole("dialog");
+  await expect(peek).toBeVisible();
+  await peek.getByRole("link", { name: /Ouvrir|فتح/ }).click();
+  await page.waitForURL(/\/orders\/\d+/);
+}
+
 test.describe("the credential boundary", () => {
   test("signs in with a valid Application Password", async ({ page }) => {
     await signIn(page, "fr");
@@ -76,7 +117,10 @@ test.describe("the credential boundary", () => {
     await page.fill("#username", USER!);
     await page.fill("#password", "definitely not the right password");
     await page.click('button[type="submit"]');
-    const alert = page.getByRole("alert");
+    /* Scoped to `main`: Next mounts its own route announcer as a second
+       `role="alert"` on every page, so an unscoped `getByRole("alert")` is a
+       strict-mode violation rather than the form's refusal. */
+    const alert = page.locator("main").getByRole("alert");
     await expect(alert).toBeVisible();
     const wrongPassword = await alert.innerText();
 
@@ -86,8 +130,8 @@ test.describe("the credential boundary", () => {
     await page.fill("#username", "no-such-user-exists-here");
     await page.fill("#password", "definitely not the right password");
     await page.click('button[type="submit"]');
-    await expect(page.getByRole("alert")).toBeVisible();
-    const noSuchUser = await page.getByRole("alert").innerText();
+    await expect(alert).toBeVisible();
+    const noSuchUser = await alert.innerText();
 
     expect(noSuchUser).toBe(wrongPassword);
   });
@@ -130,37 +174,36 @@ test.describe("the orders list", () => {
   test("renders real orders, and the filter lives in the URL", async ({ page }) => {
     await signIn(page, "fr");
 
-    const rows = page.locator('a[href*="/orders/"]');
-    await expect(rows.first()).toBeVisible();
-    const unfiltered = await rows.count();
+    await expect(rows(page).first()).toBeVisible();
+    const unfiltered = await rows(page).count();
     expect(unfiltered).toBeGreaterThan(0);
 
-    // The segmented control writes the URL, so a link is shareable and the back
-    // button works.
-    //
-    // Clicked on the label, which is what a person touches — the radio itself is
-    // `sr-only` (present for the keyboard and the accessibility tree, and the
-    // native label association is what makes the tap work). Driving the hidden
-    // input directly is a gesture no user makes.
-    await page
-      .getByRole("radiogroup")
-      .getByText(/^(En cours|المعالجة)$/)
+    // The tab strip writes the URL, so a link is shareable and the back button
+    // works. A real `<button>` now, rather than the label of an `sr-only` radio
+    // — `FilterTabs` replaced `Segmented`, which could hold four of eight
+    // statuses and pushed `on-hold` and `failed` into a sheet.
+    await statusTabs(page)
+      .getByRole("button", { name: /^(En traitement|قيد المعالجة)$/ })
       .click();
     await expect(page).toHaveURL(/status=processing/);
     await page.waitForTimeout(600);
 
-    // Every visible badge now reads the filtered status. This is the assertion
-    // that the filter reached the API rather than only the URL.
-    const badges = await page
-      .locator('a[href*="/orders/"] span.tonal')
-      .allInnerTexts();
-    expect(badges.length).toBeGreaterThan(0);
-    for (const badge of badges) expect(badge).toMatch(/En traitement|قيد المعالجة/);
+    /*
+     * Every visible row now reads the filtered status. This is the assertion
+     * that the filter reached the API rather than only the URL, and it is made
+     * on the row's own text rather than on `span.tonal`: `.tonal` was the old
+     * badge class and is gone — `Badge` pairs `-fg`/`-bg` tokens precisely
+     * because `.tonal` failed contrast on four of five tones — and a class name
+     * was never what this test was about.
+     */
+    const texts = await rows(page).allInnerTexts();
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text).toMatch(/En traitement|قيد المعالجة/);
 
     // And back restores the unfiltered list.
     await page.goBack();
     await page.waitForTimeout(600);
-    await expect(page.locator('a[href*="/orders/"]').first()).toBeVisible();
+    await expect(rows(page).first()).toBeVisible();
   });
 
   test("an impossible filter shows the empty state, not a blank list", async ({ page }) => {
@@ -169,7 +212,7 @@ test.describe("the orders list", () => {
     await page.goto("/fr/orders?search=Nadia");
     await page.waitForSelector('[data-testid="orders-count"]');
     await page.waitForTimeout(700);
-    await expect(page.locator('a[href*="/orders/"]').first()).toBeVisible();
+    await expect(rows(page).first()).toBeVisible();
 
     // The negative: a search that matches nothing offers to clear itself.
     await page.goto("/fr/orders?search=zzzzzz-no-such-customer-zzzzzz");
@@ -182,11 +225,12 @@ test.describe("the orders list", () => {
 test.describe("the order detail and its write path", () => {
   test("renders sub-resources and decodes the API's HTML entities", async ({ page }) => {
     await signIn(page, "fr");
-    await page.locator('a[href*="/orders/"]').first().click();
-    await page.waitForURL(/\/orders\/\d+/);
+    await openFirstOrder(page);
 
-    await expect(page.getByText(/Résumé/)).toBeVisible();
-    await expect(page.getByText(/Historique/)).toBeVisible();
+    // Real headings now, on real `Card` sections — `getByText` would also match
+    // the word inside a timeline entry.
+    await expect(page.getByRole("heading", { name: /Résumé/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Historique/ })).toBeVisible();
 
     // The timeline sends "(99&rarr;98)". React renders text, so an undecoded
     // entity appears verbatim on screen.
@@ -203,16 +247,31 @@ test.describe("the order detail and its write path", () => {
     await page.goto("/fr/orders?status=cancelled");
     await page.waitForSelector('[data-testid="orders-count"]');
     await page.waitForTimeout(700);
-    await page.locator('a[href*="/orders/"]').first().click();
-    await page.waitForURL(/\/orders\/\d+/);
+    await openFirstOrder(page);
 
+    /*
+     * The status picker is a `Menu` from the header's primary action, not a
+     * bottom `ActionSheet` full of buttons. So the trigger is a button and the
+     * moves are `role="menuitem"` — which is the accessible contract a menu owes
+     * and the sheet never had.
+     */
     await page.getByRole("button", { name: /Changer le statut/ }).click();
     // Offer a move the API must refuse from a terminal status.
-    await page.getByRole("button", { name: /Passer à En traitement/ }).click();
+    await page.getByRole("menuitem", { name: /Passer à En traitement/ }).click();
 
-    // The refusal renders on the screen and stays there — a 409 is not a toast.
-    await expect(page.getByText(/ne peut pas passer de/)).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(/Aucun changement n’est possible/)).toBeVisible();
+    /*
+     * The refusal renders on the screen and stays there — a 409 is not a toast.
+     * It is now one `role="alert"` region at the top of the body, above the
+     * two-column grid, rather than inside whichever section was refused: below
+     * `lg` the aside sits under a line-item list of unknown length, so a refusal
+     * rendered there is a refusal nobody scrolls to.
+     */
+    /* Scoped to `main`: Next mounts its own route announcer as a second
+       `role="alert"` on every page, so an unscoped `getByRole("alert")` is a
+       strict-mode violation rather than this screen's refusal. */
+    const alert = page.locator("main").getByRole("alert");
+    await expect(alert).toContainText(/ne peut pas passer de/, { timeout: 15000 });
+    await expect(alert).toContainText(/Aucun changement n’est possible/);
 
     // And the control is now disabled, from the API's answer rather than from a
     // transition table copied into the panel.
@@ -227,17 +286,51 @@ test.describe("the order detail and its write path", () => {
     await page.goto("/fr/orders?status=pending");
     await page.waitForSelector('[data-testid="orders-count"]');
     await page.waitForTimeout(700);
-    await page.locator('a[href*="/orders/"]').first().click();
-    await page.waitForURL(/\/orders\/\d+/);
+    await openFirstOrder(page);
 
     await page.getByRole("button", { name: /Changer le statut/ }).click();
-    await page.getByRole("button", { name: /Passer à En traitement/ }).click();
+    await page.getByRole("menuitem", { name: /Passer à En traitement/ }).click();
 
     // The toast confirms; the screen is the record.
     await expect(page.getByText(/Statut mis à jour/)).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(/Statut actuel : En traitement/)).toBeVisible({
-      timeout: 15000,
-    });
+
+    /*
+     * The status now reads back from the aside's summary card rather than from
+     * "Statut actuel : En traitement", which was `StatusAction`'s own line and
+     * is gone: the act moved to the header and the *display* stayed behind as a
+     * `Badge` on the Résumé card. Same assertion — the transition took and the
+     * server-rendered screen agrees — read off the place that now carries it.
+     */
+    const summary = page.locator("aside").filter({ hasText: /Résumé/ }).first();
+    await expect(summary).toContainText(/En traitement/, { timeout: 15000 });
+  });
+
+  /**
+   * A move into a terminal status is destructive and goes through
+   * `ConfirmDialog`, whose button names the act — "Annuler la commande", never
+   * "OK". DESIGN.md §3.1 requires both halves and nothing asserted either.
+   */
+  test("cancelling asks first, with a button that names the act", async ({ page }) => {
+    await signIn(page, "fr");
+    await page.goto("/fr/orders?status=pending");
+    await page.waitForSelector('[data-testid="orders-count"]');
+    await page.waitForTimeout(700);
+    await openFirstOrder(page);
+
+    await page.getByRole("button", { name: /Changer le statut/ }).click();
+    await page.getByRole("menuitem", { name: /Passer à Annulée/ }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Annuler la commande" })).toBeVisible();
+
+    /*
+     * Deliberately not completing it. This test proves the guard, and a suite
+     * that cancels a real order to do so cannot be re-run — the same reasoning
+     * `e2e/products.spec.ts` gives for its permanent-deletion test.
+     */
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
   });
 });
 
@@ -250,8 +343,13 @@ test.describe("Arabic and RTL", () => {
 
     // Assert the rendered string, not the DOM attribute: the attribute half
     // cannot catch a bidi bug.
-    const number = await page
-      .locator('a[href*="/orders/"] span[dir="ltr"]')
+    //
+    // Scoped to a *visible* row, because both presentations are in the DOM at
+    // every width and `innerText` of a `display: none` subtree is its raw text
+    // content — which would pass this without anything having been laid out.
+    const number = await rows(page)
+      .first()
+      .locator('span[dir="ltr"]')
       .first()
       .innerText();
     expect(number.trim()).toMatch(/^#\d+$/);
@@ -264,10 +362,9 @@ test.describe("Arabic and RTL", () => {
 
   test("a SKU inside Arabic text keeps its direction", async ({ page }) => {
     await signIn(page, "ar");
-    await page.locator('a[href*="/orders/"]').first().click();
-    await page.waitForURL(/\/orders\/\d+/);
+    await openFirstOrder(page);
 
-    const isolated = page.locator('span[dir="ltr"]');
+    const isolated = page.locator('main span[dir="ltr"]');
     expect(await isolated.count()).toBeGreaterThan(0);
     for (const element of await isolated.all()) {
       // Every identifier is isolated, or the bidi algorithm reorders it silently.
@@ -283,10 +380,8 @@ test.describe("Arabic and RTL", () => {
     await page.goto("/ar/orders?search=Probe");
     await page.waitForSelector('[data-testid="orders-count"]');
     await page.waitForTimeout(700);
-    const row = page.locator('a[href*="/orders/"]').first();
-    if ((await row.count()) === 0) test.skip(true, "no probe order on this install");
-    await row.click();
-    await page.waitForURL(/\/orders\/\d+/);
+    if ((await rows(page).count()) === 0) test.skip(true, "no probe order on this install");
+    await openFirstOrder(page);
 
     // Asserted on the rendered string, because the attribute half cannot catch a
     // bidi bug — this is the whole point of the rule.

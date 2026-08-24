@@ -16,18 +16,32 @@
  */
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { BASE_PATH, respond, type MockResponse } from "@/scripts/mock-api.mjs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BASE_PATH, resetState, respond, type MockResponse } from "@/scripts/mock-api.mjs";
 import { unwrap, listMeta } from "@/lib/api/envelope";
 import { ApiError } from "@/lib/api/errors";
-import type { z } from "zod";
+import { decodeEntities } from "@/lib/format/html";
+import { z } from "zod";
 
 import {
+  codRecord,
   identity,
   order,
   orderList,
+  orderNotes,
+  timeline,
   wilayas,
 } from "@/lib/api/schemas/order";
+import {
+  shipment as shipmentSchema,
+  shipments as shipmentsSchema,
+  shippingProviders,
+} from "@/lib/api/schemas/shipping";
+import {
+  paymentMethods,
+  payments as paymentsSchema,
+  verifyResult,
+} from "@/lib/api/schemas/payment";
 import {
   attributeTerms,
   facets as facetsSchema,
@@ -45,6 +59,22 @@ import { coupon, couponDetail, couponList } from "@/lib/api/schemas/coupon";
 function get(path: string, query = ""): MockResponse {
   return respond("GET", `${BASE_PATH}${path}`, new URLSearchParams(query));
 }
+
+/**
+ * The writes. A body is passed through exactly as the panel's `acWrite()` sends
+ * it — `POST /payments/{id}/verify` sends none at all, which is why `body` is
+ * optional here rather than defaulted to `{}`.
+ */
+function write(method: string, path: string, body?: unknown): MockResponse {
+  return respond(method, `${BASE_PATH}${path}`, new URLSearchParams(), body ?? null);
+}
+
+/**
+ * A write in one test must not be readable by the next. The mock's state is
+ * rebuilt from its seeds rather than unwound, which is the same thing that
+ * happens at every process start and is what keeps a capture run byte-stable.
+ */
+beforeEach(() => resetState());
 
 /** The panel's own boundary, applied to the mock's own output. */
 function parse<T>(schema: z.ZodType<T>, response: MockResponse) {
@@ -154,6 +184,538 @@ describe("GET /orders", () => {
   });
 });
 
+/**
+ * The five routes the detail hangs off an order. Each one is parsed with the
+ * schema the panel's own boundary uses, because a sub-resource the harness
+ * serves in a shape the panel would reject is a screen that renders here and
+ * throws in production.
+ */
+describe("the order detail's sub-resources", () => {
+  it("serves notes whose created_at carries NO offset, unlike the order's", () => {
+    const { data, meta } = parseList(orderNotes, get("/orders/1023/notes"));
+    expect(data.length).toBeGreaterThan(0);
+    expect(meta.total).toBe(data.length);
+
+    // The asymmetry `lib/format/date.ts` exists to repair, in two assertions:
+    // the note has no `T` and no offset, and the order beside it has both.
+    // `new Date()` reads the first as *local* time and shifts it silently.
+    for (const note of data) {
+      expect(note.created_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    }
+    expect(parse(order, get("/orders/1023")).data.date_created).toMatch(/T.+\+00:00$/);
+
+    // And a note the customer wrote is distinguishable from one the shop wrote,
+    // because the detail renders exactly that filter.
+    expect(data.some((note) => note.customer_note)).toBe(true);
+    expect(data.some((note) => !note.customer_note)).toBe(true);
+    // Escaped the way WordPress escapes a note body.
+    expect(data.some((note) => note.content.includes("&#039;"))).toBe(true);
+  });
+
+  it("serves an order with no notes as an empty list, not a 404", () => {
+    const { data, meta } = parseList(orderNotes, get("/orders/1004/notes"));
+    expect(data).toEqual([]);
+    expect(meta.total).toBe(0);
+  });
+
+  it("serves a timeline with an empty actor and entities left undecoded", () => {
+    const { data } = parseList(timeline, get("/orders/1023/timeline"));
+    expect(data.length).toBeGreaterThan(0);
+
+    // `""`, not null and not "system": a renderer that tested for truthiness and
+    // one that tested for null behave differently and only one is right.
+    const system = data.filter((entry) => entry.actor === "");
+    expect(system.length).toBeGreaterThan(0);
+    expect(data.every((entry) => typeof entry.actor === "string")).toBe(true);
+
+    // The entity arrives raw and the panel's own decoder is what turns it into
+    // an arrow. A fixture set of clean strings would let a screen stop calling
+    // this and still look right against the harness.
+    const stock = data.find((entry) => entry.summary.includes("&rarr;"));
+    expect(stock, "a timeline must carry an entity to decode").toBeDefined();
+    expect(decodeEntities(stock!.summary)).toContain("→");
+    expect(decodeEntities(stock!.summary)).not.toContain("&rarr;");
+
+    // The notes are already in it — measured — which is why the detail filters
+    // the notes collection down to the customer's own rather than reprinting
+    // every note a second time underneath.
+    const notes = parseList(orderNotes, get("/orders/1023/notes")).data;
+    for (const note of notes) {
+      expect(data.some((entry) => entry.summary === note.content)).toBe(true);
+    }
+  });
+
+  it("serves a COD record whose allowed_outcomes is the server's own answer", () => {
+    const { data, meta } = parse(codRecord, get("/orders/1023/cod"));
+    expect(meta).toBeNull();
+    expect(data.status).toBe("confirmed");
+    // Measured: a confirmed record allows only `confirmed`, because re-confirming
+    // changes nothing but the attempt count while `confirmed → rejected` is a
+    // different event entirely.
+    expect(data.allowed_outcomes).toEqual(["confirmed"]);
+
+    // The two records the refusals below are reachable from.
+    expect(parse(codRecord, get("/orders/1004/cod")).data.enabled).toBe(false);
+    expect(parse(codRecord, get("/orders/1006/cod")).data.allowed_outcomes).toEqual([]);
+  });
+
+  it("serves parcels, including a live one carrying a label credential", () => {
+    const live = parseList(shipmentsSchema, get("/orders/1014/shipments")).data;
+    expect(live).toHaveLength(1);
+    expect(live[0].is_live).toBe(true);
+    // `stripLabelUrls()` exists to keep this out of the RSC payload, so the
+    // harness has to serve a parcel that actually has one or the strip is never
+    // exercised by a capture.
+    expect(live[0].metadata.label).toEqual(expect.any(String));
+
+    const finished = parseList(shipmentsSchema, get("/orders/1023/shipments")).data;
+    expect(finished[0].is_live).toBe(false);
+    // A provider `/shipping/providers` does not list, exactly as shipment 213
+    // measured — so a label lookup has to fall back to the raw name.
+    const providers = parseList(shippingProviders, get("/shipping/providers")).data;
+    expect(providers.some((p) => p.name === finished[0].provider)).toBe(false);
+
+    expect(parseList(shipmentsSchema, get("/orders/1007/shipments")).data).toEqual([]);
+  });
+
+  it("serves payments, and a payment's stamp ends Z where a parcel's ends +00:00", () => {
+    const { data } = parseList(paymentsSchema, get("/orders/1023/payments"));
+    expect(data).toHaveLength(2);
+    // Both notations in one branch, which is why `parseApiDate()` is the only
+    // thing allowed to touch either.
+    expect(data.every((row) => row.created_at.endsWith("Z"))).toBe(true);
+    const parcel = parseList(shipmentsSchema, get("/orders/1023/shipments")).data[0];
+    expect(parcel.created_at.endsWith("+00:00")).toBe(true);
+
+    // A payment carries its own currency, like an order and unlike a product.
+    expect(data.every((row) => row.currency !== "")).toBe(true);
+    // And the amounts agree with the order they belong to, rather than being a
+    // second set of figures on the same screen.
+    const total = parse(order, get("/orders/1023")).data.total;
+    expect(data.every((row) => row.amount === total)).toBe(true);
+  });
+});
+
+describe("the detail's reference lists", () => {
+  it("serves exactly one shipping provider, and it is the default", () => {
+    const { data } = parseList(shippingProviders, get("/shipping/providers"));
+    expect(data).toHaveLength(1);
+    expect(data[0].name).toBe("manual");
+    expect(data[0].is_default).toBe(true);
+  });
+
+  it("serves the two payment methods, chargily first", () => {
+    const { data } = parseList(paymentMethods, get("/payments/methods"));
+    expect(data.map((row) => row.name)).toEqual(["chargily", "cod"]);
+    expect(data.filter((row) => row.is_default)).toHaveLength(1);
+  });
+
+  /**
+   * **This is the one route in this suite with no real schema to parse against,
+   * and it is written here rather than pretended away.** `CreateParcelSheet` and
+   * `RulesView` both read `/locations/wilayas/{id}/communes` with an untyped
+   * `acRead<Commune[]>` against a local `{id, name, name_ar}` — there is no Zod
+   * boundary anywhere in `lib/api/schemas` for it — so this asserts exactly the
+   * three keys those two components index into, and nothing more.
+   */
+  it("serves communes four segments deep, bilingual and paginated", () => {
+    const commune = z.array(
+      z.looseObject({ id: z.number(), name: z.string(), name_ar: z.string() }),
+    );
+    const { data, meta } = parseList(
+      commune,
+      get("/locations/wilayas/16/communes", "per_page=100"),
+    );
+    expect(data.length).toBeGreaterThan(0);
+    expect(meta.total).toBe(data.length);
+    expect(data.every((row) => row.name !== "" && row.name_ar !== "")).toBe(true);
+
+    // Genuinely paginated, unlike `/locations/wilayas` — the picker asks for 100.
+    expect(
+      parseList(commune, get("/locations/wilayas/16/communes", "per_page=2")).data,
+    ).toHaveLength(2);
+    // And a wilaya that does not exist is a 404 rather than an empty list.
+    expect(get("/locations/wilayas/999/communes").status).toBe(404);
+  });
+});
+
+/**
+ * The writes, and the one property that makes them worth having: a screen that
+ * patches and refetches sees the new value. Nothing here is unwound afterwards —
+ * `resetState()` in `beforeEach` rebuilds the whole thing from the seeds, which
+ * is exactly what a second process does at load.
+ */
+describe("the writes", () => {
+  it("patches a status and reads it back, with the derived flags recomputed", () => {
+    expect(parse(order, get("/orders/1023")).data.status).toBe("completed");
+
+    const patched = parse(order, write("PATCH", "/orders/1023", { status: "processing" })).data;
+    expect(patched.status).toBe("processing");
+
+    // The read after the write is the whole point.
+    const reread = parse(order, get("/orders/1023")).data;
+    expect(reread.status).toBe("processing");
+    // And the list agrees with the detail, because a filter that disagreed with
+    // the row it filtered would be a screen contradicting itself.
+    expect(
+      parseList(orderList, get("/orders", "status=processing&per_page=100")).data.some(
+        (row) => row.id === 1023,
+      ),
+    ).toBe(true);
+
+    // The timeline the transition wrote to is what `router.refresh()` fetches.
+    const events = parseList(timeline, get("/orders/1023/timeline")).data;
+    expect(events.some((entry) => entry.summary.includes("processing"))).toBe(true);
+  });
+
+  it("recomputes is_editable rather than leaving a finished order editable", () => {
+    const editable = parse(order, write("PATCH", "/orders/1023", { status: "on-hold" })).data;
+    expect(editable.is_editable).toBe(true);
+    expect(editable.stock_reduced).toBe(false);
+
+    const done = parse(order, write("PATCH", "/orders/1023", { status: "completed" })).data;
+    expect(done.is_editable).toBe(false);
+    expect(done.stock_reduced).toBe(true);
+    expect(done.date_completed).not.toBeNull();
+  });
+
+  /**
+   * `PATCH /orders/{id}/cod` takes `enabled` and **drops every other field
+   * silently** — no 400, no mention in the response. That is why the panel can
+   * PATCH the whole GET body back, and a mock that refused a stray key would
+   * send someone off building a field filter nobody needs.
+   */
+  it("patches COD's enabled flag and ignores every other field without saying so", () => {
+    const before = parse(codRecord, get("/orders/1023/cod")).data;
+
+    const after = parse(
+      codRecord,
+      write("PATCH", "/orders/1023/cod", {
+        ...before,
+        enabled: false,
+        status: "rejected",
+        attempts: 99,
+        allowed_outcomes: ["nonsense"],
+      }),
+    ).data;
+
+    expect(after.enabled).toBe(false);
+    expect(after.status).toBe(before.status);
+    expect(after.attempts).toBe(before.attempts);
+    expect(after.allowed_outcomes).toEqual(before.allowed_outcomes);
+    expect(parse(codRecord, get("/orders/1023/cod")).data.enabled).toBe(false);
+  });
+
+  it("records a COD attempt and reads the new record back", () => {
+    const before = parse(codRecord, get("/orders/1007/cod")).data;
+    expect(before.status).toBe("pending");
+    expect(before.attempts).toBe(0);
+
+    const after = parse(
+      codRecord,
+      write("POST", "/orders/1007/cod/attempts", {
+        outcome: "unreachable",
+        reason: "Téléphone éteint.",
+      }),
+    ).data;
+    expect(after.status).toBe("unreachable");
+    expect(after.attempts).toBe(1);
+    expect(after.reason).toBe("Téléphone éteint.");
+    expect(after.last_attempt_at).not.toBeNull();
+
+    expect(parse(codRecord, get("/orders/1007/cod")).data.attempts).toBe(1);
+  });
+
+  it("creates a parcel that then appears in the order's own list", () => {
+    const created = parse(
+      shipmentSchema,
+      write("POST", "/orders/1007/shipments", {
+        provider: "manual",
+        wilaya_id: 16,
+        commune_id: 484,
+        delivery_type: "home",
+      }),
+    ).data;
+    expect(created.is_live).toBe(true);
+    expect(created.metadata.wilaya_id).toBe(16);
+    // The destination comes off the body and never off the address, which is the
+    // same fact analytics rests on.
+    expect(created.metadata.commune_id).toBe(484);
+
+    const list = parseList(shipmentsSchema, get("/orders/1007/shipments")).data;
+    expect(list.map((row) => row.id)).toEqual([created.id]);
+  });
+
+  it("cancels a live parcel, and the order stops being blocked by it", () => {
+    // One live parcel per order, so this is refused first.
+    expect(
+      write("POST", "/orders/1014/shipments", {
+        provider: "manual",
+        wilaya_id: 16,
+        commune_id: 484,
+        delivery_type: "home",
+      }).status,
+    ).toBe(409);
+
+    const cancelled = parse(shipmentSchema, write("POST", "/shipments/7014/cancel")).data;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.is_live).toBe(false);
+    expect(parseList(shipmentsSchema, get("/orders/1014/shipments")).data[0].is_live).toBe(false);
+
+    // And with nothing live, the same create now succeeds — history accumulates
+    // and does not block.
+    expect(
+      write("POST", "/orders/1014/shipments", {
+        provider: "manual",
+        wilaya_id: 16,
+        commune_id: 484,
+        delivery_type: "home",
+      }).status,
+    ).toBe(200);
+  });
+
+  /**
+   * Verify answers something that is **not a payment**, and its report is not
+   * safe to format as money: `amount` and `currency` came back as empty strings
+   * on the `cod` transaction this was measured on. `transaction` is the
+   * authority for every figure on screen.
+   */
+  it("verifies a payment and answers a report whose amount is an empty string", () => {
+    const { data } = parse(verifyResult, write("POST", "/payments/5231/verify"));
+    expect(data.report.amount).toBe("");
+    expect(data.report.currency).toBe("");
+    expect(data.report.provider_status).toBe("awaiting_delivery");
+    // The stored record beside it carries the real figure.
+    expect(data.transaction.amount).not.toBe("");
+    expect(data.transaction.id).toBe(5231);
+
+    // It writes nothing, so a second verify is the same answer.
+    expect(write("POST", "/payments/5231/verify").body).toEqual(
+      write("POST", "/payments/5231/verify").body,
+    );
+  });
+
+  /**
+   * **`POST /orders/{id}/payments` must stay a 404.** It is the one write on this
+   * subject the API offers and `lib/api/allowlist.ts` refuses it deliberately: it
+   * opens a checkout at the provider and hands back a real payment link for a
+   * shopper. A fixture that answered it would be an invitation to build the
+   * screen that must not exist.
+   */
+  it("refuses to mint a payment, at either spelling", () => {
+    expect(write("POST", "/payments", { provider: "chargily" }).status).toBe(404);
+    expect(write("POST", "/orders/1023/payments", { provider: "chargily" }).status).toBe(404);
+    // And a verb nobody wrote on a route that exists is a 404, not a silent read.
+    expect(write("DELETE", "/orders/1023").status).toBe(404);
+    expect(write("PATCH", "/products/101", { status: "draft" }).status).toBe(404);
+    expect(write("POST", "/orders/1023/notes", { content: "x" }).status).toBe(404);
+    expect(get("/orders/1023/cod/attempts").status).toBe(404);
+  });
+});
+
+/**
+ * **The 409s and the 400s, which are the point of all of the above.**
+ *
+ * Each is a distinct screen state the detail has to render, and a screen cannot
+ * be verified against a state it can never reach. Each is asserted for its code
+ * *and* for the shape of its `details`, because the body is what the screen
+ * renders: a 409 that is only checked for its status is a 409 nobody has read.
+ */
+describe("the refusals, by fixture id", () => {
+  const refusal = (response: MockResponse) => {
+    const error = apiError(response);
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("conflict");
+    return error;
+  };
+
+  it("1000 — a terminal order refuses every move, with an empty allowed list", () => {
+    const error = refusal(write("PATCH", "/orders/1000", { status: "processing" }));
+    expect(error.conflict).toMatchObject({
+      from: "cancelled",
+      to: "processing",
+      allowed: [],
+    });
+    // `[]` is a real answer meaning *finished*, and is not the field being
+    // absent — `ApiError.conflict` keeps the difference and the screen renders
+    // "this order is finished" rather than an empty chip row.
+    expect(error.conflict?.allowed).toEqual([]);
+  });
+
+  it("1023 — a legal move is a 200, which is what makes the 409s mean anything", () => {
+    expect(write("PATCH", "/orders/1023", { status: "processing" }).status).toBe(200);
+  });
+
+  it("1014 — an illegal move on a live order names the moves that are legal", () => {
+    const error = refusal(write("PATCH", "/orders/1014", { status: "pending" }));
+    // The measured list, in the vocabulary's own order.
+    expect(error.conflict).toEqual({
+      from: "processing",
+      to: "pending",
+      allowed: ["on-hold", "completed", "cancelled", "refunded", "failed"],
+    });
+  });
+
+  it("1004 — COD switched off blames the order, by id", () => {
+    const error = refusal(write("POST", "/orders/1004/cod/attempts", { outcome: "confirmed" }));
+    expect(error.details).toEqual({ order_id: 1004 });
+    expect(error.details.allowed).toBeUndefined();
+  });
+
+  /**
+   * The measured trap: order 3879 carried `allowed_outcomes: []` **and** a
+   * cancelled order, and the 409 blamed the order, because that gate runs first.
+   * A record can therefore report outcomes the order will refuse anyway, which is
+   * the whole reason `codAttemptGate()` exists.
+   */
+  it("1000 — a cancelled order refuses a call even though COD is on", () => {
+    expect(parse(codRecord, get("/orders/1000/cod")).data.enabled).toBe(true);
+    const error = refusal(write("POST", "/orders/1000/cod/attempts", { outcome: "confirmed" }));
+    expect(error.details).toEqual({ order_status: "cancelled" });
+  });
+
+  it("1006 — outcomes exhausted refuses with the empty list that says so", () => {
+    const error = refusal(write("POST", "/orders/1006/cod/attempts", { outcome: "confirmed" }));
+    expect(error.details).toEqual({ from: "rejected", to: "confirmed", allowed: [] });
+  });
+
+  it("1007 — a legal outcome is a 200, and a bogus one is a 400 naming the field", () => {
+    expect(write("POST", "/orders/1007/cod/attempts", { outcome: "confirmed" }).status).toBe(200);
+
+    const bad = apiError(write("POST", "/orders/1007/cod/attempts", { outcome: "maybe" }));
+    expect(bad.status).toBe(400);
+    expect(bad.fields?.outcome).toEqual(expect.stringContaining("confirmed"));
+
+    // A *missing* outcome gets a different sentence from an invalid one.
+    const missing = apiError(write("POST", "/orders/1007/cod/attempts", {}));
+    expect(missing.status).toBe(400);
+    expect(missing.fields?.outcome).toEqual(expect.stringContaining("Required"));
+
+    // `reason` is capped at 500 and reports under its own field.
+    const long = apiError(
+      write("POST", "/orders/1007/cod/attempts", {
+        outcome: "confirmed",
+        reason: "x".repeat(501),
+      }),
+    );
+    expect(long.status).toBe(400);
+    expect(long.fields?.reason).toEqual(expect.any(String));
+    expect(
+      write("POST", "/orders/1007/cod/attempts", {
+        outcome: "confirmed",
+        reason: "x".repeat(500),
+      }).status,
+    ).toBe(200);
+  });
+
+  it("1014 — a second live parcel is refused, and the 409 names the first", () => {
+    const error = refusal(
+      write("POST", "/orders/1014/shipments", {
+        provider: "manual",
+        wilaya_id: 16,
+        commune_id: 484,
+        delivery_type: "home",
+      }),
+    );
+    expect(error.details).toMatchObject({ shipment_id: 7014, status: "created" });
+    // No field list on this one — the form has nothing wrong with it, so the
+    // refusal renders as a sentence rather than binding to a control.
+    expect(error.fields).toBeNull();
+  });
+
+  it("1007 — a missing destination is a 400 naming both halves at once", () => {
+    const error = apiError(write("POST", "/orders/1007/shipments", { provider: "manual" }));
+    expect(error.status).toBe(400);
+    expect(error.code).toBe("rest_invalid_param");
+    // `details.fields`, an object of messages — not `details.params` — because
+    // each one binds to its own control on the create-parcel form.
+    expect(error.fields).toEqual({
+      wilaya_id: expect.any(String),
+      commune_id: expect.any(String),
+    });
+    expect(error.params).toBeNull();
+    // The destination is validated before anything else, so a body carrying only
+    // a provider fails the same way an empty one does.
+    expect(apiError(write("POST", "/orders/1007/shipments", {})).fields).toEqual(
+      error.fields,
+    );
+  });
+
+  it("7023 — a finished parcel refuses cancellation, with no allowed list at all", () => {
+    const error = refusal(write("POST", "/shipments/7023/cancel"));
+    // An order's 409 carries `allowed` and a shipment's does not, which is the
+    // one place this subject cannot follow the panel's usual rule.
+    expect(error.details).toEqual({ from: "delivered", to: "cancelled", is_live: false });
+    expect(error.conflict?.allowed).toBeUndefined();
+  });
+
+  it("refuses a status outside the vocabulary with a 400, not a 409", () => {
+    const error = apiError(write("PATCH", "/orders/1023", { status: "nonsense" }));
+    expect(error.status).toBe(400);
+    expect(error.fields?.status).toEqual(expect.stringContaining("processing"));
+  });
+});
+
+/**
+ * **The second identity, and the state it exists to make reachable.**
+ *
+ * The harness identity holds all thirteen capabilities, which is what a harness
+ * whose job is to render screens needs — and it is why no screen could be
+ * captured in the forbidden state DESIGN.md §3.7 requires of every one of them.
+ * `MOCK_IDENTITY` is read at module load, so this reloads the module rather than
+ * flipping a switch at request time: a capture run is one identity throughout,
+ * and `respond()` keeps answering from its arguments alone.
+ */
+describe("MOCK_IDENTITY", () => {
+  const freshMock = async () => {
+    vi.resetModules();
+    return import("@/scripts/mock-api.mjs");
+  };
+
+  it("serves all thirteen capabilities by default", () => {
+    const { data } = parse(identity, get("/auth/me"));
+    expect(data.capabilities).toHaveLength(13);
+    expect(data.capabilities).toContain("ac_manage_shipping");
+    expect(data.capabilities).toContain("ac_manage_payments");
+  });
+
+  it("drops the two the order detail's gated sections need, when asked to", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "reduced");
+    try {
+      const mock = await freshMock();
+      const { data } = unwrap(
+        identity,
+        mock.respond("GET", `${mock.BASE_PATH}/auth/me`).body,
+        200,
+      );
+      expect(data.capabilities).not.toContain("ac_manage_shipping");
+      expect(data.capabilities).not.toContain("ac_manage_payments");
+      // And keeps the one the screen itself is gated on, or the capture would be
+      // of the whole page refused rather than of two sections absent.
+      expect(data.capabilities).toContain("ac_manage_orders");
+      expect(data.capabilities).toHaveLength(11);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * A value nobody recognises throws at load rather than falling back. A run that
+   * quietly served the Super Admin after being asked for the reduced identity
+   * would produce a green forbidden-state capture that is nothing of the kind.
+   */
+  it("refuses a value it does not recognise, rather than falling back", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "reduce");
+    try {
+      await expect(freshMock()).rejects.toThrow(/MOCK_IDENTITY/);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
 describe("GET /products", () => {
   it("parses the list, including the rows that carry an absence", () => {
     const { data, meta } = parseList(productList, get("/products", "per_page=100"));
@@ -245,11 +807,18 @@ describe("the catalogue vocabularies", () => {
   it("404s a sub-resource nobody wrote, at every collection", () => {
     expect(get("/attributes/9/terms").status).toBe(404);
     expect(get("/attributes/1/nonsense").status).toBe(404);
-    // The depth guard is per collection, not a blanket `> 3`: a third segment on
-    // a collection with no sub-resource must not be answered by the row.
-    expect(get("/orders/1000/notes").status).toBe(404);
+    // The depth guard is per collection, not a blanket `> 4`: a third or fourth
+    // segment on a collection that has no such sub-resource must not be answered
+    // by the row above it. `/orders/{id}/notes` used to be on this list and is a
+    // real route now — `/orders/{id}/nonsense` took its place, because the point
+    // was never that guard's number.
+    expect(get("/orders/1000/nonsense").status).toBe(404);
+    expect(get("/orders/1000/notes/1").status).toBe(404);
+    expect(get("/customers/20/orders").status).toBe(404);
     expect(get("/products/101/variations").status).toBe(404);
     expect(get("/inventory/low-stock/anything").status).toBe(404);
+    expect(get("/locations/wilayas/16/communes/1").status).toBe(404);
+    expect(get("/locations/communes").status).toBe(404);
   });
 });
 
@@ -690,7 +1259,19 @@ describe("query parameters", () => {
  * Adding an endpoint to the mock means moving its module out of UNCOVERED and
  * writing the parse. Adding a schema file means one line here, deliberately.
  */
-const COVERED = ["order", "product", "customer", "inventory", "coupon"];
+const COVERED = [
+  "order",
+  "product",
+  "customer",
+  "inventory",
+  "coupon",
+  // Both moved out of UNCOVERED with the order detail's sub-resources: the mock
+  // now serves `/shipping/providers`, an order's parcels and its payments, plus
+  // the cancel and verify writes. What each module still holds that nothing
+  // exercises is named below rather than left implied.
+  "shipping",
+  "payment",
+];
 
 const UNCOVERED: Record<string, string> = {
   analytics: "the dashboard's report endpoints are not mocked yet",
@@ -699,12 +1280,32 @@ const UNCOVERED: Record<string, string> = {
   cms: "/cms/* is not mocked yet",
   media: "/media is not mocked yet",
   notification: "/notifications is not mocked yet",
-  payment: "/payments is not mocked yet",
   settings: "/settings is not mocked yet",
-  shipping: "/shipping/* and /shipments are not mocked yet",
   staff: "/users and /roles are not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",
 };
+
+/**
+ * The bookkeeping the two lists above cannot do: a module counts as covered when
+ * the endpoints the panel calls are served, and both of the newly-covered ones
+ * carry schemas for routes that are still 404s here. Named, so "covered" does not
+ * quietly come to mean "finished".
+ */
+describe("what the newly-covered modules still do not serve", () => {
+  it("leaves the shipping tariff and the standalone collections unmocked", () => {
+    // `shippingRule` / `shippingRate` — the rules screen's own endpoints.
+    expect(get("/shipping/rules").status).toBe(404);
+    expect(get("/shipping/rates", "wilaya_id=16&commune_id=484").status).toBe(404);
+    // A parcel and a transaction are reached through their order here, which is
+    // the only way the detail reaches them.
+    expect(get("/shipments").status).toBe(404);
+    expect(get("/shipments/7014").status).toBe(404);
+    expect(get("/payments").status).toBe(404);
+    expect(get("/payments/5231").status).toBe(404);
+    // `codStatistics` — `/cod/statistics` belongs to the analytics screen.
+    expect(get("/cod/statistics").status).toBe(404);
+  });
+});
 
 describe("schema coverage", () => {
   it("accounts for every module in lib/api/schemas", () => {

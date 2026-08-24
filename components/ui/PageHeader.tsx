@@ -20,7 +20,7 @@ export function PageHeader({
   title,
   /** A count or one-line description. Never a paragraph. */
   subtitle,
-  /** Below `lg`, where the top bar carries no breadcrumb. */
+  /** The way back to the list. Rendered at **every** width — see below. */
   back,
   actions,
   /** Filter bar, tabs, search — rendered below the title block. */
@@ -38,10 +38,24 @@ export function PageHeader({
   return (
     <div className={divided ? "border-b border-ui-line" : ""}>
       <div className="flex flex-col gap-3 px-4 pt-4 pb-3 sm:px-6 xl:px-8">
+        {/*
+          At **every** width, and that is a correction to DESIGN.md rather than a
+          preference.
+
+          §2.2 puts the breadcrumb in the top bar at `lg`+ and §2.4 says the back
+          link is only needed below it. But `AppShell` renders that top bar
+          `lg:hidden` — at `lg`+ there is a sidebar and no bar at all, so the
+          breadcrumb was specified for a piece of chrome that does not exist
+          there. With this link also `lg:hidden`, a detail screen on a desktop had
+          no way back to its list except the sidebar's own nav item, which loses
+          the filter the person arrived with.
+
+          Both sections carry the amendment.
+        */}
         {back ? (
           <Link
             href={back.href}
-            className="ui-ring ui-interactive -ms-1 inline-flex min-h-7 w-fit items-center gap-1 rounded-ui-md px-1 text-ui-label text-ui-muted hover:text-ui-fg lg:hidden"
+            className="ui-ring ui-interactive -ms-1 inline-flex min-h-7 w-fit items-center gap-1 rounded-ui-md px-1 text-ui-label text-ui-muted hover:text-ui-fg"
           >
             {/* A back arrow points the way the reader reads, so it flips. */}
             <Icon name="back" flipInRtl className="size-3.5" />
@@ -99,14 +113,21 @@ export function PageBody({
   children,
   className = "",
 }: {
-  /** `full` for tables, `form` for settings, `detail` for a single column. */
-  width?: "full" | "wide" | "detail" | "form";
+  /**
+   * `full` for tables, `form` for settings, `detail` for a single column,
+   * `split` for the two-column detail `DetailGrid` draws.
+   */
+  width?: "full" | "wide" | "split" | "detail" | "form";
   children: ReactNode;
   className?: string;
 }) {
   const MAX = {
     full: "max-w-400",
     wide: "max-w-360",
+    /* 1152 = 768 + 24 + 360: §2.3's single-column detail width, the gutter, and
+       the aside. The main column at its widest is exactly as wide as it would be
+       if the aside were not there. */
+    split: "max-w-288",
     detail: "max-w-192",
     form: "max-w-160",
   } as const;
