@@ -55,7 +55,12 @@
  *                    real on /products, whose own set is publish/draft/pending/
  *                    private — `?status=trash` is a 400 there, and a trashed
  *                    product still reads back from `/products/{id}` with a 200
- *   search           real on /orders, /products, /customers — substring, folded
+ *   search           real on /orders, /products, /customers — substring, and
+ *                    accent-folded, because MySQL's collation is: `?search=Chérif`
+ *                    matches `nadia.cherif@…`. **On /customers it does not match
+ *                    a name** — see "What ?search= on /customers does not match",
+ *                    which is the single most carefully measured fact on that
+ *                    screen and the one this file got wrong for three branches
  *   the nine filters real on /products: sku, category, tag, min_price,
  *                    max_price, stock_status, on_sale, featured and
  *                    `attributes[taxonomy]=slug,slug`
@@ -959,11 +964,69 @@ function withoutEmail(address) {
   return copy;
 }
 
-const CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
+/**
+ * The two addresses that are not `client{id}@example.test`, and both are there to
+ * be *matched* rather than to be read.
+ *
+ *   5  the 80-character unbroken address the 340px overflow assertion needs.
+ *   6  **the accent trap.** `?search=Chérif` looks like a name search that works
+ *      and is not: MySQL's collation is accent-insensitive, so the folded term
+ *      matches the *email* `nadia.cherif@…` — on a customer who has no name at
+ *      all, so the row it returns is titled `client26`. lib/customers.ts:45-60
+ *      records the measurement, and without an address like this the folded
+ *      search below would have nothing to prove and nothing to catch.
+ */
+const SPECIAL_EMAILS = { 5: LONG_EMAIL, 6: "nadia.cherif@example.test" };
+
+/**
+ * ── Consent has four payload states and the fixtures carried one ─────────────
+ *
+ * `marketing_consent_at` is the only reliable signal that a decision exists.
+ * `consentRecord()` in lib/customers.ts reads the date first and calls a null one
+ * `never`, whatever the flag beside it says — so a **withdrawal is a `false` with
+ * a non-null date**, and it is a different answer from the fourteen rows carrying
+ * `false` and null. "They said no" against "we never asked" is the distinction
+ * the row exists for, and it was the one this file could not produce.
+ *
+ *   0  granted    true  + a date + `registration`      a source the panel labels
+ *   2  granted    true  + a date + `seed`              a source it has no label for
+ *   4  withdrawn  false + a date + `unsubscribe_link`  the second negative
+ *   …  never      false + null   + null                the other fourteen
+ *
+ * The withdrawal is on index 4 — customer 24 — rather than on a quiet row, and
+ * that is a capture decision: 24 is the one customer `scripts/capture.mjs` takes
+ * by default, so putting the state that was entirely unreachable on the row that
+ * is actually photographed is the difference between it being reachable and it
+ * being seen. The other two are states rather than screens; capture.mjs names how
+ * to reach them.
+ *
+ * **`"seed"` is the exact string that blanked the customer screen**, and it is
+ * here for that reason rather than for variety. lib/api/schemas/customer.ts:54-69
+ * is the whole story: `marketing_consent_source` was `z.enum([...])`,
+ * `Consent::set()` stores whatever string it is handed with no validation of any
+ * kind, the campaigns seed passed `"seed"`, and `GET /customers/{id}` then failed
+ * to parse *on the server* — the entire detail rendered as "This page couldn't
+ * load" over one label on one row. A fixture set whose every source sits inside
+ * the convention is a fixture set that would let that enum come back unnoticed.
+ *
+ * The fourth state lib/customers.ts names — *declined*, "a source but no grant" —
+ * is **deliberately absent**, and see the test: `consentRecord()` cannot express
+ * it. It keys on the date, so a source with a null date returns `never` and the
+ * two are indistinguishable downstream. Inventing a payload the API has not been
+ * seen to produce, to reach a state the panel cannot tell apart anyway, would be
+ * this file manufacturing a screen state rather than reproducing one.
+ */
+const CONSENT_RECORDS = {
+  0: { granted: true, minutesAgo: 9000, source: "registration" },
+  2: { granted: true, minutesAgo: 12_000, source: "seed" },
+  4: { granted: false, minutesAgo: 4000, source: "unsubscribe_link" },
+};
+
+const SEEDED_CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
   const id = 20 + index;
   const [first, last] = NAMED_CUSTOMERS[index] ?? ["", ""];
   const wilaya = WILAYAS[int(0, WILAYAS.length - 1)];
-  const email = index === 5 ? LONG_EMAIL : `client${id}@example.test`;
+  const email = SPECIAL_EMAILS[index] ?? `client${id}@example.test`;
 
   const billing = {
     first_name: first,
@@ -979,6 +1042,8 @@ const CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
     email,
   };
 
+  const consent = CONSENT_RECORDS[index];
+
   return {
     id,
     username: `client${id}`,
@@ -986,11 +1051,12 @@ const CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
     first_name: first,
     last_name: last,
     role: "customer",
-    // The five who have ordered are the five the statistics block reports on.
+    // The five who have ordered are the five `CUSTOMER_ORDER_PLAN` hands orders
+    // to below, and the five the statistics block therefore reports on.
     is_paying_customer: index < 5,
-    marketing_consent: index === 0,
-    marketing_consent_at: index === 0 ? iso(9000) : null,
-    marketing_consent_source: index === 0 ? "registration" : null,
+    marketing_consent: consent?.granted ?? false,
+    marketing_consent_at: consent === undefined ? null : iso(consent.minutesAgo),
+    marketing_consent_source: consent?.source ?? null,
     billing,
     // Shipping carries no email — WooCommerce stores none — so the key is
     // *absent* rather than present and empty. `email` is optional on the address
@@ -1001,6 +1067,63 @@ const CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
   };
 });
 
+/**
+ * ── The seventeenth customer, and the only one written out by hand ───────────
+ *
+ * **This is the positive control, reproduced.** lib/customers.ts:45-60 records
+ * how `?search=` was pinned down on 2026-08-19: customer 26 was given the names
+ * `Zqxwvu Plmokn` — a string that appears in no login and no email anywhere in
+ * the shop — and `?search=Zqxwvu` returned **0 rows** while `?search=cus_fresh`,
+ * its login, returned 1. Without a row like this in the fixture set the claim
+ * "search does not match a name" is unfalsifiable here: every other name in this
+ * shop is also a substring of something the search *does* match, or is Arabic.
+ *
+ * Written out rather than drawn from the `Array.from` above, and that is
+ * load-bearing for the same reason `seeded()` is on the catalogue: each of those
+ * sixteen rows makes four `int()` draws into the one shared mulberry32, so a
+ * seventeenth pass would shift the sequence and change `statusColumn` — and with
+ * it which order is `completed`, which is what half this file's fixture ids mean.
+ *
+ * It has ordered nothing and decided nothing about consent, so it lands in the
+ * two common cases and adds a row to neither of the interesting ones.
+ */
+const CONTROL_CUSTOMER = (() => {
+  const wilaya = WILAYAS[15]; // Alger
+  const email = "client36@example.test";
+  const billing = {
+    first_name: "Zqxwvu",
+    last_name: "Plmokn",
+    company: "",
+    address_1: "12 rue des Frères Bouadou",
+    address_2: "",
+    city: wilaya.name,
+    state: wilaya.code,
+    postcode: `${wilaya.code}000`,
+    country: "DZ",
+    phone: "0551000036",
+    email,
+  };
+
+  return {
+    id: 36,
+    username: "client36",
+    email,
+    first_name: "Zqxwvu",
+    last_name: "Plmokn",
+    role: "customer",
+    is_paying_customer: false,
+    marketing_consent: false,
+    marketing_consent_at: null,
+    marketing_consent_source: null,
+    billing,
+    shipping: withoutEmail(billing),
+    date_created: iso(52_000),
+    date_modified: null,
+  };
+})();
+
+const CUSTOMERS = [...SEEDED_CUSTOMERS, CONTROL_CUSTOMER];
+
 const ORDER_STATUSES = [
   "pending",
   "processing",
@@ -1010,42 +1133,6 @@ const ORDER_STATUSES = [
   "refunded",
   "failed",
 ];
-
-/**
- * The detail's `statistics`, and **the list must not carry it** — the two shapes
- * differ by exactly that key, which lib/api/schemas/customer.ts is explicit
- * about. Eleven of the sixteen have never ordered, so both `first_order` and
- * `last_order` are null on them.
- */
-function statisticsFor(customer, index) {
-  const ordered = index < 5;
-  const total = ordered ? index + 2 : 0;
-  const completed = ordered ? Math.max(1, Math.floor(total / 2)) : 0;
-  const revenue = completed * 1050;
-
-  const byStatus = Object.fromEntries(ORDER_STATUSES.map((status) => [status, 0]));
-  byStatus.completed = completed;
-  byStatus.pending = total - completed;
-
-  return {
-    total_orders: total,
-    completed_orders: completed,
-    cancelled_orders: 0,
-    returned_orders: 0,
-    total_revenue: `${revenue}.00`,
-    // Revenue is the sum of the *completed* orders and the average is over the
-    // same ones, so this does not divide into `total_orders`. That is the API's
-    // arithmetic, and reproducing it is the point.
-    average_order_value: completed > 0 ? `${revenue / completed}.00` : "0.00",
-    first_order: ordered
-      ? { id: 1000 + index, date: iso(30_000), status: "completed", total: "1050.00" }
-      : null,
-    last_order: ordered
-      ? { id: 1200 + index, date: iso(400), status: "completed", total: "1050.00" }
-      : null,
-    by_status: byStatus,
-  };
-}
 
 /* ----------------------------------------------------------------- orders --- */
 
@@ -1085,6 +1172,84 @@ const noWilayaColumn = shuffled(
 );
 
 /**
+ * ── Who owns which order, and why most of them belong to nobody listed ───────
+ *
+ * `customer_id` used to be `CUSTOMERS[index % 16].id`, which gave each of the
+ * sixteen roughly twenty-one orders — and the statistics block beside it reported
+ * two to six, because it was written out independently. **The two collections
+ * contradicted each other about the same person**, and nothing could see it until
+ * `GET /customers/{id}/orders` existed: the detail would have printed
+ * "Total orders 6" over a list of twenty-one.
+ *
+ * So ownership is stated once, here, and the statistics are *derived* from it
+ * below. A customer's orders and their report cannot disagree because there is
+ * only one of them.
+ *
+ * **The arithmetic forces the rest.** 288 of the 633 are guests and eleven of the
+ * seventeen customers have never ordered — both measured — so the five who have
+ * cannot absorb 345 orders between them without making one of those two numbers
+ * false. The remainder therefore belongs to customer ids the collection does not
+ * list: `GET /customers/{id}` is a 404 on all of them, which is the same answer
+ * the administrator's own id gets, because the repository filters on
+ * `role: customer`. ADMIN_PANEL.md:171 has the other half of it — an HPOS order
+ * keyed to a deleted `customer_id` becomes an orphan no report can attribute.
+ * That is an inference from two measurements rather than a measurement; it is
+ * written here so the next reader argues with the reasoning rather than the code.
+ *
+ * The plan is **by status**, not by count, because the status breakdown is the
+ * point: `by_status` must sum to `total_orders` and it is the block that explains
+ * why revenue counts fewer orders than the customer placed. Customer 24 carries
+ * six of the seven statuses for that reason — `failed` is missing because the
+ * shop's one failed order is a guest's, and taking it would put the guest count
+ * off by one.
+ */
+const CUSTOMER_ORDER_PLAN = [
+  [20, ["completed", "pending"]],
+  [21, ["completed", "cancelled", "pending"]],
+  [22, ["completed", "completed", "processing", "cancelled"]],
+  [23, ["completed", "pending", "processing", "cancelled", "refunded"]],
+  [24, ["completed", "completed", "pending", "processing", "on-hold", "cancelled", "refunded"]],
+];
+
+/** How many unlisted accounts the remaining non-guest orders are spread over. */
+const ORPHAN_ACCOUNTS = 40;
+const ORPHAN_BASE = 900;
+
+/**
+ * Order index → the id that owns it. `0` is a guest, and stays exactly the 288
+ * `guestColumn` chose.
+ *
+ * No `rand()` here and none below it: the plan is satisfied by walking the
+ * already-shuffled status column in order, so this adds nothing to the one shared
+ * mulberry32 and every collection above stays byte-identical.
+ */
+const ownerColumn = (() => {
+  const owners = Array.from({ length: ORDER_COUNT }, () => 0);
+
+  for (const [customerId, plan] of CUSTOMER_ORDER_PLAN) {
+    for (const status of plan) {
+      const index = statusColumn.findIndex(
+        (value, i) => value === status && !guestColumn[i] && owners[i] === 0,
+      );
+      // Loudly, at module load. A plan that has quietly become unsatisfiable —
+      // one more `completed` than the book holds — would otherwise show up as a
+      // customer whose breakdown is one row short of what this file claims.
+      if (index === -1) {
+        throw new Error(`No unclaimed ${status} order left for customer ${customerId}.`);
+      }
+      owners[index] = customerId;
+    }
+  }
+
+  let orphan = 0;
+  for (let index = 0; index < ORDER_COUNT; index += 1) {
+    if (guestColumn[index] || owners[index] !== 0) continue;
+    owners[index] = ORPHAN_BASE + (orphan++ % ORPHAN_ACCOUNTS);
+  }
+  return owners;
+})();
+
+/**
  * The names a shopkeeper actually sees, including the three that break layouts:
  * a very long unbroken one, Arabic ones, and one with an LTR run inside Arabic
  * text — which is where a bidi bug reverses an order number.
@@ -1105,7 +1270,6 @@ const ORDER_NAMES = [
 const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
   const id = 1000 + index;
   const status = statusColumn[index];
-  const guest = guestColumn[index];
   const [first, last] = ORDER_NAMES[index % ORDER_NAMES.length];
   const wilaya = WILAYAS[int(0, WILAYAS.length - 1)];
   const product = PRODUCTS[int(0, PRODUCTS.length - 1)];
@@ -1162,7 +1326,7 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
     number: String(id),
     status,
     currency: "DZD",
-    customer_id: guest ? 0 : CUSTOMERS[index % CUSTOMERS.length].id,
+    customer_id: ownerColumn[index],
     customer_note: index % 23 === 0 ? "Livrer après 17 h, merci." : "",
     payment_method: "cod",
     payment_method_title: "Paiement à la livraison",
@@ -1183,6 +1347,160 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
     date_completed: status === "completed" ? iso(index * 43 - 20) : null,
   };
 });
+
+/**
+ * One customer's orders as the **seeds** hold them, newest first — which is the
+ * order the book itself is in. `ordersOf()` further down is the same list read
+ * through anything a PATCH has written; this one is what the notification queue
+ * is built from, because a queued message is frozen at the moment it was queued
+ * and does not follow the order it was about.
+ */
+const seededOrdersOf = (customerId) =>
+  ORDERS.filter((order) => order.customer_id === customerId);
+
+/* ---------------------------------------------------------- notifications --- */
+
+/**
+ * ── The queue, and the error state it was rendering instead ──────────────────
+ *
+ * `GET /notifications` was absent entirely, so the customer detail's
+ * notifications section rendered its **error state in every capture** — a screen
+ * state produced by the harness rather than caught by it, and the most expensive
+ * kind of green run: the section looked deliberate.
+ *
+ * Four measurements from lib/notifications.ts shape the rows, and each one is a
+ * thing the screen would otherwise never be held against:
+ *
+ *   **`status` is three values and the screen shows four.** `queueState()`
+ *   derives them from three fields, because a *retryable* failure leaves the row
+ *   `pending` with `attempts: 1` and an error on it — which reads as "never
+ *   touched" to anything looking at `status` alone. So these cycle through all
+ *   four states and the section's summary strip has something to count.
+ *
+ *   **18 of the 39 measured rows were `admin`** — the shop being told it had an
+ *   order, not a customer being confirmed. The customer section filters on
+ *   `recipient`, so those are correctly *absent* from it, and its footnote says
+ *   so; without admin rows in the fixture set that footnote is unverifiable.
+ *
+ *   **`recipient` is whatever the channel addresses**, and the API does not
+ *   validate it as an email. The one `sms` row carries a phone number, exactly as
+ *   `seed-notifications.mjs` writes it, so a screen that formatted this as mail
+ *   would be visible here.
+ *
+ *   **`subject_id` is nullable and never 0.** One row carries null rather than a
+ *   zero standing in for it.
+ *
+ * `last_error` is one of the three sentences *this codebase* writes rather than
+ * anything a transport said — `EmailChannel` only ever sees `wp_mail()` return a
+ * boolean, and lib/api/schemas/notification.ts:61-75 records that the field's own
+ * docblock on the backend is wrong about it.
+ *
+ * **The one inference in this block**: the subjectless row's `dedupe_key`. The key
+ * is `event:subject_id` by construction and nobody measured what the right half
+ * is when there is no subject, so it is the event alone. Flagged rather than
+ * presented as measured.
+ */
+const NOTIFICATION_STATES = [
+  { status: "sent", attempts: 1, error: null, sent: true },
+  // Never attempted: `queued`, and the only state whose `attempts` is 0.
+  { status: "pending", attempts: 0, error: null, sent: false },
+  // Still pending, but tried — `retrying`, the state `status` alone hides.
+  {
+    status: "pending",
+    attempts: 1,
+    error: "wp_mail() did not accept the message.",
+    sent: false,
+  },
+  // Parked: a permanent refusal rather than five attempts.
+  {
+    status: "failed",
+    attempts: 5,
+    error: "Not a deliverable email address.",
+    sent: false,
+  },
+];
+
+const NOTIFICATIONS = (() => {
+  const rows = [];
+
+  const push = ({ channel, event, audience, recipient, order, slot }) => {
+    const state = NOTIFICATION_STATES[slot % NOTIFICATION_STATES.length];
+    rows.push({
+      id: 4100 + rows.length,
+      channel,
+      event,
+      dedupe_key: order === null ? event : `${event}:${order.id}`,
+      audience,
+      recipient,
+      subject_type: order === null ? "" : "order",
+      subject_id: order === null ? null : order.id,
+      status: state.status,
+      attempts: state.attempts,
+      last_error: state.error,
+      // A notification about an order is queued when the order is placed, so the
+      // two stamps agree rather than being a second timeline on one screen. Both
+      // carry `+00:00` — `gmdate('c')` — unlike an order note's, which has none.
+      created_at: order === null ? iso(120) : order.date_created,
+      sent_at: state.sent ? (order === null ? iso(118) : order.date_modified) : null,
+    });
+  };
+
+  let slot = 0;
+  for (const [customerId] of CUSTOMER_ORDER_PLAN) {
+    const customer = CUSTOMERS.find((row) => row.id === customerId);
+    for (const order of seededOrdersOf(customerId)) {
+      push({
+        channel: "email",
+        event: "order.placed",
+        audience: "customer",
+        recipient: customer.email,
+        order,
+        slot: slot++,
+      });
+      // The shop's own alert about the same order, addressed to the shop. Not in
+      // the customer's section, by construction, and that is the point of it.
+      push({
+        channel: "email",
+        event: "admin.new_order",
+        audience: "admin",
+        recipient: "admin@example.test",
+        order,
+        slot: slot++,
+      });
+    }
+  }
+
+  // The second channel, addressed to a phone rather than to a mailbox.
+  push({
+    channel: "sms",
+    event: "shipment.shipped",
+    audience: "customer",
+    recipient: "+213551000024",
+    order: seededOrdersOf(24)[0],
+    slot: slot++,
+  });
+
+  // The row with no subject at all.
+  push({
+    channel: "email",
+    event: "stock.low",
+    audience: "admin",
+    recipient: "admin@example.test",
+    order: null,
+    slot: slot++,
+  });
+
+  /*
+   * `created_at DESC, id DESC`, fixed. `NotificationRepository::search()` orders
+   * it and nothing can change it: measured, `?orderby=channel`, `?orderby=id`
+   * and `?order=asc` all return the identical first six ids, and
+   * `?orderby=nonsense` is a 200 — the parameter is not even validated. The
+   * opposite of the drain, which sends oldest first.
+   */
+  return [...rows].sort(
+    (a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id - a.id),
+  );
+})();
 
 /* ------------------------------------------------------------- variations --- */
 
@@ -2024,6 +2342,74 @@ const orderRow = (order) => {
   return status === order.status ? order : withStatus(order, status);
 };
 
+/**
+ * One customer's orders as they read **now**, newest first — what
+ * `GET /customers/{id}/orders` serves and what the statistics below are counted
+ * from. Read through the write state, so a PATCHed status moves the row, the
+ * breakdown and the report together rather than leaving three screens disagreeing
+ * about one order.
+ */
+const ordersOf = (customerId) => seededOrdersOf(customerId).map(orderRow);
+
+/**
+ * ── The detail's `statistics`, counted rather than written out ───────────────
+ *
+ * **The list must not carry this** — the two shapes differ by exactly this key,
+ * which lib/api/schemas/customer.ts is explicit about, and it is the first
+ * collection in this API where the row and the detail are different objects.
+ *
+ * Every figure is derived from `ordersOf()`, and that is the repair: these used to
+ * be written out beside an order book that gave the same customer twenty-one
+ * orders, so the report said 6 and the collection said 21 with nothing able to
+ * notice. Derivation makes the invariants free rather than promised —
+ * **`by_status` sums to `total_orders`** because it is a tally of the same list,
+ * which is the property lib/api/schemas/customer.ts:119-137 says the block is
+ * rendered for.
+ *
+ * **The arithmetic trap survives, and is the reason this is not simpler.**
+ * `total_revenue` is the sum of the *completed* orders and `average_order_value`
+ * is over the same ones, so `total_revenue ÷ total_orders` is **not** the average
+ * — 2100 ÷ 5 is 420 against a stated 1050 on the measured customer. Every figure
+ * is internally consistent and only labelling can make that visible, which is
+ * what `statFigures()` gives each one a `scope` for. A mock whose revenue divided
+ * neatly into its order count would delete the whole reason that type exists.
+ *
+ * `returned_orders` is counted as the **refunded** ones. That mapping is an
+ * inference — WooCommerce has no `returned` status and nothing measured says what
+ * feeds this field — and it is written here rather than left in the code so the
+ * next reader can disagree with it.
+ */
+function statisticsFor(customer) {
+  const rows = ordersOf(customer.id);
+
+  const byStatus = Object.fromEntries(ORDER_STATUSES.map((status) => [status, 0]));
+  for (const row of rows) byStatus[row.status] += 1;
+
+  const completed = rows.filter((row) => row.status === "completed");
+  const revenue = completed.reduce((sum, row) => sum + Number.parseFloat(row.total), 0);
+
+  // Four fields, not an order: reaching for the rest would be a request the panel
+  // has not made. lib/api/schemas/customer.ts says so.
+  const summary = (order) =>
+    order === undefined
+      ? null
+      : { id: order.id, date: order.date_created, status: order.status, total: order.total };
+
+  return {
+    total_orders: rows.length,
+    completed_orders: completed.length,
+    cancelled_orders: byStatus.cancelled,
+    returned_orders: byStatus.refunded,
+    total_revenue: revenue.toFixed(2),
+    average_order_value:
+      completed.length === 0 ? "0.00" : (revenue / completed.length).toFixed(2),
+    // The book is newest first, so the oldest order is the last row.
+    first_order: summary(rows[rows.length - 1]),
+    last_order: summary(rows[0]),
+    by_status: byStatus,
+  };
+}
+
 /* ---------------------------------------------------------------- refusals --- */
 
 /**
@@ -2317,10 +2703,20 @@ function verifyPayment(id) {
  * `page` and `per_page`, genuinely. Over 100 is a **400 rather than a clamp** —
  * measured, `?per_page=500` answers `per_page must be between 1 and 100` — so a
  * footer that offered 500 would break against the real shop and must break here.
+ *
+ * The default is **20**, which is the API's own — stated twice from measurement,
+ * in app/[locale]/(panel)/orders/query.ts and products/query.ts. It was 10 here,
+ * which is the quieter half of the same class of error as a mock that is too
+ * permissive: a screen that forgot to send `per_page` would have shown ten rows
+ * against the harness and twenty against the shop, and the overflow assertions
+ * would have been watching a table half the width of the real one.
  */
+const DEFAULT_PER_PAGE = 20;
+
 function paginate(rows, params) {
   const page = Number.parseInt(params.get("page") ?? "1", 10) || 1;
-  const perPage = Number.parseInt(params.get("per_page") ?? "10", 10) || 10;
+  const perPage =
+    Number.parseInt(params.get("per_page") ?? String(DEFAULT_PER_PAGE), 10) || DEFAULT_PER_PAGE;
 
   if (perPage < 1 || perPage > 100) {
     return {
@@ -2342,12 +2738,31 @@ function paginate(rows, params) {
   };
 }
 
-/** Substring, case-insensitive, over the fields a person would type into. */
+/**
+ * Accent-folded and lowercased. Shared with the product sorts below, where it is
+ * there so a collation that depends on the runtime's ICU build cannot make a
+ * screenshot differ between machines; here it is there because **MySQL's own
+ * collation is accent-insensitive** and the panel's most-quoted customer
+ * measurement turns on it.
+ */
+const fold = (value) =>
+  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+/**
+ * Substring, case-insensitive and **accent-insensitive**, over the fields a
+ * person would type into.
+ *
+ * The folding is not a nicety. `?search=Chérif` returning a row is the trap
+ * lib/customers.ts:45-60 is built around: it looks like proof that the search
+ * matches names, and it is the accent-insensitive collation matching the *email*
+ * `nadia.cherif@…`. Fold on one side only and that row never comes back, the
+ * trap is unreachable, and the mock quietly disagrees with this file's own header.
+ */
 function searchRows(rows, params, fields) {
-  const term = (params.get("search") ?? "").trim().toLowerCase();
+  const term = fold((params.get("search") ?? "").trim());
   if (term === "") return rows;
   return rows.filter((row) =>
-    fields(row).some((value) => String(value ?? "").toLowerCase().includes(term)),
+    fields(row).some((value) => fold(String(value ?? "")).includes(term)),
   );
 }
 
@@ -2417,7 +2832,9 @@ const invalidParam = (name, message) =>
  */
 function parseProductFilters(params) {
   const filters = {
-    search: (params.get("search") ?? "").trim().toLowerCase(),
+    // Folded, like `searchRows` and for the same reason: the collation behind
+    // this endpoint is the same one, and half the catalogue is accented.
+    search: fold((params.get("search") ?? "").trim()),
     sku: (params.get("sku") ?? "").trim().toLowerCase(),
     status: "",
     categories: [],
@@ -2538,7 +2955,7 @@ const priceOf = (product) =>
  */
 function matchesProduct(product, filters, skip = NOTHING) {
   if (filters.search !== "") {
-    const haystack = `${product.name} ${product.sku}`.toLowerCase();
+    const haystack = fold(`${product.name} ${product.sku}`);
     if (!haystack.includes(filters.search)) return false;
   }
   if (filters.sku !== "" && !product.sku.toLowerCase().includes(filters.sku)) return false;
@@ -2587,9 +3004,8 @@ function matchesProduct(product, filters, skip = NOTHING) {
 
 /* ---------------------------------------------------------- product sorts --- */
 
-const fold = (value) =>
-  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
+// `fold` is up with `searchRows`, which needs the same folding for a different
+// reason \u2014 see it there.
 const compareBy = (key) => (a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
 const descending = (compare) => (a, b) => -compare(a, b);
 
@@ -3093,6 +3509,186 @@ function deleteProduct(current, params) {
   return ok({ id: current.id, deleted: true });
 }
 
+/* -------------------------------------------------------- customer queries --- */
+
+/**
+ * ── `orderby` on /customers is validated and *then* ignored ──────────────────
+ *
+ * Those are two different things and this collection does both, which nothing
+ * else in this file does. Measured one parameter at a time — see
+ * app/[locale]/(panel)/customers/query.ts:13-18:
+ *
+ *   ?nonsense=zzz         200, all rows   an unknown *name* is silent
+ *   ?role=administrator   200, all rows   likewise, and it is not a widening
+ *   ?orderby=zzz          **400**         a known name with a bad value refuses
+ *   ?order=sideways       **400**         likewise
+ *
+ * `queryFromParams()` carries a guard built entirely on that asymmetry: a stale
+ * or hand-edited URL must not be able to provoke a 400 the screen then renders as
+ * an error. While this mock answered 200 to both, that guard could have been
+ * deleted with nothing anywhere noticing.
+ *
+ * Ignored *after* validating, because the header's rule holds here too: nothing
+ * measured says either sort does anything, and a mock that sorted would let an
+ * agent verify a control against the harness and ship one that does not work.
+ */
+const CUSTOMER_ORDERBY = ["registered", "ID", "display_name", "user_email"];
+
+/**
+ * **A different enum on the sub-resource, and that is the point of having it.**
+ * `GET /customers/{id}/orders` takes `date, id, modified, total` — so
+ * `?orderby=registered` is a 400 here and a 200 one level up, and `?orderby=date`
+ * is the other way round. A screen that reused the parent's control would send a
+ * value this route refuses.
+ */
+const CUSTOMER_ORDERS_ORDERBY = ["date", "id", "modified", "total"];
+
+const SORT_DIRECTIONS = ["asc", "desc"];
+
+/** Null when the pair is acceptable, a 400 when either value is outside its set. */
+function checkSort(params, orderbyValues) {
+  for (const [name, allowed] of [
+    ["orderby", orderbyValues],
+    ["order", SORT_DIRECTIONS],
+  ]) {
+    const raw = params.get(name);
+    // `""` is the absence of the parameter, the way it is everywhere else here.
+    if (raw === null || raw === "") continue;
+    if (!allowed.includes(raw)) {
+      const message = `${name} is not one of ${oxford(allowed)}`;
+      return fail(400, "rest_invalid_param", message, { params: { [name]: message } });
+    }
+  }
+  return null;
+}
+
+/**
+ * `GET /customers/{id}/orders`, and the three measured behaviours it exists to
+ * reproduce. It used to be refused as a third segment, and the unit suite
+ * asserted that 404.
+ *
+ *   `status`      one value; a comma list is a 400, the same single-select rule
+ *                 `/orders` follows and against the same seven-word vocabulary.
+ *   `orderby`     the enum above, which is **not** the parent collection's.
+ *   `customer_id` **ignored.** Measured: `?customer_id=25` on customer 24's route
+ *                 answers customer 24's orders. The identity is the path and no
+ *                 parameter can redirect it — which is worth having in a fixture,
+ *                 because the obvious implementation reads the parameter when it
+ *                 is there and quietly serves somebody else's order list.
+ *
+ * Nothing below reads `customer_id`, and that absence *is* the third behaviour.
+ *
+ * The rows are `ordersOf()`, which is the same list the detail's statistics are
+ * counted from — so `meta.total` here and `statistics.total_orders` on the parent
+ * cannot disagree.
+ */
+function customerOrders(customer, params) {
+  const sort = checkSort(params, CUSTOMER_ORDERS_ORDERBY);
+  if (sort !== null) return sort;
+
+  const filtered = filterByStatus(ordersOf(customer.id), params);
+  if (filtered.error) return filtered.error;
+
+  const page = paginate(filtered.rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/* ---------------------------------------------------- notification queries --- */
+
+/**
+ * `?status=` takes three and refuses a fourth **by name**, and the refusal is not
+ * shaped like this file's others: measured, the code is `invalid_request` rather
+ * than `rest_invalid_param` and the sentence ends with a full stop —
+ *
+ *   details.params.status: "status is not one of pending, sent, and failed."
+ *
+ * lib/notifications.ts:16-27 records both. `details.params`, not `details.fields`.
+ */
+const NOTIFICATION_STATUSES = ["pending", "sent", "failed"];
+
+/** `Y-m-d`, UTC, whole days at both ends. `?date_from=yesterday` is a 400. */
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * `GET /notifications`.
+ *
+ * **What is filtered and what is accepted-and-ignored is the whole shape of this
+ * screen**, and both halves are reproduced. Measured 2026-08-21, one parameter at
+ * a time, in app/[locale]/(panel)/notifications/query.ts:10-33:
+ *
+ *   channel      honoured — and **not validated**: `?channel=nonsense` is a 200
+ *                with 0 rows where `?status=nonsense` is a 400, because the route
+ *                declares a key pattern rather than an enum
+ *   status       honoured, and refused by name outside its three
+ *   dedupe_key   honoured, **exact match only** — `?dedupe_key=payment.received`
+ *                answers 0 rows, never the set that starts with it
+ *   recipient    honoured — added on `feat/notification-filters`, and the reason
+ *                the customer section is one request instead of thirty
+ *   subject_id   honoured, `minimum: 1`, so `?subject_id=0` is a 400 rather than
+ *                the unset value it looks like
+ *   date_from/to honoured, `Y-m-d`, UTC, both ends inclusive
+ *
+ *   event        ACCEPTED AND IGNORED
+ *   audience     ACCEPTED AND IGNORED
+ *   search       ACCEPTED AND IGNORED
+ *   orderby      ACCEPTED AND IGNORED, and not even validated
+ *
+ * The four ignored ones are ignored *here* by nothing reading them, which is the
+ * only way to reproduce "accepted and ignored" — and `event` and `audience` are
+ * the two that matter, because both are on every row and both are the obvious
+ * thing to filter by. §90 declined them deliberately: `dedupe_key`'s left half
+ * *is* the event, and `audience` is separated by `recipient`. A mock that
+ * filtered on them would let an agent build the two controls the panel refuses to
+ * ship and watch them work.
+ */
+function notificationsListing(params) {
+  const status = params.get("status");
+  if (status !== null && status !== "" && !NOTIFICATION_STATUSES.includes(status)) {
+    const message = `status is not one of ${oxford(NOTIFICATION_STATUSES)}.`;
+    return fail(400, "invalid_request", message, { params: { status: message } });
+  }
+
+  const subjectId = params.get("subject_id");
+  if (subjectId !== null && subjectId !== "") {
+    const parsed = Number(subjectId);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      const message = "subject_id must be greater than or equal to 1";
+      return fail(400, "invalid_request", message, { params: { subject_id: message } });
+    }
+  }
+
+  for (const name of ["date_from", "date_to"]) {
+    const raw = params.get(name);
+    if (raw !== null && raw !== "" && !YMD.test(raw)) {
+      const message = `${name} is not a valid date`;
+      return fail(400, "invalid_request", message, { params: { [name]: message } });
+    }
+  }
+
+  const equals = (name, key) => {
+    const value = params.get(name);
+    return value === null || value === "" ? null : (row) => String(row[key]) === value;
+  };
+
+  const from = params.get("date_from");
+  const to = params.get("date_to");
+  const tests = [
+    equals("channel", "channel"),
+    equals("status", "status"),
+    equals("dedupe_key", "dedupe_key"),
+    // Exact, not a substring: this is a `WHERE recipient = %s` and a customer
+    // whose address is a prefix of another's must not collect their queue.
+    equals("recipient", "recipient"),
+    equals("subject_id", "subject_id"),
+    from === null || from === "" ? null : (row) => row.created_at.slice(0, 10) >= from,
+    to === null || to === "" ? null : (row) => row.created_at.slice(0, 10) <= to,
+  ].filter((test) => test !== null);
+
+  const rows = NOTIFICATIONS.filter((row) => tests.every((test) => test(row)));
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -3373,21 +3969,71 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       });
     }
 
-    case "customers":
+    case "customers": {
+      // Depth is stated here, the way `/products` and `/orders` state theirs.
+      if (segments.length > 3) return notFound();
+
+      // The one sub-resource a customer has. Named, so `/customers/{id}/anything`
+      // still falls to the 404 rather than being served the customer.
+      if (segments.length === 3) {
+        if (method !== "GET" || segments[2] !== "orders") return notFound();
+        const customer = CUSTOMERS.find((row) => row.id === numericId(second));
+        return customer === undefined ? notFound() : customerOrders(customer, searchParams);
+      }
+
+      // The list only. `orderby` is a collection parameter, so a single read is
+      // not the place to refuse one — over-applying the 400 would be the same
+      // class of error as never answering it.
+      if (second === undefined) {
+        const sort = checkSort(searchParams, CUSTOMER_ORDERBY);
+        if (sort !== null) return sort;
+      }
+
       return collectionOf(CUSTOMERS, {
-        search: (customer) => [
-          customer.username,
-          customer.email,
-          customer.first_name,
-          customer.last_name,
-        ],
+        /*
+         * ── What `?search=` on /customers does not match ─────────────────────
+         *
+         * **`user_login`, `user_email` and `display_name`. Never `first_name` or
+         * `last_name`. Do not "improve" this back.**
+         *
+         * This list carried the two name fields for three branches, and that made
+         * it the most capable-beyond-the-API thing in the file. Measured
+         * 2026-08-19 with a positive control, recorded verbatim at
+         * lib/customers.ts:45-60: customer 26 was given the names `Zqxwvu
+         * Plmokn`, `?search=Zqxwvu` returned **0 rows**, and `?search=cus_fresh`
+         * — its login — returned 1. Customer 36 above is that control,
+         * reproduced, so the claim is falsifiable here rather than merely
+         * asserted. `?search=Chérif` appearing to work is the accent-insensitive
+         * collation matching the *email* `nadia.cherif@…`, which is customer 26.
+         *
+         * `display_name` is absent from the two fields below because it is not a
+         * field on this payload, and because in this shop every display name *is*
+         * the username — measured, `orderby=display_name` and `orderby=user_email`
+         * returned byte-identical sequences across all 16 rows.
+         *
+         * **The whole screen is built on this.** `looksLikeAName()` drives an
+         * empty state that explains *why* nothing matched instead of saying "no
+         * results", and while the two name fields were in this list that empty
+         * state could not be reached at all: every name in the shop matched. A
+         * screen could have shipped having never once rendered it.
+         */
+        search: (customer) => [customer.username, customer.email],
         // The detail is the row plus the report the list omits — and the list
         // must not carry it, which is the one place these two shapes differ.
-        detail: (customer) => ({
-          ...customer,
-          statistics: statisticsFor(customer, CUSTOMERS.indexOf(customer)),
-        }),
+        detail: (customer) => ({ ...customer, statistics: statisticsFor(customer) }),
       });
+    }
+
+    /*
+     * The queue's list, and **nothing else on this collection yet**.
+     * `GET /notifications/{id}` and `POST /notifications/{id}/retry` are both real
+     * routes the notifications screen calls, and both are still 404s here — named
+     * in the unit suite rather than left implied, because "covered" must not come
+     * to mean "finished". The list is what the customer detail's section needs and
+     * it is what this branch serves.
+     */
+    case "notifications":
+      return segments.length === 1 ? notificationsListing(searchParams) : notFound();
 
     case "inventory":
       /*

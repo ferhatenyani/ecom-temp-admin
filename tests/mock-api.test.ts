@@ -60,7 +60,16 @@ import {
   STOCK_STATUSES,
 } from "@/lib/product-status";
 import { priceSpan, variationLabel } from "@/lib/products";
-import { customerDetail, customerList } from "@/lib/api/schemas/customer";
+import { CONSENT_SOURCES, customerDetail, customerList } from "@/lib/api/schemas/customer";
+import {
+  consentRecord,
+  hasNoOrders,
+  looksLikeAName,
+  statFigures,
+  statusBreakdown,
+} from "@/lib/customers";
+import { notificationList } from "@/lib/api/schemas/notification";
+import { QUEUE_STATES, stateCounts } from "@/lib/notifications";
 import { inventoryItem, inventoryList } from "@/lib/api/schemas/inventory";
 import { coupon, couponDetail, couponList } from "@/lib/api/schemas/coupon";
 
@@ -1369,7 +1378,11 @@ describe("the catalogue vocabularies", () => {
     // was never that guard's number.
     expect(get("/orders/1000/nonsense").status).toBe(404);
     expect(get("/orders/1000/notes/1").status).toBe(404);
-    expect(get("/customers/20/orders").status).toBe(404);
+    // `/customers/{id}/orders` used to be on this list and is a real route now —
+    // a third segment under another name took its place, because the point was
+    // never that guard's number.
+    expect(get("/customers/20/nonsense").status).toBe(404);
+    expect(get("/customers/20/orders/1").status).toBe(404);
     // `/products/{id}/variations` used to be on this list and is a real route
     // now — a fourth segment under it took its place, because the point was
     // never that guard's number.
@@ -1618,6 +1631,12 @@ describe("the /products filters", () => {
   });
 });
 
+/** Every customer id the mock serves: the sixteen, plus the search control. */
+const CUSTOMER_IDS = [...Array.from({ length: 16 }, (_, i) => 20 + i), 36];
+
+const everyCustomer = () =>
+  CUSTOMER_IDS.map((id) => parse(customerDetail, get(`/customers/${id}`)).data);
+
 describe("GET /customers", () => {
   /**
    * The one collection where the list row and the detail are different objects.
@@ -1627,22 +1646,516 @@ describe("GET /customers", () => {
    */
   it("omits statistics from the list and carries it on the detail", () => {
     const { data } = parseList(customerList, get("/customers", "per_page=100"));
-    expect(data).toHaveLength(16);
+    expect(data).toHaveLength(17);
     expect(data.some((row) => "statistics" in row)).toBe(false);
 
-    const detail = parse(customerDetail, get("/customers/20")).data;
+    const detail = parse(customerDetail, get("/customers/24")).data;
     expect(detail.statistics.total_orders).toBeGreaterThan(0);
+    // Every shared value is identical, so the detail really is the row plus a
+    // report rather than a richer object — which is what makes two types honest.
+    const row = data.find((candidate) => candidate.id === 24);
+    const shared = Object.fromEntries(
+      Object.entries(detail).filter(([key]) => key !== "statistics"),
+    );
+    expect(shared).toEqual(row);
   });
 
-  it("parses all 16 details, including the 11 who have never ordered", () => {
-    const details = Array.from({ length: 16 }, (_, i) =>
-      parse(customerDetail, get(`/customers/${20 + i}`)).data,
-    );
+  it("parses all 17 details, including the 12 who have never ordered", () => {
+    const details = everyCustomer();
     const never = details.filter(
       (row) => row.statistics.first_order === null && row.statistics.last_order === null,
     );
-    expect(never).toHaveLength(11);
+    expect(never).toHaveLength(12);
+    expect(never.every((row) => row.statistics.total_orders === 0)).toBe(true);
+    // **12 of them have no name at all**, which is the measurement the row's
+    // whole identity fallback exists for. The seventeenth customer is named and
+    // is the search control below, so this count is the measured one unchanged.
     expect(details.filter((row) => row.first_name === "" && row.last_name === "")).toHaveLength(12);
+  });
+});
+
+/**
+ * **`?search=` matches `user_login`, `user_email` and `display_name` — never
+ * `first_name` or `last_name`**, and this is the most carefully measured fact
+ * about the customers screen.
+ *
+ * lib/customers.ts:45-60 records how it was pinned down: customer 26 was given
+ * the names `Zqxwvu Plmokn`, `?search=Zqxwvu` returned 0 rows and
+ * `?search=cus_fresh` returned 1. The mock matched all four fields for three
+ * branches, which made `looksLikeAName()`'s empty state — the one that explains
+ * *why* nothing matched instead of saying "no results" — unreachable against the
+ * harness. A screen could have shipped having never rendered it.
+ */
+describe("?search= on /customers", () => {
+  const found = (term: string) =>
+    parseList(customerList, get("/customers", `search=${encodeURIComponent(term)}&per_page=100`));
+
+  it("does NOT match a name, with the positive control the measurement used", () => {
+    // The control: a name that appears in no login and no email anywhere here.
+    const control = parse(customerDetail, get("/customers/36")).data;
+    expect(control.first_name).toBe("Zqxwvu");
+    expect(control.last_name).toBe("Plmokn");
+    expect(control.username).not.toContain("Zqxwvu");
+    expect(control.email).not.toContain("zqxwvu");
+
+    // The negative half, on both halves of the name and on the whole thing.
+    expect(found("Zqxwvu").meta.total).toBe(0);
+    expect(found("Plmokn").meta.total).toBe(0);
+    expect(found("Zqxwvu Plmokn").meta.total).toBe(0);
+
+    // And the positive half, which is what makes the zero above a measurement
+    // rather than a search that is simply broken: the same row *is* findable.
+    expect(found(control.username).data.map((row) => row.id)).toEqual([36]);
+    expect(found(control.email).data.map((row) => row.id)).toEqual([36]);
+
+    // The one named customer nobody can look up by name, which is the sentence
+    // the empty state exists to say.
+    const named = parse(customerDetail, get("/customers/20")).data;
+    expect(named.first_name).not.toBe("");
+    expect(found(named.first_name).meta.total).toBe(0);
+    expect(looksLikeAName(named.first_name)).toBe(true);
+  });
+
+  it("matches a username and an email, case- and accent-insensitively", () => {
+    expect(found("CLIENT20").meta.total).toBe(found("client20").meta.total);
+    expect(found("client20").meta.total).toBe(1);
+
+    /*
+     * **The trap.** `?search=Chérif` returns a row and looks like proof that
+     * names are matched. It is the accent-insensitive collation matching the
+     * *email* — and the row it returns has no name on it at all, which is the
+     * only reason the illusion is visible here.
+     */
+    const accented = found("Chérif");
+    expect(accented.meta.total).toBe(1);
+    expect(accented.data[0].email).toContain("cherif");
+    expect(accented.data[0].first_name).toBe("");
+    expect(accented.data[0].last_name).toBe("");
+  });
+
+  /**
+   * An unknown parameter is ignored with a 200 and a known one with a bad value
+   * is a 400. `queryFromParams()` carries a guard built entirely on that
+   * asymmetry, and while the mock answered 200 to both it could have been deleted
+   * with nothing noticing.
+   */
+  it("ignores an unknown parameter and refuses a bad orderby by name", () => {
+    const all = parseList(customerList, get("/customers", "per_page=100")).meta.total;
+    expect(parseList(customerList, get("/customers", "per_page=100&nonsense=zzz")).meta.total)
+      .toBe(all);
+    expect(
+      parseList(customerList, get("/customers", "per_page=100&role=administrator")).meta.total,
+    ).toBe(all);
+
+    expect(get("/customers", "orderby=zzz").status).toBe(400);
+    expect(get("/customers", "order=sideways").status).toBe(400);
+    expect(apiError(get("/customers", "orderby=zzz")).details).toMatchObject({
+      params: { orderby: expect.stringContaining("registered") },
+    });
+
+    // The four it does accept, and — the header's rule — it sorts by none of them.
+    const ids = (query: string) =>
+      parseList(customerList, get("/customers", `per_page=100&${query}`)).data.map((r) => r.id);
+    for (const orderby of ["registered", "ID", "display_name", "user_email"]) {
+      expect(get("/customers", `orderby=${orderby}`).status).toBe(200);
+      expect(ids(`orderby=${orderby}&order=asc`)).toEqual(ids(""));
+    }
+
+    // The refusal is the **collection's**. A single read takes no `orderby` at
+    // all, so refusing one there would be the same error in the other direction.
+    expect(get("/customers/24", "orderby=zzz").status).toBe(200);
+  });
+});
+
+/**
+ * **The statistics block, and the two invariants it is rendered for.**
+ *
+ * `by_status` sums to `total_orders` exactly — that is the property
+ * lib/api/schemas/customer.ts:119-137 says the block exists to publish — and
+ * `total_revenue ÷ total_orders` is **not** `average_order_value`, because
+ * revenue and the average are both over the *completed* orders. Every figure is
+ * internally consistent and only labelling can make that visible, which is what
+ * `statFigures()` gives each one a scope for.
+ */
+describe("a customer's statistics", () => {
+  it("sums by_status to total_orders on every fixture", () => {
+    for (const customer of everyCustomer()) {
+      const summed = Object.values(customer.statistics.by_status).reduce((a, b) => a + b, 0);
+      expect(summed, `by_status must sum to total_orders on ${customer.id}`).toBe(
+        customer.statistics.total_orders,
+      );
+      // And the panel's own reader agrees, with the zeros dropped: the sum is the
+      // property that survives dropping them.
+      const breakdown = statusBreakdown(customer.statistics);
+      expect(breakdown.reduce((sum, row) => sum + row.count, 0)).toBe(
+        customer.statistics.total_orders,
+      );
+      expect(breakdown.every((row) => row.count > 0)).toBe(true);
+    }
+  });
+
+  it("keeps the arithmetic trap: revenue is over the completed orders only", () => {
+    const rich = parse(customerDetail, get("/customers/24")).data.statistics;
+    expect(rich.completed_orders).toBeGreaterThan(0);
+    expect(rich.completed_orders).toBeLessThan(rich.total_orders);
+
+    // The arithmetic a reader performs when the two figures sit side by side, and
+    // the arithmetic the API actually did.
+    expect(Number(rich.total_revenue) / rich.total_orders).not.toBeCloseTo(
+      Number(rich.average_order_value),
+    );
+    expect(Number(rich.total_revenue) / rich.completed_orders).toBeCloseTo(
+      Number(rich.average_order_value),
+    );
+
+    // Every figure carries its scope, and the money ones count the completed.
+    expect(statFigures(rich).filter((figure) => figure.scope === "completed")).toHaveLength(3);
+  });
+
+  /**
+   * The breakdown used to hold `pending` and `completed` and nothing else, with
+   * `cancelled_orders` and `returned_orders` zero on all sixteen — so the
+   * zero-dropped list could never be more than two rows and two of the report's
+   * own fields were unrenderable.
+   */
+  it("gives one customer a breakdown that is more than two rows", () => {
+    const rich = parse(customerDetail, get("/customers/24")).data.statistics;
+    expect(statusBreakdown(rich).length).toBeGreaterThan(2);
+    expect(rich.cancelled_orders).toBeGreaterThan(0);
+    expect(rich.returned_orders).toBeGreaterThan(0);
+    expect(rich.by_status.cancelled).toBe(rich.cancelled_orders);
+    expect(hasNoOrders(rich)).toBe(false);
+  });
+
+  /**
+   * **The report and the order list cannot disagree**, because they are counted
+   * from the same rows. They used to: `customer_id` was assigned round-robin over
+   * the whole order book while the statistics were written out beside it, so the
+   * detail would have printed "Total orders 6" over a list of twenty-one.
+   */
+  it("agrees with the customer's own order list, row for row", () => {
+    for (const customer of everyCustomer()) {
+      const orders = parseList(orderList, get(`/customers/${customer.id}/orders`, "per_page=100"));
+      expect(orders.meta.total, `totals disagree on ${customer.id}`).toBe(
+        customer.statistics.total_orders,
+      );
+      expect(orders.data.filter((row) => row.status === "completed")).toHaveLength(
+        customer.statistics.completed_orders,
+      );
+
+      if (customer.statistics.total_orders === 0) continue;
+      // The span is this customer's own oldest and newest, not two invented ids.
+      expect(orders.data.map((row) => row.id)).toContain(customer.statistics.first_order?.id);
+      expect(customer.statistics.last_order?.id).toBe(orders.data[0].id);
+    }
+  });
+});
+
+/**
+ * **The four consent payload states**, three of which no fixture could reach.
+ *
+ * Only index 0 was `true` with a date and a source; the other fifteen had never
+ * decided. A withdrawal — `false` with a **non-null** date — is the second
+ * negative and a different answer from "we never asked", and an unknown source
+ * string is the shape that once blanked the whole screen.
+ */
+describe("the consent record", () => {
+  const consentOf = (id: number) =>
+    consentRecord(parse(customerDetail, get(`/customers/${id}`)).data);
+
+  it("reaches granted, withdrawn and never, and a source with no label", () => {
+    const granted = consentOf(20);
+    expect(granted.state).toBe("granted");
+    expect(granted).toMatchObject({ at: expect.any(String), source: "registration" });
+    expect(CONSENT_SOURCES).toContain(granted.state === "granted" ? granted.source : null);
+
+    /*
+     * The state the fixtures could not produce: a `false` that is a *decision*.
+     * It is on customer 24 because that is the row `scripts/capture.mjs` takes by
+     * default — reachable and photographed rather than merely reachable.
+     */
+    const withdrawn = consentOf(24);
+    expect(withdrawn.state).toBe("withdrawn");
+    expect(withdrawn.state === "withdrawn" && withdrawn.at).toEqual(expect.any(String));
+    expect(parse(customerDetail, get("/customers/24")).data.marketing_consent).toBe(false);
+    expect(parse(customerDetail, get("/customers/24")).data.marketing_consent_at).not.toBeNull();
+
+    /*
+     * **`"seed"` is the string that blanked the customer screen.**
+     * `marketing_consent_source` was `z.enum([...])`, `Consent::set()` stores
+     * whatever it is handed with no validation, the campaigns seed passed this,
+     * and the detail rendered as "This page couldn't load" over one label on one
+     * row. It parses, and it is outside the convention.
+     */
+    const unknown = consentOf(22);
+    expect(unknown.state).toBe("granted");
+    const source = unknown.state === "never" ? null : unknown.source;
+    expect(source).toBe("seed");
+    expect(CONSENT_SOURCES as readonly string[]).not.toContain(source);
+
+    // The common case, and the majority of the shop: no record at all, which is
+    // the one that changes what a shop should do next.
+    expect(consentOf(21)).toEqual({ state: "never" });
+    const never = everyCustomer().filter(
+      (row) => consentRecord(row).state === "never",
+    );
+    expect(never).toHaveLength(14);
+    expect(never.every((row) => row.marketing_consent_at === null)).toBe(true);
+  });
+
+  /**
+   * **The fourth state lib/customers.ts names cannot be told apart, and that is a
+   * property of the reader rather than a gap in the fixtures.** *declined* is "a
+   * source but no grant" — but `consentRecord()` keys on the date and returns
+   * `never` for any null one, whatever the source beside it says. So the mock
+   * does not serve a payload for it: a fixture reaching a state the panel cannot
+   * distinguish would be this file manufacturing a screen state rather than
+   * reproducing one. This test is what stops that being forgotten.
+   */
+  it("collapses declined into never, because the reader keys on the date", () => {
+    expect(
+      consentRecord({
+        ...parse(customerDetail, get("/customers/24")).data,
+        marketing_consent: false,
+        marketing_consent_at: null,
+        marketing_consent_source: "account",
+      }),
+    ).toEqual({ state: "never" });
+
+    // No fixture carries that shape, so nothing can come to depend on it.
+    expect(
+      everyCustomer().some(
+        (row) => row.marketing_consent_at === null && row.marketing_consent_source !== null,
+      ),
+    ).toBe(false);
+  });
+});
+
+/**
+ * `GET /customers/{id}/orders`, which used to be refused as a third segment — and
+ * this suite asserted the 404. Three measured behaviours, each one a thing the
+ * obvious implementation gets wrong.
+ */
+describe("GET /customers/{id}/orders", () => {
+  it("returns the identical shape to /orders, and 404s a customer who is not one", () => {
+    const { data, meta } = parseList(orderList, get("/customers/24/orders", "per_page=100"));
+    expect(data.length).toBeGreaterThan(0);
+    expect(meta.total).toBe(data.length);
+    // Verified by deep key-set equality on the live API, which is why
+    // lib/api/schemas/order.ts serves both and there is no second order type.
+    expect(Object.keys(data[0]).sort()).toEqual(
+      Object.keys(parse(order, get(`/orders/${data[0].id}`)).data).sort(),
+    );
+
+    // A customer with no orders is an empty list, not a 404.
+    expect(parseList(orderList, get("/customers/36/orders")).data).toEqual([]);
+    // An id the collection does not list is a 404 — including the ids the order
+    // book's own orphan orders are keyed to.
+    expect(get("/customers/900/orders").status).toBe(404);
+    expect(get("/customers/999999/orders").status).toBe(404);
+  });
+
+  it("takes one status, and a comma list is a 400", () => {
+    const filtered = parseList(orderList, get("/customers/24/orders", "status=completed&per_page=100"));
+    expect(filtered.data.length).toBeGreaterThan(0);
+    expect(filtered.data.every((row) => row.status === "completed")).toBe(true);
+    expect(filtered.meta.total).toBeLessThan(
+      parseList(orderList, get("/customers/24/orders", "per_page=100")).meta.total,
+    );
+
+    expect(get("/customers/24/orders", "status=completed,pending").status).toBe(400);
+    expect(get("/customers/24/orders", "status=nonsense").status).toBe(400);
+    // `""` is the absence of the filter, not a value.
+    expect(parseList(orderList, get("/customers/24/orders", "status=&per_page=100")).meta.total)
+      .toBe(parseList(orderList, get("/customers/24/orders", "per_page=100")).meta.total);
+  });
+
+  /**
+   * **A different `orderby` enum from the parent collection**, which is the whole
+   * reason it is worth reproducing: a screen that reused the customer list's
+   * control would send a value this route refuses, and vice versa.
+   */
+  it("takes orderby from its own enum, not the customer list's", () => {
+    for (const orderby of ["date", "id", "modified", "total"]) {
+      expect(get("/customers/24/orders", `orderby=${orderby}`).status).toBe(200);
+      expect(get("/customers", `orderby=${orderby}`).status).toBe(400);
+    }
+    for (const orderby of ["registered", "ID", "display_name", "user_email"]) {
+      expect(get("/customers/24/orders", `orderby=${orderby}`).status).toBe(400);
+      expect(get("/customers", `orderby=${orderby}`).status).toBe(200);
+    }
+    expect(get("/customers/24/orders", "order=sideways").status).toBe(400);
+
+    // Validated and then ignored, the way everything in this file is ignored.
+    const ids = (query: string) =>
+      parseList(orderList, get("/customers/24/orders", `per_page=100&${query}`)).data.map(
+        (row) => row.id,
+      );
+    expect(ids("orderby=total&order=asc")).toEqual(ids(""));
+  });
+
+  /**
+   * **`customer_id` is ignored.** Measured: `?customer_id=25` on customer 24's
+   * route answers customer 24's orders. The identity is the path and no parameter
+   * can redirect it — worth pinning, because the obvious implementation reads the
+   * parameter when it is there and quietly serves somebody else's order list.
+   */
+  it("ignores customer_id entirely", () => {
+    const own = parseList(orderList, get("/customers/24/orders", "per_page=100")).data;
+    const redirected = parseList(
+      orderList,
+      get("/customers/24/orders", "per_page=100&customer_id=23"),
+    ).data;
+    expect(redirected.map((row) => row.id)).toEqual(own.map((row) => row.id));
+
+    // And it is a redirection that would have been visible: 23 has its own,
+    // different list.
+    const other = parseList(orderList, get("/customers/23/orders", "per_page=100")).data;
+    expect(other.map((row) => row.id)).not.toEqual(own.map((row) => row.id));
+    // An id that is not a customer at all changes nothing either.
+    expect(
+      parseList(orderList, get("/customers/24/orders", "per_page=100&customer_id=0")).data.length,
+    ).toBe(own.length);
+  });
+
+  it("paginates, and reads a PATCHed status back", () => {
+    const first = parseList(orderList, get("/customers/24/orders", "per_page=2"));
+    expect(first.data).toHaveLength(2);
+    expect(first.meta.total).toBeGreaterThan(2);
+    expect(get("/customers/24/orders", "per_page=500").status).toBe(400);
+
+    // The list and the report move together, because both are counted from the
+    // same rows read through the same write state.
+    const pending = parseList(orderList, get("/customers/24/orders", "per_page=100")).data.find(
+      (row) => row.status === "pending",
+    );
+    expect(write("PATCH", `/orders/${pending!.id}`, { status: "completed" }).status).toBe(200);
+
+    const after = parse(customerDetail, get("/customers/24")).data.statistics;
+    expect(after.by_status.pending).toBe(0);
+    expect(
+      Object.values(after.by_status).reduce((a, b) => a + b, 0),
+    ).toBe(after.total_orders);
+  });
+});
+
+/**
+ * `GET /notifications`, which was absent entirely — so the customer detail's
+ * notifications section rendered its **error state in every capture**, a screen
+ * state produced by the harness rather than caught by it.
+ */
+describe("GET /notifications", () => {
+  const rows = (query: string) =>
+    parseList(notificationList, get("/notifications", `per_page=100&${query}`));
+
+  it("parses the queue, in all four states the panel derives from three fields", () => {
+    const { data, meta } = rows("");
+    expect(data.length).toBeGreaterThan(0);
+    expect(meta.total).toBe(data.length);
+
+    // `status` is three values and the screen shows four: a retryable failure
+    // leaves the row `pending` with the attempt counted and the error on it.
+    const counts = stateCounts(data);
+    for (const state of QUEUE_STATES) {
+      expect(counts[state], `no ${state} row to render`).toBeGreaterThan(0);
+    }
+
+    // The two the panel labels, and a recipient that is not an email — the API
+    // does not validate it as one, and `seed-notifications.mjs` writes a phone.
+    expect(new Set(data.map((row) => row.channel))).toEqual(new Set(["email", "sms"]));
+    expect(data.some((row) => !row.recipient.includes("@"))).toBe(true);
+    // Nullable and never 0.
+    expect(data.some((row) => row.subject_id === null)).toBe(true);
+    expect(data.every((row) => row.subject_id !== 0)).toBe(true);
+    // Newest first, and nothing can change it.
+    expect(data.map((row) => row.created_at)).toEqual(
+      [...data.map((row) => row.created_at)].sort().reverse(),
+    );
+    expect(rows("orderby=channel&order=asc").data.map((row) => row.id)).toEqual(
+      data.map((row) => row.id),
+    );
+    expect(get("/notifications", "orderby=nonsense").status).toBe(200);
+  });
+
+  /**
+   * The filter the customer detail's section is built on, and the reason it is
+   * one request rather than one per order per event name.
+   */
+  it("filters by recipient, and leaves the shop's own alerts out of it", () => {
+    const customer = parse(customerDetail, get("/customers/24")).data;
+    const mine = rows(`recipient=${encodeURIComponent(customer.email)}`);
+    expect(mine.data.length).toBeGreaterThan(0);
+    expect(mine.data.every((row) => row.recipient === customer.email)).toBe(true);
+    expect(mine.data.every((row) => row.audience === "customer")).toBe(true);
+
+    // **18 of the 39 measured rows were `admin`** — the shop being told it had an
+    // order. They are about this customer's orders and are correctly absent, which
+    // is what the section's footnote says and what makes it verifiable.
+    const admin = rows("recipient=admin@example.test");
+    expect(admin.data.length).toBeGreaterThan(0);
+    expect(admin.data.some((row) => mine.data.every((row2) => row2.id !== row.id))).toBe(true);
+    expect(rows("").data.filter((row) => row.audience === "admin").length).toBeGreaterThan(0);
+
+    // Exact, never a prefix: an address that is a prefix of another's must not
+    // collect their queue.
+    expect(rows(`recipient=${customer.email.slice(0, 8)}`).meta.total).toBe(0);
+  });
+
+  it("honours channel, status, dedupe_key, subject_id and the date range", () => {
+    expect(rows("channel=email").data.every((row) => row.channel === "email")).toBe(true);
+    // **Not validated**: an unknown channel is a 200 with 0 rows where an unknown
+    // status is a 400, because the route declares a key pattern rather than an enum.
+    expect(rows("channel=nonsense").meta.total).toBe(0);
+    expect(get("/notifications", "channel=nonsense").status).toBe(200);
+
+    for (const status of ["pending", "sent", "failed"]) {
+      expect(rows(`status=${status}`).data.every((row) => row.status === status)).toBe(true);
+    }
+    const refused = apiError(get("/notifications", "status=delivered"));
+    expect(refused.status).toBe(400);
+    // Measured: the code is `invalid_request`, not `rest_invalid_param`, and the
+    // sentence names the three and ends with a stop.
+    expect(refused.code).toBe("invalid_request");
+    expect(refused.details).toMatchObject({
+      params: { status: "status is not one of pending, sent, and failed." },
+    });
+
+    // `dedupe_key` is exact-match only — the left half alone answers 0 rows.
+    const one = rows("").data.find((row) => row.subject_id !== null)!;
+    expect(rows(`dedupe_key=${one.dedupe_key}`).data.map((r) => r.id)).toContain(one.id);
+    expect(rows(`dedupe_key=${one.event}`).meta.total).toBe(0);
+
+    // One order, every event about it — the query `dedupe_key` cannot express.
+    const bySubject = rows(`subject_id=${one.subject_id}`);
+    expect(bySubject.data.length).toBeGreaterThan(1);
+    expect(bySubject.data.every((row) => row.subject_id === one.subject_id)).toBe(true);
+    // `minimum: 1`, so the unset value is refused rather than ignored.
+    expect(get("/notifications", "subject_id=0").status).toBe(400);
+
+    const day = one.created_at.slice(0, 10);
+    expect(rows(`date_from=${day}&date_to=${day}`).data.every((row) =>
+      row.created_at.startsWith(day),
+    )).toBe(true);
+    expect(get("/notifications", "date_from=yesterday").status).toBe(400);
+  });
+
+  /**
+   * **`event` and `audience` are accepted and ignored**, and reproducing that is
+   * the point: both are on every row, both are the obvious thing to filter by,
+   * and §90 declined them deliberately. A mock that honoured them would let an
+   * agent build the two controls the panel refuses to ship and watch them work.
+   */
+  it("accepts event, audience and search, and ignores all three", () => {
+    const all = rows("").meta.total;
+    expect(rows("event=order.placed").meta.total).toBe(all);
+    expect(rows("audience=admin").meta.total).toBe(all);
+    expect(rows("search=yacine").meta.total).toBe(all);
+    expect(rows("wilaya=16").meta.total).toBe(all);
+  });
+
+  it("serves the list and nothing else on the collection", () => {
+    expect(get("/notifications/1").status).toBe(404);
+    expect(write("POST", "/notifications/1/retry").status).toBe(404);
   });
 });
 
@@ -1829,6 +2342,10 @@ const COVERED = [
   // exercises is named below rather than left implied.
   "shipping",
   "payment",
+  // Moved out with the customers redesign: `GET /notifications` is served, and
+  // the customer detail's section reads it. The two routes this module still
+  // carries schemas for are named below, for the same reason.
+  "notification",
 ];
 
 const UNCOVERED: Record<string, string> = {
@@ -1837,7 +2354,6 @@ const UNCOVERED: Record<string, string> = {
   campaign: "/campaigns is not mocked yet",
   cms: "/cms/* is not mocked yet",
   media: "/media is not mocked yet",
-  notification: "/notifications is not mocked yet",
   settings: "/settings is not mocked yet",
   staff: "/users and /roles are not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",
@@ -1862,6 +2378,21 @@ describe("what the newly-covered modules still do not serve", () => {
     expect(get("/payments/5231").status).toBe(404);
     // `codStatistics` — `/cod/statistics` belongs to the analytics screen.
     expect(get("/cod/statistics").status).toBe(404);
+  });
+
+  /**
+   * **`notification` is covered by its list and by nothing else**, and the gap is
+   * larger than the two above: `/notifications/{id}` and its retry are routes a
+   * screen that already exists calls on load, not schemas waiting for a branch.
+   * `notificationMessage`, `notificationDetail`, `retryResponse`, `retryMeta` and
+   * `sentConflictDetails` all describe answers this file cannot give, so the
+   * notification detail is the one screen in the panel that cannot be captured at
+   * all. Named here so "covered" does not quietly come to mean "finished".
+   */
+  it("leaves the notification detail and its retry unmocked", () => {
+    expect(get("/notifications/1").status).toBe(404);
+    expect(get("/notifications/4100").status).toBe(404);
+    expect(write("POST", "/notifications/4100/retry").status).toBe(404);
   });
 });
 

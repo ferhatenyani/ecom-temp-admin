@@ -92,6 +92,37 @@ const LOCALES = ["fr", "ar"];
  * blank, one that manages no stock of its own, and a price range across the three
  * — where 37 of the 39 products would render that section as nothing at all.
  *
+ * `/customers/24` is the third, and **the customer detail had never been captured
+ * at any width** — the screen with the most sections in the panel and no
+ * screenshot of any of them. 24 is the richest customer for the same reason 1023
+ * is the richest order: it is the only one where every section has something in
+ * it. Seven orders across **six of the seven statuses**, so the zero-dropped
+ * breakdown is six rows rather than the two every other customer can manage;
+ * `cancelled_orders` and `returned_orders` are both non-zero; two of the seven are
+ * completed, so `total_revenue ÷ total_orders` is visibly not the stated average
+ * and the card's scope footnote is doing real work; and it is the one customer
+ * whose consent was **withdrawn** — a `false` with a date on it, which is a
+ * different answer from the fourteen who were never asked and was the state no
+ * fixture could reach at all. It has no name — 12 of the 17 customers do not — so
+ * the header renders the username fallback rather than the one path a named row
+ * would take.
+ *
+ * **Two things about this route are worth knowing before reading its output.**
+ *
+ * The other two consent states are on other rows: 20 is granted from
+ * `registration` and 22 is granted from `seed`, a source the panel has no label
+ * for and renders as itself. Those are states rather than screens, so capture
+ * them by name when the card changes:
+ *
+ *     node scripts/capture.mjs /customers/20 /customers/22
+ *
+ * And **this captures the profile tab only.** The orders list and the customer's
+ * notification queue are the detail's other two tabs, both client-fetched on
+ * selection, and this harness never interacts with the page — so neither
+ * `/customers/{id}/orders` nor `/notifications` is requested by a capture run of
+ * this route, whatever the mock serves. `tests/mock-api.test.ts` is what holds
+ * those two, and a screenshot of either would need a harness that can click.
+ *
  * **`/products/208` is deliberately not here, and it is the one worth knowing
  * about.** It is the only product carrying a broken option set, so it is the only
  * route that renders the `options_problems` warning — a state, not a screen, and
@@ -105,6 +136,7 @@ const DEFAULT_ROUTES = [
   "/products",
   "/products/104",
   "/customers",
+  "/customers/24",
   "/inventory",
   "/coupons",
 ];
