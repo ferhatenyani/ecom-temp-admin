@@ -178,6 +178,7 @@
       "ac_manage_orders": "الطلبات",
       "ac_manage_products": "المنتجات",
       "ac_manage_customers": "العملاء",
+      "ac_manage_coupons": "رموز الخصم",
       "ac_manage_inventory": "المخزون",
       "ac_manage_settings": "الإعدادات",
       "ac_manage_users": "المستخدمون",
@@ -216,6 +217,7 @@
     "listUpdated": "{total, plural, =0 {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}",
     "productName": "المنتج {name}",
     "customerName": "العميل {name}",
+    "couponCode": "رمز الخصم {code}",
     "stockItem": "العنصر {name}"
   },
   "statusShort": {
@@ -684,12 +686,12 @@
   },
   "coupons": {
     "title": "رموز الخصم",
+    "loading": "جارٍ التحميل…",
     "createTitle": "رمز خصم جديد",
     "refresh": "تحديث",
+    "actions": "إجراءات",
     "create": "إنشاء",
-    "cancel": "إلغاء",
-    "save": "حفظ",
-    "revert": "استرجاع",
+    "new": "رمز خصم جديد",
     "saved": "تم حفظ رمز الخصم.",
     "created": "تم إنشاء رمز الخصم.",
     "trashed": "نُقل رمز الخصم إلى المهملات.",
@@ -697,20 +699,29 @@
     "trash": "نقل إلى المهملات",
     "deleteForever": "حذف نهائي",
     "count": "{total, plural, =0 {لا توجد رموز خصم} one {رمز خصم واحد} two {رمزا خصم} few {# رموز خصم} many {# رمز خصم} other {# رمز خصم}}",
-    "previousPage": "الصفحة السابقة",
-    "nextPage": "الصفحة التالية",
     "searchLabel": "البحث عن رمز",
     "searchPlaceholder": "رمز الخصم",
     "clearSearch": "مسح البحث",
     "statusLabel": "التصفية حسب الحالة",
+    "columns": {
+      "code": "الرمز",
+      "description": "الوصف",
+      "discount": "الخصم",
+      "type": "النوع",
+      "minimum": "الحد الأدنى للسلة",
+      "usage": "الاستعمالات",
+      "expires": "الانتهاء",
+      "restrictions": "القيود",
+      "id": "المعرّف"
+    },
     "expired": "منتهٍ",
     "freeShipping": "شحن مجاني",
-    "percentValue": "{amount} ٪",
     "noDescription": "بدون وصف",
     "minimumShort": "ابتداءً من {amount}",
     "restrictedShort": "{count, plural, one {قيد واحد} two {قيدان} few {# قيود} other {# قيدًا}}",
     "notFound": "رمز الخصم هذا غير موجود. الحذف النهائي لا رجعة فيه، أما النقل إلى المهملات فنعم.",
-    "trashedBanner": "رمز الخصم هذا في المهملات. لم يعد يُطبَّق، لكنه يحتفظ برمزه — وإعادة إنشاء الرمز نفسه ستُرفض بتعارض.",
+    "trashedBanner": "رمز الخصم هذا في المهملات. لم يعد يُطبَّق، لكنه يحتفظ برمزه — وإعادة إنشاء الرمز نفسه ستُرفض بتعارض. وحفظه من هذه الشاشة يُخرجه من المهملات كمسودة.",
+    "staleTitle": "قيود معطَّلة",
     "staleRestrictions": "{count, plural, one {قيد واحد يشير} two {قيدان يشيران} few {# قيود تشير} other {# قيدًا يشير}} إلى عنصر محذوف. لذلك لا يُطبَّق رمز الخصم على شيء.",
     "duplicateCode": "الرمز «{code}» مستعمل بالفعل. تُحفظ الرموز بحروف صغيرة، فحالة الأحرف لا تميّزها.",
     "usageOf": "{count} من {limit}",
@@ -780,9 +791,10 @@
       "product_categories": "الفئات المعنية",
       "excluded_product_categories": "الفئات المستثناة",
       "any": "الكل",
+      "none": "لا شيء",
       "excludes": "استثناء",
-      "selected": "{count, plural, one {# مختار} two {# مختاران} few {# مختارة} other {# مختارًا}}",
-      "missingOne": "عنصر محذوف (#{id})"
+      "missingOne": "عنصر محذوف (#{id})",
+      "unknownOne": "عنصر ‏#{id}"
     },
     "picker": {
       "description": "المس سطرًا لإضافته أو إزالته.",
@@ -802,11 +814,12 @@
       "trashTitle": "نقل هذا الرمز إلى المهملات؟",
       "trashBody": "سيتوقف عن العمل لكنه يحتفظ برمزه، ويمكن استرجاعه.",
       "deleteTitle": "حذف نهائي؟",
-      "deleteBody": "لا رجعة فيه. سيعود الرمز متاحًا لرمز خصم جديد."
+      "deleteBody": "لا رجعة فيه. سيعود الرمز متاحًا لرمز خصم جديد.",
+      "typeCode": "اكتب «{code}» للتأكيد."
     },
     "empty": {
       "none": "لا توجد رموز خصم بعد.",
-      "noResults": "لا يوجد رمز خصم مطابق.",
+      "noResults": "لا يوجد رمز خصم مطابق. يقتصر البحث على الرمز دون الوصف.",
       "clear": "مسح عوامل التصفية"
     }
   },

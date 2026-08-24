@@ -1,16 +1,16 @@
 import { getTranslations } from "next-intl/server";
 import { requireSession } from "@/lib/session/read";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { BLANK, CouponForm } from "../[id]/CouponForm";
 
 /**
  * Creating a coupon.
  *
- * Its own route rather than a sheet: the form is eight sections tall and includes
- * a picker that opens a sheet of its own, and a sheet inside a sheet at the 390px
- * floor is two dismiss gestures stacked on one screen.
+ * Its own route rather than an overlay: the form is seven sections tall and opens
+ * a `Drawer` of its own for the restrictions, and a drawer inside a drawer at the
+ * 340px floor is two dismiss gestures stacked on one screen.
  *
  * `POST /coupons` is on the proxy allowlist while `POST /products` is not, and the
  * difference is real rather than an inconsistency: a coupon has no variations, no
@@ -28,11 +28,16 @@ export default async function NewCouponPage({
   if (!has(me, "ac_manage_coupons")) {
     const t = await getTranslations("coupons");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader
+          title={t("createTitle")}
+          back={{ href: `/${locale}/coupons`, label: t("title") }}
+          divided={false}
+        />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_coupons" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

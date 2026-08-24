@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import type { CouponDetail, RestrictionRef } from "@/lib/api/schemas/coupon";
+import type { CouponDetail, RestrictionRef, Restrictions } from "@/lib/api/schemas/coupon";
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import {
   COUPON_STATUSES,
@@ -23,25 +23,31 @@ import {
   refLabel,
   usage,
 } from "@/lib/coupons";
-import { formatDate } from "@/lib/format/date";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { SectionError } from "@/components/patterns/States";
-import { ListGroup, ListRow, ListValueRow } from "@/components/primitives/GroupedList";
+import { formatDate, formatWhen } from "@/lib/format/date";
+import { useOnline } from "@/lib/use-online";
+import { useHydrated } from "@/lib/use-hydrated";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
-  DecimalField,
+  DateField,
+  ErrorSummary,
+  NumberField,
   ReadOnlyField,
-  SelectField,
-  SwitchField,
-  TextAreaField,
+  SaveBar,
+  Select,
+  Switch,
+  TextArea,
   TextField,
-} from "@/components/primitives/Field";
-import { ActionSheet } from "@/components/primitives/ActionSheet";
-import { Button } from "@/components/primitives/Button";
+  type FormFailure,
+} from "@/components/ui/Form";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { Notice, StaleBanner } from "@/components/ui/States";
+import { Menu, type MenuAction } from "@/components/ui/Menu";
+import { ConfirmDialog } from "@/components/ui/Confirm";
+import { IconButton } from "@/components/ui/Button";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useToast } from "@/components/primitives/Toast";
-import { useHydrated } from "@/lib/use-hydrated";
 import { RestrictionPicker } from "./RestrictionPicker";
 
 /**
@@ -51,6 +57,27 @@ import { RestrictionPicker } from "./RestrictionPicker";
  * this screen with an empty object behind it. That is why `POST /coupons` is on
  * the proxy allowlist while `POST /products` is not: there, create would have been
  * a different and much larger screen.
+ *
+ * ## `PageBody width="form"`, not `DetailGrid`
+ *
+ * §2.3 lists a coupon in the 640px form row, and it belongs there rather than in
+ * the two-column detail row the product screen uses. A product is a record with
+ * an unboundedly-growing main body — descriptions, attributes, a variation list —
+ * beside a fixed block of reference material to glance at while reading it. A
+ * coupon has no read-only half at all: its dates and its id are three lines, and
+ * `usage_count` belongs beside the limits it counts against rather than in an
+ * aside that would exist to hold it.
+ *
+ * ## The write payload is a named subset, never the GET body
+ *
+ * The products branch measured what happens otherwise: a PATCH carrying only
+ * read-only fields is a 400 with no `details` at all. On a coupon it is worse,
+ * because **a coupon refuses a read-only key rather than dropping it** — the
+ * opposite of a product's rule — and `restrictions` is the trap: it is emitted on
+ * every single-coupon response *including the answer to the write itself*, so the
+ * obvious "save what I was given" round trip 400s on the field the API had just
+ * handed over. `id`, `usage_count`, `used_by`, `date_created` and `date_modified`
+ * are refused the same way.
  */
 
 type Draft = {
@@ -153,27 +180,103 @@ export const BLANK: CouponDetail = {
   },
 };
 
+/**
+ * What the form knows about a restriction id: the name to print, and whether the
+ * API said the id resolves to nothing.
+ *
+ * **This map is the fix for a real defect.** The rows used to take their ids from
+ * the draft and their *names* from `coupon.restrictions` — the last **saved**
+ * response — and then render the names whenever there were any and the draft's
+ * count beside them. Add a product to coupon 302, which already carries one, and
+ * the row showed one old name with a trailing "2". Two sources of truth for one
+ * row, and the count was the only half that moved.
+ *
+ * So there is one source: seeded from the saved response, extended by every
+ * picker commit — the picker already knows the names it displayed — and rebuilt
+ * from the answer to each save, which is the API resolving them afresh.
+ *
+ * **An id in neither source renders as its id and does not claim `missing`.**
+ * `missing` is a measured API fact, and inventing it would tell somebody a
+ * product had been deleted when all that happened is that this browser has never
+ * seen its name.
+ */
+type RefName = { name: string | null; missing: boolean };
+
+function seedRefNames(restrictions: Restrictions): Map<number, RefName> {
+  const map = new Map<number, RefName>();
+  // Through `RESTRICTION_FIELDS` rather than `Object.values`: the schema is a
+  // `looseObject`, so its index signature is `unknown` and `Object.values` would
+  // hand back `unknown[]`.
+  for (const field of RESTRICTION_FIELDS) {
+    for (const ref of restrictions[field] as RestrictionRef[]) {
+      map.set(ref.id, { name: ref.name, missing: ref.missing });
+    }
+  }
+  return map;
+}
+
+/**
+ * A field's DOM id, so `ErrorSummary` can link a failure to the control it is
+ * about — which is the whole reason every control in `Form.tsx` takes one.
+ *
+ * `date_expires` keeps the shorter `coupon-expires`: it is the one id on this
+ * form that predates the redesign and is asserted **by name** in
+ * `e2e/coupons.spec.ts`, which reads the expiry through it to prove the ISO/`Y-m-d`
+ * asymmetry has been resolved before the value reaches the control.
+ */
+function fieldId(key: string): string {
+  return key === "date_expires" ? "coupon-expires" : `coupon-${key}`;
+}
+
 export function CouponForm({
   locale,
   initialCoupon,
+  fetchedAt,
   mode,
 }: {
   locale: string;
   initialCoupon: CouponDetail;
+  /**
+   * When the server render that produced `initialCoupon` happened, for §3.7's
+   * stale marker. Absent on create, where there is no fetch and nothing that can
+   * age — a blank object is exactly as old as the form around it.
+   */
+  fetchedAt?: number;
   mode: "create" | "edit";
 }) {
   const t = useTranslations("coupons");
+  const tStates = useTranslations("states");
   const router = useRouter();
   const toast = useToast();
+  const online = useOnline();
+  /*
+   * The restriction rows are the one control on this form that `Form.tsx` does
+   * not draw, so they carry its guard themselves. A tap landing in the window
+   * between first paint and hydration opens nothing and reports nothing — and
+   * **WebKit hydrates slowly enough for that window to be real**, which is why
+   * `e2e/coupons.spec.ts` waits on `toBeEnabled()` before clicking one. Chromium
+   * closed it before every click; WebKit did not.
+   */
   const hydrated = useHydrated();
 
   const [coupon, setCoupon] = useState(initialCoupon);
   const [draft, setDraft] = useState<Draft>(() => draftOf(initialCoupon));
+  const [refNames, setRefNames] = useState(() => seedRefNames(initialCoupon.restrictions));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [topError, setTopError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [picker, setPicker] = useState<RestrictionField | null>(null);
   const [deleting, setDeleting] = useState<"trash" | "force" | null>(null);
+
+  /**
+   * Where the keyboard goes when the delete confirm closes.
+   *
+   * The dialog is opened from a `Menu` item, which Radix unmounts the moment it
+   * is selected — so the opener the overlay recorded is detached by the time it
+   * would be focused, Radix's own fallback targets a trigger ref a controlled
+   * dialog never sets, and focus lands on `<body>`.
+   */
+  const menuTriggerId = useId();
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(coupon));
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
@@ -182,6 +285,22 @@ export function CouponForm({
   const trashed = coupon.status === "trash";
   const stale = missingRefs(coupon.restrictions);
   const redemptions = usage(coupon);
+  const offlineReason = online ? undefined : tStates("offlineWrites");
+
+  /**
+   * How this locale joins a short list of names.
+   *
+   * `Intl.ListFormat`, not `.join("، ")`. The literal that stood here was an
+   * **Arabic** comma, hardcoded, and it ran in both locales — so a French reader
+   * saw "Tapis et Textiles، Burnous en laine". A list separator is locale data,
+   * and this is the platform API that holds it.
+   *
+   * `narrow` `conjunction` is CLDR's shortest enumeration: commas in French, و in
+   * Arabic. `unit` was measured first and is wrong here — its narrow form joins
+   * with a **bare space** in French, which for a list of product names is no
+   * separator at all.
+   */
+  const LIST = new Intl.ListFormat(locale, { style: "narrow", type: "conjunction" });
 
   /* ----------------------------------------------------------------- save --- */
 
@@ -245,6 +364,9 @@ export function CouponForm({
 
       setCoupon(saved);
       setDraft(draftOf(saved));
+      // The API has just resolved every id afresh, so its answer replaces what
+      // the pickers contributed rather than merging with it.
+      setRefNames(seedRefNames(saved.restrictions));
       toast.show(t("saved"));
       // The list's cached page is now stale in one row. Refreshing the route is
       // cheaper and more honest than patching a cache entry by hand.
@@ -277,20 +399,13 @@ export function CouponForm({
 
       /*
        * A 400 lists **every** bad field at once, so each one is bound to its own
-       * control rather than collapsed into one line. The messages are the API's
-       * English; they name the problem precisely and a translated generic would
-       * throw that away. Only the label is localised.
+       * control *and* listed in the summary at the top. The messages are the
+       * API's English; they name the problem precisely and a translated generic
+       * would throw that away. Only the label is localised.
        */
       const fields = error.fields;
       if (fields !== null && Object.keys(fields).length > 0) {
         setErrors(fields);
-
-        // A field the form does not render still has to be reachable, or the
-        // person sees a refusal with no cause anywhere on screen.
-        const orphans = Object.entries(fields).filter(([key]) => !(key in draft));
-        if (orphans.length > 0) {
-          setTopError(orphans.map(([key, message]) => `${key}: ${message}`).join(" · "));
-        }
         return;
       }
 
@@ -316,430 +431,620 @@ export function CouponForm({
     }
   }
 
+  /* ------------------------------------------------- the failures, summarised --- */
+
+  /**
+   * §3.4: a form that failed submission shows a summary at the top listing each
+   * failure as a link to its field, with focus moved to it.
+   *
+   * **This is the second of the two defects this branch exists to fix, and it was
+   * a silent failed save.** A 400 on a restriction id — `{"product_ids":[101,8842]}`
+   * on coupon 305, which the mock reproduces — set `errors` and then computed
+   * "orphans" as the keys *not* in the draft. `product_ids` **is** in the draft,
+   * so there were no orphans, the top-level message never ran, and the four
+   * restriction rows read `errors` nowhere. Net: the refusal cleared `saving`,
+   * left the bar dirty, and put nothing whatsoever on screen.
+   *
+   * Every writable key gets a label, not only the rendered ones, because a 400
+   * names fields this form does not show and the name alone reads as machinery.
+   * A key outside the set falls back to itself: a genuinely unknown field is a
+   * bug report, and its name is the only part of it worth carrying.
+   *
+   * Everything writable here has a control on screen — including the four
+   * restriction rows, which are `<button>`s and therefore focusable link targets
+   * — so `id` is set for all of them and the orphan case is `FIELD_LABELS`'
+   * fallback rather than a branch.
+   */
+  const FIELD_LABELS: Record<string, string> = {
+    code: t("field.code"),
+    status: t("field.status"),
+    discount_type: t("field.discount_type"),
+    amount: t("field.amount"),
+    description: t("field.description"),
+    date_expires: t("field.date_expires"),
+    minimum_amount: t("field.minimum_amount"),
+    maximum_amount: t("field.maximum_amount"),
+    usage_limit: t("field.usage_limit"),
+    usage_limit_per_user: t("field.usage_limit_per_user"),
+    limit_usage_to_x_items: t("field.limit_usage_to_x_items"),
+    individual_use: t("field.individual_use"),
+    free_shipping: t("field.free_shipping"),
+    exclude_sale_items: t("field.exclude_sale_items"),
+    email_restrictions: t("field.email_restrictions"),
+    product_ids: t("restriction.product_ids"),
+    excluded_product_ids: t("restriction.excluded_product_ids"),
+    product_categories: t("restriction.product_categories"),
+    excluded_product_categories: t("restriction.excluded_product_categories"),
+  };
+
+  const failures: FormFailure[] = Object.entries(errors).map(([key, message]) => ({
+    id: key in FIELD_LABELS ? fieldId(key) : undefined,
+    label: FIELD_LABELS[key] ?? key,
+    message,
+  }));
+
+  /* ---------------------------------------------------------- restrictions --- */
+
+  /** The names on one restriction row, joined the way `LIST` joins a list. */
+  function restrictionSummary(ids: number[]): string {
+    const labels = ids.map((id) => {
+      const known = refNames.get(id);
+      if (known === undefined) {
+        /* Neither the API nor a picker has named this id in this session. It is
+           printed as an id — never as a name, and never as `missing`, which is a
+           thing the API says and not a thing a client may infer. */
+        return t("restriction.unknownOne", { id });
+      }
+      /* `refLabel` is the one authority on "a name, or the honest absence of
+         one", so the rule that an id must never be printed *as* a name lives in
+         one place rather than being restated here. */
+      const label = refLabel({ id, name: known.name, missing: known.missing });
+      return label.named ? label.text : t("restriction.missingOne", { id });
+    });
+
+    return LIST.format(labels);
+  }
+
   /* ----------------------------------------------------------------- view --- */
 
+  const deleteActions: MenuAction[] = [
+    /* Only for a live coupon: a DELETE on an already-trashed one answers 200
+       again and changes nothing, so the item would be a control that cannot act. */
+    ...(trashed
+      ? []
+      : [
+          {
+            key: "trash",
+            label: t("trash"),
+            icon: "trash" as const,
+            destructive: true,
+            disabled: offlineReason !== undefined,
+            onSelect: () => setDeleting("trash"),
+          },
+        ]),
+    {
+      key: "force",
+      label: t("deleteForever"),
+      icon: "close" as const,
+      destructive: true,
+      disabled: offlineReason !== undefined,
+      onSelect: () => setDeleting("force"),
+    },
+  ];
+
   return (
-    <Scaffold
-      title={mode === "create" ? t("createTitle") : coupon.code}
-      back={{ href: `/${locale}/coupons`, label: t("title") }}
-    >
-      <div className="mx-auto max-w-3xl px-4">
-        {topError ? <SectionError>{topError}</SectionError> : null}
-
-        {/*
-          A trashed coupon still reads back 200 with `status: "trash"` — only
-          `?force=true` gives a 404 — so this screen is reachable for one and has
-          to say what it is looking at. It also keeps its code, which is why
-          recreating that code answers 409 rather than succeeding.
-        */}
-        {trashed ? (
-          <div className="tonal tone-danger mb-4 rounded-lg px-4 py-3">
-            <p className="text-body">{t("trashedBanner")}</p>
-          </div>
-        ) : null}
-
-        {/*
-          Stale restrictions, surfaced rather than silently kept.
-          A product deleted after the coupon was written leaves an id resolving to
-          nothing; the API reports it as `missing` instead of dropping it, because
-          a client that dropped it would delete the restriction on the next save.
-          A coupon restricted to something that no longer exists applies to
-          nothing and is otherwise indistinguishable from one that works.
-        */}
-        {stale.length > 0 ? (
-          <div className="tonal tone-warning mb-4 rounded-lg px-4 py-3">
-            <p className="text-body">
-              <Isolate numeric>{t("staleRestrictions", { count: stale.length })}</Isolate>
-            </p>
-            <p className="mt-1 text-footnote">
-              {stale.map((ref: RestrictionRef) => `#${ref.id}`).join(" · ")}
-            </p>
-          </div>
-        ) : null}
-
-        <ListGroup title={t("section.basics")}>
-          <TextField
-            label={t("field.code")}
-            value={draft.code}
-            /*
-             * Folded as the user types, so what they see is what will be stored.
-             * WooCommerce lower-cases every code on save and the duplicate check
-             * runs on the folded form, which is why `BIENVENUE10` collides with
-             * `bienvenue10` — a field that showed the typed case would make that
-             * 409 look like a bug.
-             */
-            onChange={(value) => set("code", value.toLowerCase())}
-            error={errors.code}
-            hint={t("hint.code")}
-            isolate
-            disabled={trashed}
-            name="code"
-          />
-          <SelectField<DiscountType>
-            label={t("field.discount_type")}
-            value={draft.discount_type}
-            onChange={(value) => set("discount_type", value)}
-            options={DISCOUNT_TYPES.map((value) => ({ value, label: t(`type.${value}`) }))}
-            error={errors.discount_type}
-            disabled={trashed}
-          />
-          <DecimalField
-            label={
-              draft.discount_type === "percent" ? t("field.amountPercent") : t("field.amount")
-            }
-            value={draft.amount}
-            onChange={(value) => set("amount", value)}
-            error={errors.amount}
-            hint={draft.discount_type === "percent" ? t("hint.percent") : t("hint.amount")}
-            disabled={trashed}
-            name="amount"
-          />
-          <TextAreaField
-            label={t("field.description")}
-            value={draft.description}
-            onChange={(value) => set("description", value)}
-            error={errors.description}
-            rows={2}
-            disabled={trashed}
-          />
-          <SelectField<CouponStatus>
-            label={t("field.status")}
-            value={draft.status}
-            onChange={(value) => set("status", value)}
-            options={COUPON_STATUSES.map((value) => ({
-              value,
-              label: t(`status.${value}`),
-            }))}
-            error={errors.status}
-            hint={t("hint.status")}
-            disabled={trashed}
-          />
-        </ListGroup>
-
-        <ListGroup title={t("section.validity")} footnote={t("hint.expiry")}>
-          <div className="list-row flex flex-col gap-1 px-4 py-2.5">
-            <label htmlFor="coupon-expires" className="text-footnote text-label-secondary">
-              {t("field.date_expires")}
-            </label>
-            {/*
-              A native date input rather than `TextField`. The control's own value
-              format is `YYYY-MM-DD`, which is exactly what the API accepts on
-              write — the mismatch is entirely on the *read* side, and
-              `expiryInputValue()` has already resolved it.
-             */}
-            <input
-              id="coupon-expires"
-              type="date"
-              /*
-                **A native date input follows the *browser's* locale, and there
-                is no way to change it.** The Arabic form renders `mm/dd/yyyy` —
-                a US ordering in a right-to-left screen. `lang` is set because it
-                is the only hint the platform offers and some engines honour it;
-                measured on Chromium 2026-08-19, this one does not. The control's
-                internals cannot be styled or relabelled either.
-                
-                So the placeholder is left as the platform's and the value is
-                echoed underneath, formatted for the page. A person can then
-                confirm the date they set without having to trust a format they
-                do not recognise, which is the part that actually matters.
-              */
-              lang={locale}
-              value={draft.date_expires}
-              onChange={(event) => set("date_expires", event.target.value)}
-              disabled={trashed || !hydrated}
-              aria-busy={!hydrated || undefined}
-              aria-invalid={errors.date_expires ? true : undefined}
-              className="min-h-11 w-full bg-transparent text-body text-label outline-none disabled:opacity-40"
-            />
-            {/* The value in the page's own language — see above. `Isolate`, not
-                `Ltr`: this is `Intl`-formatted, and forcing a direction over the
-                marks it inserts renders an Arabic date as `17ص 12:03 .2026/08/`. */}
-            {draft.date_expires !== "" ? (
-              <span className="text-caption text-label-secondary">
-                <Isolate>{formatDate(draft.date_expires, locale, false)}</Isolate>
-              </span>
-            ) : null}
-            {errors.date_expires ? (
-              <span className="text-footnote text-danger">{errors.date_expires}</span>
-            ) : null}
-          </div>
-          <DecimalField
-            label={t("field.minimum_amount")}
-            value={draft.minimum_amount}
-            onChange={(value) => set("minimum_amount", value)}
-            error={errors.minimum_amount}
-            /*
-             * "Leave empty for none" and not "0 for none". A negative value is now
-             * refused by name — it used to answer 200 and silently erase a real
-             * threshold — and an empty field is the way to clear one.
-             */
-            hint={t("hint.threshold")}
-            disabled={trashed}
-            name="minimum_amount"
-          />
-          <DecimalField
-            label={t("field.maximum_amount")}
-            value={draft.maximum_amount}
-            onChange={(value) => set("maximum_amount", value)}
-            error={errors.maximum_amount}
-            hint={t("hint.maximumAmount")}
-            disabled={trashed}
-            name="maximum_amount"
-          />
-        </ListGroup>
-
-        <ListGroup title={t("section.limits")}>
-          <TextField
-            label={t("field.usage_limit")}
-            value={draft.usage_limit}
-            onChange={(value) => set("usage_limit", value)}
-            error={errors.usage_limit}
-            hint={t("hint.unlimited")}
-            inputMode="numeric"
-            disabled={trashed}
-            name="usage_limit"
-          />
-          <TextField
-            label={t("field.usage_limit_per_user")}
-            value={draft.usage_limit_per_user}
-            onChange={(value) => set("usage_limit_per_user", value)}
-            error={errors.usage_limit_per_user}
-            hint={t("hint.unlimited")}
-            inputMode="numeric"
-            disabled={trashed}
-            name="usage_limit_per_user"
-          />
-          <TextField
-            label={t("field.limit_usage_to_x_items")}
-            value={draft.limit_usage_to_x_items}
-            onChange={(value) => set("limit_usage_to_x_items", value)}
-            error={errors.limit_usage_to_x_items}
-            hint={t("hint.unlimited")}
-            inputMode="numeric"
-            disabled={trashed}
-            name="limit_usage_to_x_items"
-          />
-          {mode === "edit" ? (
-            /*
-             * Read-only, and it is not a field the panel could write if it wanted
-             * to: `usage_count` is moved by `POST /cart/coupons` on the storefront
-             * and by nothing else. `used_by` is emitted by no response at all, so
-             * *who* redeemed a coupon is unanswerable and this row does not imply
-             * it is knowable elsewhere in the panel.
-             */
-            <ReadOnlyField
-              label={t("field.usage_count")}
-              value={
-                <Ltr numeric>
-                  {redemptions.limited
-                    ? t("usageOf", { count: redemptions.count, limit: redemptions.limit })
-                    : String(redemptions.count)}
-                </Ltr>
-              }
-              reason={t("hint.usageCount")}
-            />
-          ) : null}
-        </ListGroup>
-
-        <ListGroup title={t("section.behaviour")}>
-          <SwitchField
-            label={t("field.free_shipping")}
-            checked={draft.free_shipping}
-            onChange={(checked) => set("free_shipping", checked)}
-            hint={t("hint.freeShipping")}
-            disabled={trashed}
-          />
-          <SwitchField
-            label={t("field.individual_use")}
-            checked={draft.individual_use}
-            onChange={(checked) => set("individual_use", checked)}
-            hint={t("hint.individualUse")}
-            disabled={trashed}
-          />
-          <SwitchField
-            label={t("field.exclude_sale_items")}
-            checked={draft.exclude_sale_items}
-            onChange={(checked) => set("exclude_sale_items", checked)}
-            hint={t("hint.excludeSaleItems")}
-            disabled={trashed}
-          />
-        </ListGroup>
-
-        {/* ------------------------------------------------- the restrictions --- */}
-
-        <ListGroup
-          title={t("section.restrictions")}
-          /*
-           * **`fixed_product` is the only type that discounts per product.** The
-           * other two apply to the cart and use the product list as a *condition*.
-           * A shop that sets "500 DA off these two products" on a `fixed_cart`
-           * coupon takes 500 DA off the whole basket, and nothing on screen would
-           * otherwise say so.
-           */
-          footnote={
-            discountsPerProduct(draft.discount_type)
-              ? t("hint.perProduct")
-              : t("hint.perCart")
-          }
-        >
-          {RESTRICTION_FIELDS.map((field) => {
-            const ids = draft[field];
-            const refs = coupon.restrictions[field];
-
-            return (
-              <button
-                key={field}
-                type="button"
-                disabled={trashed || !hydrated}
-                onClick={() => setPicker(field)}
-                className="list-row press-row flex min-h-11 w-full items-center gap-3 px-4 py-3 text-start disabled:opacity-40"
-              >
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="flex items-center gap-2 text-body text-label">
-                    {t(`restriction.${field}`)}
-                    {isExclusion(field) ? (
-                      <StatusBadge tone="warning" className="shrink-0">
-                        {t("restriction.excludes")}
-                      </StatusBadge>
-                    ) : null}
-                  </span>
-                  <span className="text-footnote text-label-secondary">
-                    {ids.length === 0 ? (
-                      <span className="text-label-tertiary">{t("restriction.any")}</span>
-                    ) : (
-                      /*
-                        The names, resolved by the API, and never a bare id where a
-                        name goes — an id printed as a label reads as a product
-                        called 8842. An unresolvable id is rendered as its own
-                        thing, with the id as evidence rather than as a name.
-
-                        `dir="auto"` because these are user-typed product names,
-                        and the list is clipped from the name's own end in both
-                        locales rather than from the paragraph's.
-                      */
-                      <span dir="auto" className="line-clamp-2">
-                        {refs.length > 0
-                          ? refs
-                              .map((ref) => {
-                                const label = refLabel(ref);
-                                return label.named
-                                  ? label.text
-                                  : t("restriction.missingOne", { id: ref.id });
-                              })
-                              .join("، ")
-                          : t("restriction.selected", { count: ids.length })}
-                      </span>
-                    )}
-                  </span>
-                </span>
-                <Ltr className="shrink-0 text-footnote text-label-tertiary">{ids.length}</Ltr>
-                <Icon name="chevron" flipInRtl className="size-4 shrink-0 text-label-tertiary" />
-              </button>
-            );
-          })}
-        </ListGroup>
-
-        <ListGroup title={t("section.emails")} footnote={t("hint.emails")}>
-          <TextAreaField
-            label={t("field.email_restrictions")}
-            value={draft.email_restrictions}
-            onChange={(value) => set("email_restrictions", value)}
-            error={errors.email_restrictions}
-            rows={3}
-            disabled={trashed}
-          />
-        </ListGroup>
-
-        {mode === "edit" ? (
-          <ListGroup title={t("section.record")}>
-            <ListValueRow label={t("field.id")} value={<Ltr>{coupon.id}</Ltr>} />
-            <ListValueRow
-              label={t("field.created")}
-              // `Intl` formatted, so `Isolate` — `Ltr` over an Arabic date's RLMs
-              // renders `17ص 12:03 .2026/08/`.
-              value={<Isolate>{formatDate(coupon.date_created, locale, false)}</Isolate>}
-            />
-            {coupon.date_modified !== null ? (
-              <ListValueRow
-                label={t("field.modified")}
-                value={<Isolate>{formatDate(coupon.date_modified, locale, false)}</Isolate>}
-              />
-            ) : null}
-          </ListGroup>
-        ) : null}
-
-        {mode === "edit" && !trashed ? (
-          <ListGroup title={t("section.danger")}>
-            <ListRow>
-              <Button
-                variant="plain"
-                onClick={() => setDeleting("trash")}
-                disabled={saving}
-                className="w-full text-danger"
-              >
-                {t("trash")}
-              </Button>
-            </ListRow>
-          </ListGroup>
-        ) : null}
-
-        {trashed ? (
-          <ListGroup title={t("section.danger")}>
-            <ListRow>
-              <Button
-                variant="plain"
-                onClick={() => setDeleting("force")}
-                disabled={saving}
-                className="w-full text-danger"
-              >
-                {t("deleteForever")}
-              </Button>
-            </ListRow>
-          </ListGroup>
-        ) : null}
-      </div>
-
-      {/*
-        The save bar appears when the form is dirty, and on create it is present
-        from the start — there is nothing to compare a new coupon against and the
-        person needs somewhere to go.
-      */}
-      {(dirty || mode === "create") && !trashed ? (
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={mode === "create" ? t("createTitle") : coupon.code}
+        back={{ href: `/${locale}/coupons`, label: t("title") }}
+        /* A detail page omits the rule and lets the first section do the
+           separating — §2.4. */
+        divided={false}
         /*
-          `.save-bar`, not a hand-rolled `bottom-0`. Both this and the tab bar are
-          `fixed … bottom-0 z-20`, and the tab bar comes later in the document, so
-          it painted on top and the save button was **physically untappable** at
-          phone widths — Playwright reported the inventory tab intercepting the
-          click, which is exactly what a thumb would have hit.
-
-          The utility already exists for the product form and solves it properly:
-          it sits one tab-bar height above the bottom edge, and at `md` — where
-          the tab bar becomes a sidebar — it drops to the edge and insets by the
-          sidebar's width instead.
-        */
-        <div className="save-bar material-bar hairline-t fixed inset-x-0 z-20">
-          <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-            <Button
-              variant="plain"
-              onClick={() =>
-                mode === "create" ? router.push(`/${locale}/coupons`) : setDraft(draftOf(coupon))
+         * **Delete is here, in a `Menu`, and the save is not.** §2.4 puts a detail
+         * screen's action in the header; §3.4 legislates a long form's save
+         * separately as a sticky bar that appears when the form is dirty. The
+         * header rule is about a control acting on the record's *state*, which a
+         * save is not.
+         */
+        actions={
+          mode === "edit" ? (
+            <Menu
+              label={t("actions")}
+              align="end"
+              actions={deleteActions}
+              trigger={
+                <IconButton
+                  id={menuTriggerId}
+                  label={t("actions")}
+                  icon="more"
+                  variant="secondary"
+                  disabled={saving}
+                />
               }
-              disabled={saving}
-              className="flex-1"
+            />
+          ) : undefined
+        }
+      />
+
+      <PageBody width="form">
+        <div className="flex flex-col gap-4">
+          {/*
+            §3.7's fifth state. This screen holds a record fetched once on the
+            server and then edits it in the browser, so what is on screen can
+            outlive the fetch that produced it — and the half of the rule that
+            does the real work has something to disable here: the save bar below
+            and the two delete items in the header menu all go off with this same
+            reason.
+          */}
+          {!online && fetchedAt !== undefined ? (
+            <StaleBanner time={formatWhen(new Date(fetchedAt).toISOString(), locale)} />
+          ) : null}
+
+          <ErrorSummary failures={failures} />
+
+          {/* A failure with nothing per-field to say — a network error, a 500, a
+              refused DELETE. Inline and standing, never a toast: §3.1 says an
+              error a person must act on is not one. */}
+          {topError !== null ? (
+            <Notice role="alert" tone="danger" title={tStates("errorTitle")}>
+              <p className="text-ui-label">{topError}</p>
+            </Notice>
+          ) : null}
+
+          {/*
+            A trashed coupon still reads back 200 with `status: "trash"` — only
+            `?force=true` gives a 404 — so this screen is reachable for one and has
+            to say what it is looking at. It also keeps its code, which is why
+            recreating that code answers 409 rather than succeeding.
+
+            **And it says what saving would do.** The status control has no trash
+            option, because `?status=trash` is refused on write, so the form opens
+            already coerced to `draft`. Coercing silently would make the next save
+            an untrash nobody asked for; saying so turns the same coercion into the
+            restore path, which is otherwise a thing this panel cannot do at all.
+          */}
+          {trashed ? (
+            <Notice tone="danger" title={t("status.trash")}>
+              <p className="text-ui-label">{t("trashedBanner")}</p>
+            </Notice>
+          ) : null}
+
+          {/*
+            Stale restrictions, surfaced rather than silently kept.
+            A product deleted after the coupon was written leaves an id resolving to
+            nothing; the API reports it as `missing` instead of dropping it, because
+            a client that dropped it would delete the restriction on the next save.
+            A coupon restricted to something that no longer exists applies to
+            nothing and is otherwise indistinguishable from one that works.
+          */}
+          {stale.length > 0 ? (
+            <Notice tone="warning" title={t("staleTitle")}>
+              <p className="text-ui-label">
+                <Isolate numeric>{t("staleRestrictions", { count: stale.length })}</Isolate>
+              </p>
+              <p className="text-ui-label">
+                {LIST.format(
+                  stale.map((ref: RestrictionRef) =>
+                    t("restriction.missingOne", { id: ref.id }),
+                  ),
+                )}
+              </p>
+            </Notice>
+          ) : null}
+
+          {/* Cards, not `Form.tsx`'s `Section`: `Card.tsx` records the split —
+              `Section` is a bordered group sized to sit *inside* an overlay, at
+              `--text-subheading` so it does not compete with a Drawer's own
+              title, and a card on a page is the page's structure and takes
+              `--text-heading` per §3.4 and 20px of padding per §1.4. It is also
+              the box model `FormSkeleton` is measured against, which is what lets
+              the three `loading.tsx` files match first paint. */}
+          <div className="flex flex-col gap-4">
+            <Card title={t("section.basics")}>
+              <div className="flex min-w-0 flex-col gap-4">
+                <TextField
+                  id={fieldId("code")}
+                  name="code"
+                  label={t("field.code")}
+                  value={draft.code}
+                  /*
+                   * Folded as the user types, so what they see is what will be
+                   * stored. WooCommerce lower-cases every code on save and the
+                   * duplicate check runs on the folded form, which is why
+                   * `BIENVENUE10` collides with `bienvenue10` — a field that showed
+                   * the typed case would make that 409 look like a bug.
+                   *
+                   * `toLowerCase()` and not `normalizeCode()`: the trim belongs on
+                   * submit. Trimming mid-keystroke moves the caret.
+                   */
+                  onChange={(value) => set("code", value.toLowerCase())}
+                  error={errors.code}
+                  hint={t("hint.code")}
+                  isolate
+                />
+                <Select<DiscountType>
+                  id={fieldId("discount_type")}
+                  label={t("field.discount_type")}
+                  value={draft.discount_type}
+                  onChange={(value) => set("discount_type", value)}
+                  options={DISCOUNT_TYPES.map((value) => ({
+                    value,
+                    label: t(`type.${value}`),
+                  }))}
+                  error={errors.discount_type}
+                />
+                <NumberField
+                  id={fieldId("amount")}
+                  name="amount"
+                  label={
+                    draft.discount_type === "percent"
+                      ? t("field.amountPercent")
+                      : t("field.amount")
+                  }
+                  value={draft.amount}
+                  onChange={(value) => set("amount", value)}
+                  error={errors.amount}
+                  hint={draft.discount_type === "percent" ? t("hint.percent") : t("hint.amount")}
+                />
+                <TextArea
+                  id={fieldId("description")}
+                  label={t("field.description")}
+                  value={draft.description}
+                  onChange={(value) => set("description", value)}
+                  error={errors.description}
+                  rows={2}
+                />
+                <Select<CouponStatus>
+                  id={fieldId("status")}
+                  label={t("field.status")}
+                  value={draft.status}
+                  onChange={(value) => set("status", value)}
+                  options={COUPON_STATUSES.map((value) => ({
+                    value,
+                    label: t(`status.${value}`),
+                  }))}
+                  error={errors.status}
+                  hint={t("hint.status")}
+                />
+              </div>
+            </Card>
+
+            <Card title={t("section.validity")}>
+              <div className="flex min-w-0 flex-col gap-4">
+                <DateField
+                  id={fieldId("date_expires")}
+                  label={t("field.date_expires")}
+                  value={draft.date_expires}
+                  onChange={(value) => set("date_expires", value)}
+                  /*
+                    **A native date input follows the *browser's* locale and there is
+                    no way to change it** — the Arabic form renders `mm/dd/yyyy`, a
+                    US ordering in a right-to-left screen. `lang` is the only hint
+                    the platform offers, `<html lang>` already carries it and the
+                    control inherits it, and Chromium was measured on 2026-08-19 not
+                    to honour it anyway. The control's internals cannot be styled or
+                    relabelled either.
+
+                    So the value is echoed underneath in the page's own language and
+                    a person can confirm the date they set without having to trust a
+                    format they do not recognise, which is the part that matters.
+
+                    `Isolate`, not `Ltr`: this is `Intl`-formatted, and forcing a
+                    direction over the marks it inserts renders an Arabic date as
+                    `17ص 12:03 .2026/08/`.
+                  */
+                  echo={
+                    draft.date_expires !== "" ? (
+                      <Isolate>{formatDate(draft.date_expires, locale, false)}</Isolate>
+                    ) : undefined
+                  }
+                  error={errors.date_expires}
+                  hint={t("hint.expiry")}
+                />
+                <NumberField
+                  id={fieldId("minimum_amount")}
+                  name="minimum_amount"
+                  label={t("field.minimum_amount")}
+                  value={draft.minimum_amount}
+                  onChange={(value) => set("minimum_amount", value)}
+                  error={errors.minimum_amount}
+                  /*
+                   * "Leave empty for none" and not "0 for none". A negative value is
+                   * refused by name — it used to answer 200 and silently erase a real
+                   * threshold — and an empty field is the way to clear one.
+                   */
+                  hint={t("hint.threshold")}
+                />
+                <NumberField
+                  id={fieldId("maximum_amount")}
+                  name="maximum_amount"
+                  label={t("field.maximum_amount")}
+                  value={draft.maximum_amount}
+                  onChange={(value) => set("maximum_amount", value)}
+                  error={errors.maximum_amount}
+                  hint={t("hint.maximumAmount")}
+                />
+              </div>
+            </Card>
+
+            <Card title={t("section.limits")}>
+              <div className="flex min-w-0 flex-col gap-4">
+                <TextField
+                  id={fieldId("usage_limit")}
+                  name="usage_limit"
+                  label={t("field.usage_limit")}
+                  value={draft.usage_limit}
+                  onChange={(value) => set("usage_limit", value)}
+                  error={errors.usage_limit}
+                  hint={t("hint.unlimited")}
+                  inputMode="numeric"
+                  isolate
+                />
+                {mode === "edit" ? (
+                  /*
+                   * **Beside the limit it counts against, not as a lonely row.** That
+                   * is where the number means something: 37 is unremarkable and
+                   * "37 sur 50" is a coupon two thirds spent.
+                   *
+                   * Read-only, and not a field the panel could write if it wanted to:
+                   * `usage_count` is moved by `POST /cart/coupons` on the storefront
+                   * and by nothing else — the API refuses it on write rather than
+                   * dropping it. `used_by` is emitted by no response at all, so *who*
+                   * redeemed a coupon is unanswerable and this row does not imply it
+                   * is knowable elsewhere in the panel.
+                   */
+                  <ReadOnlyField
+                    label={t("field.usage_count")}
+                    value={
+                      redemptions.limited ? (
+                        <Isolate numeric>
+                          {t("usageOf", {
+                            count: redemptions.count,
+                            limit: redemptions.limit,
+                          })}
+                        </Isolate>
+                      ) : (
+                        <Ltr>{redemptions.count}</Ltr>
+                      )
+                    }
+                    reason={t("hint.usageCount")}
+                  />
+                ) : null}
+                <TextField
+                  id={fieldId("usage_limit_per_user")}
+                  name="usage_limit_per_user"
+                  label={t("field.usage_limit_per_user")}
+                  value={draft.usage_limit_per_user}
+                  onChange={(value) => set("usage_limit_per_user", value)}
+                  error={errors.usage_limit_per_user}
+                  hint={t("hint.unlimited")}
+                  inputMode="numeric"
+                  isolate
+                />
+                <TextField
+                  id={fieldId("limit_usage_to_x_items")}
+                  name="limit_usage_to_x_items"
+                  label={t("field.limit_usage_to_x_items")}
+                  value={draft.limit_usage_to_x_items}
+                  onChange={(value) => set("limit_usage_to_x_items", value)}
+                  error={errors.limit_usage_to_x_items}
+                  hint={t("hint.unlimited")}
+                  inputMode="numeric"
+                  isolate
+                />
+              </div>
+            </Card>
+
+            <Card title={t("section.behaviour")}>
+              <div className="flex min-w-0 flex-col gap-4">
+                <Switch
+                  id={fieldId("free_shipping")}
+                  label={t("field.free_shipping")}
+                  checked={draft.free_shipping}
+                  onChange={(checked) => set("free_shipping", checked)}
+                  hint={t("hint.freeShipping")}
+                  error={errors.free_shipping}
+                />
+                <Switch
+                  id={fieldId("individual_use")}
+                  label={t("field.individual_use")}
+                  checked={draft.individual_use}
+                  onChange={(checked) => set("individual_use", checked)}
+                  hint={t("hint.individualUse")}
+                  error={errors.individual_use}
+                />
+                <Switch
+                  id={fieldId("exclude_sale_items")}
+                  label={t("field.exclude_sale_items")}
+                  checked={draft.exclude_sale_items}
+                  onChange={(checked) => set("exclude_sale_items", checked)}
+                  hint={t("hint.excludeSaleItems")}
+                  error={errors.exclude_sale_items}
+                />
+              </div>
+            </Card>
+
+            <Card
+              title={t("section.restrictions")}
+              /*
+               * **`fixed_product` is the only type that discounts per product.** The
+               * other two apply to the cart and use the product list as a *condition*.
+               * A shop that sets "500 DA off these two products" on a `fixed_cart`
+               * coupon takes 500 DA off the whole basket, and nothing on screen would
+               * otherwise say so.
+               */
+              footnote={
+                discountsPerProduct(draft.discount_type)
+                  ? t("hint.perProduct")
+                  : t("hint.perCart")
+              }
             >
-              {mode === "create" ? t("cancel") : t("revert")}
-            </Button>
-            <Button
-              variant="filled"
-              onClick={() => void save()}
-              loading={saving}
-              className="flex-1"
-            >
-              {mode === "create" ? t("create") : t("save")}
-            </Button>
+              <div className="flex min-w-0 flex-col gap-4">
+                {RESTRICTION_FIELDS.map((field) => {
+                  const ids = draft[field];
+                  const problem = errors[field];
+
+                  return (
+                    <button
+                      key={field}
+                      id={fieldId(field)}
+                      type="button"
+                      onClick={() => setPicker(field)}
+                      disabled={!hydrated}
+                      aria-busy={!hydrated || undefined}
+                      /* `aria-describedby` and not `aria-invalid`: the latter is
+                         not supported on the button role, and the refusal is
+                         carried by the danger border, the message wired here, and
+                         the summary at the top of the form. */
+                      aria-describedby={problem ? `${fieldId(field)}-error` : undefined}
+                      className={`ui-field ui-interactive ui-hover-fill ui-ring flex w-full cursor-pointer items-center gap-2.5 rounded-ui-md border px-2 py-1.5 text-start disabled:cursor-not-allowed disabled:opacity-50 ${
+                        problem ? "border-ui-danger-fg" : "border-ui-line"
+                      }`}
+                    >
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="flex min-w-0 items-center gap-2 text-ui-compact text-ui-fg">
+                          <span className="min-w-0 truncate">{t(`restriction.${field}`)}</span>
+                          {isExclusion(field) ? (
+                            <Badge tone="warning">{t("restriction.excludes")}</Badge>
+                          ) : null}
+                        </span>
+                        <span className="min-w-0 text-ui-caption text-ui-subtle">
+                          {ids.length === 0 ? (
+                            /*
+                              **Empty means the opposite thing on the two kinds of
+                              row, and one word cannot serve both.** On an
+                              inclusion row no ids means the coupon applies to
+                              every product — "Tous". On an exclusion row it means
+                              nothing is excluded, and "Tous" there reads as *all
+                              products are excluded*, which is the inverse of the
+                              truth and is what a brand-new coupon claimed on both
+                              of its exclusion rows.
+                            */
+                            isExclusion(field) ? t("restriction.none") : t("restriction.any")
+                          ) : (
+                            /* The names, from the one map the form keeps — see
+                               `RefName`. Two lines rather than one: at 640px a row
+                               restricted to three products is three names, and a
+                               single clipped line would show the first and imply
+                               there is nothing else. `dir="auto"` because these are
+                               user-typed product names, and the list is then clipped
+                               from the name's own end in both locales rather than
+                               from the paragraph's. */
+                            <span dir="auto" className="line-clamp-2">
+                              {restrictionSummary(ids)}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      <Ltr className="shrink-0 text-ui-caption text-ui-subtle">{ids.length}</Ltr>
+                      <Icon
+                        name="chevron"
+                        flipInRtl
+                        className="size-4 shrink-0 text-ui-subtle"
+                      />
+                    </button>
+                  );
+                })}
+
+                {/*
+                  The refusals, under the rows they belong to.
+
+                  **This is the first of the two defects this branch exists to
+                  fix.** A 400 naming `product_ids` was bound into `errors` and
+                  then read by nothing: the rows consulted it nowhere, and the
+                  fallback that would have surfaced it only fired for keys *not*
+                  in the draft — which `product_ids` is. So the refusal cleared
+                  `saving`, left the bar dirty, and put nothing on screen at all.
+
+                  The message is the API's own English: "No product was found for:
+                  8842." names the offending id, which is the only actionable part
+                  and the part a translated generic would throw away. The field is
+                  not repeated here — the row it sits under is labelled — and
+                  `ErrorSummary` at the top of the form is where the pairing
+                  happens, because there the row is off screen.
+                */}
+                {RESTRICTION_FIELDS.filter((field) => errors[field]).map((field) => (
+                  <p
+                    key={field}
+                    id={`${fieldId(field)}-error`}
+                    className="flex items-start gap-1.5 text-ui-label text-ui-danger-fg"
+                  >
+                    <Icon name="alert" className="mt-0.5 size-3.5 shrink-0" />
+                    <span className="min-w-0">{errors[field]}</span>
+                  </p>
+                ))}
+              </div>
+            </Card>
+
+            <Card title={t("section.emails")} footnote={t("hint.emails")}>
+              <div className="flex min-w-0 flex-col gap-4">
+                <TextArea
+                  id={fieldId("email_restrictions")}
+                  label={t("field.email_restrictions")}
+                  value={draft.email_restrictions}
+                  onChange={(value) => set("email_restrictions", value)}
+                  error={errors.email_restrictions}
+                  rows={3}
+                />
+              </div>
+            </Card>
+
+            {mode === "edit" ? (
+              <Card title={t("section.record")}>
+                <div className="flex min-w-0 flex-col gap-4">
+                  <ReadOnlyField label={t("field.id")} value={<Ltr>{coupon.id}</Ltr>} />
+                  <ReadOnlyField
+                    label={t("field.created")}
+                    // `Intl` formatted, so `Isolate` — `Ltr` over an Arabic date's
+                    // RLMs renders `17ص 12:03 .2026/08/`.
+                    value={<Isolate>{formatDate(coupon.date_created, locale, false)}</Isolate>}
+                  />
+                  <ReadOnlyField
+                    label={t("field.modified")}
+                    value={<Isolate>{formatDate(coupon.date_modified, locale, false)}</Isolate>}
+                  />
+                </div>
+              </Card>
+            ) : null}
           </div>
+
+          {/*
+            The save bar. §3.4: a long form gets a sticky footer that appears when
+            the form is dirty — plus the pinned variant, which is what `persistent`
+            is for and what these two cases need.
+
+            **Create**: there is nothing to compare a blank object against, so
+            "unsaved changes" is the wrong frame and the bar carries no discard —
+            there is nothing to revert a blank form to. The back link is the way
+            out. `saveLabel` is "Créer", which is what the suite clicks.
+
+            **A trashed coupon**: the form opens already coerced to `draft` and
+            therefore clean, and saving is the only restore path this panel has.
+            Gating it on dirtiness would mean changing some unrelated field first.
+          */}
+          <SaveBar
+            dirty={dirty}
+            persistent={mode === "create" || trashed}
+            saving={saving}
+            onSave={() => void save()}
+            onDiscard={
+              mode === "edit"
+                ? () => {
+                    setDraft(draftOf(coupon));
+                    setErrors({});
+                    setTopError(null);
+                  }
+                : undefined
+            }
+            saveLabel={mode === "create" ? t("create") : undefined}
+            /* §3.7: the write control is disabled with the same reason the stale
+               marker gives, rather than failing at the network and blaming
+               itself. */
+            blockedReason={offlineReason}
+          />
         </div>
-      ) : null}
+      </PageBody>
 
       {picker !== null ? (
         <RestrictionPicker
@@ -750,11 +1055,21 @@ export function CouponForm({
           kind={RESTRICTION_KIND[picker]}
           title={t(`restriction.${picker}`)}
           selected={draft[picker]}
-          onCommit={(ids) => set(picker, ids)}
+          returnFocusTo={fieldId(picker)}
+          onCommit={(ids, names) => {
+            set(picker, ids);
+            /* The picker is the only thing that knows the name of an id it has
+               just added; the form cannot resolve one without a request. */
+            setRefNames((current) => {
+              const next = new Map(current);
+              for (const [id, name] of names) next.set(id, { name, missing: false });
+              return next;
+            });
+          }}
         />
       ) : null}
 
-      <ActionSheet
+      <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
@@ -763,20 +1078,25 @@ export function CouponForm({
         /*
          * Two different confirmations, because they are two different acts. A
          * trash is reversible and keeps the code — recreating it answers 409 —
-         * while `?force=true` is permanent and frees the code. The products
-         * branch set this precedent and the wording differs for the same reason.
+         * while `?force=true` is permanent and frees the code. Nothing in the two
+         * responses distinguishes them: both answer `{id, deleted: true}`.
          */
-        description={
-          deleting === "force" ? t("confirm.deleteBody") : t("confirm.trashBody")
+        body={deleting === "force" ? t("confirm.deleteBody") : t("confirm.trashBody")}
+        confirmLabel={deleting === "force" ? t("deleteForever") : t("trash")}
+        loading={saving}
+        /*
+         * §3.1: an irreversible act requires the record's identifier to be typed.
+         * Only the permanent path asks — making the trash type it too would train
+         * the typing away, and the trash is recoverable from this very screen.
+         */
+        requireTyped={
+          deleting === "force"
+            ? { value: coupon.code, label: t("confirm.typeCode", { code: coupon.code }) }
+            : undefined
         }
-        actions={[
-          {
-            label: deleting === "force" ? t("deleteForever") : t("trash"),
-            tone: "destructive" as const,
-            onSelect: () => void remove(deleting === "force"),
-          },
-        ]}
+        returnFocusTo={menuTriggerId}
+        onConfirm={() => void remove(deleting === "force")}
       />
-    </Scaffold>
+    </div>
   );
 }

@@ -21,7 +21,7 @@ left looking like an oversight.
 [x]  4. Products — detail + form
 [x]  5. Customers — list + detail
 [x]  6. Inventory — list + detail + ledger
-[ ]  7. Coupons — list + form        (mock done, screens not built)
+[x]  7. Coupons — list + form
 [ ]  8. Shipping
 [ ]  9. Payments
 [ ] 10. Dashboard
@@ -39,7 +39,7 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **94
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **90
 files left.**
 
 ---
@@ -220,49 +220,74 @@ rows instead of five.
 
 ---
 
-## 7. Coupons — mock done, screens not built
-
-The write surface is mocked and verified. `search` and three-state `status` now
-filter, `eligible-products`/`eligible-categories` are served, and the writes
-reproduce rules that are **not** the product rules — a read-only key is refused
-rather than dropped, `PATCH {}` is a 200 no-op, and a duplicate code is a 409
-under `details.code` carrying the lower-cased form. Fixtures exist for a stale
-restriction, a trashed coupon and a non-zero usage count.
-
-**Decisions already resolved** (from the scout; build to them):
+## 7. Coupons — list + form
 
 - List: `DataTable`/`RecordList` + `columns.tsx`, status `FilterTabs` — three
   states, the first sending nothing, because absent means publish AND draft.
-  Search. **No sorting** — `orderby` is validated with no positive control.
-- **No peek** — the detail is the row plus `restrictions`, the test customers
-  failed. Identifying cell is a real `<a href>`, table presentation only.
-- **One component** for `/new` and `/{id}`, not two.
-- **`PageBody width="form"` (640), not `DetailGrid`** — §2.3 lists coupon in the
-  form row, and unlike products this screen has no read-only report half.
-- Restriction picker: a **`Drawer`** with real checkboxes via `Form.tsx`'s
-  `CheckRow` (the current `role="checkbox"` on a `<button>` is what the new form
-  layer retires), and its search **submit-gated** — it currently fires a request
-  per keystroke and can be opened four times per form.
-- Sticky `SaveBar` when dirty. Delete in a header `Menu` → `ConfirmDialog`;
-  permanent delete requires typing the identifier.
-- `loading.tsx` for all three routes. Drop the list's `StaleBanner` (no writes to
-  disable). Delete the dead `coupons.percentValue` key.
+  Search, and it matches the **code only**; the placeholder says so. No sorting
+  (`orderby` is validated then ignored — `date,id,code,usage` all return one id
+  sequence), no peek, no bulk, no export — coupons is not in `EXPORT_SUBJECTS`.
+- Create ships as a `PageHeader` primary: `POST /coupons` **is** allowlisted,
+  unlike products.
+- `per_page` moved into the URL on the customers shape, so `TableFooter` is used
+  as-is; a stale `?per_page=37` falls back rather than travelling.
+- Form: **one component** for `/new` and `/{id}`, `PageBody width="form"` (640)
+  rather than `DetailGrid` — §2.3 puts coupon in the form row and this screen
+  has no read-only report half. `usage_count` is a `ReadOnlyField` beside the
+  limit it counts against, which is the only place the number means anything.
+- Delete in a header `Menu` → `ConfirmDialog`; permanent delete requires typing
+  the code. Restriction picker is a `Drawer`, search **submit-gated** — it fired
+  a request per keystroke and the form can open it four times.
+- Omitted: sorting, peek, bulk, export, and any `status=trash` request (a 400).
 
-**Two real bugs to fix:**
-1. **A 400 on a restriction id renders nowhere — a silent failed save.** Errors
-   are keyed by field, the restriction rows render none, and the orphan fallback
-   only fires for keys *not* in the draft. `product_ids` is in the draft. Wire
-   `ErrorSummary`; the mock produces this refusal, so verify it lands.
-2. The restriction rows **mix draft counts with saved names** — add a product to
-   a field that already had one and it shows the old names beside the new count.
+**The two recorded bugs, both fixed and both verified on screen:**
+1. A 400 on a restriction id rendered nowhere — a silent failed save. The orphan
+   fallback only fired for keys *not* in the draft, and `product_ids` is in it.
+   `ErrorSummary` is wired; saving coupon 305 now names the offending id.
+2. The rows mixed draft counts with saved names. The form now holds one
+   `id → {name, missing}` map, seeded from `restrictions` and extended by every
+   picker commit. An id in neither source renders as its id and does **not**
+   claim `missing` — that flag is an API fact, not a fallback.
 
-**Measurements that must survive:** `amount: "0.00"` is a real coupon while a
-zero threshold is stored as null and can never read back as `"0.00"` — both
-directions on one object. `date_expires` is written `Y-m-d` and read back full
-ISO, so only `expiryInputValue()` may put it in a control. `missing` is on every
-restriction row, not just broken ones, because filtering stale ids out would
-silently delete them on the next save. The code folds on keystroke so the 409
-names a code the person recognises.
+**A third, found in the captures and older than this branch:** `restriction.any`
+("Tous") rendered for an empty list on all four rows. On the two *exclusion* rows
+that states the inverse of the fact — every coupon in the shop, including a blank
+one, claimed all products were excluded. Split into `restriction.none`.
+
+**Four `Form.tsx` extensions, so the next screen inherits them:** `CheckRow`
+gains `secondary`/`badge` (it took `label: string` only, so wiring the picker
+through it would have silently dropped the SKU, the `noSku` fallback and the
+draft badge); `NumberField` gains `name`; `DateField` gains `echo`, which is the
+only defence against Chromium rendering `mm/dd/yyyy` in Arabic; `SaveBar` gains
+`persistent`. **`SaveBar` also stopped offering discard on a clean form** — it
+gated on `onDiscard` alone, which was the same test as `dirty` until `persistent`
+existed, and a persistent bar then offered "Annuler les modifications" against
+nothing to annul.
+
+**`Card`, not `Section`.** `Section` is sized to sit inside an overlay at
+`--text-subheading`; a card on a page takes `--text-heading`, and `Card` is the
+box model `FormSkeleton` is measured against, which is what makes the two form
+`loading.tsx` files match first paint.
+
+**The trashed coupon stays editable.** `GET /{id}` is 200 with `status:"trash"`,
+the picker offers only the two live states, so the form opens coerced to `draft`
+and *clean*. Saving is the restore path and it is the only one this panel has —
+gating it on dirtiness would mean editing an unrelated field first. Its banner
+names the state and says what saving does. That is `persistent`'s second caller.
+
+**`e2e/coupons.spec.ts`: 15 tests before, 15 after, titles identical.** The row
+helper resolved rows through `a[href*="/coupons/"]`, but that anchor lives only
+in the table, which is `hidden md:block` — and every Playwright project bar one
+is phone-sized, so `toBeVisible()` failed before any test reached its own
+assertion. `tbody tr, li.ui-card` filtered to visible fixes ten tests at once.
+The live codes stay: the suite runs against the shop, not the mock.
+
+**Measurements that survived:** `amount: "0.00"` is a real coupon while a zero
+threshold is stored as null and can never read back as `"0.00"`. `date_expires`
+is written `Y-m-d` and read back full ISO, so only `expiryInputValue()` may put
+it in a control. `missing` is on every restriction row. The code folds on
+keystroke so the 409 names a code the person recognises. `restrictions` is
+emitted by GET and **refused on write**, so the payload stays a named subset.
 
 ---
 
@@ -270,10 +295,14 @@ names a code the person recognises.
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
   off the bottom to clear a tab bar that no longer exists. Panel-wide.
-- **`.save-bar` stays in `globals.css`** — eight unmigrated forms use it, and
+- **`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
   they are `fixed` with no block-end, so deleting the rule would unstick their
   bars rather than remove them.
-- **`RowSkeleton.tsx` stays** — eight unmigrated screens import it.
+- **`RowSkeleton.tsx` stays** — **seven** unmigrated screens import it.
+- **`e2e/customers.spec.ts:57,115` has the coupons row-helper bug**, unfixed: it
+  asserts `toBeVisible()` on an anchor that only the `md`+ table renders, on a
+  phone project. It has never surfaced because the suite is env-gated and has
+  never run here. The fix is the `tbody tr, li.ui-card` helper coupons now uses.
 - `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
   Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
 - The sticky first column has no divider at its frozen edge.

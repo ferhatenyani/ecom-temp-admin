@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * Coupons: the list, the form, and the restriction picker.
@@ -15,12 +15,37 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Coupons are found by code, which is unique and stable — unlike a product id.
  *
- * `ROW` excludes `/coupons/new`: the create control in the nav bar is an anchor
- * too, so a bare `a[href*="/coupons/"]` matched it first and every
- * "open the first row" helper clicked *create*. The failure looked like the list
- * not rendering.
+ * **The suite runs against the live shop, not the mock**, and it is env-gated on
+ * credentials nobody has in the redesign checkout — so `tapis15` and the other
+ * live codes stay exactly as they are. What the redesign changes is *how* a row
+ * is addressed, never what any of these tests check.
  */
-const ROW = 'a[href*="/coupons/"]:not([href$="/new"])';
+
+/**
+ * One coupon row, in whichever presentation the running viewport paints.
+ *
+ * **`DataTable` renders both and hides one per breakpoint.** The `<table>` — which
+ * is the only place the code's `<a href>` exists — is `hidden md:block`, and below
+ * `md` a `RecordList` card navigates through a stretched overlay button instead,
+ * so a row is one anchor and not two. All four Playwright projects here are
+ * phone-sized bar the desktop one, so the old `a[href*="/coupons/"]` locator
+ * resolved to a node that is in the DOM and never painted: `toBeVisible()` failed
+ * before any of these tests got to their own assertion. One helper, ten tests.
+ *
+ * `<tr>` and `<li class="ui-card">` rather than the link and the overlay button,
+ * because a row is read as well as clicked — "the row says Livraison offerte" is
+ * an assertion about the row's text, and the overlay button has none. Both
+ * containers are clickable: `<tr>` carries `onRowClick`, and the card's overlay
+ * covers it edge to edge.
+ *
+ * `/coupons/new` is no longer a hazard worth a `:not()` — the create control is a
+ * `ButtonLink` in the page header, outside both presentations — but filtering to
+ * what is painted excludes it anyway.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
 const USER = process.env.AC_STAFF_USER;
 const PASS = process.env.AC_STAFF_PASS;
 const LIMITED_USER = process.env.AC_LIMITED_USER;
@@ -67,7 +92,7 @@ async function openPicker(page: Page, name: RegExp) {
 
 async function openByCode(page: Page, locale: string, code: string) {
   await openCoupons(page, locale, `?search=${encodeURIComponent(code)}`);
-  const row = page.locator(ROW).first();
+  const row = rows(page).first();
   await expect(row).toBeVisible();
   await row.click();
   await page.waitForURL(/\/coupons\/\d+/);
@@ -92,7 +117,7 @@ test.describe("the coupon list", () => {
     await signIn(page, "fr");
     await openCoupons(page, "fr", "?search=livraison");
 
-    const row = page.locator(ROW).first();
+    const row = rows(page).first();
     await expect(row).toContainText("Livraison offerte");
     await expect(row).not.toContainText("0,00 DA");
   });
@@ -106,7 +131,7 @@ test.describe("the coupon list", () => {
     await signIn(page, "fr");
     await openCoupons(page, "fr", "?search=bienvenue");
 
-    const row = page.locator(ROW).first();
+    const row = rows(page).first();
     await expect(row).toContainText("10 %");
     await expect(row).not.toContainText("10.00");
   });
@@ -195,8 +220,15 @@ test.describe("the restriction picker", () => {
     // The rows are real categories with names, not ids.
     await expect(page.locator('[role="dialog"]')).toContainText("Tapis et Textiles");
 
-    // A checkbox row, addressed by its role rather than by a drawn box.
-    const first = page.locator('[role="dialog"] [role="checkbox"]').first();
+    /*
+      A checkbox row, addressed by its role rather than by a drawn box — which is
+      what this line always meant and now finally does. The rows were
+      `<button role="checkbox">`; `Form.tsx`'s `CheckRow` is a **real**
+      `<input type="checkbox">`, whose role is implicit. `[role="checkbox"]` is a
+      CSS *attribute* selector and does not match an implicit role, so it is
+      `getByRole` — Playwright's own role engine — instead.
+    */
+    const first = page.getByRole("dialog").getByRole("checkbox").first();
     await expect(first).toBeVisible();
 
     await page.getByRole("button", { name: /Annuler/ }).click();
@@ -217,7 +249,11 @@ test.describe("the restriction picker", () => {
     const search = page.locator('[role="dialog"] input[type="search"]');
     await expect(search).toBeEnabled();
     await search.fill("AC-SEO-TAPIS");
-    await expect(page.locator('[role="dialog"] [role="checkbox"]')).toHaveCount(1);
+    /* **Enter, because the picker's search is submit-gated now.** It used to fire
+       a request per keystroke, and a coupon form can open this drawer four times.
+       `fill()` alone would leave the list unfiltered and the count at 28. */
+    await search.press("Enter");
+    await expect(page.getByRole("dialog").getByRole("checkbox")).toHaveCount(1);
   });
 });
 
@@ -243,7 +279,7 @@ test.describe("the capability boundary", () => {
 
     // And the picker, which is the part that needed a route of its own.
     await openPicker(page, /Produits concernés/);
-    await expect(page.locator('[role="dialog"] [role="checkbox"]').first()).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("checkbox").first()).toBeVisible();
   });
 
   /**
