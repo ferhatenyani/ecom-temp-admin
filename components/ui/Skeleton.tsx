@@ -138,6 +138,58 @@ export function RecordListSkeleton({
   );
 }
 
+/**
+ * A card of label/value rows — the shape a detail screen's aside is made of, and
+ * the one §3.6 listed and nobody had built.
+ *
+ * **Every measurement is `Card`'s and `DataRow`'s, not a guess.** The card is
+ * `flex flex-col gap-3 py-4 sm:py-5` with `px-4 sm:px-5` inside, its heading is
+ * `--text-heading` at a 1.5rem line box, and a `DataRow` is `py-2` around a
+ * `--text-compact` value at 1.25rem with a 1px rule under it — 37px a row. So the
+ * blocks here are `h-5` inside `py-2 border-b`, which is the row's own geometry
+ * rather than a height that happens to look close.
+ *
+ * `rows` is the caller's, because the real cards differ: the summary card has
+ * six rows and the customer card has five, and a placeholder that renders four
+ * for both is a placeholder that shifts twice.
+ */
+export function CardSkeleton({
+  rows = 4,
+  label,
+  /** A card with no heading — a totals block, a bare list. */
+  titled = true,
+}: {
+  rows?: number;
+  label: string;
+  titled?: boolean;
+}) {
+  return (
+    <SkeletonRegion
+      label={label}
+      className="ui-card flex flex-col gap-3 overflow-hidden py-4 sm:py-5"
+    >
+      {titled ? (
+        <div className="px-4 sm:px-5">
+          <Skeleton className="h-6 w-32" />
+        </div>
+      ) : null}
+      <div className="px-4 sm:px-5">
+        {Array.from({ length: rows }, (_, i) => (
+          <div
+            key={i}
+            className="flex items-center justify-between gap-4 border-b border-ui-line py-2 last:border-b-0"
+          >
+            <Skeleton className={`h-5 ${CELL_WIDTHS[i % CELL_WIDTHS.length]}`} />
+            <Skeleton
+              className={`h-5 ${CELL_WIDTHS[(i + 3) % CELL_WIDTHS.length]}`}
+            />
+          </div>
+        ))}
+      </div>
+    </SkeletonRegion>
+  );
+}
+
 /** A metric tile, for dashboards and analytics headers. */
 export function StatSkeleton({ count = 4, label }: { count?: number; label: string }) {
   return (

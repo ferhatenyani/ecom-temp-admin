@@ -18,7 +18,7 @@ than left to look like an oversight.
 [x]  0. Harness — mock API, capture script, this file
 [x]  1. Orders — list        (inherited; merged before this run began)
 [x]  2. Products — list
-[ ]  3. Orders — detail
+[x]  3. Orders — detail
 [ ]  4. Products — detail + form
 [ ]  5. Customers — list + detail
 [ ]  6. Inventory — list + detail
@@ -191,3 +191,77 @@ source comments so the ledger is not missing its reference screen.
   permanent vertical rule into all eighteen remaining list tables at every
   width, and a scroll-driven one needs a scroll listener in the primitive.
   Deferred rather than decided here.
+
+---
+
+## 3. Orders — detail — 2026-08-24
+
+The screen that sets the detail patterns for the ~20 detail screens after it.
+
+- Layout: two-column at `lg`+ — main `1fr` plus a 360px aside, aside **below**
+  main when it collapses. Built as `components/ui/Detail.tsx` (`DetailGrid`)
+  plus `components/ui/Card.tsx` (`Card`, `DataList`, `DataRow`), because it did
+  not exist as a primitive and twenty screens need exactly it. `PageBody` gains
+  `width="split"`, capped 1152 = 768 + 24 + 360.
+  It is **flex, not grid**: `grid-cols-[minmax(0,1fr)_360px]` is an arbitrary
+  value and §7 fails the build on one. `flex-1` + `lg:w-90` is the same
+  geometry off the spacing scale.
+- Columns / sections: main is items+totals · timeline · customer notes ·
+  parcels · payments — the wide, tabular, unboundedly-growing things. Aside is
+  status · dates · payment method · customer · COD — fixed-height reference
+  material read while scanning main.
+- **The primary action lives in `PageHeader`, never in the aside. This is now
+  the rule for every detail screen in the run.** Below `lg` the aside drops
+  beneath a variable-length item list, and the panel's most-used control cannot
+  sit at the bottom of a page whose length is data-dependent.
+- Status picker: a `Menu` of candidate moves; `cancelled` and `refunded` go
+  through `ConfirmDialog` with a label naming the act. The panel holds no
+  transition table — the API is the authority, and after the first 409 the menu
+  narrows to the server's own `allowed` list.
+- 409 refusal: inline `role="alert"` above the grid, and it stays. Never a toast.
+- Bulk: n/a.
+- Row click: n/a.
+- Omitted deliberately:
+  - **The line-item editor.** `is_editable` exists and ADMIN_PANEL.md specifies
+    the behaviour, but the `PATCH /orders/{id}` line-items contract has never
+    been measured.
+  - **A Cancel button.** `ADMIN_PANEL.md:1402` lists `/orders/{id}/cancel`; it
+    is not allowlisted, not mocked and called by nothing.
+  - **`stock_reduced`**, which is schema'd and documented and would need an
+    invented meaning to render.
+  - **`needs_payment`.** Tried, then removed: the restatement is honest but not
+    news, because the status badge and the transaction statuses already carry
+    it, and the one thing worth saying — whether an unsettled transaction will
+    ever settle — is exactly what the flag cannot say.
+- Notes:
+  - Line items are a plain semantic `<table>` in a bordered section, not
+    `DataTable`. Selection, column picker, density, pagination, sorting and a
+    row menu are all unwanted for a fixed 1–3 row list, and §3.2's contract is
+    about list *screens*. If a second detail screen needs the same thing, that
+    is when it becomes a primitive.
+  - **DESIGN.md §2.2/§2.4 were wrong and are amended.** They put the breadcrumb
+    in the top bar at `lg`+, but `AppShell` renders that bar `lg:hidden` — at
+    `lg`+ there is a sidebar and no bar at all, so the screen had no way back to
+    the list. `PageHeader`'s `back` link now shows at every width.
+  - **Focus restoration was broken panel-wide**, not just here, and is fixed in
+    `Overlay`: Radix's modal `Dialog.Content` restores focus to
+    `Dialog.Trigger`, which no overlay in this panel renders, so Escape dropped
+    focus to `<body>` from every Modal, Drawer and ConfirmDialog in the app. A
+    `Menu`-opened `ConfirmDialog` needed more than that — the menu item Radix
+    unmounts on select cannot be restored to — hence a `returnFocusTo` prop.
+  - A COD switch that disabled itself while its own PATCH was in flight dropped
+    focus to `<body>` with nothing to restore it to. Fixed.
+  - Prose was cut from seven sentences to four, one per card. "Restraint and
+    finish, not more chrome" applies to words as much as to decoration, and the
+    Articles footnote had leaked engineering rationale — *its write contract was
+    never measured* — onto a shopkeeper's screen. That reasoning moved into the
+    file's docblock, where the rest of this project keeps it.
+  - `e2e/orders.spec.ts` was **already broken before this branch**: the list
+    migration left ten `a[href*="/orders/"]` selectors against a `DataTable`
+    that emits no anchor, plus a `getByRole("radiogroup")` and a `span.tonal`.
+    Both the list and the detail assertions are fixed here. One test added; none
+    deleted.
+- **Found, not fixed:** DESIGN.md §3.1 says `ConfirmDialog` focuses Cancel by
+  default; measured, Radix's `FocusScope` focuses the header Close button first.
+  Both are non-destructive so the guard against Enter-on-an-unread-dialog holds.
+  Fixing it needs a second focus prop on `Modal`.

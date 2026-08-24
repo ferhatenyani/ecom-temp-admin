@@ -27,32 +27,62 @@ import {
 } from "@/lib/api/schemas/payment";
 import { stripLabelUrlsFrom } from "@/lib/shipping";
 import { canManageOrders, has } from "@/lib/capabilities";
-import { STATUS_TONE, customerName, customerPhone, orderPlace } from "@/lib/orders";
-import { formatMoney } from "@/lib/format/money";
+import { STATUS_TONE } from "@/lib/order-status";
+import { customerName, customerPhone, orderPlace } from "@/lib/orders";
 import { formatDate, formatWhen } from "@/lib/format/date";
 import { decodeEntities } from "@/lib/format/html";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState, SectionError } from "@/components/patterns/States";
-import {
-  ListGroup,
-  ListRow,
-  ListValueRow,
-} from "@/components/primitives/GroupedList";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { DetailGrid } from "@/components/ui/Detail";
+import { Card, DataList, DataRow } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { ForbiddenState, SectionError } from "@/components/ui/States";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
-import { StatusAction } from "./StatusAction";
+import { OrderScreen, OrderNotices } from "./OrderScreen";
+import { OrderActions } from "./OrderActions";
+import { OrderItems } from "./OrderItems";
 import { CodSection } from "./CodSection";
 import { ParcelsSection } from "./ParcelsSection";
 import { PaymentsSection } from "./PaymentsSection";
 
 /**
- * The order detail: a stack of grouped inset sections.
+ * The order detail — the first detail screen on the new system, and the one the
+ * roughly twenty after it inherit their shape from.
  *
- * Each section pulls from its own route and renders independently, so a missing
- * shipment does not block the order. That is why every sub-fetch here catches its
- * own failure and renders a section-level error rather than letting one 500 take
- * the page down.
+ * ## The two columns, and which side a thing lands on
+ *
+ * `DetailGrid`: main `1fr` plus a 360px aside at `lg`+, the aside collapsing
+ * **below** main. The split is not by importance, it is by *shape*:
+ *
+ *   main    line items and totals · timeline · customer notes · parcels ·
+ *           payments — the wide, tabular, unboundedly-growing things. A parcel
+ *           list can be five rows long and a timeline twenty.
+ *   aside   status · dates · payment method · the customer · COD — fixed-height
+ *           reference material a person glances at while reading the main column.
+ *
+ * The **primary action is in `PageHeader`**, never in the aside, and that is the
+ * rule for the whole run: below `lg` the aside drops beneath a line-item list
+ * whose length is the order's, so a control down there sits at a scroll offset
+ * that depends on the data.
+ *
+ * ## What survives from the screen this replaces
+ *
+ * Everything below this line is a measurement rather than a style, and the
+ * rebuild kept all of it:
+ *
+ *   - the parallel sub-resource fetch, each failure caught alone, with `null`
+ *     (this section could not load) distinct from `[]` (there is nothing here)
+ *   - `stripLabelUrlsFrom` running server-side, **before** these become props:
+ *     an RSC payload is in the document, so an unstripped shipment would put a
+ *     courier's credential there whether or not anything rendered it
+ *   - the capability-conditional shipping and payment reads, deliberately not
+ *     fired-and-caught: a Manager is 403 on every payments route — measured —
+ *     and spending two requests per order detail to be refused would cost two of
+ *     a 600/min budget shared across their open tabs, to render nothing
+ *   - the customer-notes-only filter, because the timeline already carries them
+ *   - `decodeEntities` on summaries and note bodies
+ *   - every `Ltr` / `Isolate` wrap, and `dir="auto"` on the email anchor
+ *   - `formatWhen` for the offsetless `created_at`
  */
 export default async function OrderDetailPage({
   params,
@@ -67,11 +97,16 @@ export default async function OrderDetailPage({
 
   if (!canManageOrders(me)) {
     return (
-      <Scaffold title={tOrders("title")} back={{ href: `/${locale}/orders`, label: t("back") }}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader
+          title={tOrders("title")}
+          back={{ href: `/${locale}/orders`, label: t("back") }}
+          divided={false}
+        />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_orders" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -87,17 +122,6 @@ export default async function OrderDetailPage({
     throw error;
   }
 
-  /**
-   * The sub-resources, in parallel, each failing alone. `null` means "this
-   * section could not load" and renders as such — distinct from an empty array,
-   * which means "there is nothing here", a different and legitimate answer.
-   *
-   * The shipping and payment reads are conditional on the capability rather than
-   * fired-and-caught. A Manager is 403 on every payments route — measured — and
-   * spending two requests per order detail to be refused would cost every
-   * Manager two of a 600/min budget shared across their open tabs, to render
-   * nothing.
-   */
   const canShip = has(me, "ac_manage_shipping");
   const canPay = has(me, "ac_manage_payments");
 
@@ -155,277 +179,286 @@ export default async function OrderDetailPage({
   const phone = customerPhone(order);
   const place = orderPlace(order, wilayasByCode, locale);
   const email = order.billing.email ?? "";
-  const money = (value: string) => formatMoney(value, order.currency, locale);
+
+  /**
+   * When this render happened, for §3.7's stale marker.
+   *
+   * The list polls every 30 s; this screen is a Server Component and only moves
+   * when something asks it to — a write, or the header's refresh. So the age of
+   * what is on screen is the age of *this render*, and the marker reports it
+   * rather than leaving the staleness silent.
+   *
+   * `react-hooks/purity` flags `Date.now()` in a component body, and it is right
+   * about the case it is written for: a client component that re-renders would
+   * produce a different value each time and React could not tell which one was
+   * meant. **An async Server Component is not that case.** It runs once per
+   * request, on the server, and never re-renders — so the value is as stable as
+   * the response it is part of, and reading the clock here *is* part of the
+   * fetch rather than part of the render.
+   *
+   * A client-side alternative was tried and is wrong: recording the time in a
+   * mount effect gives an age that stops moving after `router.refresh()`, which
+   * re-renders this Server Component without remounting the client tree — so the
+   * marker would report the age of the first render forever.
+   */
+  // eslint-disable-next-line react-hooks/purity -- see above: a Server Component renders once per request.
+  const fetchedAt = Date.now();
 
   return (
-    <Scaffold
-      title={t("title", { number: order.number })}
-      back={{ href: `/${locale}/orders`, label: t("back") }}
-    >
-      <div className="mx-auto max-w-3xl px-4">
-        {/* ------------------------------------------------------- summary --- */}
-        <ListGroup title={t("summary")}>
-          <ListRow>
-            <span className="text-body text-label-secondary">{tOrders("status")}</span>
-            <span className="ms-auto">
-              <StatusBadge tone={STATUS_TONE[order.status]}>
-                {tStatus(order.status)}
-              </StatusBadge>
-            </span>
-          </ListRow>
-          <ListValueRow
-            label={t("created")}
-            value={<Isolate>{formatDate(order.date_created, locale)}</Isolate>}
-          />
-          <ListValueRow
-            label={t("modified")}
-            value={<Isolate>{formatWhen(order.date_modified, locale)}</Isolate>}
-          />
-          {order.date_paid ? (
-            <ListValueRow
-              label={t("paid")}
-              value={<Isolate>{formatDate(order.date_paid, locale)}</Isolate>}
+    <OrderScreen fetchedAt={fetchedAt} locale={locale}>
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader
+          title={t("title", { number: order.number })}
+          subtitle={<Isolate>{formatDate(order.date_created, locale)}</Isolate>}
+          back={{ href: `/${locale}/orders`, label: t("back") }}
+          /* A detail page omits the rule and lets the first card do the
+             separating — §2.4. */
+          divided={false}
+          actions={
+            <OrderActions
+              orderId={order.id}
+              status={order.status}
+              canWrite={canManageOrders(me)}
             />
-          ) : null}
-          {order.date_completed ? (
-            <ListValueRow
-              label={t("completed")}
-              value={<Isolate>{formatDate(order.date_completed, locale)}</Isolate>}
-            />
-          ) : null}
-          <ListValueRow
-            label={t("paymentMethod")}
-            value={order.payment_method_title || order.payment_method || "—"}
-          />
-        </ListGroup>
-
-        {/* The write path. A 409 renders the moves the API says are legal. */}
-        <StatusAction
-          orderId={order.id}
-          status={order.status}
-          locale={locale}
-          canWrite={canManageOrders(me)}
+          }
         />
 
-        {/* --------------------------------------------------------- items --- */}
-        <ListGroup
-          title={t("items")}
-          footnote={order.is_editable ? t("editableYes") : t("editableNo")}
-        >
-          {order.line_items.length === 0 ? (
-            <ListRow>
-              <span className="text-body text-label-secondary">{t("noItems")}</span>
-            </ListRow>
-          ) : (
-            order.line_items.map((item) => (
-              <ListRow key={item.id}>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-body text-label">{item.name}</span>
-                  <span className="text-footnote text-label-secondary">
-                    {item.sku ? (
-                      <>
-                        {/* A SKU inside Arabic text needs its own direction. */}
-                        {t("sku")} <Ltr>{item.sku}</Ltr>
-                        <span aria-hidden="true"> · </span>
-                      </>
+        <PageBody width="split">
+          {/* Above the grid, so a refusal from either column is seen at every
+              width. §3.1: an error a person must act on is never a toast. */}
+          <OrderNotices />
+
+          <DetailGrid
+            main={
+              <>
+                <OrderItems order={order} locale={locale} />
+
+                {/* ------------------------------------------------- timeline --- */}
+                <Card title={t("timeline")}>
+                  {events === null ? (
+                    <SectionError>{t("sectionFailed")}</SectionError>
+                  ) : events.length === 0 ? (
+                    <p className="text-ui-body text-ui-muted">{t("noNotes")}</p>
+                  ) : (
+                    <ol className="flex flex-col">
+                      {events.map((event, index) => (
+                        <li
+                          key={`${event.type}-${event.at}-${index}`}
+                          className="flex min-w-0 flex-col gap-0.5 border-b border-ui-line py-2.5 first:pt-0 last:border-b-0 last:pb-0"
+                        >
+                          {/*
+                            Decoded, not rendered raw: the API sends
+                            "(99&rarr;98)" and React would print those six
+                            characters literally. Decoded to text, never to HTML.
+                          */}
+                          {/* `break-words`, because a timeline summary quotes
+                              the product's SKU and this shop has a 60-character
+                              one: without it the run overflows the card, which
+                              `overflow-hidden` then clips — a value on screen
+                              with no way to read it, which §2.1 forbids. */}
+                          <span
+                            dir="auto"
+                            className="text-ui-compact break-words text-ui-fg"
+                          >
+                            {decodeEntities(event.summary)}
+                          </span>
+                          <span className="text-ui-caption text-ui-subtle">
+                            <Isolate>{formatWhen(event.at, locale)}</Isolate>
+                            {event.actor ? (
+                              <>
+                                <span aria-hidden="true"> · </span>
+                                {event.actor === "system" ? t("system") : event.actor}
+                              </>
+                            ) : null}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </Card>
+
+                {/*
+                  Customer notes only.
+
+                  `GET /orders/{id}/timeline` already aggregates the note rows
+                  alongside the stock and audit events — measured: the three notes
+                  on order 3078 all appear in its five timeline entries. Rendering
+                  the full notes collection underneath reprinted every one of them
+                  a second time. What the timeline does not distinguish is whose
+                  note it is, so this section keeps the ones a customer wrote,
+                  which are the ones a support agent is looking for.
+                */}
+                {customerNotes.length > 0 ? (
+                  <Card title={t("customerNotes")}>
+                    <ul className="flex flex-col">
+                      {customerNotes.map((note) => (
+                        <li
+                          key={note.id}
+                          className="flex min-w-0 flex-col gap-0.5 border-b border-ui-line py-2.5 first:pt-0 last:border-b-0 last:pb-0"
+                        >
+                          <span
+                            dir="auto"
+                            className="text-ui-compact break-words text-ui-fg"
+                          >
+                            {decodeEntities(note.content)}
+                          </span>
+                          <span className="text-ui-caption text-ui-subtle">
+                            {/* `created_at` has no offset, so it is read as UTC
+                                rather than as the host's local time. */}
+                            <Isolate>{formatWhen(note.created_at, locale)}</Isolate>
+                            <span aria-hidden="true"> · </span>
+                            {note.added_by === "system" ? t("system") : note.added_by}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Card>
+                ) : null}
+
+                {/* ---------------------------------------------------- parcels --- */}
+                {canShip ? (
+                  <ParcelsSection
+                    orderId={order.id}
+                    // Stripped on the server, before these become props.
+                    shipments={stripLabelUrlsFrom(shipmentsResult ?? [])}
+                    failed={shipmentsResult === null}
+                    providers={providersResult ?? []}
+                    wilayas={geography ?? []}
+                    canWrite={canShip}
+                    locale={locale}
+                  />
+                ) : null}
+
+                {/* --------------------------------------------------- payments --- */}
+                {canPay ? (
+                  <PaymentsSection
+                    payments={(paymentsResult ?? []) as Payment[]}
+                    methods={methodsResult ?? []}
+                    failed={paymentsResult === null}
+                    canWrite={canPay}
+                    locale={locale}
+                  />
+                ) : null}
+              </>
+            }
+            aside={
+              <>
+                {/* ---------------------------------------------------- summary --- */}
+                <Card title={t("summary")}>
+                  <DataList>
+                    <DataRow label={tOrders("status")}>
+                      <Badge tone={STATUS_TONE[order.status]}>
+                        {tStatus(order.status)}
+                      </Badge>
+                    </DataRow>
+                    <DataRow label={t("created")}>
+                      {/* `Isolate`, not `Ltr`: ICU puts RTL marks inside the
+                          Arabic form on purpose and forcing dir="ltr" over them
+                          renders the date wrong. See primitives/Ltr.tsx. */}
+                      <Isolate>{formatDate(order.date_created, locale)}</Isolate>
+                    </DataRow>
+                    <DataRow label={t("modified")}>
+                      <Isolate>{formatWhen(order.date_modified, locale)}</Isolate>
+                    </DataRow>
+                    {order.date_paid ? (
+                      <DataRow label={t("paid")}>
+                        <Isolate>{formatDate(order.date_paid, locale)}</Isolate>
+                      </DataRow>
                     ) : null}
-                    <Ltr numeric>×{item.quantity}</Ltr>
-                  </span>
-                </span>
-                <Ltr className="shrink-0 text-body text-label">{money(item.total)}</Ltr>
-              </ListRow>
-            ))
-          )}
-        </ListGroup>
-
-        {/* --------------------------------------------------------- totals --- */}
-        <ListGroup>
-          <ListValueRow label={t("subtotal")} value={<Ltr>{money(order.subtotal)}</Ltr>} />
-          {order.discount_total !== "0.00" ? (
-            <ListValueRow
-              label={t("discount")}
-              value={<Ltr>−{money(order.discount_total)}</Ltr>}
-            />
-          ) : null}
-          <ListValueRow
-            label={t("shipping")}
-            value={<Ltr>{money(order.shipping_total)}</Ltr>}
-          />
-          {order.total_tax !== "0.00" ? (
-            <ListValueRow label={t("tax")} value={<Ltr>{money(order.total_tax)}</Ltr>} />
-          ) : null}
-          <ListRow>
-            <span className="text-headline text-label">{t("total")}</span>
-            <Ltr className="ms-auto text-headline text-label">{money(order.total)}</Ltr>
-          </ListRow>
-        </ListGroup>
-
-        {/* ------------------------------------------------------- customer --- */}
-        <ListGroup title={t("customer")}>
-          <ListValueRow
-            label={t("customer")}
-            value={name ?? (order.customer_id === 0 ? tOrders("guest") : tOrders("noName"))}
-          />
-          {phone ? (
-            <ListRow className="press-row">
-              <span className="text-body text-label-secondary">{t("phone")}</span>
-              {/* A phone number never mirrors. */}
-              <a href={`tel:${phone}`} className="ms-auto flex items-center gap-2 text-accent">
-                <Icon name="phone" className="size-4" />
-                <Ltr className="text-body">{phone}</Ltr>
-              </a>
-            </ListRow>
-          ) : null}
-          {email ? (
-            <ListRow>
-              <span className="text-body text-label-secondary">{t("email")}</span>
-              {/* `Ltr` isolates the address; the clipping is on the anchor,
-                  which inherits the *page's* direction — so in Arabic the
-                  ellipsis landed at the anchor's left and ate the start of the
-                  address. The container needs its own resolved direction too, or
-                  the isolation inside it is clipped from the wrong end. */}
-              <a
-                href={`mailto:${email}`}
-                dir="auto"
-                className="ms-auto min-w-0 truncate text-body text-accent"
-              >
-                <Ltr numeric={false}>{email}</Ltr>
-              </a>
-            </ListRow>
-          ) : null}
-          {/* Two rows both labelled "Adresse" is what these were; they are a
-              wilaya and a street, and the labels now say which is which. */}
-          {place ? <ListValueRow label={t("wilaya")} value={place} /> : null}
-          {order.billing.address_1 ? (
-            <ListValueRow
-              label={t("address")}
-              /**
-               * Isolated, like every other identifier.
-               *
-               * A street address is Latin-script content with a number in it, and
-               * inside an Arabic paragraph the bidi algorithm moves that number to
-               * the other end: `1 Rue Test` rendered as `Rue Test 1`, relocating
-               * the house number with nothing to show it happened. `numeric={false}`
-               * because an address is prose, not a column of figures — it wants
-               * direction isolation, not tabular digits.
-               */
-              value={<Ltr numeric={false}>{order.billing.address_1}</Ltr>}
-            />
-          ) : null}
-          {order.customer_note ? (
-            <ListRow>
-              <span className="flex min-w-0 flex-col gap-1">
-                <span className="text-footnote text-label-secondary">{t("note")}</span>
-                <span className="text-body text-label">{order.customer_note}</span>
-              </span>
-            </ListRow>
-          ) : null}
-        </ListGroup>
-
-        {/* ---------------------------------------------------------- parcels --- */}
-        {canShip ? (
-          <ParcelsSection
-            orderId={order.id}
-            // Stripped on the server, before these become props: an RSC payload
-            // is in the document, so an unstripped shipment would put a courier's
-            // credential there whether or not anything rendered it.
-            shipments={stripLabelUrlsFrom(shipmentsResult ?? [])}
-            failed={shipmentsResult === null}
-            providers={providersResult ?? []}
-            wilayas={geography ?? []}
-            canWrite={canShip}
-            locale={locale}
-          />
-        ) : null}
-
-        {/* --------------------------------------------------------- payments --- */}
-        {canPay ? (
-          <PaymentsSection
-            payments={(paymentsResult ?? []) as Payment[]}
-            methods={methodsResult ?? []}
-            failed={paymentsResult === null}
-            canWrite={canPay}
-            locale={locale}
-          />
-        ) : null}
-
-        {/* ------------------------------------------------------------ COD --- */}
-        <CodSection
-          orderId={order.id}
-          orderStatus={order.status}
-          record={cod}
-          canWrite={canManageOrders(me)}
-          locale={locale}
-        />
-
-        {/* ------------------------------------------------------- timeline --- */}
-        <ListGroup title={t("timeline")}>
-          {events === null ? (
-            <ListRow>
-              <SectionError>{t("sectionFailed")}</SectionError>
-            </ListRow>
-          ) : events.length === 0 ? (
-            <ListRow>
-              <span className="text-body text-label-secondary">{t("noNotes")}</span>
-            </ListRow>
-          ) : (
-            events.map((event, index) => (
-              <ListRow key={`${event.type}-${event.at}-${index}`}>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  {/*
-                    Decoded, not rendered raw: the API sends
-                    "(99&rarr;98)" and React would print those six characters
-                    literally. Decoded to text, never to HTML.
-                  */}
-                  <span className="text-subhead text-label">
-                    {decodeEntities(event.summary)}
-                  </span>
-                  <span className="text-caption text-label-secondary">
-                    <Isolate>{formatWhen(event.at, locale)}</Isolate>
-                    {event.actor ? (
-                      <>
-                        <span aria-hidden="true"> · </span>
-                        {event.actor === "system" ? t("system") : event.actor}
-                      </>
+                    {order.date_completed ? (
+                      <DataRow label={t("completed")}>
+                        <Isolate>{formatDate(order.date_completed, locale)}</Isolate>
+                      </DataRow>
                     ) : null}
-                  </span>
-                </span>
-              </ListRow>
-            ))
-          )}
-        </ListGroup>
+                    <DataRow label={t("paymentMethod")}>
+                      <span dir="auto">
+                        {order.payment_method_title || order.payment_method || "—"}
+                      </span>
+                    </DataRow>
+                  </DataList>
+                </Card>
 
-        {/*
-          Customer notes only.
+                {/* --------------------------------------------------- customer --- */}
+                <Card title={t("customer")}>
+                  <DataList>
+                    <DataRow label={t("customer")}>
+                      <span dir="auto">
+                        {name ??
+                          (order.customer_id === 0 ? tOrders("guest") : tOrders("noName"))}
+                      </span>
+                    </DataRow>
+                    {phone ? (
+                      <DataRow label={t("phone")}>
+                        {/* A phone number never mirrors. */}
+                        <a
+                          href={`tel:${phone}`}
+                          className="ui-ring inline-flex items-center gap-1.5 rounded-ui-md text-ui-accent hover:underline"
+                        >
+                          <Icon name="phone" className="size-3.5 shrink-0" />
+                          <Ltr>{phone}</Ltr>
+                        </a>
+                      </DataRow>
+                    ) : null}
+                    {email ? (
+                      <DataRow label={t("email")}>
+                        {/* `Ltr` isolates the address; the clipping is on the
+                            anchor, which inherits the *page's* direction — so in
+                            Arabic the ellipsis landed at the anchor's left and ate
+                            the start of the address. The container needs its own
+                            resolved direction too, or the isolation inside it is
+                            clipped from the wrong end. */}
+                        <a
+                          href={`mailto:${email}`}
+                          dir="auto"
+                          className="ui-ring block min-w-0 truncate rounded-ui-md text-ui-accent hover:underline"
+                        >
+                          <Ltr numeric={false}>{email}</Ltr>
+                        </a>
+                      </DataRow>
+                    ) : null}
+                    {/* Two rows both labelled "Adresse" is what these were; they
+                        are a wilaya and a street, and the labels say which. */}
+                    {place ? (
+                      <DataRow label={t("wilaya")}>
+                        <span dir="auto">{place}</span>
+                      </DataRow>
+                    ) : null}
+                    {order.billing.address_1 ? (
+                      <DataRow label={t("address")}>
+                        {/*
+                         * Isolated, like every other identifier.
+                         *
+                         * A street address is Latin-script content with a number
+                         * in it, and inside an Arabic paragraph the bidi algorithm
+                         * moves that number to the other end: `1 Rue Test`
+                         * rendered as `Rue Test 1`, relocating the house number
+                         * with nothing to show it happened. `numeric={false}`
+                         * because an address is prose, not a column of figures.
+                         */}
+                        <Ltr numeric={false}>{order.billing.address_1}</Ltr>
+                      </DataRow>
+                    ) : null}
+                    {order.customer_note ? (
+                      <DataRow label={t("note")} stacked>
+                        <span dir="auto">{decodeEntities(order.customer_note)}</span>
+                      </DataRow>
+                    ) : null}
+                  </DataList>
+                </Card>
 
-          `GET /orders/{id}/timeline` already aggregates the note rows alongside
-          the stock and audit events — measured: the three notes on order 3078 all
-          appear in its five timeline entries. Rendering the full notes collection
-          underneath reprinted every one of them a second time. What the timeline
-          does not distinguish is whose note it is, so this section keeps the ones
-          a customer wrote, which are the ones a support agent is looking for.
-        */}
-        {customerNotes.length > 0 ? (
-          <ListGroup title={t("customerNotes")}>
-            {customerNotes.map((note) => (
-              <ListRow key={note.id}>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-subhead text-label">
-                    {decodeEntities(note.content)}
-                  </span>
-                  <span className="text-caption text-label-secondary">
-                    {/* `created_at` has no offset, so it is read as UTC rather
-                        than as the host's local time. */}
-                    <Isolate>{formatWhen(note.created_at, locale)}</Isolate>
-                    <span aria-hidden="true"> · </span>
-                    {note.added_by === "system" ? t("system") : note.added_by}
-                  </span>
-                </span>
-              </ListRow>
-            ))}
-          </ListGroup>
-        ) : null}
+                {/* -------------------------------------------------------- COD --- */}
+                <CodSection
+                  orderId={order.id}
+                  orderStatus={order.status}
+                  record={cod}
+                  canWrite={canManageOrders(me)}
+                  locale={locale}
+                />
+              </>
+            }
+          />
+        </PageBody>
       </div>
-    </Scaffold>
+    </OrderScreen>
   );
 }

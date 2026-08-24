@@ -63,8 +63,28 @@ const DRAWER_WIDTH: Record<Size, string> = {
  * Recording it there and focusing it back on close is the whole fix. Both
  * handlers run before Radix's own — `composeEventHandlers` puts the prop first
  * and skips its internal one once `preventDefault()` has been called.
+ *
+ * ## `returnFocusTo`, added on the orders-detail branch
+ *
+ * The recorded opener is the right answer only when the opener survives the
+ * overlay. **A menu item does not**, and "a `Menu` item opens a `ConfirmDialog`"
+ * is the shape every destructive row action in this panel takes: Radix unmounts
+ * the item the moment it is selected, so on close the recorded node is detached,
+ * the guard below correctly declines to focus it, Radix's own fallback targets a
+ * trigger ref that a controlled dialog never sets, and focus lands on `<body>`.
+ * Measured with the keyboard alone on the order detail: Escape on the cancel
+ * confirmation dropped a person to the top of the document with the whole
+ * sidebar to tab through again.
+ *
+ * Focusing the real trigger *before* opening the dialog does not fix it — the
+ * menu's own focus scope is trapped and pulls focus straight back into the menu,
+ * so the recorded opener is the menu item anyway. Neither does focusing it after
+ * `onOpenChange(false)`, which fires before `onCloseAutoFocus` and therefore
+ * loses to it. The caller naming the element is the version that works, and it
+ * is an **id** rather than a ref so that a caller can name a control it does not
+ * hold a handle to.
  */
-function useOpenerFocus() {
+function useOpenerFocus(returnFocusTo?: string) {
   const opener = useRef<HTMLElement | null>(null);
 
   return {
@@ -72,13 +92,15 @@ function useOpenerFocus() {
       opener.current = document.activeElement as HTMLElement | null;
     },
     onCloseAutoFocus: (event: Event) => {
-      /* Only when the opener is still in the document. A row's action menu can
-         be gone by the time its drawer closes — a filter changed underneath it —
-         and focusing a detached node silently does nothing, which is worse than
-         letting Radix's own fallback run. */
-      if (!opener.current?.isConnected) return;
+      /* The caller's explicit target wins, then the recorded opener — and only
+         when it is still in the document. A row's action menu can be gone by the
+         time its drawer closes, and focusing a detached node silently does
+         nothing, which is worse than letting Radix's own fallback run. */
+      const named = returnFocusTo ? document.getElementById(returnFocusTo) : null;
+      const target = named ?? (opener.current?.isConnected ? opener.current : null);
+      if (!target) return;
       event.preventDefault();
-      opener.current.focus();
+      target.focus();
     },
   };
 }
@@ -149,6 +171,7 @@ export function Modal({
   size = "md",
   children,
   footer,
+  returnFocusTo,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -157,13 +180,19 @@ export function Modal({
   size?: Size;
   children: ReactNode;
   /**
+   * The id of the control focus should return to, when the thing that opened
+   * this will not be there to receive it — a `Menu` item, typically. See
+   * `useOpenerFocus`.
+   */
+  returnFocusTo?: string;
+  /**
    * Actions. Cancel first in DOM order so it is the first tab stop and, on a
    * phone, the *lower* of the two — `flex-col-reverse` puts the primary on top
    * where the thumb is not, which is deliberate for a confirming action.
    */
   footer?: ReactNode;
 }) {
-  const focus = useOpenerFocus();
+  const focus = useOpenerFocus(returnFocusTo);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -189,6 +218,7 @@ export function Drawer({
   children,
   footer,
   headerExtra,
+  returnFocusTo,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -201,8 +231,10 @@ export function Drawer({
   footer?: ReactNode;
   /** A link or action beside the title — "open full page", typically. */
   headerExtra?: ReactNode;
+  /** See `Modal`. */
+  returnFocusTo?: string;
 }) {
-  const focus = useOpenerFocus();
+  const focus = useOpenerFocus(returnFocusTo);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>

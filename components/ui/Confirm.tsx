@@ -32,6 +32,7 @@ export function ConfirmDialog({
   tone = "destructive",
   loading = false,
   requireTyped,
+  returnFocusTo,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,6 +48,15 @@ export function ConfirmDialog({
    * number, a SKU, a product name.
    */
   requireTyped?: { value: string; label: string };
+  /**
+   * The id of the control focus returns to on close.
+   *
+   * Needed here more than anywhere else: this dialog is nearly always opened
+   * from a `Menu` item, which Radix unmounts on select — so the opener the
+   * overlay recorded is detached by the time it would be focused. See
+   * `useOpenerFocus` in Overlay.tsx.
+   */
+  returnFocusTo?: string;
 }) {
   const t = useTranslations("ui");
   const [typed, setTyped] = useState("");
@@ -74,6 +84,7 @@ export function ConfirmDialog({
       onOpenChange={onOpenChange}
       title={title}
       size="sm"
+      returnFocusTo={returnFocusTo}
       footer={
         <>
           {/* Cancel first in DOM order: first tab stop, and autoFocus makes it

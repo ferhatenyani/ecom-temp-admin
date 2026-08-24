@@ -1,16 +1,17 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
+import { Icon } from "@/components/primitives/Icon";
 
 /**
  * The form controls. See DESIGN.md §3.4.
  *
  * These are the shapes a filter panel and a settings form both need — a bordered
- * section, a checkable row, a single-select group and a text field — written once
- * so the next screen inherits them instead of hand-rolling a fourth set. They
- * replace `FilterGroup`/`FilterValue` from `components/patterns/FilterSheet.tsx`
- * and `TextField`/`DecimalField` from `components/primitives/Field.tsx`, both of
- * which draw iOS inset rows.
+ * section, a checkable row, a single-select group, a text field, a text area, a
+ * select and a switch — written once so the next screen inherits them instead of
+ * hand-rolling a fourth set. They replace `FilterGroup`/`FilterValue` from
+ * `components/patterns/FilterSheet.tsx` and `TextField`/`DecimalField` from
+ * `components/primitives/Field.tsx`, both of which draw iOS inset rows.
  *
  * Every one of them is a **real** control: a real `<input type="checkbox">`, a
  * real radio group, a real labelled `<input>`. The old pair used
@@ -207,6 +208,142 @@ export function ChoiceGroup({
   );
 }
 
+/* ═══════════════════════════════════════════════════════ the labelled field ═══
+ *
+ * One frame — label above, control, then help text or an error — and four
+ * controls hung off it. DESIGN.md §3.4 is a list of things that are easy to do
+ * to *one* field and easy to forget on the ninth: the label is always visible
+ * and is never a placeholder, the help text is written before the error rather
+ * than as a consolation after it, the error carries an icon and is wired through
+ * `aria-describedby`, and `aria-invalid` is set. Written once here, they cannot
+ * be forgotten on the ninth.
+ *
+ * Help text and an error are **both** described, in that order, rather than the
+ * error replacing the hint: the hint usually says what a valid value looks like,
+ * which is the thing a person needs most at the moment they got it wrong.
+ */
+
+const CONTROL =
+  "ui-ring ui-interactive min-h-9 w-full rounded-ui-md border bg-ui-surface px-2.5 py-1.5 text-start text-ui-body text-ui-fg outline-none placeholder:text-ui-subtle disabled:cursor-not-allowed disabled:opacity-50";
+
+function borderFor(invalid: boolean): string {
+  return invalid ? "border-ui-danger-fg" : "border-ui-line-control";
+}
+
+function FieldFrame({
+  id,
+  label,
+  hint,
+  hintId,
+  error,
+  errorId,
+  className = "",
+  children,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  hintId: string;
+  error?: string;
+  errorId: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`flex min-w-0 flex-col gap-1.5 ${className}`}>
+      <label htmlFor={id} className="text-ui-label text-ui-fg">
+        {label}
+      </label>
+      {children}
+      {hint ? (
+        <p id={hintId} className="text-ui-label text-ui-muted">
+          {hint}
+        </p>
+      ) : null}
+      {error ? (
+        <p
+          id={errorId}
+          className="flex items-start gap-1.5 text-ui-label text-ui-danger-fg"
+        >
+          <Icon name="alert" className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0">{error}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The `aria-describedby` value for a field that may have both, or neither. */
+function describedBy(hint: string | undefined, hintId: string, error: string | undefined, errorId: string) {
+  const ids = [hint ? hintId : null, error ? errorId : null].filter(Boolean);
+  return ids.length > 0 ? ids.join(" ") : undefined;
+}
+
+export function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  error,
+  disabled = false,
+  /**
+   * An identifier — a SKU, a price, a tracking number — rather than prose.
+   *
+   * Forces `dir="ltr"` and `unicode-bidi: isolate` on the input, for the reason
+   * `components/primitives/Ltr.tsx` records at length: a run of digits typed into
+   * an Arabic page is reordered by the bidi algorithm and the person reads back a
+   * value they did not enter. Off by default, because a customer's name is not an
+   * identifier and forcing LTR on one is the same bug from the other side.
+   */
+  isolate = false,
+  inputMode,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+  disabled?: boolean;
+  isolate?: boolean;
+  inputMode?: "text" | "decimal" | "numeric" | "tel" | "email" | "search";
+  className?: string;
+}) {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+
+  return (
+    <FieldFrame
+      id={id}
+      label={label}
+      hint={hint}
+      hintId={hintId}
+      error={error}
+      errorId={errorId}
+      className={className}
+    >
+      <input
+        id={id}
+        type="text"
+        inputMode={inputMode}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(hint, hintId, error, errorId)}
+        {...(isolate
+          ? { dir: "ltr" as const, "data-numeric": "", style: { unicodeBidi: "isolate" as const } }
+          : {})}
+        className={`${CONTROL} ${borderFor(Boolean(error))}`}
+      />
+    </FieldFrame>
+  );
+}
+
 /**
  * A decimal field: a decimal string in, a decimal string out, never a `number`.
  *
@@ -216,43 +353,214 @@ export function ChoiceGroup({
  * must be numeric") is the thing the panel is meant to surface. Swallowing the
  * bad value locally means the person never learns which character was wrong.
  *
- * `dir="ltr"` and `data-numeric`, because a price is an identifier-shaped run of
- * digits and must not be reordered by the Arabic paragraph around it.
+ * `isolate`, because a price is an identifier-shaped run of digits and must not
+ * be reordered by the Arabic paragraph around it.
+ *
+ * `flex-1` is its own, not the frame's: the price band renders two of these side
+ * by side in a `flex-wrap` row and they have to share the width.
  */
-export function NumberField({
+export function NumberField(props: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+}) {
+  return <TextField {...props} isolate inputMode="decimal" className="flex-1" />;
+}
+
+/**
+ * A multi-line field.
+ *
+ * `counter` renders the length against its limit and is not decoration: the one
+ * caller in this branch is a COD call reason the API caps at 500 characters and
+ * refuses with a 400, so the limit has to be visible *before* the refusal rather
+ * than surfaced as one. `maxLength` is deliberately not set on the element — a
+ * hard cap silently truncates a paste and the person never learns why.
+ */
+export function TextArea({
   label,
   value,
   onChange,
   placeholder,
   hint,
+  error,
+  rows = 3,
+  counter,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;
   hint?: string;
+  error?: string;
+  rows?: number;
+  counter?: { length: number; limit: number; label: string };
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+
+  return (
+    <FieldFrame
+      id={id}
+      label={label}
+      hint={hint}
+      hintId={hintId}
+      error={error}
+      errorId={errorId}
+    >
+      <textarea
+        id={id}
+        rows={rows}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        dir="auto"
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(hint, hintId, error, errorId)}
+        className={`${CONTROL} ${borderFor(Boolean(error))}`}
+      />
+      {counter ? (
+        <p
+          className={`text-ui-caption ${
+            counter.length > counter.limit ? "text-ui-danger-fg" : "text-ui-subtle"
+          }`}
+        >
+          {/* A live region would announce on every keystroke. The limit is in the
+              hint above for a screen reader; this is the sighted person's gauge. */}
+          <span data-numeric="">{counter.label}</span>
+        </p>
+      ) : null}
+    </FieldFrame>
+  );
+}
+
+/**
+ * A single-select field — a real `<select>`.
+ *
+ * Not a Radix listbox, and that is a decision rather than an omission: a native
+ * select is the one control a phone renders as a full-screen wheel with the
+ * platform's own search, it needs no portal, no collision detection and no
+ * keyboard re-implementation, and at 340px it is the only picker that cannot
+ * open off the edge of the screen. `ChoiceGroup` above is what a *small* closed
+ * set uses; this is for the 69-row wilaya list.
+ */
+export function Select({
+  label,
+  value,
+  onChange,
+  options,
+  hint,
+  error,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  options: { value: string; label: string }[];
+  hint?: string;
+  error?: string;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+
+  return (
+    <FieldFrame
+      id={id}
+      label={label}
+      hint={hint}
+      hintId={hintId}
+      error={error}
+      errorId={errorId}
+    >
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(hint, hintId, error, errorId)}
+        className={`${CONTROL} cursor-pointer ${borderFor(Boolean(error))}`}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </FieldFrame>
+  );
+}
+
+/**
+ * A boolean, as a real `<input type="checkbox" role="switch">`.
+ *
+ * `role="switch"` rather than a bare checkbox because the two announce
+ * differently and mean differently: a checkbox is *include this*, a switch is
+ * *this is on now*. Cash on delivery being enabled on an order is a state, not a
+ * selection, and it writes immediately rather than on a submit.
+ *
+ * The input is stretched over the row at `opacity-0` with the track drawn beside
+ * it, the same arrangement `CheckRow` uses and for the same measured reason.
+ */
+export function Switch({
+  label,
+  checked,
+  onChange,
+  hint,
+  disabled = false,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  hint?: string;
+  disabled?: boolean;
 }) {
   const id = useId();
   const hintId = `${id}-hint`;
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-      <label htmlFor={id} className="text-ui-label text-ui-fg">
-        {label}
+    <div className="flex min-w-0 flex-col gap-1">
+      <label
+        className={`ui-interactive relative flex min-h-9 items-center gap-3 rounded-ui-md text-ui-compact text-ui-fg ${
+          disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+        }`}
+      >
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+          aria-describedby={hint ? hintId : undefined}
+          className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        />
+        <span className="min-w-0 flex-1">{label}</span>
+        <span
+          aria-hidden="true"
+          className={`ui-interactive ui-ring-peer flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 ${
+            checked
+              ? "justify-end border-ui-fg bg-ui-fg"
+              : "justify-start border-ui-line-control bg-ui-surface-2"
+          }`}
+        >
+          {/* `justify-*` rather than a translate, so the knob has one position per
+              state and nothing to animate to the wrong end in RTL. */}
+          <span
+            className={`size-4 rounded-full ${
+              checked ? "bg-ui-surface" : "bg-ui-line-control"
+            }`}
+          />
+        </span>
       </label>
-      <input
-        id={id}
-        type="text"
-        inputMode="decimal"
-        dir="ltr"
-        data-numeric=""
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        aria-describedby={hint ? hintId : undefined}
-        style={{ unicodeBidi: "isolate" }}
-        className="ui-ring ui-interactive min-h-9 w-full rounded-ui-md border border-ui-line-control bg-ui-surface px-2.5 text-start text-ui-body text-ui-fg outline-none placeholder:text-ui-subtle"
-      />
       {hint ? (
         <p id={hintId} className="text-ui-label text-ui-muted">
           {hint}
