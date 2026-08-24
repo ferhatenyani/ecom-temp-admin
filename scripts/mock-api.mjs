@@ -1529,9 +1529,16 @@ const NOTIFICATIONS = (() => {
  * which is the resolved figure a variable product reports.
  *
  * **The five `int()` draws happen here rather than in the inventory rows below,
- * and that is load-bearing.** They are the last five calls into the one shared
- * mulberry32; drawing them in this order at this point keeps every collection
- * above byte-identical to what the earlier branches were verified against.
+ * and that is load-bearing.** Drawing them in this order at this point keeps
+ * every collection above byte-identical to what the earlier branches were
+ * verified against.
+ *
+ * They used to be the *last* five calls into the one shared mulberry32. The
+ * movements ledger below now draws after them and nothing else in this file
+ * does, which is why it is built where it is: anywhere earlier and it would
+ * shift the sequence under every customer, all 633 orders and these five
+ * quantities. A new fixture that needs the PRNG goes **after** the ledger, not
+ * before it.
  */
 const INHERITED_STOCK_VARIATION = 9032;
 
@@ -1567,10 +1574,34 @@ const VARIATIONS = [...VARIATION_COUNTS.keys()].flatMap((parentIndex) => {
   });
 });
 
+/**
+ * The five variation bodies as they read **now**.
+ *
+ * `POST /inventory/{id}/adjust` moves a variation's shelf and `PATCH
+ * /inventory/{id}` changes whether it has one, so these are read through the
+ * write state for the same reason `catalogue()` is: a variations table and a
+ * stock row that disagreed about the same shelf would be two screens
+ * contradicting each other, which is the quiet wrongness this file exists not to
+ * produce.
+ */
+const variationRows = () => VARIATIONS.map((row) => state.variations.get(row.id) ?? row);
+
 const variationsOf = (product) =>
-  VARIATIONS.filter((variation) => variation.parent_id === product.id);
+  variationRows().filter((variation) => variation.parent_id === product.id);
 
 /* -------------------------------------------------------------- inventory --- */
+
+/**
+ * WooCommerce's store-wide low-stock threshold — the number a row falls back to
+ * when its own `low_stock_amount` is cleared.
+ *
+ * `PATCH /inventory/{id} {low_stock_amount: null}` therefore reads back as this
+ * figure and **never as null**: `wc_get_low_stock_amount()` resolves the global
+ * default and the presenter publishes the *effective* threshold, which is the
+ * one the row's quantity is actually judged against. A mock that echoed the null
+ * back would let a screen render an empty field where the shop shows a number.
+ */
+const STORE_LOW_STOCK_AMOUNT = 2;
 
 /**
  * Every listed product plus the 5 variations the two variable products carry.
@@ -1604,7 +1635,7 @@ function inventoryRows() {
         low_stock: product.stock_quantity !== null && product.stock_quantity <= threshold,
       };
     }),
-    ...VARIATIONS.map((variation) => {
+    ...variationRows().map((variation) => {
       const parent = productById(variation.parent_id);
       const slot = parent.variations.indexOf(variation.id);
       // A variation that manages no stock of its own is stocked *by its parent*,
@@ -1613,6 +1644,27 @@ function inventoryRows() {
       const quantity = variation.manage_stock
         ? variation.stock_quantity
         : parent.stock_quantity;
+      /*
+       * ── The one row that reports the string ──────────────────────────────
+       *
+       * `manage_stock` is `true`, `false`, or the **string `"parent"`** for a
+       * variation inheriting its parent's shelf — `z.union([z.boolean(),
+       * z.literal("parent")])` in lib/api/schemas/inventory.ts, and until now no
+       * fixture in this file had ever produced the third case, so that branch of
+       * the union had never been parsed from this mock at all.
+       *
+       * It is emitted **here and not on the variation body**: the product
+       * schema's `variation.manage_stock` is a plain `z.boolean()`, because
+       * `/products/{id}/variations` is WooCommerce's own payload while this is
+       * `InventoryPresenter`'s. Publishing the string on both would make the
+       * variations table fail at the panel's boundary against a shape the real
+       * API never sends.
+       *
+       * `managing_stock` stays `false` beside it, which is the pair the schema's
+       * docblock describes: the raw value and the plain yes/no disagreeing on
+       * purpose. `canAdjust()` reads the second and refuses the row.
+       */
+      const inherits = !variation.manage_stock && variation.id === INHERITED_STOCK_VARIATION;
       return {
         id: variation.id,
         parent_id: parent.id,
@@ -1621,7 +1673,7 @@ function inventoryRows() {
         // `""` is possible: a variation need carry no SKU of its own, and the
         // row must render without inventing the parent's.
         sku: variation.sku,
-        manage_stock: variation.manage_stock,
+        manage_stock: inherits ? "parent" : variation.manage_stock,
         managing_stock: variation.manage_stock,
         stock_managed_by_id: variation.manage_stock ? variation.id : parent.id,
         stock_quantity: quantity,
@@ -1631,8 +1683,270 @@ function inventoryRows() {
         low_stock: quantity !== null && quantity <= 2,
       };
     }),
-  ];
+  ].map(withStockSettings);
 }
+
+/**
+ * The two fields `PATCH /inventory/{id}` owns that exist nowhere else in this
+ * file: a product row carries no `backorders` and no threshold of its own, so
+ * both are computed by `inventoryRows()` above and a write to either has to live
+ * beside the row rather than in it.
+ *
+ * `low_stock` is recomputed rather than carried over, because it is derived from
+ * the very number a write to `low_stock_amount` changes — a row reporting a
+ * threshold of 40 and `low_stock: false` over a quantity of 25 would be a row
+ * arguing with itself.
+ */
+function withStockSettings(row) {
+  const written = state.stockSettings.get(row.id);
+  if (written === undefined) return row;
+  const next = { ...row, ...written };
+  next.low_stock = next.stock_quantity !== null && next.stock_quantity <= next.low_stock_amount;
+  return next;
+}
+
+/* ------------------------------------------------------------- the ledger --- */
+
+/**
+ * ── A ledger is an archive and a catalogue is not ────────────────────────────
+ *
+ * **Most of the ledger's `product_id`s do not exist in `/inventory`, and that is
+ * the single most load-bearing fact about this collection.** Measured: 1154
+ * movements name **155 distinct product ids and only 23 of them appear in
+ * `/inventory` at all** — the rest were created and deleted by the backend's own
+ * fixture suites, and the rows they moved stayed, because a stock ledger that
+ * forgot a movement when its product was deleted would no longer be a ledger.
+ *
+ * That is what makes tapping a row a real path to a 404, which is why
+ * `app/[locale]/(panel)/inventory/[id]/not-found.tsx` is a built screen rather
+ * than a defensive branch nobody has seen. A fixture set whose every movement
+ * resolved would leave that screen unreachable and the row's refusal to invent a
+ * name looking like laziness.
+ *
+ * The 23 are written out rather than sliced off `inventoryRows()`, on the same
+ * rule as the two refusal tables in this file: a literal that stops matching
+ * fails a test, while a `slice()` moves quietly and takes the meaning with it.
+ * They are all rows that manage their own stock, so `?product_id=` on any of
+ * them is a filter with something behind it.
+ */
+const LEDGER_CATALOGUE_IDS = [
+  101, 102, 104, 105, 107, 108, 109, 111, 112, 113, 115, 116,
+  117, 119, 120, 122, 123, 124, 126, 127, 201, 207, 9030,
+];
+
+/** The deleted ones. 3000–3131 collides with no id anywhere else in this file. */
+const LEDGER_ARCHIVE_BASE = 3000;
+const LEDGER_ARCHIVE_COUNT = 132;
+
+const LEDGER_PRODUCT_IDS = [
+  ...LEDGER_CATALOGUE_IDS,
+  ...Array.from({ length: LEDGER_ARCHIVE_COUNT }, (_, i) => LEDGER_ARCHIVE_BASE + i),
+];
+
+const MOVEMENT_COUNT = 1154;
+
+/** Above every other id in this file, and descending with age: the newest row
+    is `61154` and the oldest is `60001`, so an id sorts the way the list does. */
+const MOVEMENT_ID_BASE = 60_000;
+
+/**
+ * ── The distribution, which is the point of not generating a uniform one ─────
+ *
+ * A ledger with the same number of rows under each of nine reasons would make
+ * every decision the screen makes look arbitrary. Measured 2026-08-18:
+ *
+ *   order_reduced    480 of 1154 — the commonest row by far, which is why
+ *                    `REASON_TONE` marks it `neutral`: tinting the shop working
+ *                    correctly in red leaves nothing to notice `damage` by
+ *   correction       166, and −1540 net over them
+ *   customer_return  **0**, and `other` **0** — both are reasons a person may
+ *                    write and neither has ever been written here, which is
+ *                    exactly why `/movements/summary` omits them and why the
+ *                    panel's legend is built from `ALL_REASONS` instead
+ *
+ * The other four are shaped rather than measured — nothing published a figure
+ * for `restock`, `damage`, `loss` or `product_edit` — and they are chosen to sum
+ * to 1154 with the two that were. Flagged rather than presented as measurement.
+ *
+ * **`order_reduced` + `order_restored` is 692, which is the measured count of
+ * rows carrying `order_id > 0`, and that is not a coincidence to tidy away.** An
+ * order id is on an order-driven row and on nothing else, which is what makes
+ * `movementActor()`'s first branch — *an order did this, and here is its number*
+ * — cover exactly those 692 rows and no others.
+ */
+const REASON_PLAN = [
+  ["order_reduced", 480],
+  ["order_restored", 212],
+  ["correction", 166],
+  ["product_edit", 130],
+  ["restock", 96],
+  ["damage", 40],
+  ["loss", 30],
+];
+
+/** The two the shop writes from an order, and the only two carrying an order id. */
+const LEDGER_ORDER_REASONS = ["order_reduced", "order_restored"];
+
+/**
+ * Which way a reason moves the shelf. `correction` and `product_edit` are absent
+ * because they genuinely go both ways — a correction is as often a phantom unit
+ * removed as one found — and the sign is drawn for them instead.
+ */
+const MOVEMENT_SIGN = {
+  order_reduced: -1,
+  order_restored: 1,
+  restock: 1,
+  damage: -1,
+  loss: -1,
+};
+
+/**
+ * **16 rows carry the harness identity's own id**, which is what makes the
+ * ledger's "mine only" filter a filter with something behind it: `?actor_id=` is
+ * the one identity pivot the panel can honestly offer, because a movement's
+ * actor cannot be resolved to a *name* by three of the four roles that can read
+ * the ledger (lib/inventory.ts:127-158 has the table).
+ *
+ * The 16 is lib/inventory.ts's figure. ADMIN_PANEL.md:1795 says 17 for the same
+ * measurement; the two disagree by one and nothing here can settle it, so the
+ * panel's own file wins and the disagreement is written down rather than picked
+ * silently.
+ *
+ * They land only on rows a *person* wrote. An order-driven row's `actor_id` is
+ * whoever happened to be signed in when the status changed — for a storefront
+ * checkout, the customer — so putting the reader's own id on one would make
+ * "my movements" return rows they had nothing to do with.
+ */
+const MINE_MOVEMENTS = 16;
+
+/**
+ * `actor_id: 0` — what the ledger stores when no user was signed in at all: a
+ * CLI import, a cron-driven restock, a guest checkout. `movementActor()` renders
+ * it as *unknown*, which is a fourth answer and not a missing one.
+ */
+const ANONYMOUS_MOVEMENTS = 120;
+
+/** Other staff accounts. `movementActor()` renders any of these as *a colleague*. */
+const COLLEAGUE_ACTORS = [470, 475, 488];
+
+/**
+ * **1140 of the 1154 rows carry `note: ""`.** Measured, and it is the reason the
+ * ledger row cannot be laid out around a note: a list that reserved a line for
+ * one would be 99 % whitespace.
+ *
+ * Fourteen carry one, including a long unbroken French sentence, so the 340px
+ * overflow assertion has something to catch on this collection too.
+ */
+const MOVEMENT_NOTES = [
+  "Inventaire trimestriel, écart constaté en rayon.",
+  "Carton reçu du fournisseur, deux pièces cassées.",
+  "Retour client, article remis en stock.",
+  "Erreur de saisie corrigée après vérification physique.",
+  "Casse pendant le transport.",
+  "Réajustement après inventaire tournant du dépôt de Rouiba, comptage contradictoire effectué par deux préparateurs et validé par le responsable.",
+  "Perte constatée, dossier ouvert.",
+  "Réception partielle.",
+  "Écart de comptage, à revoir.",
+  "Article retrouvé en réserve.",
+  "Démarque inconnue.",
+  "Correction après litige transporteur.",
+  "Stock initial repris de l'ancien système.",
+  "Palette reconditionnée.",
+];
+
+/**
+ * ── The ledger itself ────────────────────────────────────────────────────────
+ *
+ * **The invariant `quantity_before + delta === quantity_after` holds on every
+ * row, by construction rather than by check.** The backend enforces it where the
+ * movement is built, which is what lets the panel render a row as an arrow
+ * between two numbers instead of a delta the reader has to apply — so a fixture
+ * that could produce a row where the three disagree would make that rendering a
+ * lie the harness could not see.
+ *
+ * `quantity_before` is chosen *from* the delta on a negative move so the shelf
+ * never goes below zero in the archive. That is a shaping decision, not a
+ * measurement: WooCommerce will happily store a negative quantity on a product
+ * that takes backorders.
+ *
+ * `created_at` is `stamp()` — **no UTC offset** — exactly like an order note's
+ * and unlike its `date_created`. `parseApiDate()` is the only thing that may
+ * touch it, and a mock that emitted ISO here would let a screen drop that call
+ * and still look right.
+ *
+ * The rows are newest first, which is `created_at DESC` and the order the API
+ * serves. Roughly thirteen minutes apart, so 1154 rows span about ten days and a
+ * `date_from`/`date_to` window has something real to cut. **The per-day figures
+ * ADMIN_PANEL.md:1857 quotes — 15 corrections "today" against 166 unfiltered —
+ * are not reproduced**: they were measured on a shop whose ledger runs over a
+ * different span, and stretching this one to hit them would be inventing a shape
+ * to match a number.
+ */
+const MOVEMENTS = (() => {
+  const reasons = shuffled(
+    REASON_PLAN.flatMap(([reason, count]) => Array.from({ length: count }, () => reason)),
+  );
+
+  /*
+   * Every one of the 155 ids appears at least once — the pool is seeded with one
+   * of each and the remaining 999 rows are drawn from it — so "155 distinct
+   * products" is a property of the fixture rather than a probability that a
+   * seeded PRNG happened to satisfy.
+   */
+  const products = shuffled([
+    ...LEDGER_PRODUCT_IDS,
+    ...Array.from({ length: MOVEMENT_COUNT - LEDGER_PRODUCT_IDS.length }, () =>
+      LEDGER_PRODUCT_IDS[int(0, LEDGER_PRODUCT_IDS.length - 1)],
+    ),
+  ]);
+
+  const notes = shuffled([
+    ...MOVEMENT_NOTES,
+    ...Array.from({ length: MOVEMENT_COUNT - MOVEMENT_NOTES.length }, () => ""),
+  ]);
+
+  const everyIndex = Array.from({ length: MOVEMENT_COUNT }, (_, index) => index);
+  const mine = new Set(
+    shuffled(everyIndex.filter((index) => !LEDGER_ORDER_REASONS.includes(reasons[index]))).slice(
+      0,
+      MINE_MOVEMENTS,
+    ),
+  );
+  const anonymous = new Set(
+    shuffled(everyIndex.filter((index) => !mine.has(index))).slice(0, ANONYMOUS_MOVEMENTS),
+  );
+
+  let minutes = 3;
+  return reasons.map((reason, index) => {
+    minutes += int(4, 22);
+
+    const ordered = LEDGER_ORDER_REASONS.includes(reason);
+    const sign = MOVEMENT_SIGN[reason] ?? (int(0, 3) === 0 ? 1 : -1);
+    const delta = sign * (ordered ? int(1, 3) : int(1, 12));
+    // Never below zero in the archive: the floor is chosen from the delta.
+    const before = delta < 0 ? -delta + int(0, 48) : int(0, 60);
+
+    return {
+      id: MOVEMENT_ID_BASE + MOVEMENT_COUNT - index,
+      product_id: products[index],
+      delta,
+      quantity_before: before,
+      quantity_after: before + delta,
+      reason,
+      note: notes[index],
+      order_id: ordered ? ORDERS[int(0, ORDER_COUNT - 1)].id : 0,
+      actor_id: mine.has(index)
+        ? IDENTITY.id
+        : anonymous.has(index)
+          ? 0
+          : COLLEAGUE_ACTORS[index % COLLEAGUE_ACTORS.length],
+      created_at: stamp(minutes),
+    };
+  });
+})();
+
+/** The archive plus whatever this process has adjusted, newest first. */
+const allMovements = () => [...state.movements, ...MOVEMENTS];
 
 /* ---------------------------------------------------------------- coupons --- */
 
@@ -1801,12 +2115,20 @@ function restrictionsFor(coupon) {
  *
  * Reproduced rather than tidied up. A mock that emitted ISO here would let a
  * screen drop `parseApiDate()` and still look right against the harness.
+ *
+ * **A movement's `created_at` is the same notation**, measured on the same day —
+ * lib/api/schemas/inventory.ts:83-86 records it — which is why this is a hoisted
+ * `function` rather than the `const` arrow it used to be: the ledger is built
+ * some six hundred lines above this point and a `const` would be in its temporal
+ * dead zone. Moving the declaration up instead would have moved this paragraph
+ * away from the two notations it is contrasted with.
  */
-const stamp = (minutesAgo) =>
-  new Date(EPOCH - minutesAgo * 60_000)
+function stamp(minutesAgo) {
+  return new Date(EPOCH - minutesAgo * 60_000)
     .toISOString()
     .replace("T", " ")
     .replace(/\.\d{3}Z$/, "");
+}
 
 /**
  * And a third notation, because there are three. A shipment's `created_at` ends
@@ -2264,6 +2586,24 @@ const state = {
   products: new Map(),
   /** Force-deleted product ids. A permanent delete is the one thing that 404s. */
   gone: new Set(),
+  /**
+   * Variation id → the whole body as it reads now. An adjustment moves a
+   * variation's own shelf and `PATCH /inventory/{id}` decides whether it has
+   * one, and neither of those goes through `state.products`.
+   */
+  variations: new Map(),
+  /**
+   * Inventory id → `{backorders?, low_stock_amount?}`.
+   *
+   * The two settings that live on **neither** a product body nor a variation
+   * body: `inventoryRows()` computes both, so a write to either has to be kept
+   * beside the row. Keyed by the inventory id, which is the product id for a
+   * top-level row and the variation id for a variation.
+   */
+  stockSettings: new Map(),
+  /** Movements this process has written, newest first. Prepended to the archive. */
+  movements: [],
+  nextMovementId: 0,
 };
 
 export function resetState() {
@@ -2275,6 +2615,12 @@ export function resetState() {
   state.nextShipmentId = 7100;
   state.products = new Map();
   state.gone = new Set();
+  state.variations = new Map();
+  state.stockSettings = new Map();
+  state.movements = [];
+  // Above the 1154 seeded ids, and the same figure in every process, which is
+  // what keeps a screenshot of a written movement byte-stable.
+  state.nextMovementId = MOVEMENT_ID_BASE + MOVEMENT_COUNT + 46;
 }
 
 resetState();
@@ -3689,6 +4035,628 @@ function notificationsListing(params) {
   return page.error ?? ok(page.rows, page.meta);
 }
 
+/* ------------------------------------------------------ inventory queries --- */
+
+/**
+ * ── What `GET /inventory` honours, and what it accepts and ignores ───────────
+ *
+ * Both halves are the shape of the stock screen and both are reproduced.
+ * Measured 2026-08-18, one parameter at a time:
+ *
+ *   search             honoured
+ *   stock_status       honoured, and refused by name outside its three —
+ *                      `?stock_status=zzz` is a **400**
+ *   manage_stock       honoured, and **three-state: absent is not `false`**.
+ *                      `""` returns everything, `false` returns the rows that
+ *                      track nothing. A control that conflated them would stop
+ *                      filtering and say nothing about it, which is the same
+ *                      trap `on_sale` sets on `/products`
+ *   include_variations honoured, and **defaults to false**
+ *   page, per_page     honoured, and `per_page=101` is a 400 rather than a clamp
+ *
+ *   sku, status,       ACCEPTED AND IGNORED. ADMIN_PANEL.md:1701 lists them as
+ *   category,          parameters this route takes and **nothing measured says
+ *   orderby, order     any of them does anything**, so nothing here reads them.
+ *                      The panel sends none of the five. Reading them would be
+ *                      this file manufacturing a capability rather than
+ *                      reproducing one — and `orderby`/`order` are the header's
+ *                      own rule besides.
+ *
+ * And `?nonsense=zzz` is a 200 with every row, which is the difference that
+ * makes the first list worth having: an unknown *name* is silent, a known name
+ * with a bad value refuses, and a screen can therefore hear about one and never
+ * about the other.
+ *
+ * **The default on `include_variations` is the branch's largest correction to
+ * the spec's shorthand.** With it off the list is 38 rows here and with it on it
+ * is 43 — the shop's own 28-against-33 — while `/inventory/low-stock` *always*
+ * includes variations. So the default screen shows "Burnous en laine tissé main
+ * — L" and the full list, on the same shorthand, says that row does not exist.
+ * Reproducing the default is what makes that difference capturable at all.
+ */
+function inventoryListing(params) {
+  const rows = filterInventory(inventoryRows(), params);
+  if (rows.error) return rows.error;
+
+  const page = paginate(rows.rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+function filterInventory(rows, params) {
+  const raw = params.get("include_variations");
+  let includeVariations = false;
+  if (raw !== null && raw !== "") {
+    if (!BOOLEANS.has(raw)) {
+      return { error: invalidParam("include_variations", "include_variations is not of type boolean.") };
+    }
+    includeVariations = BOOLEANS.get(raw);
+  }
+
+  const stockStatus = params.get("stock_status");
+  if (stockStatus !== null && stockStatus !== "" && !STOCK_STATUSES.includes(stockStatus)) {
+    return {
+      error: invalidParam(
+        "stock_status",
+        `stock_status is not one of ${oxford([...STOCK_STATUSES].sort())}`,
+      ),
+    };
+  }
+
+  /*
+   * Filtered on `managing_stock` rather than on the raw `manage_stock`, and the
+   * two agree on every row in this shop — including the delegated one, where the
+   * raw value is the string `"parent"` and WooCommerce's own
+   * `wc_string_to_bool()` reads that as false. **Which of the two the API
+   * actually filters on was not measured**, and it is written here rather than
+   * left in the code because a shop where they diverge would settle it.
+   */
+  const manageStock = params.get("manage_stock");
+  let tracking = null;
+  if (manageStock !== null && manageStock !== "") {
+    if (!BOOLEANS.has(manageStock)) {
+      return { error: invalidParam("manage_stock", "manage_stock is not of type boolean.") };
+    }
+    tracking = BOOLEANS.get(manageStock);
+  }
+
+  /*
+   * Name and SKU, folded — the fields `/products` was measured to search and the
+   * same repository behind both. **Which fields this route searches was not
+   * measured separately**, and the customers collection is why that sentence is
+   * here rather than assumed: three branches shipped with a search that matched
+   * two fields the API has never matched.
+   */
+  const term = fold((params.get("search") ?? "").trim());
+
+  return {
+    rows: rows.filter((row) => {
+      if (!includeVariations && row.parent_id !== 0) return false;
+      if (stockStatus !== null && stockStatus !== "" && row.stock_status !== stockStatus) {
+        return false;
+      }
+      if (tracking !== null && row.managing_stock !== tracking) return false;
+      if (term !== "" && !fold(`${row.name} ${row.sku}`).includes(term)) return false;
+      return true;
+    }),
+  };
+}
+
+/**
+ * `GET /inventory/lookup?sku=`, and the **three** answers it has.
+ *
+ * A hit is the same item shape as the other three inventory routes. A miss is
+ * `404 not_found` — *not* `rest_no_route`, which is what an unrouted path
+ * answers — and `SkuLookup` reads that code by name to tell "no such SKU" from
+ * "the request went nowhere", rendering the first as an empty state at the field
+ * and keeping the typed value.
+ *
+ * **A missing `sku` is a 400 whose `details.params` is an *array of names*
+ * rather than an object of messages**, and nothing in this repository had ever
+ * exercised that shape. It is the one endpoint measured to produce it:
+ * `{"params": ["sku"]}`. `Object.values` of an array returns its elements, so a
+ * reader written for the object shape renders the bare word `sku` at a person in
+ * a stockroom as though it were an explanation — which is the defect
+ * lib/api/browser.ts:81-95 exists to prevent and `inventory/query.ts:253-276`
+ * handles by falling through to the generic message.
+ *
+ * The match is exact and case-sensitive. `?sku=AC/BUR 010` is a 404 and nothing
+ * fuzzy exists, which is why the field searches on submit rather than debouncing
+ * — every keystroke before the last one is a request that can only 404.
+ * MySQL's collation would fold case on an `=` comparison and this does not;
+ * that is the *less* capable direction on purpose, and the field uppercases
+ * anyway.
+ */
+function inventoryLookup(params) {
+  const sku = (params.get("sku") ?? "").trim();
+  if (sku === "") {
+    return fail(400, "rest_missing_callback_param", "Missing parameter(s): sku", {
+      params: ["sku"],
+    });
+  }
+
+  // `sku: ""` is a real value on two variations and must never be a hit: an
+  // empty query is a missing parameter, not a search for the blank ones.
+  const row = inventoryRows().find((candidate) => candidate.sku !== "" && candidate.sku === sku);
+  return row === undefined
+    ? fail(404, "not_found", "No product was found with that SKU.")
+    : ok(row);
+}
+
+/* ------------------------------------------------------------ the ledger --- */
+
+/** The union of nine — every reason the ledger can *contain*. `zzz` is a 400. */
+const MOVEMENT_REASONS = [
+  "correction",
+  "restock",
+  "damage",
+  "loss",
+  "customer_return",
+  "other",
+  "order_reduced",
+  "order_restored",
+  "product_edit",
+];
+
+/** The six a *person* may write. `POST /adjust` refuses the other three. */
+const MANUAL_REASONS = ["correction", "restock", "damage", "loss", "customer_return", "other"];
+
+/**
+ * The window both ledger routes share, and the only filter the summary honours.
+ *
+ * `YYYY-MM-DD`, UTC, whole days at both ends and both inclusive — `?date_from=
+ * yesterday` is a 400. Compared as a string prefix of `created_at`, which works
+ * precisely because that stamp has no offset to strip first.
+ */
+function movementWindow(params) {
+  for (const name of ["date_from", "date_to"]) {
+    const value = params.get(name);
+    if (value !== null && value !== "" && !YMD.test(value)) {
+      return { error: invalidParam(name, `${name} is not a valid date`) };
+    }
+  }
+
+  const from = params.get("date_from");
+  const to = params.get("date_to");
+  return {
+    rows: allMovements().filter((row) => {
+      const day = row.created_at.slice(0, 10);
+      if (from !== null && from !== "" && day < from) return false;
+      if (to !== null && to !== "" && day > to) return false;
+      return true;
+    }),
+  };
+}
+
+/**
+ * `GET /inventory/movements`.
+ *
+ * `reason` takes all nine — the ledger is *read* in full even though only six
+ * may be written, and `?reason=order_reduced` is 480 of the 1154 rows — and
+ * refuses a tenth by name.
+ *
+ * `product_id` and `actor_id` are matched and **not validated**: a value that is
+ * not an id answers 200 with zero rows rather than a 400. Nothing measured says
+ * either refuses, the panel sends `\d+` or nothing, and inventing a refusal is
+ * how a screen ends up built against a 400 the shop never sends.
+ */
+function movementsListing(params) {
+  const reason = params.get("reason");
+  if (reason !== null && reason !== "" && !MOVEMENT_REASONS.includes(reason)) {
+    return invalidParam("reason", `reason is not one of ${oxford([...MOVEMENT_REASONS].sort())}`);
+  }
+
+  const windowed = movementWindow(params);
+  if (windowed.error) return windowed.error;
+
+  const productId = params.get("product_id");
+  const actorId = params.get("actor_id");
+
+  const rows = windowed.rows.filter((row) => {
+    if (reason !== null && reason !== "" && row.reason !== reason) return false;
+    if (productId !== null && productId !== "" && String(row.product_id) !== productId) return false;
+    if (actorId !== null && actorId !== "" && String(row.actor_id) !== actorId) return false;
+    return true;
+  });
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/**
+ * `GET /inventory/movements/summary` — **an object keyed by reason, not a list**,
+ * and therefore no `meta` either.
+ *
+ * **It omits every reason with no rows**, which is the whole reason the panel
+ * builds its filter from `ALL_REASONS` and takes only the counts from here: two
+ * of the six a person may choose — `customer_return` and `other` — have never
+ * been written in this shop, so a picker built from this response would offer
+ * seven reasons, three of which answer 400, and would be missing two a person
+ * can create at any moment. Neither response is a vocabulary: one is a set of
+ * permissions and the other is a set of counts.
+ *
+ * **Only the date window is honoured**, and that is the measured half —
+ * ADMIN_PANEL.md:1856 says the route takes `date_from`/`date_to` and that the
+ * window is real. `summaryParams()` in the panel sends `reason`, `product_id`
+ * and `actor_id` too, because it is the ledger's request minus its pagination,
+ * and **nothing measured says the summary reads any of them**. They are accepted
+ * and ignored here rather than honoured on a guess: a mock that narrowed on them
+ * and an API that did not would leave the strip disagreeing with itself in
+ * production only. Flagged, because it is the one place on this collection where
+ * the safe direction is also the surprising one.
+ */
+function movementsSummary(params) {
+  const windowed = movementWindow(params);
+  if (windowed.error) return windowed.error;
+
+  const summary = {};
+  for (const row of windowed.rows) {
+    const entry = summary[row.reason] ?? { net: 0, movements: 0 };
+    entry.net += row.delta;
+    entry.movements += 1;
+    summary[row.reason] = entry;
+  }
+  return ok(summary);
+}
+
+/* ------------------------------------------------------- the stock writes --- */
+
+/*
+ * ── Which inventory id produces which refusal ────────────────────────────────
+ *
+ * The third table in this file, on the same rule as the other two: a screen
+ * cannot be verified against a state it can never reach, and every id below is
+ * written out because a literal that stops matching fails a test while a
+ * `find()` moves quietly and takes the table's meaning with it.
+ *
+ *   id    request                                    answer
+ *   ────  ─────────────────────────────────────────  ──────────────────────────
+ *   101   POST /adjust {increase, 3, restock}        200 {item, movement} — and
+ *                                                    the movement carries **no
+ *                                                    `id`**, unlike the ledger's
+ *   101   POST /adjust {decrease, 99, loss}          409 {stock_quantity,
+ *                                                    projected: −74, backorders:
+ *                                                    "no"} — refused, never
+ *                                                    clamped
+ *   103   POST /adjust {increase, 1, restock}        409 {id, manage_stock:
+ *                                                    false} — tracks no stock
+ *   9032  POST /adjust {increase, 1, restock}        409 {id, manage_stock:
+ *                                                    **"parent"**} — the shelf
+ *                                                    is 104's
+ *   9030  POST /adjust {decrease, 40, damage}        **200** — `backorders` is
+ *                                                    "notify", so below zero is
+ *                                                    a legal shelf
+ *   101   POST /adjust {}                            400 fields{mode, quantity,
+ *                                                    reason} — three at once
+ *   101   POST /adjust {…, reason:"order_reduced"}   400 fields{reason} — the
+ *                                                    *same* sentence an unknown
+ *                                                    reason gets, deliberately
+ *   101   POST /adjust {…, nonsense: 1}              400 fields{nonsense}
+ *   101   PATCH {low_stock_amount: null}             200 — reads back as 2, the
+ *                                                    store-wide default
+ *   101   PATCH {stock_quantity: 9}                  400 fields{stock_quantity}
+ *                                                    naming the adjust route
+ *   9032  PATCH {manage_stock: "parent"}             **200 and destructive** —
+ *                                                    see `patchInventory()`
+ *   101   PATCH {id: 101}                            400, **no `details` at all**
+ *
+ * 101 is "Miel de jujubier", the one row in the shop whose `low_stock_amount` is
+ * 5 rather than 2. 103 is one of the eight that manage no stock. 9030 is the
+ * slot-0 variation, which is the only kind of row carrying `backorders:
+ * "notify"`. 9032 is the delegated one.
+ */
+
+const ADJUST_MODES = ["set", "increase", "decrease"];
+const ADJUST_FIELDS = ["mode", "quantity", "reason", "note"];
+
+/**
+ * `POST /inventory/{id}/adjust`.
+ *
+ * The gates, in the order the API applies them, so the reason on screen is the
+ * reason the server would have given:
+ *
+ *   1. every bad field at once   400 `details.fields` — an empty body names
+ *                                three, because the form renders one message per
+ *                                control and a 400 naming only the first would
+ *                                hide the rest
+ *   2. the row tracks nothing    409 {id, manage_stock}
+ *   3. below zero, no backorders 409 {stock_quantity, projected, backorders}
+ *
+ * **The body is exactly four fields and an unknown one is a 400**, which is why
+ * `AdjustForm` sends a named payload rather than a spread — `note` is omitted
+ * entirely when it is blank rather than sent as `""`.
+ *
+ * **The three system reasons are refused with the same sentence as an unknown
+ * one**, on purpose: a caller must not be able to probe which forgeries exist by
+ * reading the difference between two messages.
+ *
+ * The response is `{item, movement}` and **the movement omits `id`** — it is
+ * `InventoryMovement::toArray()`, where the ledger's own rows are the stored
+ * records. `adjustResult` in the panel's schema is `movement.omit({id: true})`
+ * for exactly this, and because both schemas are loose an `id` that leaked in
+ * here would parse silently, so the test asserts the absence rather than
+ * inferring it from a parse.
+ */
+function adjustStock(row, body) {
+  const fields = {};
+
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return invalidBody("Invalid parameter(s): mode, quantity, reason", {
+      mode: `Must be one of: ${ADJUST_MODES.join(", ")}.`,
+      quantity: "Must be a whole number.",
+      reason: `Must be one of: ${MANUAL_REASONS.join(", ")}.`,
+    });
+  }
+
+  for (const key of Object.keys(body)) {
+    if (!ADJUST_FIELDS.includes(key)) fields[key] = "Unknown field.";
+  }
+
+  const mode = body.mode;
+  if (typeof mode !== "string" || !ADJUST_MODES.includes(mode)) {
+    fields.mode = `Must be one of: ${ADJUST_MODES.join(", ")}.`;
+  }
+
+  const quantity = body.quantity;
+  if (typeof quantity !== "number" || !Number.isInteger(quantity)) {
+    fields.quantity = "Must be a whole number.";
+  } else if (quantity < 0) {
+    fields.quantity = "Cannot be negative.";
+    // A zero-magnitude relative move is a no-op that would still write a ledger
+    // row, so it is refused for the two relative modes and allowed for `set` —
+    // setting a shelf to zero is a real thing to record. `quantityProblem()` in
+    // lib/movement-reason.ts is the field's copy of this rule.
+  } else if (quantity === 0 && mode !== "set") {
+    fields.quantity = "Must be greater than zero.";
+  }
+
+  if (typeof body.reason !== "string" || !MANUAL_REASONS.includes(body.reason)) {
+    fields.reason = `Must be one of: ${MANUAL_REASONS.join(", ")}.`;
+  }
+
+  if ("note" in body && (typeof body.note !== "string" || body.note.length > 500)) {
+    fields.note = "note must be a string of 500 characters or fewer.";
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+  }
+
+  /*
+   * `managing_stock`, not `manage_stock` — the raw value is the string
+   * `"parent"` on the one row where the two disagree, and it is *that* value the
+   * refusal publishes, because it is the fact the reader needs: the shelf is
+   * somewhere else. `adjustTarget()` in the panel is what avoids this gate.
+   */
+  if (!row.managing_stock) {
+    return conflict("This product does not manage stock.", {
+      id: row.id,
+      manage_stock: row.manage_stock,
+    });
+  }
+
+  const before = row.stock_quantity ?? 0;
+  const projected =
+    mode === "increase" ? before + quantity : mode === "decrease" ? before - quantity : quantity;
+
+  /*
+   * **Refused, never clamped**, and `projected` is the number the screen renders
+   * — it is the thing the person has to change, and a 409 that only said "too
+   * many" would leave them doing the subtraction that the preview line exists to
+   * spare them. A row whose `backorders` is anything but "no" takes the move and
+   * the shelf really does go negative, which is the state a clamping mock could
+   * never produce.
+   */
+  if (projected < 0 && row.backorders === "no") {
+    return conflict("This adjustment would take stock below zero.", {
+      stock_quantity: before,
+      projected,
+      backorders: row.backorders,
+    });
+  }
+
+  writeStock(row, projected);
+
+  const movement = {
+    id: state.nextMovementId++,
+    // The id whose shelf moved. It is this row, because a row that delegates was
+    // refused two gates above.
+    product_id: row.id,
+    delta: projected - before,
+    quantity_before: before,
+    quantity_after: projected,
+    reason: body.reason,
+    note: typeof body.note === "string" ? body.note : "",
+    // A manual adjustment has no order behind it. `movementActor()` therefore
+    // renders it as *you*, which is the whole point of the reader's own id here.
+    order_id: 0,
+    actor_id: IDENTITY.id,
+    // The fixture epoch, because there is no clock in this file. Every movement
+    // a process writes carries the same stamp, which is the price of a
+    // byte-stable screenshot.
+    created_at: stamp(0),
+  };
+  state.movements = [movement, ...state.movements];
+
+  const written = { ...movement };
+  delete written.id;
+
+  const item = inventoryRows().find((candidate) => candidate.id === row.id);
+  return ok({ item, movement: written });
+}
+
+/**
+ * The new quantity, onto whichever body actually holds it.
+ *
+ * `stock_status` is recomputed rather than left behind: WooCommerce's own
+ * `wc_update_product_stock_status()` derives it, and a row reporting `instock`
+ * over a quantity of zero is a row arguing with itself. `onbackorder` is
+ * reachable only through here and only on a row that takes backorders, which is
+ * the one path in this file that produces the third value of that enum.
+ */
+function writeStock(row, quantity) {
+  const status = quantity > 0 ? "instock" : row.backorders === "no" ? "outofstock" : "onbackorder";
+
+  if (row.parent_id === 0) {
+    const current = productById(row.id);
+    state.products.set(row.id, { ...current, stock_quantity: quantity, stock_status: status });
+    return;
+  }
+  const current = variationRows().find((candidate) => candidate.id === row.id);
+  state.variations.set(row.id, { ...current, stock_quantity: quantity, stock_status: status });
+}
+
+/**
+ * ── `PATCH /inventory/{id}`, and the most dangerous thing on this subject ────
+ *
+ * **It is absent from the route list that scoped this section** —
+ * ADMIN_PANEL.md:1669 names eight endpoints and this is not one of them, which
+ * is corrected in the build's own note four lines below it. The `PATCH`/`POST`
+ * split is not decoration: settings come here and the *quantity* does not, which
+ * is what guarantees the movement ledger has no gaps.
+ *
+ * So `stock_quantity` is a **400 that names the adjust route**. It is also the
+ * only refusal `ItemDetail`'s orphan-field branch can ever receive — the form
+ * renders four controls and this names a fifth, so a message with no control to
+ * land on has to surface at the top of the screen or the person reads a refusal
+ * with no cause anywhere on it.
+ *
+ * **And then the hazard.** `manage_stock` arrives at WordPress's boolean
+ * sanitiser, which returns `true` for any non-empty string it does not
+ * recognise — so a client that PATCHes the whole GET body back sends the string
+ * `"parent"` and **silently detaches the variation's stock from its parent**.
+ * Nothing on screen says so; the row simply stops reporting its parent's 24 and
+ * starts reporting a shelf of its own. That is why `ItemDetail.saveSettings()`
+ * sends only the fields that changed, and why the naive whole-body PATCH is
+ * caught one field earlier by the `stock_quantity` 400 above — the trap is
+ * waiting exactly one step past the obvious fix for it.
+ *
+ * The coercion is taken from the brief that scoped this branch rather than
+ * re-measured here. WordPress has two paths for a boolean argument — a validate
+ * callback that would 400 on `"parent"`, and a sanitise callback that coerces —
+ * and which one this route registers was not verified. Written down rather than
+ * hidden, because the two produce opposite screens.
+ *
+ * Everything else follows the products branch's measured split: a **read-only**
+ * key is dropped in silence, an **unknown** one is a 400, and a body left with
+ * nothing supported is a 400 with **no `details` at all**.
+ */
+const INVENTORY_READ_ONLY = [
+  "id",
+  "parent_id",
+  "type",
+  "name",
+  "sku",
+  "managing_stock",
+  "stock_managed_by_id",
+  "low_stock",
+];
+
+const BACKORDERS = ["no", "notify", "yes"];
+
+const INVENTORY_FIELD_RULES = {
+  manage_stock: (value) => {
+    if (typeof value === "boolean") return null;
+    // The hazard, reproduced. See the docblock above.
+    if (value === "parent") return null;
+    return "Must be true or false.";
+  },
+  stock_status: mustBeOneOf(STOCK_STATUSES),
+  backorders: mustBeOneOf(BACKORDERS),
+  // `null` clears the per-product threshold and the store-wide default applies;
+  // `0` is a different, legal value. Both are accepted and they are not the same
+  // request, which is the same null-is-not-zero rule the quantity follows.
+  low_stock_amount: (value) =>
+    value === null || (Number.isInteger(value) && value >= 0)
+      ? null
+      : "Must be a whole number of zero or more, or null.",
+};
+
+function patchInventory(row, body) {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+  }
+
+  const fields = {};
+  const writes = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (key === "stock_quantity") {
+      fields.stock_quantity =
+        "The quantity cannot be set here. Use POST /inventory/{id}/adjust, which records a movement.";
+      continue;
+    }
+    if (INVENTORY_READ_ONLY.includes(key)) continue;
+
+    const rule = INVENTORY_FIELD_RULES[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem === null) writes[key] = value;
+    else fields[key] = problem;
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+  }
+  if (Object.keys(writes).length === 0) {
+    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+  }
+
+  const settings = { ...state.stockSettings.get(row.id) };
+  if ("backorders" in writes) settings.backorders = writes.backorders;
+  if ("low_stock_amount" in writes) {
+    // Never null on the way back out: the presenter publishes the *effective*
+    // threshold, which is the store-wide default once the row's own is cleared.
+    settings.low_stock_amount =
+      writes.low_stock_amount === null ? STORE_LOW_STOCK_AMOUNT : writes.low_stock_amount;
+  }
+  if (Object.keys(settings).length > 0) state.stockSettings.set(row.id, settings);
+
+  if ("manage_stock" in writes || "stock_status" in writes) {
+    const tracking =
+      "manage_stock" in writes
+        ? writes.manage_stock === "parent" || writes.manage_stock === true
+        : row.managing_stock;
+
+    /*
+     * The quantity comes off the **stored body**, not off the row above it.
+     *
+     * That distinction is the whole damage. A delegated variation's row reports
+     * `stock_quantity: 24` because the presenter reads the *parent's* shelf
+     * through it; the variation's own `_stock` is null, because it has never had
+     * one. Turning tracking on gives it a shelf of its own, and that shelf is
+     * empty — so the row goes from reporting 24 units to reporting none, with a
+     * `stock_status` of `outofstock` under it and nothing on screen saying why.
+     * Reading the presented figure instead would have the variation and its
+     * parent both claiming the same 24, which is a state the shop cannot store
+     * and would make the detach look harmless.
+     *
+     * Turning tracking off removes the quantity altogether — `null`, not the
+     * figure it used to hold, which is the catalogue's own invariant and the one
+     * `patchProduct()` already keeps.
+     */
+    const current =
+      row.parent_id === 0
+        ? productById(row.id)
+        : variationRows().find((candidate) => candidate.id === row.id);
+
+    const quantity = tracking ? (current.stock_quantity ?? 0) : null;
+    const status =
+      "stock_status" in writes
+        ? writes.stock_status
+        : quantity === null || quantity > 0
+          ? "instock"
+          : "outofstock";
+
+    const next = { ...current, manage_stock: tracking, stock_quantity: quantity, stock_status: status };
+    if (row.parent_id === 0) state.products.set(row.id, next);
+    else state.variations.set(row.id, next);
+  }
+
+  return ok(inventoryRows().find((candidate) => candidate.id === row.id));
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -3719,7 +4687,7 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
    * silently reads is worse than a 404, because a screen would look like it had
    * saved.
    */
-  const WRITES = ["orders", "shipments", "payments", "products"];
+  const WRITES = ["orders", "shipments", "payments", "products", "inventory"];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
   if (segments.length === 2 && collection === "auth" && second === "me") {
@@ -4035,7 +5003,24 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     case "notifications":
       return segments.length === 1 ? notificationsListing(searchParams) : notFound();
 
-    case "inventory":
+    case "inventory": {
+      // Depth is stated here, the way `/products` and `/orders` state theirs.
+      if (segments.length > 3) return notFound();
+
+      if (second === undefined) {
+        /*
+         * **`POST /inventory` is not a route and neither is `POST
+         * /inventory/bulk`.** The batch stocktake exists at the API, takes up to
+         * 100 items and inherits every single-item rule — and no screen calls
+         * it, so lib/api/allowlist.ts:75-77 refuses it and
+         * tests/boundary.test.ts:219 asserts the refusal. Mocking it would be an
+         * invitation to build the screen, which is the same precedent `POST
+         * /products` and `POST /payments` are held to. `bulk` reaches the id
+         * branch below, fails `numericId` and falls to the 404.
+         */
+        return method === "GET" ? inventoryListing(searchParams) : notFound();
+      }
+
       /*
        * `/inventory/low-stock` is **not** in the harness brief's endpoint list
        * and the inventory screen calls it anyway — twice per render, from the
@@ -4045,16 +5030,54 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
        *
        * It returns the same item as `/inventory`, `/inventory/{id}` and
        * `/inventory/lookup` — lib/api/schemas/inventory.ts says so explicitly,
-       * verified across every row — so one row shape serves it. `/lookup` is
-       * still a 404 here: nothing calls it on load, and an endpoint nobody
-       * reaches must stay unreachable.
+       * verified across every row — so one row shape serves all four.
+       *
+       * It takes **pagination and `status` only** — verified against the live
+       * router, which registers `lowStockArgs()` as exactly that — so it has no
+       * search, no `stock_status` and, critically, **no `include_variations`:
+       * it always includes them** where the list defaults them off. That
+       * asymmetry is the whole reason the two views disagree about which rows
+       * exist, and it is reproduced by this branch reading `inventoryRows()`
+       * whole rather than going through the list's filters.
        */
-      if (segments.length === 2 && second === "low-stock") {
+      if (second === "low-stock") {
+        if (method !== "GET" || segments.length !== 2) return notFound();
         const low = inventoryRows().filter((row) => row.low_stock);
         const page = paginate(low, searchParams);
         return page.error ?? ok(page.rows, page.meta);
       }
-      return collectionOf(inventoryRows(), {});
+
+      if (second === "lookup") {
+        return method === "GET" && segments.length === 2
+          ? inventoryLookup(searchParams)
+          : notFound();
+      }
+
+      if (second === "movements") {
+        if (method !== "GET") return notFound();
+        if (segments.length === 2) return movementsListing(searchParams);
+        return segments[2] === "summary" ? movementsSummary(searchParams) : notFound();
+      }
+
+      const id = numericId(second);
+      const row = id === null ? undefined : inventoryRows().find((candidate) => candidate.id === id);
+      // A ledger row's product need not exist here — 132 of the 155 ids it names
+      // do not — and this is the 404 that makes `[id]/not-found.tsx` a screen.
+      if (row === undefined) return notFound();
+
+      if (segments.length === 3) {
+        return method === "POST" && segments[2] === "adjust" ? adjustStock(row, body) : notFound();
+      }
+
+      switch (method) {
+        case "GET":
+          return ok(row);
+        case "PATCH":
+          return patchInventory(row, body);
+        default:
+          return notFound();
+      }
+    }
 
     case "coupons":
       return collectionOf(COUPONS, {

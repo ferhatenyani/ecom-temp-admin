@@ -70,7 +70,14 @@ import {
 } from "@/lib/customers";
 import { notificationList } from "@/lib/api/schemas/notification";
 import { QUEUE_STATES, stateCounts } from "@/lib/notifications";
-import { inventoryItem, inventoryList } from "@/lib/api/schemas/inventory";
+import {
+  adjustResult,
+  inventoryItem,
+  inventoryList,
+  movementList,
+  movementSummary,
+} from "@/lib/api/schemas/inventory";
+import { ALL_REASONS } from "@/lib/movement-reason";
 import { coupon, couponDetail, couponList } from "@/lib/api/schemas/coupon";
 
 function get(path: string, query = ""): MockResponse {
@@ -2160,10 +2167,26 @@ describe("GET /notifications", () => {
 });
 
 describe("GET /inventory", () => {
+  /**
+   * `include_variations` defaults to **false**, which is the API's own default
+   * and was not reproduced here until the ledger work. So the bare list is the
+   * 38 listed products and the parameter is what adds the 5 variations — the
+   * 28-vs-33 correction the screen's own docblock is about, at this shop's
+   * larger fixture count.
+   */
+  it("defaults include_variations to false", () => {
+    const bare = parseList(inventoryList, get("/inventory", "per_page=100"));
+    expect(bare.data.filter((row) => row.parent_id !== 0)).toHaveLength(0);
+    expect(bare.meta.total).toBe(38);
+  });
+
   it("parses every row, and null is not zero on eight of them", () => {
     // The 38 listed products plus the 5 variations. A trashed product is in no
     // stockroom and is in neither this list nor /products.
-    const { data, meta } = parseList(inventoryList, get("/inventory", "per_page=100"));
+    const { data, meta } = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    );
     expect(meta.total).toBe(43);
     expect(data.filter((row) => row.parent_id !== 0)).toHaveLength(5);
     expect(data.filter((row) => row.stock_quantity === null)).toHaveLength(8);
@@ -2185,9 +2208,282 @@ describe("GET /inventory", () => {
     expect(data.length).toBeGreaterThan(0);
     expect(data.every((row) => row.low_stock)).toBe(true);
     expect(meta.total).toBe(data.length);
-    // And its sibling stays a 404: nothing reaches /lookup on load, so nothing
-    // may verify a scanner flow against a fixture that does not exist.
-    expect(get("/inventory/lookup", "sku=AC-CAT-0101").status).toBe(404);
+  });
+
+  /* ------------------------------------------------------ the filters --- */
+
+  it("filters on the three parameters that were measured, and no others", () => {
+    const out = parseList(inventoryList, get("/inventory", "stock_status=outofstock"));
+    expect(out.data.length).toBeGreaterThan(0);
+    expect(out.data.every((row) => row.stock_status === "outofstock")).toBe(true);
+
+    // A known name with a bad value refuses; an unknown *name* is ignored with a
+    // 200. That asymmetry is what makes a filter that does nothing look exactly
+    // like a filter that works, and it is why every parameter here was measured
+    // one at a time.
+    expect(get("/inventory", "stock_status=zzz").status).toBe(400);
+    const ignored = parseList(inventoryList, get("/inventory", "nonsense=zzz&per_page=100"));
+    expect(ignored.meta.total).toBe(38);
+
+    // `per_page` refuses rather than clamping.
+    expect(get("/inventory", "per_page=101").status).toBe(400);
+  });
+
+  /**
+   * Three states, not two. `manage_stock` absent is not the same question as
+   * `manage_stock=false`, and a screen whose control collapses them cannot ask
+   * for "everything".
+   */
+  it("treats manage_stock as three states", () => {
+    const all = parseList(inventoryList, get("/inventory", "per_page=100")).data.length;
+    const on = parseList(inventoryList, get("/inventory", "per_page=100&manage_stock=true")).data;
+    const off = parseList(inventoryList, get("/inventory", "per_page=100&manage_stock=false")).data;
+    expect(on.length).toBeGreaterThan(0);
+    expect(off.length).toBeGreaterThan(0);
+    expect(on.length + off.length).toBe(all);
+  });
+
+  /**
+   * The string branch of `manage_stock`'s union — a variation inheriting its
+   * parent's stock. No fixture reported it until now, so the schema's
+   * `z.union([z.boolean(), z.literal("parent")])` had never been exercised
+   * against this mock, and `saveSettings` sending the whole object would
+   * translate it to `true` and silently detach the variation.
+   */
+  it("serves a row whose manage_stock is the string 'parent'", () => {
+    const { data } = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    );
+    const delegated = data.find((row) => row.manage_stock === "parent");
+    expect(delegated).toBeDefined();
+    expect(delegated!.stock_managed_by_id).not.toBe(delegated!.id);
+  });
+
+  /* -------------------------------------------------------- the ledger --- */
+
+  it("parses the movements ledger and holds its invariant", () => {
+    const { data, meta } = parseList(movementList, get("/inventory/movements", "per_page=100"));
+    expect(meta.total).toBeGreaterThan(1000);
+    // Enforced by the backend at construction, which is why a row renders as an
+    // arrow between two numbers rather than as a delta the reader must apply.
+    expect(
+      data.every((m) => m.quantity_before + m.delta === m.quantity_after),
+    ).toBe(true);
+    // No UTC offset, unlike an order's own date_created. parseApiDate() exists
+    // only to repair this, and a mock emitting clean ISO would let it be deleted.
+    expect(data.every((m) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(m.created_at))).toBe(true);
+  });
+
+  /**
+   * **A ledger is an archive and a catalogue is not.** Measured, the real ledger
+   * names 155 distinct product ids and only 23 appear in /inventory at all. That
+   * is what makes a movement's product a real path to a 404, which is why
+   * `[id]/not-found.tsx` is a built screen rather than a defensive branch — so a
+   * mock whose every movement resolved would make that screen unreachable.
+   */
+  it("names products that no longer exist", () => {
+    const rows = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    ).data;
+    const catalogue = new Set(rows.map((row) => row.id));
+    const movements = parseList(movementList, get("/inventory/movements", "per_page=100")).data;
+    const ids = [...new Set(movements.map((m) => m.product_id))];
+    expect(ids.filter((id) => catalogue.has(id)).length).toBeLessThan(ids.length / 2);
+  });
+
+  it("filters the ledger on its measured parameters", () => {
+    const byReason = parseList(movementList, get("/inventory/movements", "reason=correction"));
+    expect(byReason.data.every((m) => m.reason === "correction")).toBe(true);
+    expect(get("/inventory/movements", "reason=zzz").status).toBe(400);
+    // Y-m-d only; anything else refuses rather than guessing a format.
+    expect(get("/inventory/movements", "date_from=31-12-2026").status).toBe(400);
+  });
+
+  /**
+   * An object keyed by reason, **not** a list, and it omits every reason with no
+   * rows. That omission is why the panel builds its filter from ALL_REASONS and
+   * takes only the counts from here — the facet lesson, in a second place.
+   */
+  it("summarises movements by reason, omitting the empty ones", () => {
+    const { data } = parse(movementSummary, get("/inventory/movements/summary"));
+    const keys = Object.keys(data);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.length).toBeLessThan(ALL_REASONS.length);
+    expect(Object.values(data).every((entry) => entry.movements > 0)).toBe(true);
+  });
+
+  /* -------------------------------------------------------- the lookup --- */
+
+  it("looks a row up by sku, and refuses in two different shapes", () => {
+    expect(parse(inventoryItem, get("/inventory/lookup", "sku=AC-CAT-0101")).data.sku).toBe(
+      "AC-CAT-0101",
+    );
+    expect(get("/inventory/lookup", "sku=NOPE").status).toBe(404);
+
+    /*
+     * A missing `sku` answers 400 with `details.params` as an **array of
+     * names**, where every other refusal in this API uses an object keyed by
+     * field. `query.ts` carries a branch for exactly that shape and nothing had
+     * ever exercised it.
+     */
+    const bare = apiError(get("/inventory/lookup"));
+    expect(bare.status).toBe(400);
+    expect(Array.isArray(bare.details.params)).toBe(true);
+  });
+
+  /* --------------------------------------------------------- the write --- */
+
+  it("adjusts stock, and answers with the movement it wrote", () => {
+    resetState();
+    const rows = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    ).data;
+    const target = rows.find(
+      (row) => row.managing_stock && row.stock_quantity !== null && row.backorders === "no",
+    )!;
+
+    const { data } = parse(
+      adjustResult,
+      write("POST", `/inventory/${target.id}/adjust`, { mode: "set", quantity: 7, reason: "correction" }),
+    );
+    expect(data.item.stock_quantity).toBe(7);
+    // InventoryMovement::toArray() omits `id`; the ledger's own rows carry one.
+    expect("id" in data.movement).toBe(false);
+    expect(data.movement.quantity_before + data.movement.delta).toBe(
+      data.movement.quantity_after,
+    );
+
+    // Stateful in-process, so a screen that adjusts and refetches sees it…
+    expect(parse(inventoryItem, get(`/inventory/${target.id}`)).data.stock_quantity).toBe(7);
+    // …and gone on the next process, so a capture stays byte-stable.
+    resetState();
+    expect(parse(inventoryItem, get(`/inventory/${target.id}`)).data.stock_quantity).toBe(
+      target.stock_quantity,
+    );
+  });
+
+  /**
+   * **Two 409s, and keeping them apart is the whole point.** One says the shelf
+   * cannot go that low; the other says this product has no shelf. They lead to
+   * different fixes — the first to a different number, the second to the
+   * settings card one section below — so a screen that collapsed them would send
+   * someone to the wrong one.
+   */
+  it("refuses a below-zero move and a non-managing product differently", () => {
+    resetState();
+    const rows = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    ).data;
+    const strict = rows.find(
+      (row) => row.managing_stock && row.stock_quantity !== null && row.backorders === "no",
+    )!;
+    const untracked = rows.find((row) => !row.managing_stock)!;
+
+    const below = apiError(
+      write("POST", `/inventory/${strict.id}/adjust`, {
+        mode: "decrease",
+        quantity: 99_999,
+        reason: "correction",
+      }),
+    );
+    expect(below.status).toBe(409);
+    // Refused, never clamped — and `projected` is the number the screen renders.
+    expect(Number(below.details.projected)).toBeLessThan(0);
+    expect(below.details.backorders).toBe("no");
+
+    const noShelf = apiError(
+      write("POST", `/inventory/${untracked.id}/adjust`, {
+        mode: "set",
+        quantity: 1,
+        reason: "correction",
+      }),
+    );
+    expect(noShelf.status).toBe(409);
+    expect(noShelf.details.id).toBe(untracked.id);
+    expect(noShelf.details.manage_stock).toBe(false);
+  });
+
+  it("lets a backordering product go negative", () => {
+    resetState();
+    const rows = parseList(
+      inventoryList,
+      get("/inventory", "per_page=100&include_variations=true"),
+    ).data;
+    const lenient = rows.find((row) => row.managing_stock && row.backorders !== "no");
+    expect(lenient).toBeDefined();
+    const out = write("POST", `/inventory/${lenient!.id}/adjust`, {
+      mode: "decrease",
+      quantity: 99_999,
+      reason: "correction",
+    });
+    expect(out.status).toBe(200);
+    expect(parse(adjustResult, out).data.item.stock_quantity).toBeLessThan(0);
+  });
+
+  it("refuses an unknown adjust field, and every bad one at once", () => {
+    resetState();
+    const rows = parseList(inventoryList, get("/inventory", "per_page=100")).data;
+    const target = rows.find((row) => row.managing_stock && row.stock_quantity !== null)!;
+
+    const unknown = apiError(
+      write("POST", `/inventory/${target.id}/adjust`, {
+        mode: "set",
+        quantity: 1,
+        reason: "correction",
+        nonsense: 1,
+      }),
+    );
+    expect(unknown.status).toBe(400);
+    expect(unknown.details.fields).toHaveProperty("nonsense");
+
+    const many = apiError(
+      write("POST", `/inventory/${target.id}/adjust`, {
+        mode: "zzz",
+        quantity: -3,
+        reason: "zzz",
+      }),
+    );
+    expect(many.status).toBe(400);
+    expect(Object.keys(many.details.fields as object).length).toBeGreaterThan(1);
+  });
+
+  /**
+   * The settings write, which the brief that scoped this section omitted
+   * entirely and which ships anyway. Its 400 on `stock_quantity` names the
+   * adjust endpoint, and that is the only path to the orphan-field branch on the
+   * item detail.
+   */
+  it("patches settings, and sends the quantity to the adjust endpoint", () => {
+    resetState();
+    const rows = parseList(inventoryList, get("/inventory", "per_page=100")).data;
+    const target = rows.find((row) => row.managing_stock)!;
+
+    expect(
+      parse(inventoryItem, write("PATCH", `/inventory/${target.id}`, { low_stock_amount: 9 }))
+        .data.low_stock_amount,
+    ).toBe(9);
+
+    const refused = apiError(write("PATCH", `/inventory/${target.id}`, { stock_quantity: 5 }));
+    expect(refused.status).toBe(400);
+    expect(refused.details.fields).toHaveProperty("stock_quantity");
+    expect(
+      String((refused.details.fields as Record<string, string>).stock_quantity),
+    ).toContain("adjust");
+  });
+
+  /**
+   * A batch stocktake is a screen nobody has built. The route exists and takes
+   * up to 100 items, and lib/api/allowlist.ts refuses it with
+   * tests/boundary.test.ts asserting the refusal — the same position products'
+   * /bulk is in. Mocking it would manufacture the evidence for a write nobody
+   * has seen work.
+   */
+  it("keeps POST /inventory/bulk unreachable", () => {
+    expect(write("POST", "/inventory/bulk", { items: [] }).status).toBe(404);
   });
 });
 
