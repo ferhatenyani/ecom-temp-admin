@@ -615,6 +615,129 @@ export function DateField({
 }
 
 /**
+ * A whole number with a `−` and a `+` beside it.
+ *
+ * **The stepper is the reason this is a primitive rather than three elements in
+ * the one screen that needs it.** DESIGN.md §3 is explicit: a screen that needs a
+ * variant which does not exist extends the primitive rather than forking one
+ * locally, and everything below is the frame every other control in this file
+ * already has — the visible label, the hint before the error, the alert icon,
+ * `aria-describedby`, `aria-invalid`, the pre-hydration guard. A local copy would
+ * have re-implemented all of it and got one of them wrong.
+ *
+ * `type="text"` with `inputMode="numeric"`, not `type="number"`, and the reason
+ * is `NumberField`'s: a number input silently drops what it cannot parse, and
+ * "Must be a whole number." is a message the API sends and this panel exists to
+ * surface. Swallowing the bad character means the person never learns which one
+ * it was. `isolate`, because a run of digits typed into an Arabic page is
+ * reordered by the bidi algorithm and the person reads back a value they did not
+ * enter.
+ *
+ * The two buttons drive the same field the keyboard does rather than being a
+ * second, competing control, and they are `−` and `+` **glyphs** rather than
+ * icons: U+2212 MINUS SIGN sits at digit height where a hyphen does not, the icon
+ * sprite has no minus, and both carry an `aria-label` while the glyph itself is
+ * `aria-hidden`. `.ui-field` gives them 36px on a pointer and 44px on touch,
+ * which is §5's floor on the input this is designed for — a thumb in a stockroom.
+ *
+ * `min` is a floor the buttons respect and the keyboard does not: typing a
+ * refused value has to reach the field's own rule and the API's message, and a
+ * stepper that clamped what was typed would hide both.
+ */
+export function Stepper({
+  id: givenId,
+  label,
+  value,
+  onChange,
+  hint,
+  error,
+  validate,
+  step = 1,
+  min,
+  decrementLabel,
+  incrementLabel,
+  disabled = false,
+}: {
+  id?: string;
+  label: string;
+  /** A string, like every other field here — the raw text, not a `number`. */
+  value: string;
+  onChange: (next: string) => void;
+  hint?: string;
+  error?: string;
+  validate?: (value: string) => string | undefined;
+  step?: number;
+  /** The floor the buttons stop at. Typing below it is still the rule's job. */
+  min?: number;
+  decrementLabel: string;
+  incrementLabel: string;
+  disabled?: boolean;
+}) {
+  const field = useField({ id: givenId, value, validate, error });
+  const off = disabled || !field.hydrated;
+
+  const bump = (by: number) => {
+    const parsed = Number.parseInt(value.trim(), 10);
+    const base = Number.isFinite(parsed) ? parsed : 0;
+    const next = base + by;
+    onChange(String(min === undefined ? next : Math.max(min, next)));
+  };
+
+  const button =
+    "ui-field ui-interactive ui-ring ui-hover-fill flex w-11 shrink-0 cursor-pointer items-center justify-center rounded-ui-md border border-ui-line-control bg-ui-surface text-ui-heading text-ui-fg disabled:cursor-not-allowed disabled:opacity-50";
+
+  return (
+    <FieldFrame
+      id={field.id}
+      label={label}
+      hint={hint}
+      hintId={field.hintId}
+      error={field.shown}
+      errorId={field.errorId}
+    >
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => bump(-step)}
+          disabled={off}
+          aria-label={decrementLabel}
+          className={button}
+        >
+          <span aria-hidden="true">−</span>
+        </button>
+
+        <input
+          id={field.id}
+          type="text"
+          inputMode="numeric"
+          value={value}
+          disabled={off}
+          aria-busy={!field.hydrated || undefined}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={field.onBlur}
+          aria-invalid={field.shown ? true : undefined}
+          aria-describedby={describedBy(hint, field.hintId, field.shown, field.errorId)}
+          dir="ltr"
+          data-numeric=""
+          style={{ unicodeBidi: "isolate" }}
+          className={`${CONTROL} text-center ${borderFor(Boolean(field.shown))}`}
+        />
+
+        <button
+          type="button"
+          onClick={() => bump(step)}
+          disabled={off}
+          aria-label={incrementLabel}
+          className={button}
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+      </div>
+    </FieldFrame>
+  );
+}
+
+/**
  * A multi-line field.
  *
  * `counter` renders the length against its limit and is not decoration: the one

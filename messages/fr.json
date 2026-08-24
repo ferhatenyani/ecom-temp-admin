@@ -215,7 +215,8 @@
     "openFilters": "Ouvrir les filtres",
     "listUpdated": "{total, plural, =0 {Aucun résultat} one {# résultat} other {# résultats}}",
     "productName": "Produit {name}",
-    "customerName": "Client {name}"
+    "customerName": "Client {name}",
+    "stockItem": "Article {name}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -402,23 +403,32 @@
   },
   "inventory": {
     "title": "Stock",
+    "loading": "Chargement…",
     "viewLabel": "Vue du stock",
     "view": {
-      "low": "Stock faible",
       "all": "Tout",
-      "moves": "Mouvements"
+      "low": "Stock faible"
     },
     "refresh": "Actualiser",
+    "export": "Exporter",
     "count": "{total, plural, =0 {Aucun article} one {# article} other {# articles}}",
     "lowCount": "{total, plural, =0 {Rien sous le seuil} one {# article sous son seuil} other {# articles sous leur seuil}}",
     "movesCount": "{total, plural, =0 {Aucun mouvement} one {# mouvement} other {# mouvements}}",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
+    "low": "Faible",
+    "chipValue": "{label} : {value}",
+    "columns": {
+      "name": "Article",
+      "sku": "SKU",
+      "status": "État",
+      "quantity": "Quantité",
+      "threshold": "Seuil",
+      "type": "Type",
+      "backorders": "Commandes en attente",
+      "id": "ID"
+    },
     "lookup": {
       "label": "Chercher un SKU",
       "placeholder": "Scannez ou saisissez un SKU",
-      "submit": "Ouvrir",
-      "searching": "Recherche…",
       "notFound": "Aucun produit avec ce SKU :",
       "notFoundHint": "Vérifiez le code : la recherche est exacte, espaces et barres obliques compris.",
       "clear": "Effacer"
@@ -426,7 +436,6 @@
     "untracked": "Non suivi",
     "untrackedHint": "Ce produit n’a pas de quantité : seul son état de stock est enregistré.",
     "threshold": "Seuil {threshold}",
-    "unit": "{count, plural, =0 {0 en stock} one {# en stock} other {# en stock}}",
     "noSku": "Sans SKU",
     "delegated": "Quantité gérée par le produit {id}",
     "delegatedShort": "Géré par le parent",
@@ -435,7 +444,6 @@
     "movesFiltersTitle": "Filtrer les mouvements",
     "clearFilters": "Tout effacer",
     "apply": "Appliquer",
-    "removeFilter": "Retirer {filter}",
     "searchLabel": "Rechercher un article",
     "searchPlaceholder": "Nom ou SKU…",
     "clearSearch": "Effacer la recherche",
@@ -443,7 +451,9 @@
     "filter": {
       "stockStatus": "État du stock",
       "manageStock": "Suivi du stock",
+      "manageStockNote": "Trois états, et « Tous » n’est pas « Non suivi » : le premier ne filtre rien, le second ne garde que les articles sans quantité.",
       "reason": "Motif",
+      "window": "Période",
       "dateFrom": "Du",
       "dateTo": "Au",
       "actor": "Auteur",
@@ -460,9 +470,21 @@
       "all": "Aucun article dans le stock.",
       "moves": "Aucun mouvement enregistré.",
       "noResults": "Aucun résultat pour ces filtres.",
-      "clear": "Effacer les filtres"
+      "clear": "Effacer les filtres",
+      "pastEnd": "Cette page est vide : il n’y a plus rien au-delà.",
+      "firstPage": "Revenir à la première page"
     },
     "ledger": {
+      "title": "Journal des mouvements",
+      "open": "Mouvements",
+      "columns": {
+        "product": "Produit",
+        "who": "Auteur",
+        "change": "Avant / après",
+        "delta": "Écart",
+        "note": "Note",
+        "when": "Date"
+      },
       "arrow": "{before} → {after}",
       "product": "Produit {id}",
       "order": "Commande {id}",
@@ -471,16 +493,14 @@
       "unknown": "Auteur inconnu",
       "whoUnavailable": "Le journal enregistre un identifiant d’auteur, pas un nom. Résoudre ce nom demande la permission Utilisateurs, que trois des quatre rôles gérant le stock n’ont pas ; le panneau montre donc ce qu’il peut prouver.",
       "summaryTitle": "Bilan par motif",
-      "net": "Net",
       "movements": "{count, plural, one {# mouvement} other {# mouvements}}",
       "summaryScope": "Sur la période et les filtres actuels.",
       "summaryOmits": "Les motifs sans aucun mouvement sont absents du bilan ; ils restent proposables.",
-      "openProduct": "Voir l’article",
-      "openOrder": "Voir la commande"
+      "summaryFailed": "Le bilan n’a pas pu être chargé. Les mouvements ci-dessous sont à jour.",
+      "summaryRetry": "Réessayer"
     },
     "detail": {
       "notFound": "Cet article n’existe plus.",
-      "quantity": "Quantité",
       "onShelf": "En rayon",
       "settings": "Réglages du stock",
       "settingsFootnote": "La quantité ne se modifie pas ici : elle passe par un ajustement, pour que chaque changement laisse une ligne au journal.",
@@ -491,18 +511,26 @@
       "backordersHint": "« Autorisées » permet de descendre sous zéro.",
       "lowStockAmount": "Seuil d’alerte",
       "lowStockAmountHint": "Propre à ce produit. Vide : le réglage général de la boutique s’applique.",
+      "saved": "Réglages enregistrés",
+      "saveFailed": "Enregistrement refusé",
+      "fields": {
+        "manage_stock": "Suivre le stock",
+        "stock_status": "État du stock",
+        "backorders": "Commandes en attente",
+        "low_stock_amount": "Seuil d’alerte"
+      },
       "identity": "Article",
+      "name": "Nom",
+      "variant": "Déclinaison",
       "sku": "SKU",
       "type": "Type",
       "parent": "Produit parent",
+      "id": "Identifiant",
       "movements": "Derniers mouvements",
       "allMovements": "Tout le journal de cet article",
       "noMovements": "Aucun mouvement pour cet article.",
-      "save": "Enregistrer",
-      "saved": "Réglages enregistrés",
-      "discard": "Annuler",
-      "unsaved": "Modifications non enregistrées",
-      "saving": "Enregistrement…"
+      "movementsFailed": "Les mouvements n’ont pas pu être chargés.",
+      "movementsRetry": "Réessayer"
     },
     "backorders": {
       "no": "Refusées",
@@ -511,7 +539,6 @@
     },
     "adjust": {
       "title": "Ajuster la quantité",
-      "open": "Ajuster",
       "modeLabel": "Type d’ajustement",
       "mode": {
         "set": "Définir",
@@ -528,14 +555,12 @@
       "minus": "Un de moins",
       "plus": "Un de plus",
       "reason": "Motif",
-      "reasonPlaceholder": "Choisir un motif",
       "note": "Note",
       "noteHint": "Facultative, 255 caractères au plus.",
       "preview": "{before} → {after}",
       "previewLabel": "Après l’ajustement",
       "unchanged": "Aucun changement",
       "submit": "Enregistrer l’ajustement",
-      "cancel": "Annuler",
       "done": "{delta} enregistré · {before} → {after}",
       "target": "L’ajustement portera sur le produit {id}, qui détient la quantité.",
       "invalid": {
@@ -544,10 +569,10 @@
         "negative": "Ne peut pas être négative.",
         "positive": "Doit être supérieure à zéro."
       },
+      "refused": "Ajustement refusé",
       "belowZero": "Cet ajustement descendrait à {projected}, et ce produit n’accepte pas les commandes en attente.",
       "notManaging": "Ce produit ne suit pas son stock. Activez le suivi ci-dessous avant d’ajuster une quantité.",
-      "notManagingShort": "Suivi du stock désactivé",
-      "offline": "Un ajustement demande une connexion."
+      "notManagingShort": "Suivi du stock désactivé"
     },
     "type": {
       "simple": "Simple",

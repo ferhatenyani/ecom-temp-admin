@@ -1,5 +1,5 @@
 import { getLocale, getTranslations } from "next-intl/server";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { Icon } from "@/components/primitives/Icon";
 
 /**
@@ -20,19 +20,21 @@ export default async function InventoryItemNotFound() {
   const tInventory = await getTranslations({ locale, namespace: "inventory" });
 
   return (
-    <Scaffold
-      title={tInventory("title")}
-      back={{ href: `/${locale}/inventory`, label: tInventory("title") }}
-    >
-      <div className="px-4">
-        <div className="rounded-lg bg-surface px-6 py-12 text-center">
-          <Icon name="alert" className="mx-auto size-8 text-label-tertiary" />
-          <h2 className="mt-4 text-title-3 text-label">{t("notFoundTitle")}</h2>
-          <p className="mt-2 text-body text-label-secondary">
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={tInventory("title")}
+        back={{ href: `/${locale}/inventory`, label: tInventory("title") }}
+        divided={false}
+      />
+      <PageBody width="detail">
+        <div className="ui-card flex flex-col items-center px-6 py-12 text-center">
+          <Icon name="alert" className="size-6 text-ui-subtle" />
+          <h2 className="mt-3 text-ui-subheading text-ui-fg">{t("notFoundTitle")}</h2>
+          <p className="mt-1.5 max-w-96 text-ui-body text-ui-muted">
             {tInventory("detail.notFound")}
           </p>
         </div>
-      </div>
-    </Scaffold>
+      </PageBody>
+    </div>
   );
 }

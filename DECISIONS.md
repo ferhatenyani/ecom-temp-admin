@@ -21,7 +21,7 @@ than left to look like an oversight.
 [x]  3. Orders — detail
 [x]  4. Products — detail + form
 [x]  5. Customers — list + detail
-[ ]  6. Inventory — list + detail
+[x]  6. Inventory — list + detail
 [ ]  7. Coupons — list + form
 [ ]  8. Shipping
 [ ]  9. Payments
@@ -488,3 +488,212 @@ whose detail is a *report* rather than a form.
   it: the border is on the `<form>` and the focus lands on the `<input>` inside,
   whose own outline is suppressed. `.ui-ring-within` is the third member of that
   family in `globals.css`. Both search fields in the panel now show the ring.
+
+---
+
+## 6. Inventory — list + detail + the ledger — 2026-08-24
+
+Three routes where there was one, and the only screen in the run whose data can
+be *wrong* rather than merely stale: a quantity is a number somebody acts on.
+
+- **The ledger moved to `/inventory/movements`.** It was the third segment of a
+  `Segmented` control holding low stock, everything, and the ledger. The first
+  two are the same collection through two endpoints; the third is different data
+  with a different filter set, a different page size and a summary of its own, and
+  folding it in meant one screen holding two unrelated query objects and a control
+  that decided which was live. `query.ts` split with it. **No nav entry** — the
+  sidebar is seventeen items and a ledger is somewhere you go *from* a stock
+  screen; it is reached from the list header and from the item detail, which are
+  the two places a person is standing when they want it.
+- **Low stock stays a view of the list, as `FilterTabs` (All / Low stock), and
+  the default is still Low stock.** ADMIN_PANEL.md's line is "the default screen
+  is low stock, not the full list", so the strip opens with its *second* tab
+  active, which is unusual and is the point.
+  It is a **different endpoint with a different parameter set** —
+  `/inventory/low-stock` takes pagination only — so on that tab the search field
+  and the Filters button are **not rendered** rather than disabled, and the
+  sentence saying where they went stays. Not rendering a control that cannot act
+  is the rule the nav already uses for capabilities, and here it is load-bearing:
+  an unknown query parameter on this API answers **200 with the full result set**,
+  so a filter that silently does nothing is indistinguishable from one that works.
+- Layout — list and ledger: `PageHeader` + `PageBody width="full"`; `DataTable`
+  at `md`+, `RecordList` below, one `columns.tsx` feeding both.
+  Layout — detail: `PageBody width="split"` + `DetailGrid`. Main is quantity ·
+  adjust · settings · the last five movements — `ItemDetail`'s old docblock on
+  the order of the work survives, because it was right. Aside is identity only,
+  and holds nothing editable, so no value on the screen is both a control and a
+  display.
+- Columns — list: name · SKU · state · quantity · threshold by default; type,
+  backorders and id behind the picker. **The id is off by default, unlike
+  customers**: a SKU is the handle here — it is what the lookup takes and what is
+  on the shelf label — and the id is offered because the ledger names a
+  `product_id` and nothing else.
+  Columns — ledger: reason · product · who · before/after · delta · date; the
+  note is optional, because 1140 of the 1154 rows carry `""`.
+- **The adjust form is an inline card, not an overlay**, and the redesign's
+  overlay layer is what made that a real choice. One of its two 409s says *this
+  product does not manage stock*, and the control that fixes it is the settings
+  card one section below on the same screen; an overlay puts that fix behind a
+  dismiss.
+- Filters: stock status and tracking in a `Drawer` behind one button with a
+  count — two dimensions, and still a drawer, because the toolbar already carries
+  the tabs, the lookup and the search box and the products branch measured three
+  labelled controls in one row leaving the search field 55px wide.
+  **No counts on any filter value**: `/inventory` publishes no facets, and the
+  ledger's counts would have to come from the summary, whose own scope is
+  unmeasured (`summaryParams()` sends `reason`, `product_id` and `actor_id`
+  because it is the ledger's request minus its pagination, and nothing measured
+  says the endpoint reads any of them). A count whose scope is unknown is worse
+  than no count.
+- Sorting: **none.** `orderby`/`order` on `/inventory` are in
+  `scripts/mock-api.mjs:4056-4058`'s accepted-and-ignored list, deliberately, so
+  a sort cannot be "verified" against the harness and shipped broken.
+  `/inventory/movements` publishes no `orderby` at all — it is `created_at DESC`
+  — so there is no control to withhold there either.
+- Row click: **navigates, and there is no peek.** The first screen in the run to
+  refuse a peek that would have been *free*: `lib/api/schemas/inventory.ts:8-13`
+  measures all four routes returning the same item, which is the condition orders
+  and products ship one on. The reason to open an inventory row is to **adjust**
+  it, and a preview that cannot adjust is a stop on the way. The identifying cell
+  is a real `<a href>` — the keyboard path and the middle click the drawer would
+  have provided — and only in the table, so a row is one anchor and not two.
+- Bulk: **nothing.** `POST /inventory/bulk` exists and takes 100 items;
+  `lib/api/allowlist.ts:75-77` and `tests/boundary.test.ts:219` both assert it
+  stays unreachable, the same precedent `POST /products/bulk` set. With no bulk
+  write there is nothing a selection column could do that the header's
+  `/api/export/inventory` link does not already do for the whole shop.
+
+### The three defects this branch fixes
+
+1. **The item's ledger was filtered by the tapped id.** `ItemDetail` and the
+   server seed both asked `?product_id={id}`, where `lib/inventory.ts:24-27` says
+   the movement is written against `stock_managed_by_id` — "a ledger filtered by
+   the tapped id would come back empty while the stock demonstrably moved". Latent
+   because all 33 rows in this shop self-manage; fixture 9032 does not. Both sides
+   now go through `itemMovementsPath(adjustTarget(item))`. Verified by capture:
+   `/inventory/9032` renders five rows of 104's ledger where it rendered none.
+2. **One `SectionError` served both "the request failed" and "nothing has
+   moved."** §3.7 wants them apart because they lead to different actions. The
+   card now has three states — a two-row skeleton while the client retries a
+   failed seed, a `role="alert"` line with a Retry, and a plain sentence for an
+   empty shelf. Verified on 103 (empty) and by injection (failed).
+3. **A report paged past its last page had no way back.** `?page=99` answers 200
+   with an empty array and the page control lives inside the table that was not
+   drawn; on the low view `isFiltered()` is false by construction, so "clear the
+   filters" was not offered either and the browser's back button was the only
+   escape from a screen the panel had navigated to itself. `isOverPaged()` is a
+   separate question from `isFiltered()` and wins the empty state's one action, on
+   both views and on the ledger.
+
+### Found and fixed on the way
+
+- **`SkuLookup`'s "keep the value and refocus" did nothing.** The input is
+  `disabled` while the request is in flight — the hydration guard every control
+  carries — and `focus()` on a disabled element is a no-op, so the 404 branch's
+  `focus()`/`select()` ran before `setBusy(false)` re-enabled anything. Measured
+  in Chromium: `document.activeElement` was `<body>`. It is an effect keyed on
+  `missing` and `busy` now, and the field takes focus with its value selected.
+- **A constant exported from a `"use client"` module is a client *reference*, not
+  a value.** `ITEM_MOVEMENTS_PER_PAGE` lived in `ItemDetail.tsx` and the Server
+  Component importing it interpolated `[object Object]` into `per_page`; the API
+  fell back to its own default and the item's ledger card rendered **nine** rows
+  where the screen asks for five. Nothing errored, and the client query that would
+  have corrected it never ran, because `QueryProvider` sets `staleTime: 15_000`
+  and seeded data is fresh on mount. It is `[id]/query.ts` now, which both sides
+  import.
+- **`Ltr` on a translated label, in the ledger.** "Produit 20" / "المنتج 20" is a
+  word with a number in it, not a bare identifier, and forcing `dir="ltr"` laid
+  the Arabic out from the left — the same defect §5 records being found in sixteen
+  call sites. It is `Isolate` now, and `e2e/inventory.spec.ts` asserts the
+  attribute as well as the rendered string.
+
+### Extended rather than forked
+
+- **`Stepper` in `components/ui/Form.tsx`.** `− [ 5 ] +` at 44px on a coarse
+  pointer is the fastest possible "one broke" on a phone in a stockroom, and the
+  frame around it — visible label, hint before error, alert icon,
+  `aria-describedby`, `aria-invalid`, the pre-hydration guard — is every other
+  control's. A local copy would have re-implemented all of it and got one wrong.
+  §3 is explicit that a screen needing a variant extends the primitive.
+- **`testId` on `Ltr` and `Isolate`.** An assertion about bidi has to be made on
+  the isolated element itself — a wrapper carries neither the `dir` attribute nor
+  the isolation — and the alternative was three hand-rolled copies of the
+  primitive's own three attributes in the ledger's cells.
+
+### Omitted deliberately
+
+- **A row-actions `Menu`** on either list. It would hold one item. The only write
+  on a stock row is the adjustment, which needs the quantity, the three modes and
+  the projection line to be usable at all — that is a screen, not a menu item —
+  and a movement is append-only, so the ledger's would be empty.
+- **The order number as a link** in a ledger row. `/orders/{id}` is gated on
+  `ac_manage_orders`, which a Product Manager holding `ac_manage_inventory` does
+  not have; the link would be a dead end for a role that can read the screen. The
+  product id *is* a link, because it is the same capability — and it is a real
+  path to a 404, which is why `[id]/not-found.tsx` is a built screen.
+- **A product-id field in the ledger's filter drawer.** `product_id` arrives by
+  tapping through from an item and is removable as a chip. The API does not
+  validate it — a value that is not an id answers 200 with zero rows — so a typo
+  would read as "nothing ever happened to this product".
+- **A `SaveBar` for the settings card.** §3.4 makes the sticky bar the *long
+  form's* exception and puts an ordinary form's actions at its own foot; four
+  fields is not a long form, and a bar reading "Enregistrer" floating over a card
+  whose own button reads "Enregistrer l'ajustement" is two saves with no way to
+  tell which is about to run. The actions are in the card and appear only when it
+  is dirty.
+- **Server-prefetching the ledger**, which every list before it in this run does.
+  Its two queries have to fail and retry independently — the summary must not take
+  the rows down with it — and doing half of that on the server means writing the
+  independence twice. `loading.tsx` draws the shape in the meantime.
+- **`StatGroup`/`Stat` for the summary strip.** It is a variable-length list of
+  0–9 reasons, not a fixed 4-up; §3.2's primitive is a different shape. One
+  `Card` with a grid inside it, because §1.6 forbids a card inside a card and nine
+  of them scrolling sideways was a phone control standing in for a table.
+
+### Notes
+
+- **The SKU lookup has its own toolbar row, above the tabs.** It sat beside the
+  search box in the first draft and that was wrong at 1440: two boxes of nearly
+  the same width eight pixels apart, both search-shaped, doing opposite things —
+  one navigates on an exact SKU and leaves the list, the other narrows it. The
+  placeholders and the icons differ and that is not enough; adjacency is what
+  people read.
+- `min-h-13` on that field is gone. The spec asks for "a large input" and
+  `.ui-field` answers it where it matters — 44px on a coarse pointer — while 52px
+  at every width was the iOS field layer having no coarse-pointer case at all.
+- **A delegated row is a third state, not "untracked".** `displayQuantity()` says
+  untracked for fixture 9032, truthfully *of that row*; but "we do not count this"
+  and "it is counted on the parent's shelf" lead to opposite actions, so the list
+  cell and the quantity card both say which, and the card links to the shelf that
+  holds the number. `stock_managed_by_id` is deliberately **not** repeated in the
+  aside: on every delegated row in this shop it is the parent, so it would be the
+  same link twice within forty pixels.
+- Message keys that lost their last caller are deleted: `view.moves`,
+  `previousPage`, `nextPage`, `removeFilter`, `unit`, `lookup.submit`,
+  `lookup.searching`, `ledger.net`, `ledger.openProduct`, `ledger.openOrder`,
+  `detail.quantity`, `detail.save`, `detail.discard`, `detail.unsaved`,
+  `detail.saving`, `adjust.open`, `adjust.cancel`, `adjust.reasonPlaceholder`
+  and `adjust.offline`.
+- `RowSkeleton.tsx` **stays**: audit, coupons, notifications, users, campaigns and
+  three content screens still import it. Nothing else in the folder does.
+- The keyboard pass, measured rather than assumed: tab order follows visual order
+  on all three screens (refresh → ledger → export → lookup → tabs → search →
+  filters → table controls → rows); the adjustment's three modes are one tab stop
+  with arrow keys inside it; both drawers trap focus and Escape restores it to the
+  button that opened them; the composed fields' focus is an accent border plus the
+  3px `--color-selection` ring, measured **after** `.ui-interactive`'s 80ms
+  border transition — reading it immediately returns the resting colour and looks
+  like a missing ring.
+
+### Found, not fixed
+
+- **`Toast` is still on retired iOS classes** — `material-bar`, `text-subhead`,
+  `text-label`, `tone-accent`, `rounded-full` — against §3.1's "`bg-surface` +
+  `border` + `--shadow-sm`. Not a coloured banner." Worse, `.toast-anchor` in
+  `globals.css` holds it `4.25rem` off the bottom below `md` to clear a tab bar
+  `app/[locale]/(panel)/layout.tsx` says was replaced, so every toast in the panel
+  floats 68px above the bottom of a phone. Pre-existing since the first redesign
+  branch — the orders and products details ship it too — and panel-wide chrome is
+  not an inventory branch's to move. Teardown owns it with `.save-bar`.
+- `movementReasonHint` in both message files has **no caller anywhere** and did
+  not gain or lose one here. Left alone; teardown owns it.

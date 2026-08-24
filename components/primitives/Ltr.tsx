@@ -13,11 +13,22 @@ export function Ltr({
   children,
   className,
   numeric = true,
+  testId,
 }: {
   children: React.ReactNode;
   className?: string;
   /** Tabular figures, for anything that appears in a column. */
   numeric?: boolean;
+  /**
+   * A handle for the suite, on the element that carries `dir` and the isolation.
+   *
+   * Added rather than letting a caller hand-roll the span: an assertion about
+   * bidi has to be made *on the isolated element itself* — a wrapper around it
+   * carries neither the `dir` attribute nor the isolation — and the alternative
+   * was three copies of this component's own three attributes in the ledger's
+   * cells, which is a fork of a primitive to reach a test id.
+   */
+  testId?: string;
 }) {
   return (
     <span
@@ -25,6 +36,7 @@ export function Ltr({
       className={className}
       style={{ unicodeBidi: "isolate" }}
       {...(numeric ? { "data-numeric": "" } : {})}
+      {...(testId ? { "data-testid": testId } : {})}
     >
       {children}
     </span>
@@ -91,10 +103,13 @@ export function Isolate({
   children,
   className,
   numeric = true,
+  testId,
 }: {
   children: React.ReactNode;
   className?: string;
   numeric?: boolean;
+  /** See `Ltr`. */
+  testId?: string;
 }) {
   return (
     <span
@@ -102,6 +117,7 @@ export function Isolate({
       className={className}
       style={{ unicodeBidi: "isolate" }}
       {...(numeric ? { "data-numeric": "" } : {})}
+      {...(testId ? { "data-testid": testId } : {})}
     >
       {children}
     </span>

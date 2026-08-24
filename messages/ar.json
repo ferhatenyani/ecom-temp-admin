@@ -215,7 +215,8 @@
     "openFilters": "فتح المرشِّحات",
     "listUpdated": "{total, plural, =0 {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}",
     "productName": "المنتج {name}",
-    "customerName": "العميل {name}"
+    "customerName": "العميل {name}",
+    "stockItem": "العنصر {name}"
   },
   "statusShort": {
     "pending": "الانتظار",
@@ -402,23 +403,32 @@
   },
   "inventory": {
     "title": "المخزون",
+    "loading": "جارٍ التحميل…",
     "viewLabel": "عرض المخزون",
     "view": {
-      "low": "منخفض",
       "all": "الكل",
-      "moves": "الحركات"
+      "low": "منخفض"
     },
     "refresh": "تحديث",
+    "export": "تصدير",
     "count": "{total, plural, =0 {لا توجد عناصر} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}",
     "lowCount": "{total, plural, =0 {لا شيء تحت العتبة} one {عنصر واحد تحت عتبته} two {عنصران تحت عتبتهما} few {# عناصر تحت عتبتها} many {# عنصرًا تحت عتبته} other {# عنصر تحت عتبته}}",
     "movesCount": "{total, plural, =0 {لا توجد حركات} one {حركة واحدة} two {حركتان} few {# حركات} many {# حركة} other {# حركة}}",
-    "previousPage": "الصفحة السابقة",
-    "nextPage": "الصفحة التالية",
+    "low": "منخفض",
+    "chipValue": "{label}: {value}",
+    "columns": {
+      "name": "العنصر",
+      "sku": "رمز SKU",
+      "status": "الحالة",
+      "quantity": "الكمية",
+      "threshold": "العتبة",
+      "type": "النوع",
+      "backorders": "الطلبات المؤجّلة",
+      "id": "المعرّف"
+    },
     "lookup": {
       "label": "البحث برمز SKU",
       "placeholder": "امسح أو أدخل رمز SKU",
-      "submit": "فتح",
-      "searching": "جارٍ البحث…",
       "notFound": "لا يوجد منتج بهذا الرمز:",
       "notFoundHint": "تحقق من الرمز؛ البحث مطابق تمامًا، بما في ذلك المسافات والشرطات المائلة.",
       "clear": "مسح"
@@ -426,7 +436,6 @@
     "untracked": "غير متتبّع",
     "untrackedHint": "لا كمية لهذا المنتج؛ تُسجّل حالة المخزون فقط.",
     "threshold": "العتبة {threshold}",
-    "unit": "{count, plural, =0 {0 في المخزون} one {# في المخزون} two {# في المخزون} few {# في المخزون} many {# في المخزون} other {# في المخزون}}",
     "noSku": "بدون SKU",
     "delegated": "الكمية يديرها المنتج {id}",
     "delegatedShort": "يديرها المنتج الأصل",
@@ -435,7 +444,6 @@
     "movesFiltersTitle": "ترشيح الحركات",
     "clearFilters": "مسح الكل",
     "apply": "تطبيق",
-    "removeFilter": "إزالة {filter}",
     "searchLabel": "البحث عن عنصر",
     "searchPlaceholder": "الاسم أو رمز SKU…",
     "clearSearch": "مسح البحث",
@@ -443,7 +451,9 @@
     "filter": {
       "stockStatus": "حالة المخزون",
       "manageStock": "تتبّع المخزون",
+      "manageStockNote": "ثلاث حالات، و«الكل» ليس «غير متتبّع»: الأولى لا ترشّح شيئًا، والثانية تُبقي العناصر بلا كمية فقط.",
       "reason": "السبب",
+      "window": "الفترة",
       "dateFrom": "من",
       "dateTo": "إلى",
       "actor": "الفاعل",
@@ -460,9 +470,21 @@
       "all": "لا توجد عناصر في المخزون.",
       "moves": "لا توجد حركات مسجّلة.",
       "noResults": "لا توجد نتائج لهذه المرشّحات.",
-      "clear": "مسح المرشّحات"
+      "clear": "مسح المرشّحات",
+      "pastEnd": "هذه الصفحة فارغة؛ لا شيء بعدها.",
+      "firstPage": "العودة إلى الصفحة الأولى"
     },
     "ledger": {
+      "title": "سجل حركات المخزون",
+      "open": "الحركات",
+      "columns": {
+        "product": "المنتج",
+        "who": "الفاعل",
+        "change": "قبل وبعد",
+        "delta": "الفرق",
+        "note": "ملاحظة",
+        "when": "التاريخ"
+      },
       "arrow": "{before} → {after}",
       "product": "المنتج {id}",
       "order": "الطلب {id}",
@@ -471,16 +493,14 @@
       "unknown": "فاعل غير معروف",
       "whoUnavailable": "يسجّل السجل معرّف الفاعل لا اسمه. تحويله إلى اسم يتطلب صلاحية المستخدمين، وهي غير متاحة لثلاثة من الأدوار الأربعة التي تدير المخزون؛ لذلك تعرض اللوحة ما يمكنها إثباته.",
       "summaryTitle": "الحصيلة حسب السبب",
-      "net": "الصافي",
       "movements": "{count, plural, one {حركة واحدة} two {حركتان} few {# حركات} many {# حركة} other {# حركة}}",
       "summaryScope": "ضمن الفترة والمرشّحات الحالية.",
       "summaryOmits": "الأسباب بلا أي حركة غائبة عن الحصيلة، وتبقى قابلة للاختيار.",
-      "openProduct": "عرض العنصر",
-      "openOrder": "عرض الطلب"
+      "summaryFailed": "تعذّر تحميل الحصيلة. الحركات أدناه محدّثة.",
+      "summaryRetry": "إعادة المحاولة"
     },
     "detail": {
       "notFound": "هذا العنصر لم يعد موجودًا.",
-      "quantity": "الكمية",
       "onShelf": "على الرف",
       "settings": "إعدادات المخزون",
       "settingsFootnote": "لا تُعدّل الكمية هنا؛ تمرّ عبر تعديل حتّى يترك كلّ تغيير أثرًا في السجل.",
@@ -491,18 +511,26 @@
       "backordersHint": "«مسموح» تتيح النزول تحت الصفر.",
       "lowStockAmount": "عتبة التنبيه",
       "lowStockAmountHint": "خاصة بهذا المنتج. إذا تُركت فارغة يُطبّق إعداد المتجر العام.",
+      "saved": "حُفظت الإعدادات",
+      "saveFailed": "رُفض الحفظ",
+      "fields": {
+        "manage_stock": "تتبّع المخزون",
+        "stock_status": "حالة المخزون",
+        "backorders": "الطلبات المؤجّلة",
+        "low_stock_amount": "عتبة التنبيه"
+      },
       "identity": "العنصر",
+      "name": "الاسم",
+      "variant": "التنويعة",
       "sku": "رمز SKU",
       "type": "النوع",
       "parent": "المنتج الأصل",
+      "id": "المعرّف",
       "movements": "آخر الحركات",
       "allMovements": "كل سجل هذا العنصر",
       "noMovements": "لا توجد حركات لهذا العنصر.",
-      "save": "حفظ",
-      "saved": "حُفظت الإعدادات",
-      "discard": "إلغاء",
-      "unsaved": "تغييرات غير محفوظة",
-      "saving": "جارٍ الحفظ…"
+      "movementsFailed": "تعذّر تحميل الحركات.",
+      "movementsRetry": "إعادة المحاولة"
     },
     "backorders": {
       "no": "مرفوضة",
@@ -511,7 +539,6 @@
     },
     "adjust": {
       "title": "تعديل الكمية",
-      "open": "تعديل",
       "modeLabel": "نوع التعديل",
       "mode": {
         "set": "تحديد",
@@ -528,14 +555,12 @@
       "minus": "واحد أقل",
       "plus": "واحد أكثر",
       "reason": "السبب",
-      "reasonPlaceholder": "اختر سببًا",
       "note": "ملاحظة",
       "noteHint": "اختيارية، 255 حرفًا كحدّ أقصى.",
       "preview": "{before} → {after}",
       "previewLabel": "بعد التعديل",
       "unchanged": "لا تغيير",
       "submit": "حفظ التعديل",
-      "cancel": "إلغاء",
       "done": "{delta} مسجّل · {before} → {after}",
       "target": "سيُطبّق التعديل على المنتج {id}، صاحب الكمية.",
       "invalid": {
@@ -544,10 +569,10 @@
         "negative": "لا يمكن أن تكون سالبة.",
         "positive": "يجب أن تكون أكبر من صفر."
       },
+      "refused": "رُفض التعديل",
       "belowZero": "سينزل هذا التعديل إلى {projected}، وهذا المنتج لا يقبل الطلبات المؤجّلة.",
       "notManaging": "هذا المنتج لا يتتبّع مخزونه. فعّل التتبّع أدناه قبل تعديل الكمية.",
-      "notManagingShort": "تتبّع المخزون معطّل",
-      "offline": "التعديل يتطلب اتصالًا."
+      "notManagingShort": "تتبّع المخزون معطّل"
     },
     "type": {
       "simple": "بسيط",
