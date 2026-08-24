@@ -19,11 +19,24 @@ export declare const BASE_PATH: string;
 
 export type MockResponse = { status: number; body: unknown };
 
+/**
+ * `body` is the parsed JSON of a write, or null. Typed as `unknown` for the same
+ * reason the response body is: the mock validates it the way the API does, and a
+ * hand-written request type here would be a second copy of that contract.
+ */
 export declare function respond(
   method: string,
   pathname: string,
   searchParams?: URLSearchParams,
+  body?: unknown,
 ): MockResponse;
+
+/**
+ * Rebuild every mutable thing — order statuses, COD records, parcels, payments —
+ * from the seeded baseline. Runs once at module load; the unit suite calls it
+ * between tests so a write in one cannot be read by another.
+ */
+export declare function resetState(): void;
 
 /** Every request the *server* handled, as `"GET /path"`. Empty until one runs. */
 export declare const requestLog: string[];

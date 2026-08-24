@@ -71,12 +71,22 @@
  * anywhere in the response path: one seeded mulberry32 runs at module load and
  * every timestamp is derived from a hard-coded epoch.
  *
+ * **The writes are stateful and this still holds.** A PATCHed status is visible
+ * to every later read *in the same process* — without that, a screen that writes
+ * and refetches could never be verified, because it would always redisplay what
+ * it had. Every mutable thing lives in one `state` object that `resetState()`
+ * rebuilds from written-out seeds, and `resetState()` runs at module load, so
+ * two processes start identical and nothing carries over between them. See
+ * "How a write can be stateful and a capture run still byte-stable" below.
+ *
  * ── Shape ────────────────────────────────────────────────────────────────────
  *
- * `respond()` is pure — method, path and params in, `{status, body}` out — and
- * is what tests/mock-api.test.ts parses with the panel's own Zod schemas and its
- * own `unwrap()`. The server below is a thin shell over it, so anything the
- * browser can get is something the unit suite has already validated.
+ * `respond()` is a function of its arguments and of what has been written to it
+ * in this process — method, path, params and a parsed body in, `{status, body}`
+ * out — and is what tests/mock-api.test.ts parses with the panel's own Zod
+ * schemas and its own `unwrap()`. The server below is a thin shell over it, so
+ * anything the browser can get is something the unit suite has already
+ * validated.
  *
  * There is deliberately **no permissive catch-all**. An unmocked path is a 404
  * with a `rest_no_route` envelope, because a screen calling something nobody
@@ -144,6 +154,21 @@ const ok = (data, meta) => ({
   status: 200,
   body: meta === undefined ? { success: true, data } : { success: true, data, meta },
 });
+
+/**
+ * A list that is **not** paginated, with the `meta` every list endpoint carries.
+ *
+ * The panel fetches these with no params at all — the wilaya table, the provider
+ * list, an order's notes and its timeline — and a default `per_page` of 10 would
+ * silently drop the tail of one with nothing anywhere reporting an error.
+ */
+const list = (rows) =>
+  ok(rows, {
+    total: rows.length,
+    page: 1,
+    per_page: rows.length,
+    total_pages: rows.length === 0 ? 0 : 1,
+  });
 
 const fail = (status, code, message, details = {}) => ({
   status,
@@ -242,29 +267,78 @@ const WILAYAS = WILAYA_NAMES.map(([name, nameAr], index) => ({
  * a missing one shows up as a `ForbiddenState` screenshot rather than an error,
  * which is exactly the kind of quiet wrong answer this file must not produce.
  */
-const IDENTITY = {
-  id: 514,
-  username: "harness",
-  display_name: "Harness Admin",
-  email: "harness@example.test",
-  roles: ["ac_super_admin"],
-  capabilities: [
-    "ac_manage_products",
-    "ac_manage_inventory",
-    "ac_manage_orders",
-    "ac_manage_customers",
-    "ac_manage_coupons",
-    "ac_manage_shipping",
-    "ac_manage_payments",
-    "ac_manage_content",
-    "ac_manage_marketing",
-    "ac_view_analytics",
-    "ac_manage_settings",
-    "ac_manage_users",
-    "ac_view_audit_logs",
-  ],
-  auth_method: "application_password",
+const CAPABILITIES = [
+  "ac_manage_products",
+  "ac_manage_inventory",
+  "ac_manage_orders",
+  "ac_manage_customers",
+  "ac_manage_coupons",
+  "ac_manage_shipping",
+  "ac_manage_payments",
+  "ac_manage_content",
+  "ac_manage_marketing",
+  "ac_view_analytics",
+  "ac_manage_settings",
+  "ac_manage_users",
+  "ac_view_audit_logs",
+];
+
+/**
+ * ── The second identity, and how to ask for it ───────────────────────────────
+ *
+ * Holding all thirteen is what a harness needs and is also why, until now, **no
+ * screen could be captured in its forbidden state** — DESIGN.md §3.7 makes that
+ * one of the five states every screen must have, and it was the one state the
+ * harness could not reach. The order detail is where that bites: `ParcelsSection`
+ * and `PaymentsSection` are rendered only for a holder of `ac_manage_shipping`
+ * and `ac_manage_payments`, so with one identity there is no capture in which
+ * they are absent.
+ *
+ *   node scripts/capture.mjs /orders/1023                        all thirteen
+ *   MOCK_IDENTITY=reduced node scripts/capture.mjs /orders/1023  eleven of them
+ *
+ * `reduced` is the same person minus exactly those two, so the order detail still
+ * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
+ * than empty. It is not "a Manager": the two-tier collapse takes more than two
+ * capabilities off a Manager, and naming it one here would be a claim about the
+ * shop's roles that this file has not measured.
+ *
+ * Read **once, at module load**, so `respond()` stays pure and a capture run is
+ * one identity from beginning to end. An unrecognised value throws rather than
+ * falling back, because a run that quietly served the Super Admin after being
+ * asked for the reduced one would produce a green forbidden-state capture that is
+ * nothing of the kind.
+ */
+const IDENTITIES = {
+  full: {
+    id: 514,
+    username: "harness",
+    display_name: "Harness Admin",
+    email: "harness@example.test",
+    roles: ["ac_super_admin"],
+    capabilities: CAPABILITIES,
+    auth_method: "application_password",
+  },
+  reduced: {
+    id: 515,
+    username: "harness-reduced",
+    display_name: "Harness Staff",
+    email: "harness-reduced@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter(
+      (capability) => capability !== "ac_manage_shipping" && capability !== "ac_manage_payments",
+    ),
+    auth_method: "application_password",
+  },
 };
+
+const REQUESTED_IDENTITY = process.env.MOCK_IDENTITY ?? "full";
+if (!(REQUESTED_IDENTITY in IDENTITIES)) {
+  throw new Error(
+    `MOCK_IDENTITY must be one of ${Object.keys(IDENTITIES).join(", ")} — got "${REQUESTED_IDENTITY}".`,
+  );
+}
+const IDENTITY = IDENTITIES[REQUESTED_IDENTITY];
 
 /* --------------------------------------------------------------- products --- */
 
@@ -1213,6 +1287,826 @@ function restrictionsFor(coupon) {
   };
 }
 
+/* ------------------------------------------ the order detail's sub-resources --- */
+
+/**
+ * The five sub-resources `GET /orders/{id}` hangs off itself, the six writes the
+ * detail screen makes, and the refusal each of those writes can answer with.
+ *
+ * **Nothing below this line calls `rand()`.** One shared mulberry32 runs at
+ * module load, so a single `int()` inserted anywhere in this file shifts the
+ * sequence and changes every customer, all 633 orders and every variation
+ * quantity above it. Every value here is written out or derived from an id, which
+ * is what keeps the collections above byte-identical to what the earlier branches
+ * were verified against.
+ */
+
+/**
+ * A timestamp with **no offset** — `"2026-08-18 02:52:22"` — which is what an
+ * order note's `created_at` is, while the order's own `date_created` beside it is
+ * `"2026-08-18T02:52:22+00:00"`. Measured, and the asymmetry is the whole reason
+ * `lib/format/date.ts` exists: `new Date()` reads an offsetless stamp as *local*
+ * time and shifts it silently by the host's offset.
+ *
+ * Reproduced rather than tidied up. A mock that emitted ISO here would let a
+ * screen drop `parseApiDate()` and still look right against the harness.
+ */
+const stamp = (minutesAgo) =>
+  new Date(EPOCH - minutesAgo * 60_000)
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, "");
+
+/**
+ * And a third notation, because there are three. A shipment's `created_at` ends
+ * `+00:00` and a payment's ends `Z` — measured, in one branch — which is why
+ * `parseApiDate()` is the only thing allowed to touch either.
+ */
+const zulu = (minutesAgo) =>
+  new Date(EPOCH - minutesAgo * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/*
+ * ── Which fixture id produces which refusal ──────────────────────────────────
+ *
+ * A screen cannot be verified against a state it can never reach, and each row
+ * below is a distinct thing the detail has to render. So every one is pinned to
+ * an id, and the ids are written out rather than searched for: a literal that
+ * stops matching fails a test, while a `find()` moves quietly and takes this
+ * table's meaning with it.
+ *
+ *   id    status      request                        answer
+ *   ────  ──────────  ─────────────────────────────  ───────────────────────────
+ *   1023  completed   PATCH {status:"processing"}    200 — the legal move
+ *   1023  completed   POST  /shipments (full body)   200 — history does not block
+ *   1023  —           POST  /payments/5231/verify    200, `report.amount: ""`
+ *   1000  cancelled   PATCH {status:<anything>}      409 {from,to,allowed:[]}
+ *   1000  cancelled   POST  /cod/attempts            409 {order_status:"cancelled"}
+ *   1014  processing  PATCH {status:"pending"}       409 {from,to,allowed:[5]}
+ *   1014  processing  POST  /shipments (full body)   409 {shipment_id:7014,…}
+ *   1004  pending     POST  /cod/attempts            409 {order_id:1004} — COD off
+ *   1006  pending     POST  /cod/attempts            409 {from,to,allowed:[]}
+ *   1007  pending     POST  /shipments {provider}    400 fields{wilaya_id,commune_id}
+ *   1007  pending     POST  /cod/attempts            200 — the legal outcome
+ *   7014  created     POST  /shipments/7014/cancel   200 — the parcel is live
+ *   7023  delivered   POST  /shipments/7023/cancel   409 {from,to,is_live:false}
+ *
+ * 1023 is also the detail route `scripts/capture.mjs` captures, and it is the
+ * richest order in the shop rather than the tidiest: three line items all
+ * carrying the 60-character SKU, a customer whose name is Arabic with a Latin
+ * order number inside it, a customer note, three notes, a seven-entry timeline,
+ * a confirmed COD record, a finished parcel from a provider that is not in
+ * `/shipping/providers`, and two payments in two states.
+ */
+const TERMINAL_ORDER = 1000; // cancelled — every move refused
+const COD_OFF_ORDER = 1004; // pending, cash on delivery switched off
+const COD_FINISHED_ORDER = 1006; // pending, every outcome already spent
+const OPEN_ORDER = 1007; // pending, nothing recorded against it yet
+const LIVE_PARCEL_ORDER = 1014; // processing, one parcel still in flight
+const RICH_ORDER = 1023; // completed — the capture route
+
+/* ------------------------------------------------------------------ notes --- */
+
+/**
+ * `[id, minutesAgo, content, customer_note, added_by]`, because the same row has
+ * to be published twice in two timestamp notations: as a note it carries
+ * `created_at` with no offset, and as the timeline entry for the same event it
+ * carries `at` with one. Storing the offset in the fixture would make that
+ * impossible to express.
+ *
+ * The bodies are French — a customer writes French — and one of them is escaped
+ * the way WordPress escapes a note body, `&#039;` for an apostrophe, so the
+ * decode the timeline needs is exercised on this collection too.
+ *
+ * An order that is not in this map has **no notes at all**, which is the ordinary
+ * case and a state the section has to render.
+ */
+const NOTE_ROWS = new Map([
+  [
+    RICH_ORDER,
+    [
+      [90230, 2620, "Commande reçue, paiement à la livraison.", false, "system"],
+      [
+        90231,
+        2480,
+        "Merci de livrer après 17 h, je travaille jusqu&#039;à 16 h 30.",
+        true,
+        "client1023",
+      ],
+      [90232, 2100, "Client rappelé, créneau confirmé.", false, "Harness Admin"],
+    ],
+  ],
+  [
+    LIVE_PARCEL_ORDER,
+    [[90140, 640, "Colis remis au livreur.", false, "Harness Admin"]],
+  ],
+  [
+    TERMINAL_ORDER,
+    [[90000, 60, "Le client ne répond plus, commande annulée.", true, "client1000"]],
+  ],
+]);
+
+const noteBody = ([id, minutesAgo, content, customerNote, addedBy]) => ({
+  id,
+  content,
+  customer_note: customerNote,
+  added_by: addedBy,
+  created_at: stamp(minutesAgo),
+});
+
+const notesFor = (orderId) => (NOTE_ROWS.get(orderId) ?? []).map(noteBody);
+
+/* --------------------------------------------------------------- timeline --- */
+
+/**
+ * The timeline, built from the order rather than stored beside it.
+ *
+ * Three things about it are measured and all three are load-bearing:
+ *
+ *   `actor` is **`""`** on a system-generated stock event — not null, not
+ *   "system" — so a renderer that tested for truthiness and one that tested for
+ *   null behave differently and only one of them is right.
+ *
+ *   `summary` arrives with **HTML entities in it**: the measured string is
+ *   `"Stock levels reduced: Shipping test AC-SHIP-BOX (99&rarr;98)"`, and React
+ *   prints those six characters literally unless `lib/format/html.ts` decodes
+ *   them first. A fixture set of clean strings would let a screen stop decoding
+ *   and still look right here.
+ *
+ *   **The notes are already in it.** Measured on order 3078: all three of its
+ *   notes appear among its five timeline entries. The detail filters the notes
+ *   collection down to the customer's own rather than printing every note twice.
+ *
+ * The summaries are English because the API's own are — the measured stock line
+ * above is WooCommerce's string, not the plugin's French. The *order* of the
+ * entries is oldest-first, which is this mock's choice and was not measured.
+ *
+ * Takes the row as it reads **now**, so a PATCHed status shows up in the timeline
+ * the transition wrote to, which is what `router.refresh()` goes and gets.
+ */
+function timelineFor(order) {
+  const entries = [
+    {
+      type: "order_created",
+      at: order.date_created,
+      actor: "",
+      summary: `Order #${order.number} placed &mdash; ${order.line_items.length} item(s), total ${order.total}&nbsp;DZD.`,
+      data: null,
+    },
+  ];
+
+  const firstItem = order.line_items[0];
+  if (order.stock_reduced && firstItem !== undefined) {
+    entries.push({
+      type: "stock_reduced",
+      at: order.date_modified,
+      // The system did this. Nobody's name goes here, and the field is present.
+      actor: "",
+      summary: `Stock levels reduced: ${firstItem.name} ${firstItem.sku} (99&rarr;98)`,
+      data: { product_id: firstItem.product_id, from: 99, to: 98 },
+    });
+  }
+
+  if (order.date_paid !== null) {
+    entries.push({
+      type: "payment",
+      at: order.date_paid,
+      actor: "",
+      summary: `Payment of ${order.total}&nbsp;DZD recorded &mdash; ${order.payment_method_title}.`,
+      data: null,
+    });
+  }
+
+  for (const row of NOTE_ROWS.get(order.id) ?? []) {
+    entries.push({
+      type: "note",
+      // The same instant as the note's own `created_at`, in the other notation.
+      at: iso(row[1]),
+      actor: row[4],
+      summary: row[2],
+      data: { customer_note: row[3] },
+    });
+  }
+
+  entries.push({
+    type: "status_change",
+    at: order.date_modified,
+    actor: "Harness Admin",
+    summary: `Order status changed to ${order.status}.`,
+    data: { to: order.status },
+  });
+
+  return entries;
+}
+
+/* -------------------------------------------------------------------- COD --- */
+
+/**
+ * What a COD record allows next, keyed by where it is now.
+ *
+ * `confirmed → ["confirmed"]` is measured and is the surprising one: re-confirming
+ * is allowed and changes nothing but the attempt count, while `confirmed →
+ * rejected` is refused, because a customer who said yes and later changed their
+ * mind has *cancelled* — folding the two together would make the confirmation
+ * rate count one event two ways.
+ */
+const COD_NEXT_OUTCOMES = {
+  pending: ["confirmed", "rejected", "unreachable"],
+  unreachable: ["confirmed", "rejected", "unreachable"],
+  confirmed: ["confirmed"],
+  rejected: [],
+  cancelled: [],
+};
+
+/** The three a confirmation call can conclude with. `pending` is not an outcome. */
+const COD_ATTEMPT_OUTCOMES = ["confirmed", "rejected", "unreachable"];
+
+/**
+ * The COD record every order starts with. Every order in this shop is
+ * `payment_method: "cod"`, so every order has one.
+ *
+ * `COD_FINISHED_ORDER` is a live order whose outcomes are spent and
+ * `TERMINAL_ORDER` reproduces the measured trap exactly: order 3879 carried
+ * `allowed_outcomes: []` **and** a cancelled order, and the 409 blamed the order,
+ * because that gate runs first. A record can therefore report outcomes the order
+ * will refuse anyway, which is what `codAttemptGate()` in lib/cod-status.ts is
+ * for.
+ */
+function seedCod(order) {
+  const status =
+    order.id === COD_FINISHED_ORDER
+      ? "rejected"
+      : order.status === "cancelled"
+        ? "cancelled"
+        : order.status === "completed" || order.status === "processing"
+          ? "confirmed"
+          : "pending";
+
+  const confirmed = status === "confirmed";
+  return {
+    // The one order the switch is off on, so the first of the three gates has a
+    // fixture of its own.
+    enabled: order.id !== COD_OFF_ORDER,
+    status,
+    attempts: status === "pending" ? 0 : 1,
+    confirmed_at: confirmed ? order.date_modified : null,
+    cancelled_at: status === "cancelled" ? order.date_modified : null,
+    last_attempt_at: status === "pending" ? null : order.date_modified,
+    reason: status === "rejected" ? "Le client a refusé la commande à la livraison." : "",
+    allowed_outcomes: COD_NEXT_OUTCOMES[status],
+  };
+}
+
+/* -------------------------------------------------------------- shipments --- */
+
+/** Measured 2026-08-20: exactly one provider, and it is the default. */
+const SHIPPING_PROVIDERS = [
+  { name: "manual", label: "In-house delivery", is_default: true },
+];
+
+/**
+ * Two parcels, and neither is tidy on purpose.
+ *
+ * 7014 is **live**, which is what makes `POST /orders/1014/shipments` a 409 and
+ * what the create button reads: one live shipment per order, enforced by the
+ * database. Its metadata carries a `label` URL — a courier's label link is a
+ * credential, and `stripLabelUrls()` exists to keep it out of the RSC payload, so
+ * the harness needs a shipment that actually has one or that strip is never
+ * exercised by a capture.
+ *
+ * 7023 is **finished**, and its provider is `acfake` — a provider
+ * `/shipping/providers` does not list, exactly as shipment 213 measured. A label
+ * lookup that indexed into the providers array would blank the column on it;
+ * `providerLabel()` falls back to the raw name instead. It also carries the
+ * provider's own spelling of the status beside the mapped one, which is the only
+ * way a mis-mapped adapter is visible at all.
+ */
+function seedShipments() {
+  // Off the order, not written out: a courier collecting a figure the order does
+  // not show is a bug report about arithmetic waiting to be filed.
+  const codAmount = ORDERS.find((row) => row.id === LIVE_PARCEL_ORDER).total;
+  return new Map([
+    /*
+     * The third state, and it is written out rather than left to fall through
+     * `shipmentsOf`'s `?? []`. An order with no parcel at all is what the create
+     * button is *for*, and a fixture whose whole value is being empty is
+     * invisible unless something names it.
+     */
+    [OPEN_ORDER, []],
+    [
+      LIVE_PARCEL_ORDER,
+      [
+        {
+          id: 7014,
+          order_id: LIVE_PARCEL_ORDER,
+          provider: "manual",
+          provider_shipment_id: "MAN-7014",
+          tracking_number: "AC7014DZ",
+          status: "created",
+          is_live: true,
+          metadata: {
+            wilaya_id: 16,
+            commune_id: 484,
+            delivery_type: "home",
+            cod_amount: codAmount,
+            label: "https://labels.example.test/manual/7014.pdf?token=abcdef",
+          },
+          created_at: iso(600),
+          updated_at: iso(500),
+        },
+      ],
+    ],
+    [
+      RICH_ORDER,
+      [
+        {
+          id: 7023,
+          order_id: RICH_ORDER,
+          provider: "acfake",
+          provider_shipment_id: "FAKE-7023",
+          tracking_number: "ACFAKE7023",
+          status: "delivered",
+          is_live: false,
+          metadata: {
+            wilaya_id: 16,
+            commune_id: 483,
+            delivery_type: "desk",
+            provider_status: "RAW_DELIVERED",
+          },
+          created_at: iso(2600),
+          updated_at: iso(2000),
+        },
+      ],
+    ],
+  ]);
+}
+
+/* --------------------------------------------------------------- payments --- */
+
+/** Measured 2026-08-20: `chargily` is the default, and `cod` is the other one. */
+const PAYMENT_METHODS = [
+  { name: "chargily", label: "Chargily", is_default: true },
+  { name: "cod", label: "Paiement à la livraison", is_default: false },
+];
+
+/**
+ * Two transactions on the rich order, and one story: the customer's card attempt
+ * failed at the gateway and the order fell back to cash on delivery.
+ *
+ * 5231 is the `cod` one and is the fixture `POST /payments/{id}/verify` was
+ * measured on: a pending cash transaction whose provider has nothing to report
+ * yet, so `report.amount` and `report.currency` come back as **empty strings**.
+ * The report is therefore not safe to format as money and `transaction` is the
+ * authority for every figure on screen — which is invisible on a fixture whose
+ * report carries a number.
+ *
+ * Neither is `paid`, and that is deliberate rather than an oversight: measured
+ * 2026-08-20, all 37 payments in this shop are `pending` and nothing has ever
+ * settled. `failed` gives the badge a second state to render without inventing a
+ * settlement the shop has never had.
+ *
+ * The amount is read off the order rather than written out, because two figures
+ * that drift apart on one screen is a bug report about arithmetic.
+ */
+function seedPayments() {
+  const order = ORDERS.find((row) => row.id === RICH_ORDER);
+  const common = { order_id: RICH_ORDER, amount: order.total, currency: "DZD" };
+  return new Map([
+    [
+      RICH_ORDER,
+      [
+        {
+          ...common,
+          id: 5230,
+          provider: "chargily",
+          provider_transaction_id: "ch_test_1023",
+          reference: "AC-PAY-5230",
+          status: "failed",
+          metadata: { provider_status: "canceled" },
+          created_at: zulu(2600),
+          updated_at: zulu(2400),
+        },
+        {
+          ...common,
+          id: 5231,
+          provider: "cod",
+          // Empty until a courier collects — a real value, not a placeholder.
+          provider_transaction_id: "",
+          reference: "AC-PAY-5231",
+          status: "pending",
+          metadata: { provider_status: "awaiting_delivery" },
+          created_at: zulu(2380),
+          updated_at: zulu(2380),
+        },
+      ],
+    ],
+  ]);
+}
+
+/* --------------------------------------------------------------- communes --- */
+
+/**
+ * A commune list per wilaya, which `/locations/wilayas` alone cannot fill: the
+ * create-parcel form asks for both halves of a destination and the API validates
+ * them before anything else on the body.
+ *
+ * **There is no Zod schema for this route in the panel** — `CreateParcelSheet`
+ * and `RulesView` both read it with an untyped `acRead<Commune[]>` and a local
+ * `{id, name, name_ar}` — so the shape here is those three keys plus the two a
+ * wilaya row carries for the same purpose. Ids run globally rather than per
+ * wilaya, the way the measured shipping rules use them (wilaya 16 / commune 484).
+ *
+ * The names are synthetic, and visibly so. Inventing 1 541 real commune names
+ * would be a fixture nobody could check against anything.
+ */
+const COMMUNE_PARTS = [
+  ["Centre", "الوسط"],
+  ["Est", "الشرق"],
+  ["Ouest", "الغرب"],
+  ["Nord", "الشمال"],
+  ["Sud", "الجنوب"],
+];
+
+const COMMUNES = new Map();
+{
+  let nextCommuneId = 1;
+  for (const wilaya of WILAYAS) {
+    const count = 3 + (wilaya.id % 3);
+    COMMUNES.set(
+      wilaya.id,
+      Array.from({ length: count }, (_, slot) => ({
+        id: nextCommuneId++,
+        wilaya_id: wilaya.id,
+        name: `${wilaya.name} ${COMMUNE_PARTS[slot][0]}`,
+        name_ar: `${wilaya.name_ar} ${COMMUNE_PARTS[slot][1]}`,
+        is_active: true,
+      })),
+    );
+  }
+}
+
+/* ------------------------------------------------------------ write state --- */
+
+/**
+ * ── How a write can be stateful and a capture run still byte-stable ──────────
+ *
+ * The writes below are genuinely stateful: PATCH a status, read the order back,
+ * and the new value is there. Without that a screen that writes and refetches
+ * cannot be verified at all — it would always redisplay what it had.
+ *
+ * The trick is that there is nothing to unwind. Every mutable thing lives in this
+ * one object, `resetState()` rebuilds all of it from the seeds above, and
+ * `resetState()` runs once at module load. So *within* a process a write is
+ * visible to every later read, and *between* processes nothing carries over: a
+ * second `node` starts from the identical baseline, because the seeds are written
+ * out, derived from ids, and touch neither the clock nor the PRNG.
+ *
+ * The unit suite calls it between tests for the same reason.
+ */
+const state = {
+  /** Order id → status, and **empty until something PATCHes**. */
+  statuses: new Map(),
+  cod: new Map(),
+  shipments: new Map(),
+  payments: new Map(),
+  nextShipmentId: 0,
+};
+
+export function resetState() {
+  state.statuses = new Map();
+  state.cod = new Map(ORDERS.map((order) => [order.id, seedCod(order)]));
+  state.shipments = seedShipments();
+  state.payments = seedPayments();
+  // Above the two seeded ids and far enough from them to read as new.
+  state.nextShipmentId = 7100;
+}
+
+resetState();
+
+const statusOf = (order) => state.statuses.get(order.id) ?? order.status;
+const shipmentsOf = (orderId) => state.shipments.get(orderId) ?? [];
+const paymentsOf = (orderId) => state.payments.get(orderId) ?? [];
+
+/**
+ * An order at a new status, with everything the seed derives from it recomputed.
+ *
+ * Not decoration. `is_editable` is false once stock has moved, so a mock that
+ * left it true after a PATCH to `completed` would render a line-item editor on a
+ * finished order — a screen state the real API never produces, arrived at through
+ * the harness rather than despite it.
+ *
+ * The two dates are the one thing this cannot do properly, because there is no
+ * clock in this file: an order that becomes paid or completed is stamped with its
+ * own `date_modified` rather than with "now", and an existing stamp is kept.
+ */
+function withStatus(order, status) {
+  const paid = status === "completed" || status === "processing" || status === "refunded";
+  return {
+    ...order,
+    status,
+    is_editable: status === "pending" || status === "on-hold",
+    needs_payment: !paid && status !== "cancelled" && status !== "failed",
+    stock_reduced: paid,
+    date_paid: paid ? (order.date_paid ?? order.date_modified) : order.date_paid,
+    date_completed:
+      status === "completed"
+        ? (order.date_completed ?? order.date_modified)
+        : order.date_completed,
+  };
+}
+
+/** The row as it reads *now*. Identity when nothing has been written to it. */
+const orderRow = (order) => {
+  const status = statusOf(order);
+  return status === order.status ? order : withStatus(order, status);
+};
+
+/* ---------------------------------------------------------------- refusals --- */
+
+/**
+ * Which moves an order allows — one rule rather than a seven-row table.
+ *
+ * Measured 2026-08-20: from `processing`, `PATCH {status:"pending"}` answers
+ *
+ *     409 {"code":"conflict","details":{"from":"processing","to":"pending",
+ *          "allowed":["on-hold","completed","cancelled","refunded","failed"]}}
+ *
+ * which is every status except the current one and except `pending`, in the
+ * vocabulary's own order. A cancelled or refunded order answers `allowed: []` —
+ * a real answer meaning *finished*, and different from the field being absent.
+ *
+ * So: nothing goes back to `pending` once it has left, and a terminal order goes
+ * nowhere. Written as the rule because the alternative is six rows of invention
+ * around the one row that was measured.
+ */
+const TERMINAL_ORDER_STATUSES = ["cancelled", "refunded"];
+
+const allowedMoves = (from) =>
+  TERMINAL_ORDER_STATUSES.includes(from)
+    ? []
+    : ORDER_STATUSES.filter((status) => status !== from && status !== "pending");
+
+/**
+ * A body field's errors arrive under `details.fields` — an object of messages,
+ * one per control — while a *query* parameter's arrive under `details.params`.
+ * Measured on `POST /orders/{id}/shipments`, which answers `fields` naming both
+ * halves of the destination at once, and it is why `ApiError` exposes the two
+ * separately: a form that read only `params` would render a generic sentence and
+ * throw the per-control half away.
+ */
+const invalidBody = (message, fields) =>
+  fail(400, "rest_invalid_param", message, { fields });
+
+const conflict = (message, details) => fail(409, "conflict", message, details);
+
+/** `PATCH /orders/{id}` — one field, and the transition is the whole story. */
+function patchOrder(order, body) {
+  const to = body?.status;
+  if (typeof to !== "string" || !ORDER_STATUSES.includes(to)) {
+    return invalidBody("Invalid parameter(s): status", {
+      status: `Must be one of: ${ORDER_STATUSES.join(", ")}.`,
+    });
+  }
+
+  const from = statusOf(order);
+  const allowed = allowedMoves(from);
+  if (!allowed.includes(to)) {
+    return conflict(`An order cannot move from ${from} to ${to}.`, { from, to, allowed });
+  }
+
+  state.statuses.set(order.id, to);
+  return ok(withStatus(order, to));
+}
+
+/**
+ * `PATCH /orders/{id}/cod` — `enabled` and nothing else.
+ *
+ * **Every other field is read-only and dropped silently**: no 400, no mention in
+ * the response, the record simply comes back with the rest of it unchanged. That
+ * is why the panel can PATCH the whole GET body back without thinking about it,
+ * and it is worth reproducing precisely because a mock that answered 400 for a
+ * stray key would send someone off building a field filter nobody needs.
+ */
+function patchCod(order, body) {
+  const enabled = body?.enabled;
+  if (typeof enabled !== "boolean") {
+    return invalidBody("Invalid parameter(s): enabled", {
+      enabled: "enabled is not of type boolean.",
+    });
+  }
+  const record = { ...state.cod.get(order.id), enabled };
+  state.cod.set(order.id, record);
+  return ok(record);
+}
+
+/**
+ * `POST /orders/{id}/cod/attempts` — the three gates, in the order the API
+ * applies them, so the reason on screen is the reason the server would have
+ * given:
+ *
+ *   1. `enabled`            409 {order_id}
+ *   2. the order's status   409 {order_status}
+ *   3. the transition       409 {from, to, allowed} — the only one with a list
+ *
+ * The two statuses that refuse an attempt outright are the same two that are
+ * terminal for a transition. lib/cod-status.ts keeps its own copy of them
+ * deliberately: they are different rules that happen to coincide, and nobody
+ * phones a customer to confirm an order that has been cancelled.
+ */
+function postCodAttempt(order, body) {
+  const outcome = body?.outcome;
+  if (typeof outcome !== "string" || outcome === "") {
+    // A *missing* outcome gets a different sentence from an invalid one —
+    // measured, and the difference is the word "Required".
+    return fail(400, "rest_missing_callback_param", "Missing parameter(s): outcome", {
+      fields: { outcome: `Required. One of: ${COD_ATTEMPT_OUTCOMES.join(", ")}.` },
+    });
+  }
+  if (!COD_ATTEMPT_OUTCOMES.includes(outcome)) {
+    return invalidBody("Invalid parameter(s): outcome", {
+      outcome: `Must be one of: ${COD_ATTEMPT_OUTCOMES.join(", ")}.`,
+    });
+  }
+
+  const reason = body?.reason ?? "";
+  if (typeof reason !== "string" || reason.length > 500) {
+    return invalidBody("Invalid parameter(s): reason", {
+      reason: "reason must be 500 characters or fewer.",
+    });
+  }
+
+  const record = state.cod.get(order.id);
+  if (!record.enabled) {
+    return conflict("Cash on delivery is not enabled for this order.", {
+      order_id: order.id,
+    });
+  }
+
+  const orderStatus = statusOf(order);
+  if (TERMINAL_ORDER_STATUSES.includes(orderStatus)) {
+    return conflict("This order is closed and cannot take a delivery call.", {
+      order_status: orderStatus,
+    });
+  }
+
+  if (!record.allowed_outcomes.includes(outcome)) {
+    return conflict(`A ${record.status} order cannot be recorded as ${outcome}.`, {
+      from: record.status,
+      to: outcome,
+      allowed: record.allowed_outcomes,
+    });
+  }
+
+  // No clock here either, so the attempt is stamped with the order's own
+  // `date_modified`. A blank reason does not overwrite the recorded one.
+  const next = {
+    ...record,
+    status: outcome,
+    attempts: record.attempts + 1,
+    confirmed_at: outcome === "confirmed" ? order.date_modified : record.confirmed_at,
+    last_attempt_at: order.date_modified,
+    reason: reason.trim() === "" ? record.reason : reason.trim(),
+    allowed_outcomes: COD_NEXT_OUTCOMES[outcome],
+  };
+  state.cod.set(order.id, next);
+  return ok(next);
+}
+
+/**
+ * `POST /orders/{id}/shipments`.
+ *
+ * **The destination is validated before anything else and does not come off the
+ * order.** Measured: `POST {}` answers 400 with `details.fields` naming both
+ * `wilaya_id` and `commune_id`, and so does a body carrying only a provider. So
+ * the form has to ask for a destination the order already appears to have —
+ * which is the same fact analytics rests on, that a wilaya comes off the shipment
+ * and never off the address.
+ *
+ * Then the constraint: **one live shipment per order**, enforced by the database.
+ * History accumulates and does not block — order 3939 carries four finished
+ * parcels and may have a fifth — so this reads `is_live` rather than counting
+ * rows, and the 409 names the parcel in the way, because the real one does.
+ *
+ * `provider` and `delivery_type` are taken as given. The destination is the only
+ * refusal that was measured on this route, and a validation nobody has seen the
+ * API perform is a validation a screen would be built against for nothing.
+ */
+function postShipment(order, body) {
+  const fields = {};
+  const wilayaId = Number(body?.wilaya_id);
+  const communeId = Number(body?.commune_id);
+  if (!Number.isInteger(wilayaId) || wilayaId <= 0) {
+    fields.wilaya_id = "Required. The destination wilaya.";
+  }
+  if (!Number.isInteger(communeId) || communeId <= 0) {
+    fields.commune_id = "Required. The destination commune.";
+  }
+  if (Object.keys(fields).length > 0) {
+    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+  }
+
+  const live = shipmentsOf(order.id).find((shipment) => shipment.is_live);
+  if (live !== undefined) {
+    return conflict("This order already has a shipment in flight.", {
+      shipment_id: live.id,
+      provider: live.provider,
+      status: live.status,
+    });
+  }
+
+  const id = state.nextShipmentId++;
+  const created = {
+    id,
+    order_id: order.id,
+    provider: typeof body?.provider === "string" && body.provider !== "" ? body.provider : "manual",
+    provider_shipment_id: `MAN-${id}`,
+    // Empty until the courier has the parcel — a real state, and the column has
+    // to render without inventing a number.
+    tracking_number: "",
+    status: "pending",
+    is_live: true,
+    metadata: {
+      wilaya_id: wilayaId,
+      commune_id: communeId,
+      delivery_type: typeof body?.delivery_type === "string" ? body.delivery_type : "home",
+      cod_amount: order.total,
+    },
+    // The fixture epoch, because there is no clock. Every row this route creates
+    // in a given process therefore carries the same stamp, which is the price of
+    // a byte-stable screenshot.
+    created_at: iso(0),
+    updated_at: iso(0),
+  };
+  state.shipments.set(order.id, [...shipmentsOf(order.id), created]);
+  return ok(created);
+}
+
+/** One row by id across every order's list. Parcels and payments both need it. */
+function findById(map, id) {
+  if (id === null) return undefined;
+  for (const list of map.values()) {
+    const hit = list.find((row) => row.id === id);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * `POST /shipments/{id}/cancel`.
+ *
+ * A terminal parcel refuses, and **its 409 carries no `allowed` list** — an
+ * order's carries one and a shipment's does not, which is the one place this
+ * subject cannot follow the panel's usual "render what the API says is legal"
+ * rule. `{from, to, is_live}` is what there is.
+ */
+function cancelShipment(id) {
+  const shipment = findById(state.shipments, id);
+  if (shipment === undefined) return notFound();
+  if (!shipment.is_live) {
+    return conflict(`A ${shipment.status} shipment cannot be cancelled.`, {
+      from: shipment.status,
+      to: "cancelled",
+      is_live: false,
+    });
+  }
+
+  const cancelled = { ...shipment, status: "cancelled", is_live: false, updated_at: iso(0) };
+  state.shipments.set(
+    shipment.order_id,
+    shipmentsOf(shipment.order_id).map((row) => (row.id === id ? cancelled : row)),
+  );
+  return ok(cancelled);
+}
+
+/**
+ * `POST /payments/{id}/verify`, which answers something that is **not a payment**:
+ * `{report, transaction}`, the provider's own answer beside the stored record.
+ *
+ * On the `cod` transaction — the fixture this was measured on — `report.amount`
+ * and `report.currency` are **empty strings**, because a cash transaction has no
+ * figure from the provider until the courier hands the money over. The report is
+ * therefore not safe to format as money; `transaction` is the authority for every
+ * number on screen and `report.provider_status` is what the report is worth.
+ *
+ * Nothing is written. The provider's answer is unchanged, so a second verify is
+ * the same 200 — which is also what keeps a capture byte-stable.
+ */
+function verifyPayment(id) {
+  const payment = findById(state.payments, id);
+  if (payment === undefined) return notFound();
+
+  const cash = payment.provider === "cod";
+  return ok({
+    report: {
+      status: payment.status,
+      provider_status: String(payment.metadata.provider_status ?? payment.status),
+      amount: cash ? "" : payment.amount,
+      currency: cash ? "" : payment.currency,
+      metadata: payment.metadata,
+    },
+    transaction: payment,
+  });
+}
+
 /* ------------------------------------------------------------ query rules --- */
 
 /**
@@ -1671,37 +2565,36 @@ function productsListing(params) {
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
 
 /**
- * The whole API surface, as a pure function. No clock, no randomness, no
- * mutation — hand it the same three arguments twice and it answers identically,
- * which is what makes both a byte-stable screenshot and a schema test possible.
+ * The whole API surface, as a function of its arguments and of whatever has been
+ * written to it in this process. No clock and no randomness anywhere — the writes
+ * below mutate `state`, and `state` is rebuilt from the seeds at module load, so
+ * a fresh process answers identically and a byte-stable screenshot survives.
  *
  * `pathname` is the full request path including the base, so this also proves
- * the base-path routing rather than assuming it.
+ * the base-path routing rather than assuming it. `body` is the parsed JSON of a
+ * write, or null.
  */
-export function respond(method, pathname, searchParams = new URLSearchParams()) {
+export function respond(method, pathname, searchParams = new URLSearchParams(), body = null) {
   // WordPress answers `rest_no_route` for a path/verb pair it has no handler
-  // for, and the panel only ever reads through this mock.
-  if (method !== "GET") return notFound();
+  // for, and the panel only ever reaches this mock through the proxy.
   if (!pathname.startsWith(`${BASE_PATH}/`)) return notFound();
 
   const segments = pathname.slice(BASE_PATH.length + 1).split("/").filter(Boolean);
   const [collection, second] = segments;
 
+  /*
+   * **Three collections write and every other one is read-only.** This used to
+   * be a flat `if (method !== "GET") return notFound()` at the top of the
+   * function, which was right while nothing wrote and would now let a POST fall
+   * through to a GET handler further down and be answered 200 — a write that
+   * silently reads is worse than a 404, because a screen would look like it had
+   * saved.
+   */
+  const WRITES = ["orders", "shipments", "payments"];
+  if (method !== "GET" && !WRITES.includes(collection)) return notFound();
+
   if (segments.length === 2 && collection === "auth" && second === "me") {
     return ok(IDENTITY);
-  }
-
-  if (segments.length === 2 && collection === "locations" && second === "wilayas") {
-    // Reference data, and the one list endpoint that is **not** paginated: the
-    // panel fetches it with no params and needs all 58 to turn a `state` of "16"
-    // into a name. A default `per_page` of 10 here would leave 48 orders showing
-    // a bare code and nothing would report an error.
-    return ok(WILAYAS, {
-      total: WILAYAS.length,
-      page: 1,
-      per_page: WILAYAS.length,
-      total_pages: 1,
-    });
   }
 
   /*
@@ -1709,20 +2602,22 @@ export function respond(method, pathname, searchParams = new URLSearchParams()) 
    *
    * This used to be a flat `if (segments.length > 2) return notFound()`, which
    * makes a three-segment route unreachable no matter how it is written further
-   * down — `/attributes/{id}/terms` could never have answered. Moving the guard
-   * to `> 3` and no further would be the opposite mistake: `/orders/1000/notes`
-   * would then be served the order itself, which is a 200 for a route nobody
-   * wrote and exactly the quiet wrong answer this file must not produce.
+   * down — `/attributes/{id}/terms` could never have answered. Raising the guard
+   * one notch at a time and no further would be the opposite mistake: at `> 3`,
+   * `/orders/1000/notes` was served the order itself, which is a 200 for a route
+   * nobody wrote and exactly the quiet wrong answer this file must not produce.
    *
-   * So the ceiling here is the deepest route that exists, and every collection
-   * that has no sub-resource says so — `collectionOf` refuses a third segment
-   * for all of them at once.
+   * So the ceiling here is the deepest route that exists — four, since
+   * `/locations/wilayas/{id}/communes` and `/orders/{id}/cod/attempts` arrived —
+   * and every collection states its own depth underneath. `collectionOf` refuses
+   * a third segment for all the flat ones at once, so raising this number can
+   * never widen them.
    */
-  if (segments.length === 0 || segments.length > 3) return notFound();
+  if (segments.length === 0 || segments.length > 4) return notFound();
 
-  /** The list/detail pair every collection below shares. */
+  /** The list/detail pair every collection below shares. Read-only, all of them. */
   const collectionOf = (rows, { search, status, detail }) => {
-    if (segments.length > 2) return notFound();
+    if (method !== "GET" || segments.length > 2) return notFound();
     if (second !== undefined) {
       const id = numericId(second);
       const row = id === null ? undefined : rows.find((candidate) => candidate.id === id);
@@ -1744,17 +2639,117 @@ export function respond(method, pathname, searchParams = new URLSearchParams()) 
   };
 
   switch (collection) {
-    case "orders":
-      return collectionOf(ORDERS, {
+    case "orders": {
+      const id = second === undefined ? null : numericId(second);
+      const order = id === null ? undefined : ORDERS.find((row) => row.id === id);
+
+      /*
+       * The detail's own sub-resources and the four writes on them. Every
+       * verb/segment pair is matched by name: an unlisted one falls to the 404
+       * below rather than to the row, which is what keeps `POST
+       * /orders/{id}/payments` — the route that mints a real payment link for a
+       * shopper, refused deliberately by lib/api/allowlist.ts — unreachable
+       * here even though the GET beside it is served.
+       */
+      if (segments.length > 2 || (order !== undefined && method !== "GET")) {
+        if (order === undefined) return notFound();
+        const row = orderRow(order);
+
+        if (segments.length === 2) {
+          return method === "PATCH" ? patchOrder(order, body) : notFound();
+        }
+        if (segments.length === 3) {
+          switch (`${method} ${segments[2]}`) {
+            // Unpaginated, like /locations/wilayas: the panel fetches each of
+            // these with no params at all and renders every row, so a default
+            // `per_page` of 10 would silently truncate a timeline.
+            case "GET notes":
+              return list(notesFor(order.id));
+            case "GET timeline":
+              return list(timelineFor(row));
+            case "GET cod":
+              return ok(state.cod.get(order.id));
+            case "PATCH cod":
+              return patchCod(order, body);
+            case "GET shipments":
+              return list(shipmentsOf(order.id));
+            case "POST shipments":
+              return postShipment(row, body);
+            case "GET payments":
+              return list(paymentsOf(order.id));
+            default:
+              return notFound();
+          }
+        }
+        if (method === "POST" && segments[2] === "cod" && segments[3] === "attempts") {
+          return postCodAttempt(order, body);
+        }
+        return notFound();
+      }
+
+      // The list and the plain detail, both reading through any status a PATCH
+      // has written.
+      return collectionOf(ORDERS.map(orderRow), {
         status: true,
-        search: (order) => [
-          order.number,
-          order.billing.first_name,
-          order.billing.last_name,
-          order.billing.email,
-          order.billing.phone,
+        search: (candidate) => [
+          candidate.number,
+          candidate.billing.first_name,
+          candidate.billing.last_name,
+          candidate.billing.email,
+          candidate.billing.phone,
         ],
       });
+    }
+
+    /*
+     * `/shipments/{id}/cancel` and `/payments/{id}/verify`, and **nothing else
+     * on either collection**. There is no `GET /shipments` and no `GET
+     * /payments` here: a parcel and a transaction are reached through the order
+     * they belong to, which is the only way the detail screen reaches them, and
+     * an endpoint nobody calls must stay unreachable.
+     *
+     * `POST /payments` is absent for a stronger reason than that, and it is the
+     * one write on this subject the API offers: it opens a checkout at the
+     * provider and hands back a real payment link for a *shopper*.
+     * lib/api/allowlist.ts:164-178 refuses it deliberately, so it must 404 here
+     * too — a fixture that answered would be an invitation to build the screen.
+     */
+    case "shipments":
+      return method === "POST" && segments.length === 3 && segments[2] === "cancel"
+        ? cancelShipment(numericId(second))
+        : notFound();
+
+    case "payments":
+      if (method === "GET" && segments.length === 2 && second === "methods") {
+        return list(PAYMENT_METHODS);
+      }
+      return method === "POST" && segments.length === 3 && segments[2] === "verify"
+        ? verifyPayment(numericId(second))
+        : notFound();
+
+    case "shipping":
+      return segments.length === 2 && second === "providers"
+        ? list(SHIPPING_PROVIDERS)
+        : notFound();
+
+    case "locations": {
+      if (second !== "wilayas") return notFound();
+      // Reference data, and the one list endpoint that is **not** paginated: the
+      // panel fetches it with no params and needs all 58 to turn a `state` of
+      // "16" into a name. A default `per_page` of 10 here would leave 48 orders
+      // showing a bare code and nothing would report an error.
+      if (segments.length === 2) return list(WILAYAS);
+
+      // Four segments, and the reason the depth guard moved again. The commune
+      // list *is* paginated, because the panel asks it for `per_page=100`.
+      if (segments.length === 4 && segments[3] === "communes") {
+        const rows = COMMUNES.get(numericId(segments[2]));
+        if (rows === undefined) return notFound();
+        const page = paginate(rows, searchParams);
+        return page.error ?? ok(page.rows, page.meta);
+      }
+      return notFound();
+    }
 
     case "products": {
       if (segments.length > 2) return notFound();
@@ -1888,9 +2883,38 @@ export function createServer() {
     }
 
     requestLog.push(`${request.method} ${url.pathname}`);
-    const { status, body } = respond(request.method ?? "GET", url.pathname, url.searchParams);
-    response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify(body));
+
+    /*
+     * The body is collected before routing because `respond()` takes it as an
+     * argument — the routing stays pure and synchronous, and this shell stays
+     * the only asynchronous thing in the file.
+     *
+     * A body that is not JSON arrives at `respond()` as `null` rather than as an
+     * error of its own. Every write here validates what it needs and answers its
+     * own 400, and the panel sends JSON or nothing at all: `POST
+     * /payments/{id}/verify` is called with no body whatsoever.
+     */
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      let parsed = null;
+      if (chunks.length > 0) {
+        try {
+          parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          parsed = null;
+        }
+      }
+
+      const { status, body } = respond(
+        request.method ?? "GET",
+        url.pathname,
+        url.searchParams,
+        parsed,
+      );
+      response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify(body));
+    });
   });
 }
 
