@@ -21,8 +21,8 @@ cd "$(dirname "$0")/.." || exit 2
 # the customers branch, floor 95; 123 at the shipping branch, floor 117; 139 at the
 # analytics branch, floor 133; 167 at the content branch, floor 160; 179 at the
 # notifications branch, floor 172; 195 at the campaigns branch, floor 188; 223 at
-# the admin branch, floor 216.
-FLOOR=234
+# the admin branch, floor 216; 248 at the products-list redesign, floor 241.
+FLOOR=241
 failures=0
 checks=0
 

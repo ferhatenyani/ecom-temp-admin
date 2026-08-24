@@ -507,6 +507,14 @@ link         accent, underline on hover
   most of the form is required — pick one convention per form and hold it.
 - Grouped in bordered sections with an `--text-heading` and an optional
   description. Sections stack at 24px.
+
+  **Inside an overlay the section heading drops to `--text-subheading`.**
+  `OverlayFrame` gives a `Modal`'s and a `Drawer`'s own title `--text-heading`,
+  so a section inside one renders its heading at exactly the size and weight of
+  the title above it and flattens the hierarchy the section exists to create.
+  Found on the products filter drawer, which stacks seven of them under one
+  title. `components/ui/Form.tsx`'s `Section` is the primitive and carries the
+  same note.
 - Actions pin to the bottom of the form in a bordered footer, primary inline-end.
   Long forms get a sticky footer that appears only when the form is dirty.
 

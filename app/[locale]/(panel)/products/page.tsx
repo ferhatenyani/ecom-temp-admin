@@ -13,8 +13,8 @@ import {
   type ProductCategory,
 } from "@/lib/api/schemas/product";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { ProductsList } from "./ProductsList";
 import { queryFromParams, toApiParams } from "./query";
 
@@ -55,11 +55,12 @@ export default async function ProductsPage({
   if (!has(me, "ac_manage_products")) {
     const t = await getTranslations("products");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader title={t("title")} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_products" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

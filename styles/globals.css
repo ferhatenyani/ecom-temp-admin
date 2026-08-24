@@ -753,6 +753,23 @@
     box-shadow: 0 0 0 3px var(--color-ui-selection);
   }
 
+  /*
+   * The same ring, driven by a sibling input rather than by the element's own
+   * focus.
+   *
+   * A checkbox and a radio in this panel are a real `<input>` stretched over the
+   * row at `opacity: 0` with a drawn box beside it — so the input carries the
+   * focus and the box has to carry the ring. Its own outline is invisible, being
+   * on an invisible element. Written here rather than as
+   * `peer-focus-visible:shadow-…` because the ring is the *selection* colour at
+   * 3px, which is not one of the three elevation tokens a `shadow-` utility is
+   * allowed to name.
+   */
+  .peer:focus-visible ~ .ui-ring-peer {
+    border-color: var(--color-ui-accent);
+    box-shadow: 0 0 0 3px var(--color-ui-selection);
+  }
+
   /* ---------------------------------------------------------------- tap ---
    * A small icon gets a real hit area from a pseudo-element rather than by
    * growing the icon. 44px on touch, 32px on a pointer — the pointer figure is
@@ -801,13 +818,60 @@
     border-block-end: 1px solid var(--color-ui-line-strong);
     white-space: nowrap;
   }
+  /*
+   * The column headers are the panel's only uppercase (§1.3), and the rule has
+   * to name the button as well as the cell.
+   *
+   * A sortable header's label lives inside a `<button>`, and the UA stylesheet
+   * gives form controls `text-transform: none` — Tailwind's preflight re-inherits
+   * `font`, `color` and `letter-spacing` for them but not this one. So an
+   * `uppercase` utility on the `<th>` reached the three unsortable columns and
+   * stopped at the two sortable ones: measured at 1440, the header row read
+   * "Produit · SKU · STOCK · Prix · STATUT", which makes sortability look like a
+   * typographic accident rather than an affordance.
+   *
+   * Declared here rather than at the call site so the next sortable column
+   * inherits it without anyone remembering to.
+   */
+  .ui-th,
+  .ui-th button {
+    text-transform: uppercase;
+  }
   .ui-td {
     border-block-end: 1px solid var(--color-ui-line);
+    /*
+     * A cell is one line, and the table scrolls rather than a row growing.
+     *
+     * §3.2 says so twice over — rows are 48px, and "more columns than width: the
+     * container scrolls inline" — but nothing enforced it, so a column with no
+     * `truncate` of its own wrapped instead. Measured on the products list at
+     * 1280 with the sidebar out: `17 août 2026, 9:12 PM` broke over three lines
+     * and took the row to 89px against the 49px every other row and the skeleton
+     * are. The same thing is visible on the orders list at 768, where the date
+     * column has always wrapped to two.
+     *
+     * A wrapped cell is worse than a scroll bar on both counts: it is a row that
+     * silently disagrees with its own placeholder, and it is a table whose rows
+     * are different heights for reasons that depend on the viewport. Cells that
+     * hold something genuinely long still cap and truncate themselves; this is
+     * the floor under the ones that do not.
+     */
+    white-space: nowrap;
   }
   .ui-table tbody tr:last-child .ui-td {
     border-block-end: 0;
   }
+  /*
+   * The row owns its ground, explicitly, rather than letting the card's surface
+   * show through it.
+   *
+   * It looks identical — `.ui-card` is the same `--color-ui-surface` — and it is
+   * what makes the sticky column below possible: a frozen cell has to be opaque
+   * or the scrolled columns read straight through it, and the only background
+   * that stays correct through hover and selection is the row's own.
+   */
   .ui-table tbody tr {
+    background-color: var(--color-ui-surface);
     transition: background-color var(--dur-ui-instant) var(--ease-ui-standard);
   }
   .ui-table tbody tr[data-hoverable]:hover {
@@ -821,6 +885,55 @@
   .ui-table-scroll {
     overflow-x: auto;
     overscroll-behavior-inline: contain;
+  }
+
+  /*
+   * The frozen leading column. §3.2: "more columns than width: the container
+   * scrolls inline and the first column is sticky."
+   *
+   * **"First" is the identifying column, not the first `<th>`.** With selection
+   * on, a checkbox column comes before it, and a checkbox that scrolls away from
+   * the row it ticks is worse than no sticky column at all — so both cells carry
+   * this class and stick as one unit. The offset is set at the call site with
+   * `start-*`, off the same spacing step the checkbox column's `w-10` uses, so
+   * the two edges cannot drift apart.
+   *
+   * `inset-inline-start`, never `left`: in Arabic the frozen edge is the
+   * right-hand one, and it is the same declaration that puts it there.
+   *
+   * Paint order is the real difficulty here, and it is three layers rather than
+   * two, because `.ui-th` is *already* sticky for the block axis:
+   *
+   *   .ui-th                z-index 1   the header, sticky to the block start
+   *   .ui-td.ui-col-sticky  z-index 0   above the body cells passing under it —
+   *                                     a positioned cell at 0 already paints
+   *                                     over its non-positioned siblings, and
+   *                                     staying at 0 is what keeps it *under*
+   *                                     the header. At 1 it would tie with the
+   *                                     header and win on DOM order, so the
+   *                                     column would paint over the column
+   *                                     labels.
+   *   .ui-th.ui-col-sticky  z-index 2   the corner cell, sticky on both axes. It
+   *                                     has to clear the plain headers that pass
+   *                                     beneath it, and a tie there goes to the
+   *                                     later element — which is every one of
+   *                                     them.
+   *
+   * The background is `inherit` rather than a surface token, and that is the
+   * difference between this working and hover and selection looking broken in
+   * exactly this one column: the row states are set on the `<tr>`, so the frozen
+   * cell borrows whichever ground the row currently has instead of pinning its
+   * own.
+   */
+  .ui-col-sticky {
+    position: sticky;
+  }
+  .ui-td.ui-col-sticky {
+    z-index: 0;
+    background-color: inherit;
+  }
+  .ui-th.ui-col-sticky {
+    z-index: 2;
   }
 
   /* ---------------------------------------------------------------- tabs ---

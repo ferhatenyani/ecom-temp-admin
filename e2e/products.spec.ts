@@ -42,12 +42,45 @@ async function openProducts(page: Page, locale: string, query = "") {
   await page.waitForSelector('[data-testid="products-count"]');
 }
 
-/** The detail URL for a SKU, resolved through the list rather than guessed. */
+/**
+ * The rows, in whichever presentation this project's viewport is showing.
+ *
+ * The redesign renders both: a real `<table>` at `md` and up and a stacked
+ * record list below it, one hidden per breakpoint. Both are always in the DOM,
+ * so a bare `tbody tr` counts correctly and then times out trying to click a row
+ * that `display: none` at the three phone widths this suite runs at.
+ * `filter({ visible: true })` is what makes one selector honest at every width.
+ *
+ * This replaces `a[href*="/products/"]`, which no longer identifies a row: a row
+ * opens a preview rather than navigating, so the only product links on the
+ * screen are inside that preview and inside each row's action menu.
+ */
+function rows(page: Page) {
+  return page.locator("tbody tr, main li.ui-card").filter({ visible: true });
+}
+
+/** The one control that opens the filter drawer. Replaces `.pill-row > button`. */
+function openFilters(page: Page) {
+  return page.getByRole("button", { name: /Filtres|عوامل التصفية/ }).click();
+}
+
+/**
+ * The detail URL for a SKU, resolved through the list rather than guessed.
+ *
+ * Two clicks now instead of one, and the extra one is the point: a row opens the
+ * peek, and the peek is what carries the link to the full page. Going straight
+ * to `/products/{id}` would need an id, and the backend's own suites delete and
+ * recreate their fixtures on every run.
+ */
 async function openBySku(page: Page, locale: string, sku: string) {
   await openProducts(page, locale, `?sku=${sku}`);
-  const row = page.locator('a[href*="/products/"]').first();
+  const row = rows(page).first();
   await expect(row).toBeVisible();
   await row.click();
+
+  const peek = page.getByRole("dialog");
+  await expect(peek).toBeVisible();
+  await peek.getByRole("link", { name: /Ouvrir|فتح/ }).click();
   await page.waitForURL(/\/products\/\d+/);
 }
 
@@ -56,14 +89,13 @@ test.describe("the products list", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
 
-    const rows = page.locator('a[href*="/products/"]');
-    const unfiltered = await rows.count();
+    const unfiltered = await rows(page).count();
     expect(unfiltered).toBeGreaterThan(0);
 
     // A filter that really filters — the positive control for the assertion
     // below, without which "the list got shorter" proves nothing.
     await openProducts(page, "fr", "?stock_status=outofstock");
-    const filtered = await page.locator('a[href*="/products/"]').count();
+    const filtered = await rows(page).count();
     expect(filtered).toBeLessThan(unfiltered);
     expect(filtered).toBeGreaterThan(0);
     await expect(page).toHaveURL(/stock_status=outofstock/);
@@ -78,16 +110,16 @@ test.describe("the products list", () => {
   test("the back button returns to the unfiltered catalogue", async ({ page }) => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
-    const before = await page.locator('a[href*="/products/"]').count();
+    const before = await rows(page).count();
 
     await page.fill('input[type="search"]', "tapis");
     await page.press('input[type="search"]', "Enter");
     await expect(page).toHaveURL(/search=tapis/);
-    await expect(page.locator('a[href*="/products/"]')).not.toHaveCount(before);
+    await expect(rows(page)).not.toHaveCount(before);
 
     await page.goBack();
     await expect(page).not.toHaveURL(/search=/);
-    await expect(page.locator('a[href*="/products/"]')).toHaveCount(before);
+    await expect(rows(page)).toHaveCount(before);
   });
 
   /**
@@ -104,10 +136,10 @@ test.describe("the products list", () => {
     // The control: there is a draft in the catalogue, so the two numbers really
     // can disagree. Without this the note below could be decorating nothing.
     await openProducts(page, "fr", "?status=draft");
-    expect(await page.locator('a[href*="/products/"]').count()).toBeGreaterThan(0);
+    expect(await rows(page).count()).toBeGreaterThan(0);
 
     await openProducts(page, "fr");
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
     const sheet = page.getByRole("dialog");
     await expect(sheet).toBeVisible();
     await expect(sheet.getByText(/produits publiés/i)).toBeVisible();
@@ -122,18 +154,28 @@ test.describe("the products list", () => {
   test("renders a zero-count facet value rather than dropping it", async ({ page }) => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
 
     const sheet = page.getByRole("dialog");
     const zero = sheet.getByRole("checkbox", { name: /Cuir/ });
     await expect(zero).toBeVisible();
-    await expect(zero).toContainText("0");
+
+    /*
+     * Asserted on the accessible name rather than with `toContainText`, and the
+     * change is forced by the control becoming real. The old row was a
+     * `<button role="checkbox">` wrapping its own label and count, so it had text
+     * content; the new one is an `<input type="checkbox">` inside a `<label>`,
+     * and an input has no text of its own. The count sits inside that label
+     * deliberately, which is what puts it in the accessible name — and a count
+     * a screen reader cannot reach is a count only sighted users have.
+     */
+    await expect(zero).toHaveAccessibleName(/Cuir\s+0/);
 
     // The control: a value with a real count renders its real count, so the "0"
     // above is a measurement and not a rendering failure.
-    await expect(sheet.getByRole("checkbox", { name: /Laine/ })).not.toContainText(
-      /\b0\b/,
-    );
+    await expect(
+      sheet.getByRole("checkbox", { name: /Laine/ }),
+    ).not.toHaveAccessibleName(/\b0\b/);
   });
 
   /**
@@ -148,17 +190,19 @@ test.describe("the products list", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr", "?attributes[pa_matiere]=laine");
 
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
     const sheet = page.getByRole("dialog");
 
+    // A real checkbox, so its state is `checked` rather than an `aria-checked`
+    // attribute the old `role="checkbox"` button had to set by hand.
     const selected = sheet.getByRole("checkbox", { name: /Laine/ });
-    await expect(selected).toHaveAttribute("aria-checked", "true");
+    await expect(selected).toBeChecked();
 
     // The sibling is still there, still counted, and still reachable.
     const sibling = sheet.getByRole("checkbox", { name: /Argent/ });
     await expect(sibling).toBeVisible();
     await expect(sibling).toBeEnabled();
-    await expect(sibling).not.toContainText(/\b0\b/);
+    await expect(sibling).not.toHaveAccessibleName(/\b0\b/);
   });
 
   /**
@@ -171,7 +215,7 @@ test.describe("the products list", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
 
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
     let sheet = page.getByRole("dialog");
     const categoryCount = await sheet
       .getByRole("checkbox", { name: /Tapis et Textiles|Épicerie Fine|Bijoux/ })
@@ -180,7 +224,7 @@ test.describe("the products list", () => {
     await page.keyboard.press("Escape");
 
     await openProducts(page, "fr", "?category=16");
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
     sheet = page.getByRole("dialog");
     const stillThere = await sheet
       .getByRole("checkbox", { name: /Tapis et Textiles|Épicerie Fine|Bijoux/ })
@@ -192,21 +236,64 @@ test.describe("the products list", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr", "?search=zzz-nothing-matches-this");
 
-    await expect(page.locator('a[href*="/products/"]')).toHaveCount(0);
+    await expect(rows(page)).toHaveCount(0);
+    /*
+     * "Effacer les filtres" is the *empty state's* action and is distinct from
+     * the drawer's "Tout effacer", which clears only the drawer's own
+     * dimensions. Two buttons, two scopes, and the names have to stay different
+     * or a test that clicks one proves nothing about the other.
+     */
     const clear = page.getByRole("button", { name: /Effacer les filtres/ });
     await expect(clear).toBeVisible();
     await clear.click();
-    await expect(page.locator('a[href*="/products/"]').first()).toBeVisible();
+    await expect(rows(page).first()).toBeVisible();
   });
 
   test("a selected filter renders as a removable chip", async ({ page }) => {
     await signIn(page, "fr");
     await openProducts(page, "fr", "?stock_status=outofstock");
 
-    const chip = page.getByRole("button", { name: /Retirer Stock/ });
+    // The chip names the dimension *and* the value — one chip per value, so
+    // removing "Rupture" cannot also remove something else.
+    const chip = page.getByRole("button", { name: /Retirer le filtre Stock : Rupture/ });
     await expect(chip).toBeVisible();
     await chip.click();
     await expect(page).not.toHaveURL(/stock_status/);
+  });
+
+  /**
+   * Sorting ships on this screen and nowhere else, and the header cycle is the
+   * half that can silently go wrong.
+   *
+   * `title asc` was re-measured as working after the backend repair;
+   * **`title desc` never was**. It answers 200 and returns the catalogue in
+   * default order, so a name header that cycled to descending would look like it
+   * worked. It must go `none → ascending → none` and never reach the third
+   * state — asserted on `aria-sort`, which is both the accessible contract and
+   * the only externally visible record of what the panel thinks it asked for.
+   */
+  test("the name column sorts ascending only, and never claims descending", async ({
+    page,
+  }) => {
+    await signIn(page, "fr");
+    await openProducts(page, "fr");
+
+    const header = page.getByRole("columnheader", { name: /Produit/ });
+    // Skipped where the table is not the presentation — below `md` the records
+    // are cards and there is no column header to click.
+    if (!(await header.isVisible())) test.skip(true, "no table at this width");
+
+    await expect(header).toHaveAttribute("aria-sort", "none");
+
+    await header.getByRole("button").click();
+    await expect(header).toHaveAttribute("aria-sort", "ascending");
+    await expect(page).toHaveURL(/sort=title-asc/);
+
+    // The control that matters: the next click returns to unsorted rather than
+    // asking for the combination nobody measured.
+    await header.getByRole("button").click();
+    await expect(header).toHaveAttribute("aria-sort", "none");
+    await expect(page).not.toHaveURL(/sort=title-desc/);
   });
 });
 
@@ -354,17 +441,22 @@ test.describe("Arabic and RTL", () => {
 
     // The SKU is the identifier the bidi algorithm reorders. Asserted on the
     // rendered string, because the `dir` attribute alone cannot catch it.
+    //
+    // Filtered to the visible one: both presentations are in the DOM at every
+    // width and `innerText` of a `display: none` subtree is its raw text
+    // content, which would pass this without anything having been laid out.
     const sku = page
-      .locator('a[href*="/products/"] span[dir="ltr"]')
+      .locator('main span[dir="ltr"]')
+      .filter({ visible: true })
       .first();
     const text = (await sku.innerText()).trim();
     expect(text).toMatch(/^[A-Z0-9-]+$/);
   });
 
-  test("the filter sheet and its counts survive mirroring", async ({ page }) => {
+  test("the filter drawer and its counts survive mirroring", async ({ page }) => {
     await signIn(page, "ar");
     await openProducts(page, "ar");
-    await page.locator(".pill-row > button").first().click();
+    await openFilters(page);
 
     const sheet = page.getByRole("dialog");
     await expect(sheet).toBeVisible();
@@ -440,15 +532,16 @@ test.describe("the fifth state", () => {
     // The age of the data, not just the fact of being offline.
     await expect(banner).toContainText(/hors ligne/i);
 
-    // And it aligns with the list rather than sitting a gutter further in:
-    // `StaleBanner` carries its own margin, so it must not also inherit one.
+    // And it aligns with the list rather than sitting a gutter further in. The
+    // banner and the table card are now siblings inside `PageBody`, which owns
+    // the gutter — so a margin of the banner's own would show up here as a step.
     const offsets = await page.evaluate(() => {
       const banner = document.querySelector('[role="status"]');
-      const row = document.querySelector('a[href*="/products/"]');
-      if (!banner || !row) return null;
+      const card = document.querySelector("main .ui-card");
+      if (!banner || !card) return null;
       return {
         banner: banner.getBoundingClientRect().left,
-        row: row.getBoundingClientRect().left,
+        row: card.getBoundingClientRect().left,
       };
     });
     expect(offsets).not.toBeNull();
@@ -482,8 +575,16 @@ test.describe("the list does not shift when data lands", () => {
     test(`the skeleton row matches the real row in ${locale}`, async ({ page }) => {
       await signIn(page, locale);
       await openProducts(page, locale);
-      const real = await page
-        .locator('a[href*="/products/"]')
+
+      /*
+       * Whichever presentation this project's width renders, against its own
+       * placeholder: a table row against `TableSkeleton`'s `.ui-row`, or a record
+       * card against `RecordListSkeleton`'s `.ui-card`. Both are always in the
+       * DOM, so the visibility filter is what keeps this comparing like with
+       * like — and `> div` no longer identifies a skeleton row at all, because
+       * the table placeholder's first child is its header band.
+       */
+      const real = await rows(page)
         .first()
         .evaluate((el) => el.getBoundingClientRect().height);
 
@@ -493,9 +594,19 @@ test.describe("the list does not shift when data lands", () => {
       await page.goto(`/${locale}/products?min_price=abc`, {
         waitUntil: "domcontentloaded",
       });
-      await page.waitForSelector('[role="status"][aria-busy="true"]');
+      /* `attached`, not the default `visible`: there are two skeleton regions in
+         the DOM now — one per presentation — and `waitForSelector` resolves on
+         the first match, which is the table's and is hidden at the phone widths
+         three of this suite's four projects run at. */
+      await page.waitForSelector('[role="status"][aria-busy="true"]', {
+        state: "attached",
+      });
       const skeleton = await page
-        .locator('[role="status"][aria-busy="true"] > div')
+        .locator(
+          '[role="status"][aria-busy="true"] .ui-row,' +
+            ' [role="status"][aria-busy="true"] .ui-card',
+        )
+        .filter({ visible: true })
         .first()
         .evaluate((el) => el.getBoundingClientRect().height);
 

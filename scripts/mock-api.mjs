@@ -26,12 +26,43 @@
  * to catch that class of thing, not to manufacture it. So: same order every
  * time, whatever is asked for, and 200 for a value nobody has heard of.
  *
+ * ── The one exception, and it is exactly five combinations ────────────────────
+ *
+ * **`/products` sorts. `/orders` still does not. Do not simplify this into
+ * either extreme.**
+ *
+ * The silent ignore was repaired in the backend — `ProductRepository::
+ * orderingClause()`, which joins `wc_product_meta_lookup` through
+ * `posts_clauses` — and exactly five combinations were re-measured as working:
+ *
+ *     date desc · date asc · title asc · price asc · price desc
+ *
+ * Those five sort here and nothing else does. Any other `orderby`, and any
+ * other combination — **including `title desc`, which nobody measured** — is
+ * accepted with a 200 and comes back in the default catalogue order, unsorted.
+ * `SORTS` in lib/product-status.ts is that list and it is the same five.
+ *
+ * Both halves of this are load-bearing. Sorting everything would let an agent
+ * build a `title desc` control, watch it work here and ship a control that does
+ * nothing; sorting nothing would make the five controls the panel does offer
+ * look broken against the harness and invite someone to delete them.
+ *
  * What *is* genuinely implemented, because a screen that silently ignored these
  * would be a screen that lies about how many rows exist:
  *
  *   page, per_page   real, and >100 is a 400 rather than a clamp — measured
- *   status           real on /orders, single value only; a comma list is a 400
+ *   status           real on /orders (single value, a comma list is a 400) and
+ *                    real on /products, whose own set is publish/draft/pending/
+ *                    private — `?status=trash` is a 400 there, and a trashed
+ *                    product still reads back from `/products/{id}` with a 200
  *   search           real on /orders, /products, /customers — substring, folded
+ *   the nine filters real on /products: sku, category, tag, min_price,
+ *                    max_price, stock_status, on_sale, featured and
+ *                    `attributes[taxonomy]=slug,slug`
+ *   facets           real on /products, opt-in through `?facets=`, counted over
+ *                    published rows only — and every group but `category` and
+ *                    `tag` excludes its own filter, which is the API's own
+ *                    inconsistency and not a bug to tidy up here
  *
  * ── Determinism ──────────────────────────────────────────────────────────────
  *
@@ -348,6 +379,396 @@ const PRODUCTS = PRODUCT_NAMES.map((name, index) => {
   };
 });
 
+/* ------------------------------------------------------- the filterable shop --- */
+
+/**
+ * Everything above this line is the catalogue as the products branch measured
+ * it, and it cannot express a single one of the nine filters: every row carries
+ * `tag_ids: []`, and the only attributes in the shop are the **local** ones
+ * (`id: 0`) on the two variable products, which §82 says can never be filtered
+ * or counted. A screen verified against that alone would have nine untested
+ * controls and a facet sheet with nothing in it.
+ *
+ * So the shop gains a vocabulary and eleven more rows. The 28 above are left
+ * exactly as they were — the eight with `stock_quantity: null`, the published
+ * one with `price: ""`, the never-published draft with `slug: ""` and the
+ * 60-character SKU are all measured, and a fixture that quietly repairs them is
+ * a fixture that stops catching what they were written to catch.
+ */
+
+/** `/product-categories`. The first six are the ones the 28 carry (`10 + i % 6`). */
+const CATEGORY_TREE = [
+  [10, "Épicerie fine", 0],
+  [11, "Miels et confitures", 10],
+  [12, "Textile", 0],
+  [13, "Tapis", 12],
+  [14, "Poterie et cuivre", 0],
+  [15, "Bijoux", 0],
+  [16, "Cosmétique naturelle", 0],
+];
+
+/** The tag vocabulary. "Terroir" is on a draft only, so the facet omits it. */
+const TAG_NAMES = [
+  [401, "Nouveauté"],
+  [402, "Pièce unique"],
+  [403, "Cadeau"],
+  [404, "Fait main"],
+  [405, "Terroir"],
+];
+
+/**
+ * The global attributes, and **`slug` is not `taxonomy`**. `/attributes/{id}`
+ * and §88's routes take the slug; `?attributes[pa_matiere]=…` and the key of a
+ * facet group are the taxonomy. Both are published here because confusing them
+ * is the mistake the endpoint exists to prevent, and a mock that carried only
+ * one of them would make the mistake unmakeable and therefore uncatchable.
+ */
+const ATTRIBUTES = [
+  {
+    id: 1,
+    name: "Matière",
+    slug: "matiere",
+    taxonomy: "pa_matiere",
+    type: "select",
+    order_by: "menu_order",
+    has_archives: false,
+  },
+  {
+    id: 2,
+    name: "Couleur",
+    slug: "couleur",
+    taxonomy: "pa_couleur",
+    type: "select",
+    order_by: "name",
+    has_archives: true,
+  },
+];
+const [MATIERE, COULEUR] = ATTRIBUTES;
+
+/**
+ * Six terms, and **"Cuir" is on no product at all** — the measurement
+ * lib/products.ts is built on: the facet group reports five values and
+ * `total_values: 5`, and this route is the only place the sixth exists.
+ *
+ * The slugs are written out rather than derived. WordPress's own sanitiser drops
+ * an apostrophe instead of turning it into a separator, so the term is
+ * `bois-dolivier` and not `bois-d-olivier` — which is the slug lib/products.ts
+ * quotes, and a variation label resolved against the wrong one silently prints
+ * the slug at a shopkeeper.
+ */
+const MATIERE_TERMS = [
+  ["Laine", "laine"],
+  ["Coton", "coton"],
+  ["Argent", "argent"],
+  ["Cuivre", "cuivre"],
+  ["Bois d'olivier", "bois-dolivier"],
+  ["Cuir", "cuir"],
+];
+
+/**
+ * Sixty, so one group is genuinely past the API's cap of 50 and comes back
+ * `truncated: true` with `total_values: 60`. A colour vocabulary is where a real
+ * shop crosses that line — the schema's own measurement is of a 60-term
+ * attribute — and three products below carry twenty each, which is how a
+ * nuancier is actually stored: one product, every colour it comes in.
+ */
+const COULEUR_NAMES = [
+  "Blanc", "Noir", "Gris", "Gris perle", "Anthracite", "Ivoire",
+  "Écru", "Beige", "Sable", "Taupe", "Brun", "Marron",
+  "Chocolat", "Café", "Caramel", "Ocre", "Terracotta", "Brique",
+  "Rouge", "Rouge grenat", "Bordeaux", "Cerise", "Framboise", "Rose",
+  "Rose poudré", "Fuchsia", "Magenta", "Violet", "Prune", "Lavande",
+  "Mauve", "Indigo", "Bleu nuit", "Bleu marine", "Bleu roi", "Bleu ciel",
+  "Turquoise", "Cyan", "Pétrole", "Sarcelle", "Vert", "Vert olive",
+  "Vert sapin", "Vert amande", "Menthe", "Kaki", "Jaune", "Jaune paille",
+  "Moutarde", "Safran", "Orange", "Abricot", "Corail", "Saumon",
+  "Cuivre", "Bronze", "Or", "Argenté", "Nacre", "Pourpre",
+];
+const COULEUR_SLUGS = COULEUR_NAMES.map(slugify);
+
+/**
+ * An attribute as a *global* one travels on a product: `name` is the **taxonomy**
+ * and `options` are term **slugs**. The local ones on the two variable products
+ * above are the other half of that asymmetry — a label and free strings — and
+ * lib/api/schemas/product.ts is explicit that a renderer has to know which it is
+ * holding or it prints `pa_matiere` at a shopkeeper.
+ */
+const carries = (attribute, slugs, position) => ({
+  id: attribute.id,
+  name: attribute.taxonomy,
+  options: slugs,
+  visible: true,
+  variation: false,
+  position,
+});
+
+/**
+ * A catalogue row written by hand rather than drawn from the PRNG, and that is
+ * deliberate: a single `int()` call inserted before `CUSTOMERS` is built would
+ * shift the one shared mulberry32 sequence and change every customer, every one
+ * of the 633 orders and every variation quantity in this file. Written-out
+ * values keep all of them byte-identical to what the earlier branches were
+ * verified against.
+ *
+ * Every one of these manages stock, so the eight rows where `stock_quantity` is
+ * null stay exactly the eight the inventory branch measured.
+ */
+function seeded({
+  id,
+  name,
+  minutesAgo,
+  status = "publish",
+  regular,
+  sale = "",
+  quantity,
+  featured = false,
+  categories,
+  tags = [],
+  attributes = [],
+}) {
+  const onSale = sale !== "";
+  return {
+    id,
+    name,
+    slug: status === "draft" ? "" : slugify(name),
+    type: "simple",
+    status,
+    featured,
+    catalog_visibility: "visible",
+    sku: `AC-CAT-${String(id).padStart(4, "0")}`,
+    description: `<p>${name} — sélection de la boutique.</p>`,
+    short_description: `<p>${name}</p>`,
+    // `price` is the effective figure: the sale price when there is one, which
+    // is what the row prints, while `regular_price` is what the form edits.
+    price: onSale ? sale : regular,
+    regular_price: regular,
+    sale_price: sale,
+    on_sale: onSale,
+    manage_stock: true,
+    stock_quantity: quantity,
+    stock_status: quantity > 0 ? "instock" : "outofstock",
+    weight: "",
+    category_ids: categories,
+    tag_ids: tags,
+    attributes,
+    variations: [],
+    image_id: 0,
+    gallery_image_ids: [],
+    image: null,
+    gallery: [],
+    permalink: `https://boutique.example.test/produit/${slugify(name)}`,
+    seo: {
+      title: name,
+      description: `${name} — boutique artisanale.`,
+      canonical: "",
+      robots: {
+        index: status === "publish",
+        follow: true,
+        directive: status === "publish" ? "index, follow" : "noindex, follow",
+      },
+      overrides: [],
+    },
+    date_created: iso(minutesAgo),
+    date_modified: iso(Math.max(1, minutesAgo - 300)),
+  };
+}
+
+/**
+ * Three of the eleven are newer than the 28 and land at the head of the list;
+ * the other eight are older and land at the tail.
+ *
+ * That split is arithmetic, not taste. The default order is date descending, a
+ * page is 20 rows, and the 60-character SKU sits at index 14 of the 28 — the row
+ * the 340px overflow assertion exists to catch. Three ahead of it puts it at 17
+ * and still on page one; twelve would push it off, and the harness would go on
+ * reporting a clean capture of a table that no longer contains the string that
+ * used to break it.
+ *
+ * What the three buy in exchange is three states page one has never been
+ * captured in: a struck-through sale price, a `pending` badge and a `private`
+ * one. Every product above is published or draft and none is on sale.
+ */
+const NEW_ARRIVALS = [
+  seeded({
+    id: 201,
+    name: "Chèche en coton, 20 coloris",
+    minutesAgo: 400,
+    regular: "1200.00",
+    sale: "900.00",
+    quantity: 18,
+    categories: [12],
+    tags: [401, 404],
+    attributes: [carries(MATIERE, ["coton"], 0), carries(COULEUR, COULEUR_SLUGS.slice(0, 20), 1)],
+  }),
+  seeded({
+    id: 202,
+    name: "Coffret dégustation, édition limitée",
+    minutesAgo: 900,
+    status: "pending",
+    regular: "5400.00",
+    quantity: 4,
+    categories: [10],
+    tags: [402],
+  }),
+  seeded({
+    id: 203,
+    name: "Assortiment revendeurs, palette",
+    minutesAgo: 1400,
+    status: "private",
+    regular: "15000.00",
+    quantity: 20,
+    categories: [10],
+  }),
+];
+
+const BACK_CATALOGUE = [
+  seeded({
+    id: 204,
+    name: "Caftan brodé, 20 coloris",
+    minutesAgo: 5900,
+    regular: "24000.00",
+    quantity: 3,
+    featured: true,
+    categories: [12],
+    tags: [402],
+    attributes: [carries(MATIERE, ["coton"], 0), carries(COULEUR, COULEUR_SLUGS.slice(20, 40), 1)],
+  }),
+  seeded({
+    id: 205,
+    name: "Couverture en laine, 20 coloris",
+    minutesAgo: 6120,
+    regular: "8500.00",
+    quantity: 6,
+    categories: [12],
+    tags: [404],
+    attributes: [carries(MATIERE, ["laine"], 0), carries(COULEUR, COULEUR_SLUGS.slice(40, 60), 1)],
+  }),
+  seeded({
+    id: 206,
+    name: "Porte-clés en argent",
+    minutesAgo: 6340,
+    // The floor of the price band, so `min_price` and `max_price` have a real
+    // spread to cut: 100 to 24 000, against the 400-to-9 000 of the 28.
+    regular: "100.00",
+    quantity: 40,
+    categories: [15],
+    tags: [403],
+    attributes: [carries(MATIERE, ["argent"], 0)],
+  }),
+  seeded({
+    id: 207,
+    name: "Théière en cuivre martelé",
+    minutesAgo: 6560,
+    regular: "7800.00",
+    sale: "6500.00",
+    quantity: 0,
+    categories: [14],
+    tags: [404],
+    attributes: [carries(MATIERE, ["cuivre"], 0)],
+  }),
+  seeded({
+    id: 208,
+    name: "Planche à découper en olivier",
+    minutesAgo: 6780,
+    regular: "3200.00",
+    quantity: 9,
+    categories: [14],
+    tags: [401, 404],
+    attributes: [carries(MATIERE, ["bois-dolivier"], 0)],
+  }),
+  seeded({
+    id: 209,
+    name: "Savon d'Alep, lot de 3",
+    minutesAgo: 7000,
+    regular: "900.00",
+    sale: "750.00",
+    quantity: 25,
+    categories: [16],
+    tags: [401],
+  }),
+  seeded({
+    id: 210,
+    name: "Tapis kilim, 200 × 300",
+    minutesAgo: 7220,
+    status: "draft",
+    regular: "18000.00",
+    quantity: 1,
+    categories: [13],
+    // On a draft, so the facet counts neither the tag nor the matiere — the
+    // scope note's whole sentence, in one row.
+    tags: [405],
+    attributes: [carries(MATIERE, ["laine"], 0)],
+  }),
+  seeded({
+    id: 211,
+    name: "Ancienne référence retirée",
+    minutesAgo: 7440,
+    status: "trash",
+    regular: "2000.00",
+    quantity: 0,
+    categories: [10],
+  }),
+];
+
+/**
+ * The whole catalogue, newest first — which is the default order, and the order
+ * `orderby=date&order=desc` therefore reproduces exactly.
+ */
+const CATALOGUE = [...NEW_ARRIVALS, ...PRODUCTS, ...BACK_CATALOGUE];
+
+/**
+ * What `/products` lists. A trashed product is **not** listed and still reads
+ * back from `/products/{id}` with a 200 and `status: "trash"` — measured, and
+ * the reason READABLE_STATUSES in lib/product-status.ts has an entry the filter
+ * refuses. `?status=trash` is a 400, so there is no way to list it at all.
+ */
+const LISTED = CATALOGUE.filter((product) => product.status !== "trash");
+
+/**
+ * The `count` a vocabulary publishes is the **unfiltered** usage over published
+ * products, and it is computed from the rows rather than written beside them: a
+ * vocabulary whose counts disagree with the catalogue is precisely the quiet
+ * wrongness this file exists not to produce, and the panel renders these numbers
+ * next to the facet's.
+ */
+const usage = (predicate) =>
+  LISTED.filter((product) => product.status === "publish" && predicate(product)).length;
+
+const CATEGORIES = CATEGORY_TREE.map(([id, name, parent]) => ({
+  id,
+  name,
+  slug: slugify(name),
+  parent,
+  description: "",
+  count: usage((product) => product.category_ids.includes(id)),
+}));
+
+const TAGS = TAG_NAMES.map(([id, name]) => ({
+  id,
+  name,
+  slug: slugify(name),
+  count: usage((product) => product.tag_ids.includes(id)),
+}));
+
+const term = (taxonomy, base) => ([name, slug], index) => ({
+  id: base + index,
+  name,
+  slug,
+  description: "",
+  menu_order: index,
+  count: usage((product) =>
+    product.attributes.some((a) => a.name === taxonomy && a.options.includes(slug)),
+  ),
+});
+
+/** Keyed by taxonomy, because that is what a facet group and a filter both use. */
+const TERMS = {
+  pa_matiere: MATIERE_TERMS.map(term("pa_matiere", 1000)),
+  pa_couleur: COULEUR_NAMES.map((name, i) => [name, COULEUR_SLUGS[i]]).map(
+    term("pa_couleur", 1100),
+  ),
+};
+
 /* --------------------------------------------------------------- customers --- */
 
 /**
@@ -597,26 +1018,32 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
 /* -------------------------------------------------------------- inventory --- */
 
 /**
- * 33 rows: the 28 top-level products plus the 5 variations the two variable
- * products carry. `low_stock_amount` is **per product** — 2 on all but one, 5 on
- * "Miel de jujubier" — so there is no shop-wide threshold to display anywhere.
+ * Every listed product plus the 5 variations the two variable products carry.
+ * A trashed product is not in stock anywhere and is not here either, which is
+ * the same rule `/products` lists by. `low_stock_amount` is **per product** — 2
+ * on all but one, 5 on "Miel de jujubier" — so there is no shop-wide threshold
+ * to display anywhere; it is keyed on that product rather than on a row index
+ * so it stays on it as the catalogue grows around it.
  */
 const INVENTORY = [
-  ...PRODUCTS.map((product, index) => ({
-    id: product.id,
-    parent_id: 0,
-    type: product.type,
-    name: product.name,
-    sku: product.sku,
-    manage_stock: product.manage_stock,
-    managing_stock: product.manage_stock,
-    stock_managed_by_id: product.id,
-    stock_quantity: product.stock_quantity,
-    stock_status: product.stock_status,
-    backorders: "no",
-    low_stock_amount: index === 0 ? 5 : 2,
-    low_stock: product.stock_quantity !== null && product.stock_quantity <= (index === 0 ? 5 : 2),
-  })),
+  ...LISTED.map((product) => {
+    const threshold = product.id === PRODUCTS[0].id ? 5 : 2;
+    return {
+      id: product.id,
+      parent_id: 0,
+      type: product.type,
+      name: product.name,
+      sku: product.sku,
+      manage_stock: product.manage_stock,
+      managing_stock: product.manage_stock,
+      stock_managed_by_id: product.id,
+      stock_quantity: product.stock_quantity,
+      stock_status: product.stock_status,
+      backorders: "no",
+      low_stock_amount: threshold,
+      low_stock: product.stock_quantity !== null && product.stock_quantity <= threshold,
+    };
+  }),
   ...[...VARIATION_COUNTS.keys()].flatMap((parentIndex) => {
     const parent = PRODUCTS[parentIndex];
     return parent.variations.map((variationId, slot) => {
@@ -848,6 +1275,397 @@ function filterByStatus(rows, params) {
   return { rows: rows.filter((row) => row.status === status) };
 }
 
+/* -------------------------------------------------------- product filters --- */
+
+/**
+ * `/products` has its own status set and `filterByStatus` above is **not** it:
+ * that one validates against the seven order statuses, so it would answer 400
+ * for `draft` and 200 for `refunded`. The two collections happen to share a
+ * parameter name and share nothing else.
+ */
+const PRODUCT_STATUSES = ["publish", "draft", "pending", "private"];
+const STOCK_STATUSES = ["instock", "outofstock", "onbackorder"];
+
+/** WordPress lists a refused enum in its own words: "a, b, c, and d". */
+const oxford = (values) =>
+  values.length < 2
+    ? values.join("")
+    : `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+
+/** `?category=` and `?tag=` take term **ids**; `?category=tapis` is a 400. */
+const ID_LIST = "^$|^[0-9]+(,[0-9]+)*$";
+const idList = new RegExp(ID_LIST);
+
+/** What WordPress's boolean sanitiser accepts. Anything else is a 400. */
+const BOOLEANS = new Map([
+  ["true", true],
+  ["1", true],
+  ["false", false],
+  ["0", false],
+]);
+
+const invalidParam = (name, message) =>
+  fail(400, "rest_invalid_param", `Invalid parameter(s): ${name}`, {
+    params: { [name]: message },
+  });
+
+/**
+ * Read the filter set once, validating as it goes.
+ *
+ * Parsed rather than applied directly, because the facets below need the same
+ * set with one dimension knocked out — a group that excludes its own filter is
+ * not a group counted before filtering, it is a group counted with everything
+ * *else* applied.
+ */
+function parseProductFilters(params) {
+  const filters = {
+    search: (params.get("search") ?? "").trim().toLowerCase(),
+    sku: (params.get("sku") ?? "").trim().toLowerCase(),
+    status: "",
+    categories: [],
+    tags: [],
+    minPrice: null,
+    maxPrice: null,
+    stockStatus: "",
+    onSale: null,
+    featured: null,
+    attributes: new Map(),
+  };
+
+  const status = params.get("status");
+  if (status !== null && status !== "") {
+    // A comma list is a 400 by falling straight through this — the measured
+    // behaviour every single-select control in the panel is built on — and so
+    // is `trash`, which is readable and unlistable.
+    if (!PRODUCT_STATUSES.includes(status)) {
+      const message = `status is not one of ${oxford([...PRODUCT_STATUSES].sort())}`;
+      return {
+        error: fail(400, "rest_invalid_param", message, { params: { status: message } }),
+      };
+    }
+    filters.status = status;
+  }
+
+  for (const [name, key] of [
+    ["category", "categories"],
+    ["tag", "tags"],
+  ]) {
+    const raw = params.get(name);
+    if (raw === null || raw === "") continue;
+    if (!idList.test(raw)) {
+      return { error: invalidParam(name, `${name} does not match pattern ${ID_LIST}`) };
+    }
+    // An id nobody has heard of is **200 with zero rows**, not a 400: the value
+    // is well-formed and simply matches nothing.
+    filters[key] = raw.split(",").map(Number);
+  }
+
+  for (const [name, key] of [
+    ["min_price", "minPrice"],
+    ["max_price", "maxPrice"],
+  ]) {
+    const raw = params.get(name);
+    if (raw === null || raw === "") continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return { error: invalidParam(name, `${name} is not of type number.`) };
+    }
+    filters[key] = value;
+  }
+
+  const stock = params.get("stock_status");
+  if (stock !== null && stock !== "") {
+    if (!STOCK_STATUSES.includes(stock)) {
+      return {
+        error: invalidParam(
+          "stock_status",
+          `stock_status is not one of ${oxford([...STOCK_STATUSES].sort())}`,
+        ),
+      };
+    }
+    filters.stockStatus = stock;
+  }
+
+  for (const [name, key] of [
+    ["on_sale", "onSale"],
+    ["featured", "featured"],
+  ]) {
+    const raw = params.get(name);
+    // `""` is absent and `"false"` is a filter, and they are **not** the same
+    // request: one returns the whole catalogue and the other returns the rows
+    // that are not on sale. A control that conflates them stops filtering and
+    // says nothing about it.
+    if (raw === null || raw === "") continue;
+    if (!BOOLEANS.has(raw)) {
+      return { error: invalidParam(name, `${name} is not of type boolean.`) };
+    }
+    filters[key] = BOOLEANS.get(raw);
+  }
+
+  for (const [key, value] of params) {
+    const match = /^attributes\[(.+)\]$/.exec(key);
+    if (match === null || value === "") continue;
+    const taxonomy = match[1];
+    if (!ATTRIBUTES.some((attribute) => attribute.taxonomy === taxonomy)) {
+      return {
+        error: fail(400, "rest_invalid_param", "Invalid parameter(s): attributes", {
+          // **Not** `details.params`, which is where every other parameter's
+          // errors go. The attributes filter reports under `details.fields` and
+          // publishes the set it would have accepted beside it, at the `details`
+          // level — a screen that reads only `params` renders a bare generic
+          // message here and throws the useful half away.
+          fields: { attributes: `${taxonomy} is not a facetable attribute taxonomy.` },
+          facetable_attributes: ATTRIBUTES.map((attribute) => attribute.taxonomy),
+        }),
+      };
+    }
+    filters.attributes.set(taxonomy, value.split(","));
+  }
+
+  return { filters };
+}
+
+const NOTHING = new Set();
+
+/** The effective price as a number. `""` is a real value and stores as zero. */
+const priceOf = (product) =>
+  product.price === "" ? 0 : Number.parseFloat(product.price);
+
+/**
+ * One row against the filter set, with `skip` naming the dimensions to ignore.
+ *
+ * `search` is never skipped, including by the facets: measured, `?search=tapis`
+ * cut the category group from six values to two, so a search narrows the counts
+ * the way any other filter does.
+ */
+function matchesProduct(product, filters, skip = NOTHING) {
+  if (filters.search !== "") {
+    const haystack = `${product.name} ${product.sku}`.toLowerCase();
+    if (!haystack.includes(filters.search)) return false;
+  }
+  if (filters.sku !== "" && !product.sku.toLowerCase().includes(filters.sku)) return false;
+  if (!skip.has("status") && filters.status !== "" && product.status !== filters.status) {
+    return false;
+  }
+  if (
+    !skip.has("category") &&
+    filters.categories.length > 0 &&
+    !filters.categories.some((id) => product.category_ids.includes(id))
+  ) {
+    return false;
+  }
+  if (
+    !skip.has("tag") &&
+    filters.tags.length > 0 &&
+    !filters.tags.some((id) => product.tag_ids.includes(id))
+  ) {
+    return false;
+  }
+  if (!skip.has("price")) {
+    const price = priceOf(product);
+    if (filters.minPrice !== null && price < filters.minPrice) return false;
+    if (filters.maxPrice !== null && price > filters.maxPrice) return false;
+  }
+  if (
+    !skip.has("stock_status") &&
+    filters.stockStatus !== "" &&
+    product.stock_status !== filters.stockStatus
+  ) {
+    return false;
+  }
+  if (filters.onSale !== null && product.on_sale !== filters.onSale) return false;
+  if (filters.featured !== null && product.featured !== filters.featured) return false;
+
+  for (const [taxonomy, slugs] of filters.attributes) {
+    if (skip.has(`attributes[${taxonomy}]`)) continue;
+    const carried = product.attributes.find((a) => a.name === taxonomy);
+    // Values inside one attribute are alternatives; two attributes are not.
+    if (carried === undefined || !slugs.some((slug) => carried.options.includes(slug))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* ---------------------------------------------------------- product sorts --- */
+
+const fold = (value) =>
+  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+const compareBy = (key) => (a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+const descending = (compare) => (a, b) => -compare(a, b);
+
+const byDate = compareBy((product) => product.date_created);
+// Folded rather than `localeCompare`d: a collation that depends on the runtime's
+// ICU build is a screenshot that differs between machines.
+const byTitle = compareBy((product) => fold(product.name));
+const byPrice = compareBy(priceOf);
+
+/**
+ * The five combinations that were re-measured as working, and only those. See
+ * the header — `title desc` is deliberately absent and deliberately a 200.
+ */
+const PRODUCT_SORTS = new Map([
+  ["date desc", descending(byDate)],
+  ["date asc", byDate],
+  ["title asc", byTitle],
+  ["price asc", byPrice],
+  ["price desc", descending(byPrice)],
+]);
+
+function sortProducts(rows, params) {
+  // `desc` is WooCommerce's default `order`, so `?orderby=title` on its own is
+  // `title desc` and therefore unsorted.
+  const sort = PRODUCT_SORTS.get(
+    `${params.get("orderby") ?? "date"} ${params.get("order") ?? "desc"}`,
+  );
+  // A stable sort, so rows that tie keep catalogue order rather than an order
+  // that depends on the engine.
+  return sort === undefined ? rows : [...rows].sort(sort);
+}
+
+/* --------------------------------------------------------------- facets --- */
+
+/** Measured with a 60-term attribute: 50 values, `total_values: 60`, truncated. */
+const FACET_CAP = 50;
+
+/**
+ * `{values, total_values, truncated}` — the shape `category`, `tag` and each
+ * attribute group share, and which is wrong for the other two thirds of the
+ * facets object: `price` is `{min, max, currency}` and `stock_status` is a bare
+ * array. One "facet group" type would be wrong twice.
+ *
+ * **A zero-count value is omitted entirely**, and `total_values` counts what is
+ * left rather than the vocabulary — measured, an attribute with six terms one of
+ * which no product carries reports 5. That is why the panel merges this against
+ * `/product-categories` and `/attributes/{id}/terms` instead of rendering it.
+ */
+function facetGroup(vocabulary, rows, holds) {
+  const values = [];
+  for (const value of vocabulary) {
+    const count = rows.filter((product) => holds(product, value)).length;
+    if (count === 0) continue;
+    values.push({ slug: value.slug, name: value.name, count, term_id: value.id });
+  }
+  return {
+    values: values.slice(0, FACET_CAP),
+    total_values: values.length,
+    truncated: values.length > FACET_CAP,
+  };
+}
+
+/**
+ * `meta.facets`, and only the groups `?facets=` asked for.
+ *
+ * Counted over **published** rows always, whatever `?status=` says — that is
+ * what `scope: "publish"` means and why `scope_note` exists to be rendered.
+ */
+function facetsFor(params, filters) {
+  const asked = new Set(
+    (params.get("facets") ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+  if (asked.size === 0) return null;
+
+  const base = (dimension = null) =>
+    LISTED.filter(
+      (product) =>
+        product.status === "publish" &&
+        matchesProduct(
+          product,
+          filters,
+          new Set(dimension === null ? ["status"] : ["status", dimension]),
+        ),
+    );
+
+  const facets = {
+    scope: "publish",
+    scope_note:
+      "Counts cover published products only. Drafts, pending and private products are listed but not counted.",
+  };
+
+  // **`category` and `tag` do not exclude their own filter and everything else
+  // does.** Measured: `?category=16` collapses this group to that one value and
+  // drops the other five, while an attribute group, `stock_status` and `price`
+  // all still report their full range under their own. lib/products.ts repairs
+  // it in the panel; reproducing the repair here would hide the thing the repair
+  // is for.
+  if (asked.has("category")) {
+    facets.category = facetGroup(CATEGORIES, base(), (product, value) =>
+      product.category_ids.includes(value.id),
+    );
+  }
+  if (asked.has("tag")) {
+    facets.tag = facetGroup(TAGS, base(), (product, value) =>
+      product.tag_ids.includes(value.id),
+    );
+  }
+
+  if (asked.has("price")) {
+    const prices = base("price").map(priceOf);
+    facets.price = {
+      // `0.00` is a real floor: a published product with no price at all stores
+      // zero in WooCommerce's lookup table, and this shop has one.
+      min: (prices.length === 0 ? 0 : Math.min(...prices)).toFixed(2),
+      max: (prices.length === 0 ? 0 : Math.max(...prices)).toFixed(2),
+      currency: "DZD",
+    };
+  }
+
+  if (asked.has("stock_status")) {
+    const rows = base("stock_status");
+    // A bare array, and **every value of the enum including the zeros** — the
+    // one group the API can enumerate completely, because it is a closed set
+    // rather than a taxonomy.
+    facets.stock_status = STOCK_STATUSES.map((value) => ({
+      value,
+      count: rows.filter((product) => product.stock_status === value).length,
+    }));
+  }
+
+  if (asked.has("rating")) {
+    // Also a bare array, and `[]` on every request: no product in this shop has
+    // a review. Measured, and the reason the panel does not ask for it.
+    facets.rating = [];
+  }
+
+  if (asked.has("attributes")) {
+    facets.attributes = {
+      facetable: ATTRIBUTES.map((attribute) => attribute.taxonomy),
+      note: "Only global attributes can be filtered. A local attribute has no shared vocabulary and no term to count.",
+      groups: ATTRIBUTES.map((attribute) => ({
+        taxonomy: attribute.taxonomy,
+        label: attribute.name,
+        ...facetGroup(
+          TERMS[attribute.taxonomy],
+          base(`attributes[${attribute.taxonomy}]`),
+          (product, value) =>
+            product.attributes.some(
+              (a) => a.name === attribute.taxonomy && a.options.includes(value.slug),
+            ),
+        ),
+      })),
+    };
+  }
+
+  return facets;
+}
+
+/** The whole `/products` listing: filter, sort, paginate, then count. */
+function productsListing(params) {
+  const parsed = parseProductFilters(params);
+  if (parsed.error) return parsed.error;
+
+  const rows = LISTED.filter((product) => matchesProduct(product, parsed.filters));
+  const page = paginate(sortProducts(rows, params), params);
+  if (page.error) return page.error;
+
+  const facets = facetsFor(params, parsed.filters);
+  return ok(page.rows, facets === null ? page.meta : { ...page.meta, facets });
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -886,10 +1704,25 @@ export function respond(method, pathname, searchParams = new URLSearchParams()) 
     });
   }
 
-  if (segments.length > 2) return notFound();
+  /*
+   * Depth is decided **per collection** below, not once here.
+   *
+   * This used to be a flat `if (segments.length > 2) return notFound()`, which
+   * makes a three-segment route unreachable no matter how it is written further
+   * down — `/attributes/{id}/terms` could never have answered. Moving the guard
+   * to `> 3` and no further would be the opposite mistake: `/orders/1000/notes`
+   * would then be served the order itself, which is a 200 for a route nobody
+   * wrote and exactly the quiet wrong answer this file must not produce.
+   *
+   * So the ceiling here is the deepest route that exists, and every collection
+   * that has no sub-resource says so — `collectionOf` refuses a third segment
+   * for all of them at once.
+   */
+  if (segments.length === 0 || segments.length > 3) return notFound();
 
   /** The list/detail pair every collection below shares. */
   const collectionOf = (rows, { search, status, detail }) => {
+    if (segments.length > 2) return notFound();
     if (second !== undefined) {
       const id = numericId(second);
       const row = id === null ? undefined : rows.find((candidate) => candidate.id === id);
@@ -923,10 +1756,61 @@ export function respond(method, pathname, searchParams = new URLSearchParams()) 
         ],
       });
 
-    case "products":
-      return collectionOf(PRODUCTS, {
-        search: (product) => [product.name, product.sku],
+    case "products": {
+      if (segments.length > 2) return notFound();
+      if (second !== undefined) {
+        const id = numericId(second);
+        // The whole catalogue, not the listed part: a trashed product answers
+        // 200 with `status: "trash"` here and appears in no listing at all.
+        const row = id === null ? undefined : CATALOGUE.find((p) => p.id === id);
+        return row === undefined ? notFound() : ok(row);
+      }
+      return productsListing(searchParams);
+    }
+
+    case "product-categories":
+      // Paginated — the panel asks for `per_page=100` — and flat, with `parent`
+      // carrying the tree and `count` the unfiltered usage the facet's own
+      // counts are merged against.
+      return collectionOf(CATEGORIES, {});
+
+    case "attributes": {
+      const attributeOf = () => ATTRIBUTES.find((a) => a.id === numericId(second));
+
+      if (segments.length === 3) {
+        /*
+         * The only sub-resource in this API, and the reason the depth guard
+         * above had to be relaxed properly rather than special-cased.
+         *
+         * **This is where a term with `count: 0` exists.** A facet group omits
+         * its zero-count values entirely, so the vocabulary is not derivable
+         * from `/products` at any price — without this route the filter sheet
+         * can only ever offer the values that already match, and picking one
+         * deletes its siblings.
+         */
+        if (segments[2] !== "terms") return notFound();
+        const attribute = attributeOf();
+        if (attribute === undefined) return notFound();
+        const page = paginate(TERMS[attribute.taxonomy], searchParams);
+        return page.error ?? ok(page.rows, page.meta);
+      }
+
+      if (second !== undefined) {
+        const attribute = attributeOf();
+        return attribute === undefined ? notFound() : ok(attribute);
+      }
+
+      // Unpaginated, like /locations/wilayas: the panel fetches this with no
+      // params at all, and a default `per_page` of 10 would silently drop the
+      // shop's later attributes — and every facet group keyed on them with
+      // nothing reporting an error.
+      return ok(ATTRIBUTES, {
+        total: ATTRIBUTES.length,
+        page: 1,
+        per_page: ATTRIBUTES.length,
+        total_pages: 1,
       });
+    }
 
     case "customers":
       return collectionOf(CUSTOMERS, {
@@ -954,11 +1838,11 @@ export function respond(method, pathname, searchParams = new URLSearchParams()) 
        *
        * It returns the same item as `/inventory`, `/inventory/{id}` and
        * `/inventory/lookup` — lib/api/schemas/inventory.ts says so explicitly,
-       * verified across all 33 rows — so one row shape serves it. `/lookup` is
+       * verified across every row — so one row shape serves it. `/lookup` is
        * still a 404 here: nothing calls it on load, and an endpoint nobody
        * reaches must stay unreachable.
        */
-      if (second === "low-stock") {
+      if (segments.length === 2 && second === "low-stock") {
         const low = INVENTORY.filter((row) => row.low_stock);
         const page = paginate(low, searchParams);
         return page.error ?? ok(page.rows, page.meta);

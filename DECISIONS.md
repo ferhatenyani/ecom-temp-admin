@@ -16,8 +16,8 @@ than left to look like an oversight.
 
 ```
 [x]  0. Harness — mock API, capture script, this file
-[x]  1. Orders — list
-[ ]  2. Products — list
+[x]  1. Orders — list        (inherited; merged before this run began)
+[x]  2. Products — list
 [ ]  3. Orders — detail
 [ ]  4. Products — detail + form
 [ ]  5. Customers — list + detail
@@ -84,3 +84,110 @@ Not a screen. The thing every later screen is verified with.
 - **Notes:** the harness asserts the mock actually received requests. Without
   that, a panel still pointed at `localhost:8090` renders error states at every
   breakpoint and the capture passes on twelve screenshots of nothing.
+
+---
+
+## 1. Orders — list — inherited
+
+Merged before this run began, in `f126fcf`, and reconstructed here from its own
+source comments so the ledger is not missing its reference screen.
+
+- Layout: `PageHeader` + `PageBody width="full"`; `DataTable` at `md`+ and
+  `RecordList` below, one column definition feeding both.
+- Columns / sections: number · customer · place · created · total · status by
+  default; items, payment, modified and id behind the column picker. `place` is
+  filled on ~8% of orders by wilaya and 27% by city and is still default,
+  because a dispatcher scans for it; `payment_method_title` is optional because
+  it is a long string saying the same thing on nearly every row.
+- Filters: status tabs and search — **both measured**. `?status=processing,pending`
+  is a 400, which is why the tabs are single-select; `?search=Nadia` takes 633
+  rows to 92.
+- Sorting: **none.** The columns carry `sortKey` and the primitive supports it,
+  but `orderby` on this collection was never verified and has a measured history
+  of being accepted and ignored.
+- Bulk: export only, built client-side from rows in memory —
+  `/api/export/orders` forwards only `limit` and cannot be asked for a set of
+  ids, and widening it is a security-surface change for a convenience.
+- Row click: drawer peek at `?peek=id`. Free, because `GET /orders/{id}` returns
+  the same object as the list row.
+- Omitted deliberately: date-range filter — `date_from`/`date_to` exist in
+  `collectionParams()` and are unverified against the same failure mode.
+- Notes: it is the one list that polls, at 30 s, paused when the document is
+  hidden. Nothing below 30 s — reads are 600/min per credential and shared
+  across every tab a person has open.
+- **Debt it left, found while scouting page 3:** `e2e/orders.spec.ts` still
+  asserts old-system markup — ten `a[href*="/orders/"]` row-anchor selectors
+  against a `DataTable` that emits no anchor at all, plus a
+  `getByRole("radiogroup")` and a `span.tonal`. Being fixed with the Orders
+  detail, which owns that file. `orders/OrderRow.tsx` is also dead — nothing
+  imports it — and goes in the teardown.
+
+---
+
+## 2. Products — list — 2026-08-24
+
+- Layout: `PageHeader` + `PageBody width="full"`; `DataTable` at `md`+,
+  `RecordList` below, one `columns.tsx` feeding both. Same shape as Orders.
+- Columns / sections: name · sku · created · stock · price · status by default;
+  category, type, featured, id and modified behind the picker.
+- Filters: status tabs (single-select — `?status=draft,publish` is a 400) and
+  search in the toolbar; the other seven dimensions in a `Drawer` behind one
+  Filters button carrying a count. Draft-then-apply, so one history entry and
+  one refetch per intent rather than one per checkbox — the best thing about the
+  screen this replaces, and it survived. Chips are one per **value**, so
+  removing "Laine" does not also remove "Coton". `trash` is not a tab:
+  `?status=trash` is a 400, though a trashed product still reads back 200.
+- Sorting: **ships, and this is the only screen in the run where it does.**
+  `lib/product-status.ts:64-86` records that the silent-ignore was repaired in
+  the backend and exactly five combinations were re-measured — date desc, date
+  asc, title asc, price asc, price desc. So: name ascending **only** (nobody
+  ever measured `title desc`), created both, price both. Nothing else.
+- Bulk: **export only — no bulk endpoint.** The brief for this run asserted
+  `POST /products/bulk` exists and it does not: one word in one shorthand list
+  in `ADMIN_PANEL.md:1477`, no verb, no body, no response shape, no measurement,
+  and `lib/api/allowlist.ts` plus `tests/boundary.test.ts:196` both assert it
+  must stay unreachable. Nothing was added to the allowlist.
+- Row click: drawer peek at `?peek=id`. Free — `lib/api/schemas/product.ts:8-12`
+  measures the two key sets identical across all 28 products.
+- Omitted deliberately:
+  - **Thumbnail column** — every product in this shop has `image: null`, so it
+    would be a column of empty squares.
+  - **A separate SKU box** — `search` already covers name and SKU. The `sku`
+    param still works end to end and still renders a removable chip.
+  - **A create action on the no-data empty state** — `POST /products` is not
+    allowlisted and no screen creates a product.
+  - **`title desc`** — see sorting.
+- Notes: four defects surfaced that were **already live on Orders** and are
+  fixed in the primitive, so Orders inherits all of them.
+  1. Sortable column headers lost their uppercase — a `<th>` computes
+     `uppercase` but a nested `<button>` does not inherit it, so the header row
+     read `PRODUIT · SKU · CRÉÉ · STOCK · PRIX · STATUT` with the sortable ones
+     in mixed case. The rule moved to `.ui-th, .ui-th button` in `globals.css`.
+  2. `aria-sort` was gated on `column.sortKey` alone rather than on a handler
+     existing. Orders declares `sortKey` on three columns and deliberately
+     passes no `onSortChange`, so those headers announced `aria-sort="none"` —
+     which in ARIA means *sortable, currently unsorted*. The table was telling a
+     screen reader it could be sorted by columns nothing on screen can sort.
+  3. The column picker and density toggle rendered below `md`, where
+     `RecordList` — which takes neither `visible` nor `density` — is what shows.
+     Two controls that changed nothing. Now `md:flex` in the primitive.
+  4. Rows were 51px against DESIGN.md §1.4's 48, because inline cell content
+     makes the row height a line box and a badge and an icon-only button hang
+     below the baseline. Cells are flex now; measured 48/49 on both screens.
+  Also: `created` is in the default column set specifically because `aria-sort`
+  lives on the header — hidden, it meant no header carried the sort state while
+  the panel had explicitly sent `orderby=date&order=desc`.
+  Focus restoration was broken panel-wide, not just here: Radix's modal
+  `Dialog.Content` restores focus to `Dialog.Trigger`, which no overlay in this
+  panel renders, so Escape dropped focus to `<body>` from every Modal, Drawer
+  and ConfirmDialog. Fixed in `Overlay`.
+  DESIGN.md §3.4 was amended: a form section heading inside an overlay drops to
+  `--text-subheading`, because `OverlayFrame` gives the overlay's own title
+  `--text-heading` and a section under it otherwise renders at exactly the size
+  and weight of that title.
+- **Known gap, deliberate:** the sticky first column has no divider at its
+  frozen edge. Mid-scroll in Arabic the neighbouring header is cut mid-word,
+  which reads slightly like clipped text. An always-on hairline would put a
+  permanent vertical rule into all eighteen remaining list tables at every
+  width, and a scroll-driven one needs a scroll listener in the primitive.
+  Deferred rather than decided here.

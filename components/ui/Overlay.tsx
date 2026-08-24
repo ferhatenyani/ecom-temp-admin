@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { IconButton } from "./Button";
 
@@ -43,6 +43,45 @@ const DRAWER_WIDTH: Record<Size, string> = {
   lg: "sm:w-160",
   xl: "sm:w-200",
 };
+
+/**
+ * Focus restoration, which Radix does **not** do for a controlled overlay.
+ *
+ * `Dialog.Content` in its modal form composes its own `onCloseAutoFocus` that
+ * calls `preventDefault()` — cancelling `FocusScope`'s restore — and then focuses
+ * `context.triggerRef.current`. That ref is only ever set by a rendered
+ * `<Dialog.Trigger>`, and every overlay in this panel is driven by an `open`
+ * prop from a button that lives somewhere else entirely: a toolbar, a table row,
+ * a menu item. So the ref is null, the restore is cancelled, nobody focuses
+ * anything, and focus lands on `<body>` — measured on the products filter
+ * drawer, where Escape dropped the keyboard back to the top of the document and
+ * a person had to tab past the whole sidebar to reach the control they had just
+ * used.
+ *
+ * `onOpenAutoFocus` fires before `FocusScope` moves focus into the content, so
+ * `document.activeElement` at that moment is still whatever opened the overlay.
+ * Recording it there and focusing it back on close is the whole fix. Both
+ * handlers run before Radix's own — `composeEventHandlers` puts the prop first
+ * and skips its internal one once `preventDefault()` has been called.
+ */
+function useOpenerFocus() {
+  const opener = useRef<HTMLElement | null>(null);
+
+  return {
+    onOpenAutoFocus: () => {
+      opener.current = document.activeElement as HTMLElement | null;
+    },
+    onCloseAutoFocus: (event: Event) => {
+      /* Only when the opener is still in the document. A row's action menu can
+         be gone by the time its drawer closes — a filter changed underneath it —
+         and focusing a detached node silently does nothing, which is worse than
+         letting Radix's own fallback run. */
+      if (!opener.current?.isConnected) return;
+      event.preventDefault();
+      opener.current.focus();
+    },
+  };
+}
 
 /**
  * The shared chrome: a header that does not scroll, a body that does, and a
@@ -124,11 +163,13 @@ export function Modal({
    */
   footer?: ReactNode;
 }) {
+  const focus = useOpenerFocus();
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-scrim fixed inset-0 z-40" />
-        <Dialog.Content className={`ui-modal z-50 ${MODAL_WIDTH[size]}`}>
+        <Dialog.Content className={`ui-modal z-50 ${MODAL_WIDTH[size]}`} {...focus}>
           <OverlayFrame title={title} description={description} footer={footer}>
             {children}
           </OverlayFrame>
@@ -161,6 +202,8 @@ export function Drawer({
   /** A link or action beside the title — "open full page", typically. */
   headerExtra?: ReactNode;
 }) {
+  const focus = useOpenerFocus();
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -168,6 +211,7 @@ export function Drawer({
         <Dialog.Content
           data-side={side}
           className={`ui-drawer z-50 ${DRAWER_WIDTH[size]}`}
+          {...focus}
         >
           <OverlayFrame
             title={title}

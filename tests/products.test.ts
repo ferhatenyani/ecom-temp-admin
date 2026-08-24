@@ -247,7 +247,18 @@ describe("the query model", () => {
       pa_matiere: "laine,argent",
       pa_couleur: "rouge",
     });
-    expect(query.page).toBe(3);
+    /*
+     * The page is **not** read from the URL, and a `?page=3` on an incoming link
+     * is deliberately ignored. It lives in component state now, matching the
+     * orders list — see the docblock in query.ts for why the redesign moved it
+     * and what it would take to move it back everywhere at once.
+     *
+     * Asserted rather than deleted, because "the page is not in the URL" is the
+     * fact the round-trip below depends on: a `page` that parsed in and never
+     * wrote back out would fail it.
+     */
+    expect(query.page).toBe(1);
+    expect(toUrlParams(query).has("page")).toBe(false);
 
     // Back out again, unchanged.
     expect(queryFromParams(toUrlParams(query))).toEqual(query);

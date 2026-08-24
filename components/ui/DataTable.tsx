@@ -31,6 +31,24 @@ export type Column<T> = {
   align?: "start" | "end";
   /** Sort key sent to the API. Omit for a column the API cannot sort. */
   sortKey?: string;
+  /**
+   * Which directions this column's header cycles through, in order. Defaults to
+   * both, ascending first — `none → asc → desc → none`.
+   *
+   * It exists because "the API sorts this column" and "the API sorts this column
+   * *both ways*" are different facts, and this one has been measured to differ.
+   * On `/products`, `title asc` is honoured and `title desc` was never measured
+   * at all: it is accepted with a 200 and comes back in default order. A header
+   * that cycled to descending would look like it worked and silently would not,
+   * which is the exact failure mode the sort controls were withheld for on the
+   * orders list.
+   *
+   * So a caller names the directions it has evidence for. `["asc"]` gives a
+   * header that goes `none → ascending → none` and never claims the third state;
+   * `["desc", "asc"]` starts a date column at newest-first, which is where its
+   * resting order already is.
+   */
+  sortDirections?: readonly ("asc" | "desc")[];
   /** Hidden by default; revealed through the column picker. */
   optional?: boolean;
   /** Never hideable — the identifier column. */
@@ -121,7 +139,26 @@ export function useTablePreferences<T>(
   };
 }
 
-/** The column picker and density switch, as one control cluster. */
+/**
+ * The column picker and density switch, as one control cluster.
+ *
+ * **It does not render below `md`, and that is the point of putting the
+ * breakpoint here rather than at each call site.** Both controls change the
+ * *table*: `visible` decides which columns `<Table>` draws and `density` picks
+ * its row padding. Below `md` the table is `hidden` and `RecordList` is what a
+ * person is looking at — and `RecordList` takes neither prop. Its three lines are
+ * chosen in the page's `record()` and its rows are one height.
+ *
+ * So on a phone these were two buttons, each opening a popover, each toggling a
+ * stored preference that changed nothing on screen. That is precisely the defect
+ * this redesign exists to stamp out — the reason the orders list ships no sort
+ * control at all is that a control which silently does nothing is worse than no
+ * control — and two of them were sitting in the toolbar of both migrated screens.
+ *
+ * The preference itself still persists: someone who set "compact" on a laptop
+ * still gets compact rows there after visiting on a phone. Only the control is
+ * withheld, at the width where it has nothing to act on.
+ */
 export function TableControls<T>({
   columns,
   visible,
@@ -140,14 +177,14 @@ export function TableControls<T>({
   const [densityOpen, setDensityOpen] = useState(false);
 
   return (
-    <div className="flex shrink-0 items-center gap-2">
+    <div className="hidden shrink-0 items-center gap-2 md:flex">
       <Popover
         open={densityOpen}
         onOpenChange={setDensityOpen}
         title={t("density")}
         trigger={
           <Button variant="secondary" size="sm" icon="density" iconEnd="chevron">
-            <span className="hidden sm:inline">{t("density")}</span>
+            {t("density")}
           </Button>
         }
       >
@@ -179,7 +216,7 @@ export function TableControls<T>({
         title={t("columns")}
         trigger={
           <Button variant="secondary" size="sm" icon="columns" iconEnd="chevron">
-            <span className="hidden sm:inline">{t("columns")}</span>
+            {t("columns")}
           </Button>
         }
       >
@@ -214,6 +251,31 @@ export function TableControls<T>({
 }
 
 export type SortState = { key: string; direction: "asc" | "desc" } | null;
+
+const BOTH_DIRECTIONS = ["asc", "desc"] as const;
+
+/**
+ * The next sort state for a header click.
+ *
+ * A column's `sortDirections` is the whole cycle: the current direction's
+ * position in that list decides what comes next, and running off the end is
+ * "unsorted". An unsorted column starts at index -1, so the first click lands on
+ * the list's first entry — which is why a date column declaring
+ * `["desc", "asc"]` opens at newest-first rather than at oldest.
+ *
+ * A stored direction the list does not contain — a stale URL, a column whose
+ * evidence has since narrowed — also reads as -1 and restarts the cycle rather
+ * than sending a combination nobody measured.
+ */
+function nextSort(
+  key: string,
+  directions: readonly ("asc" | "desc")[] = BOTH_DIRECTIONS,
+  current: "asc" | "desc" | null,
+): SortState {
+  const index = current === null ? -1 : directions.indexOf(current);
+  const next = directions[index + 1];
+  return next === undefined ? null : { key, direction: next };
+}
 
 /**
  * The table itself. `md` and up.
@@ -254,13 +316,37 @@ function Table<T>({
   const allSelected = allKeys.length > 0 && allKeys.every((k) => selected.includes(k));
   const someSelected = allKeys.some((k) => selected.includes(k));
 
+  /*
+   * Where the identifying column's frozen edge sits — see `.ui-col-sticky`.
+   *
+   * `start-10` against the checkbox column's `w-10`: the same spacing step, so
+   * the two edges abut by construction rather than by a measured pixel someone
+   * has to keep in sync. Both are `--spacing`-derived, so Arabic's 106.25% root
+   * scales the offset and the column it clears by the same factor.
+   *
+   * That is also why the checkbox header carries `min-w-10` as well as `w-10`,
+   * which is load-bearing rather than belt-and-braces. In an auto-layout table a
+   * `width` is a *preference*, and once the table overflows — which is precisely
+   * when a frozen column matters — Chromium collapses that column to its 36px
+   * min-content. Measured at 768: the checkbox cell was 36.0px wide while the
+   * name column froze at 40, so four pixels of scrolled row showed through
+   * between them. A `min-width` is a floor and is honoured; both now measure
+   * 40.0px in French and 42.5px in Arabic, which is the same 2.5rem.
+   *
+   * With selection off there is nothing in front of it and it freezes at 0.
+   */
+  const identityStart = selectable ? "start-10" : "start-0";
+
   return (
     <div className="ui-table-scroll">
       <table className="ui-table">
         <thead>
           <tr>
             {selectable ? (
-              <th scope="col" className="ui-th w-10 ps-4 pe-1">
+              <th
+                scope="col"
+                className="ui-th ui-col-sticky start-0 w-10 min-w-10 ps-4 pe-1"
+              >
                 <Checkbox
                   checked={allSelected}
                   indeterminate={someSelected && !allSelected}
@@ -276,20 +362,34 @@ function Table<T>({
               </th>
             ) : null}
 
-            {columns.map((column) => {
+            {columns.map((column, index) => {
               /* Guarded on `column.sortKey` too, not just on `sort`: an
                  unsortable column has `sortKey === undefined`, and with no sort
                  applied `sort?.key` is also undefined — so the loose comparison
                  would mark every plain column as sorted. */
               const sorted =
                 column.sortKey && sort?.key === column.sortKey ? sort.direction : null;
+              /*
+               * Sortable means *this table* can sort it, not merely that the
+               * column knows a key. `aria-sort` is the same claim as the button,
+               * so it is gated on the same condition.
+               *
+               * Measured on the orders list, which declares `sortKey` on three
+               * columns and passes no `onSortChange` — deliberately, because the
+               * API's `orderby` was never verified for orders. Those three
+               * headers rendered no button and still announced
+               * `aria-sort="none"`, which in ARIA means "sortable, currently
+               * unsorted": the table told a screen-reader user it could be sorted
+               * by columns nothing on screen can sort.
+               */
+              const sortable = Boolean(column.sortKey && onSortChange);
               const alignEnd = column.align === "end";
               return (
                 <th
                   key={column.key}
                   scope="col"
                   aria-sort={
-                    column.sortKey
+                    sortable
                       ? sorted === "asc"
                         ? "ascending"
                         : sorted === "desc"
@@ -297,20 +397,29 @@ function Table<T>({
                           : "none"
                       : undefined
                   }
-                  className={`ui-th px-3 py-2.5 text-ui-overline text-ui-muted uppercase ${
+                  /* The uppercase lives on `.ui-th` in globals.css, not on a
+                     utility here — a `<button>` inside this cell does not
+                     inherit `text-transform` and the rule has to reach it. */
+                  className={`ui-th px-3 py-2.5 text-ui-overline text-ui-muted ${
                     alignEnd ? "text-end" : "text-start"
-                  } ${column.width ?? ""}`}
+                  } ${index === 0 ? `ui-col-sticky ${identityStart}` : ""} ${
+                    column.width ?? ""
+                  }`}
                 >
-                  {column.sortKey && onSortChange ? (
+                  {sortable ? (
                     <button
                       type="button"
                       onClick={() =>
-                        onSortChange(
-                          sorted === "asc"
-                            ? { key: column.sortKey!, direction: "desc" }
-                            : sorted === "desc"
-                              ? null
-                              : { key: column.sortKey!, direction: "asc" },
+                        /* The cycle walks the column's own direction list and
+                           falls off the end into `null`. With the default list
+                           that is the familiar none → asc → desc → none; with a
+                           one-entry list the third state simply does not exist,
+                           and `aria-sort` goes ascending → none. */
+                        /* `?.` only because `sortable` is a boolean and does not
+                           narrow the prop for TypeScript; it is always defined
+                           here by construction. */
+                        onSortChange?.(
+                          nextSort(column.sortKey!, column.sortDirections, sorted),
                         )
                       }
                       className={`ui-ring ui-interactive inline-flex cursor-pointer items-center gap-1 rounded-ui-sm hover:text-ui-fg ${
@@ -356,7 +465,7 @@ function Table<T>({
                   /* The checkbox cell stops propagation so ticking a row does
                      not also open it. */
                   <td
-                    className={`ui-td ps-4 pe-1 ${CONTROL_PAD[density]}`}
+                    className={`ui-td ui-col-sticky start-0 ps-4 pe-1 ${CONTROL_PAD[density]}`}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <Checkbox
@@ -384,9 +493,44 @@ function Table<T>({
                       {...(Cell === "th" ? { scope: "row" as const } : {})}
                       className={`ui-td px-3 text-ui-compact ${ROW_PAD[density]} ${
                         alignEnd ? "text-end" : "text-start"
-                      } ${index === 0 ? "font-medium text-ui-fg" : "text-ui-muted"}`}
+                      } ${
+                        index === 0
+                          ? `ui-col-sticky ${identityStart} font-medium text-ui-fg`
+                          : "text-ui-muted"
+                      }`}
                     >
-                      {content}
+                      {/*
+                       * Every cell's content is a flex box, and that is what
+                       * makes the row height a number rather than a font
+                       * accident.
+                       *
+                       * Left as inline content, a cell's height is its *line
+                       * box*, which is the union of the text's own ascent and
+                       * descent with the baseline of whatever inline-level thing
+                       * a column happens to render. A status badge is 11px text
+                       * in a 20px box, a leading dot is an empty inline-block
+                       * whose synthesised baseline is its bottom edge — each one
+                       * hangs a little below the text's baseline and stretches
+                       * the line box. Measured on this screen: 20px of content
+                       * produced a 22px line box, so every row with a badge or a
+                       * dot in it stood 51px against the 48px DESIGN.md §1.4
+                       * specifies and the 49px `TableSkeleton` draws. Compounded
+                       * over eight skeleton rows that is 16px of shift the
+                       * moment data lands.
+                       *
+                       * Flex items contribute their height and no baseline, so
+                       * the cell is exactly as tall as its tallest child, in
+                       * every column and on every screen. `justify-end` replaces
+                       * `text-end` for the same reason it has to: text alignment
+                       * does not reach a flex line.
+                       */}
+                      <span
+                        className={`flex min-w-0 items-center ${
+                          alignEnd ? "justify-end" : ""
+                        }`}
+                      >
+                        {content}
+                      </span>
                     </Cell>
                   );
                 })}
@@ -396,7 +540,23 @@ function Table<T>({
                     className={`ui-td px-1 ${CONTROL_PAD[density]}`}
                     onClick={(event) => event.stopPropagation()}
                   >
-                    {rowActions(row)}
+                    {/*
+                     * A flex wrapper, and it is what makes the row height
+                     * deterministic rather than a cosmetic nicety.
+                     *
+                     * The actions trigger is a 28px `inline-flex` whose only
+                     * child is an `<svg>` — no in-flow text, so the flex box has
+                     * no baseline to expose and the browser synthesises one at
+                     * its bottom margin edge. Left inline, it therefore sat
+                     * entirely *above* the cell's baseline and dragged the line
+                     * box to 30px, making every row in the panel 50.4px against
+                     * the 48px DESIGN.md §1.4 specifies and the 49px
+                     * `TableSkeleton` draws. As a flex item it contributes its
+                     * height and nothing else.
+                     */}
+                    <div className="flex items-center justify-center">
+                      {rowActions(row)}
+                    </div>
                   </td>
                 ) : null}
               </tr>
@@ -448,7 +608,7 @@ function Checkbox({
       />
       <span
         aria-hidden="true"
-        className={`ui-interactive flex size-4 shrink-0 items-center justify-center rounded-ui-sm border peer-focus-visible:border-ui-accent peer-focus-visible:shadow-ui-sm ${
+        className={`ui-interactive ui-ring-peer flex size-4 shrink-0 items-center justify-center rounded-ui-sm border ${
           checked || indeterminate
             ? "border-ui-fg bg-ui-fg text-ui-surface"
             : "border-ui-line-control bg-ui-surface"
