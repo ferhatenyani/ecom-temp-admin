@@ -109,8 +109,23 @@ assertions passed. Only the cross-capture light-vs-dark comparison caught it.
 - Nine filter dimensions: status tabs and search in the toolbar, the other seven
   in a `Drawer` with draft-then-apply, so one refetch per intent rather than one
   per checkbox. Chips are one per **value**.
-- **Sorting ships here and nowhere else** — five combinations were re-measured
-  after a backend repair. Name ascending only; nobody ever measured `title desc`.
+- **Sorting ships here on five columns** — name, SKU, created, price and id,
+  both directions each. `popularity` sorts and gets no header: the API orders by
+  `total_sales` and emits it on no response, so there is no cell to put under the
+  label. It stays reachable by URL, as `customers` treats the two `orderby`
+  values it accepts and does not offer. `menu_order` and `rating` are out —
+  every product carries 0 for both, so neither control could act.
+
+**This said "five combinations, name ascending only" until 2026-08-25, and had
+been wrong for two branches.** The 2026-08-18 measurement was real; the backend
+repair outgrew it and nothing re-took it, because the backend suite stayed green
+on a fixture where id, title, sku and price all produced one identical sequence —
+so any of them could stand in for another, and its stated control compared price
+*ascending* against date *descending*, which differ even when `orderby` is
+ignored outright. Re-measured over the full catalogue against each field's own
+implied order: `date` 16 distinct, `id` 28, `title` 28, `price` 21, `sku` 28,
+`popularity` 13. `title desc` — recorded here as never measured — had been
+working the whole time.
 - Bulk: export only. `POST /products/bulk` does not exist in any verifiable form.
 - Omitted: thumbnail column (every product has `image: null`), separate SKU box,
   create action (`POST /products` is not allowlisted).
@@ -368,14 +383,14 @@ sentence quoted here and in `CouponForm` until now was the mock's invention.
   no screen branches on it today, which was checked rather than assumed. That
   request-for-request diff is now the thing to run on any collection before
   trusting it — it caught in one pass what three readings of the file had not.
-- **`/products` sorting is dated 2026-08-18 and a 2026-08-25 probe contradicts
-  it.** `title desc`, `sku asc` and `id asc` came back genuinely sorted where the
-  mock pins all three dead, so the "five combinations" claim is stale. Behaviour
-  deliberately unchanged — it reaches the products screen, so it is a scope call,
-  not a mock repair — and both the mock and the unit suite now carry the date and
-  the contradiction. **Re-measurement pending.** Sort *validation* was a separate
-  question and is fixed: the suite's `orderby=nonsense` 200 was a real
-  pre-repair measurement that outlived its repair and was never re-taken.
+- **Re-measure every collection's `orderby` before trusting it.** Two of them
+  were recorded dead and were not, and in both cases the record outlived a
+  backend repair rather than ever having been wrong. `/orders`, `/customers`,
+  `/customers/{id}/orders` and `/notifications` all still carry "accepted and
+  ignored" from dates nobody has revisited. The check is cheap and the shape is
+  known: compare each value's full id sequence against **the order its own field
+  implies**, never against the collection's default, and count the distinct
+  values so a fixture that ties on every row cannot pass as proof.
 - `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
   Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
 - The sticky first column has no divider at its frozen edge.

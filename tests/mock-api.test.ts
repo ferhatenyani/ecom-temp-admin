@@ -3324,29 +3324,30 @@ describe("query parameters", () => {
   });
 
   /**
-   * **The narrow exception, and both halves of it.** `/products` sorts, for
-   * exactly the five combinations `SORTS` in lib/product-status.ts records as
-   * re-measured after the backend repair — and for nothing else. `title desc`
-   * is the case that matters: nobody measured it, so it is accepted with a 200
-   * and comes back unsorted.
+   * **`/products` sorts twelve of its sixteen combinations**, re-measured
+   * 2026-08-25 over the full 28-row catalogue, each ordering checked against the
+   * order its own field implies rather than against "differs from the default",
+   * with the distinct-value count that backs it:
    *
-   * Compared as id sequences, the way the live router was measured.
+   *     date 16 · id 28 · title 28 · price 21 · sku 28 · popularity 13
    *
-   * ── **Dated 2026-08-18, and contradicted 2026-08-25** ────────────────────
+   * This test asserted **five** until that date, on a measurement taken
+   * 2026-08-18 — and the backend repair had already outgrown it. `title desc`
+   * was pinned here as the case that proved the list was five and not six;
+   * it had been working the whole time.
    *
-   * A probe on 2026-08-25 got genuine reverse-alphabetical from `title desc`,
-   * genuine SKU order from `sku asc` and genuine id order from `id asc` — all
-   * three pinned dead here. **Re-measurement pending. Do not read the five
-   * combinations as current.**
+   * `menu_order` and `rating` stay out, and the distinction is the point:
+   * they are **unprovable, not dead.** All 28 products carry an identical value
+   * for each, so the two directions tie and answer the same whether the sort
+   * runs or not — the `date`-on-coupons trap, one collection over. Asserting
+   * them working would be asserting the fixture, not the router.
    *
-   * The behaviour is deliberately left alone: it reaches the products screen, so
-   * it is a scope call rather than a mock repair. What *was* repaired on this
-   * collection is the sort **validation** — see the enum test below — and the
-   * two are separate questions. This test's `orderby=nonsense` 200 was itself a
-   * real 2026-08-18 measurement that outlived the backend repair and was never
-   * re-taken; that is the same failure, one field over, already corrected.
+   * `sku asc` is compared as a **whole** sequence, never a head slice: the
+   * catalogue's SKUs are `AC-CAT-<id>` and so ascend with the id, and only the
+   * one long-SKU fixture separates the two orderings — at the tail. A slice
+   * would let a fallback from `sku` to `id` pass.
    */
-  it("sorts /products by exactly the five measured combinations", () => {
+  it("sorts /products by the twelve measured combinations", () => {
     const ids = (query: string) =>
       parseList(productList, get("/products", `per_page=100&${query}`)).data.map((r) => r.id);
     const names = (query: string) =>
@@ -3378,18 +3379,36 @@ describe("query parameters", () => {
     expect(descending).toEqual([...descending].sort((a, b) => b - a));
     expect(ids("orderby=price&order=asc")).not.toEqual(unsorted);
 
-    // And everything else is a 200 that did not sort — `title desc` included,
-    // which is the whole point of the list being five and not six.
-    expect(ids("orderby=title&order=desc")).toEqual(unsorted);
-    expect(ids("orderby=title&order=desc")).not.toEqual(
-      [...ids("orderby=title&order=asc")].reverse(),
+    // title desc is the reverse of title asc — the case this file pinned dead.
+    expect(ids("orderby=title&order=desc")).toEqual([...ids("orderby=title&order=asc")].reverse());
+
+    // id sorts numerically in both directions.
+    expect(ids("orderby=id&order=asc")).toEqual([...unsorted].sort((a, b) => a - b));
+    expect(ids("orderby=id&order=desc")).toEqual([...unsorted].sort((a, b) => b - a));
+
+    // sku is alphabetical on the folded SKU, compared whole — see the docblock.
+    const skus = (query: string) =>
+      parseList(productList, get("/products", `per_page=100&${query}`)).data.map((r) => r.sku ?? "");
+    const bySku = skus("orderby=sku&order=asc");
+    expect(bySku.map(fold)).toEqual([...bySku.map(fold)].sort());
+    expect(ids("orderby=sku&order=desc")).toEqual([...ids("orderby=sku&order=asc")].reverse());
+    // The assertion that catches a fallback to `id`: the two orderings differ.
+    expect(ids("orderby=sku&order=asc")).not.toEqual(ids("orderby=id&order=asc"));
+
+    // popularity reorders and reverses. The values are not on the response —
+    // the live API sorts by `total_sales` and emits it nowhere — so this is
+    // asserted as a permutation rather than against a field.
+    expect(ids("orderby=popularity&order=asc")).not.toEqual(unsorted);
+    expect(ids("orderby=popularity&order=desc")).toEqual(
+      [...ids("orderby=popularity&order=asc")].reverse(),
     );
-    // `sku` and `popularity` are **in the enum** and sort nothing, which is the
-    // gap this test is about. `nonsense` is not in the enum and is a 400 — see
-    // the sort-validation test below. The two used to be asserted together, as
-    // though "accepted" and "honoured" were one thing.
-    expect(ids("orderby=sku&order=asc")).toEqual(unsorted);
-    expect(ids("orderby=popularity&order=desc")).toEqual(unsorted);
+
+    // The two that are accepted, validated, and honoured by nothing — because
+    // every row ties on both and no measurement can exist yet.
+    expect(ids("orderby=menu_order&order=asc")).toEqual(unsorted);
+    expect(ids("orderby=menu_order&order=desc")).toEqual(unsorted);
+    expect(ids("orderby=rating&order=asc")).toEqual(unsorted);
+    expect(ids("orderby=rating&order=desc")).toEqual(unsorted);
   });
 
   /**
