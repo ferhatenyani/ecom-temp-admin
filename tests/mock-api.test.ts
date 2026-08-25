@@ -667,7 +667,7 @@ describe("the refusals, by fixture id", () => {
   it("1007 — a missing destination is a 400 naming both halves at once", () => {
     const error = apiError(write("POST", "/orders/1007/shipments", { provider: "manual" }));
     expect(error.status).toBe(400);
-    expect(error.code).toBe("rest_invalid_param");
+    expect(error.code).toBe("invalid_request");
     // `details.fields`, an object of messages — not `details.params` — because
     // each one binds to its own control on the create-parcel form.
     expect(error.fields).toEqual({
@@ -1225,7 +1225,7 @@ describe("the product refusals, by fixture id", () => {
       }),
     );
     expect(error.status).toBe(400);
-    expect(error.code).toBe("rest_invalid_param");
+    expect(error.code).toBe("invalid_request");
 
     // Every one of them, not the first — the form renders one message per
     // control, and a 400 that named only the first would hide the rest.
@@ -1597,7 +1597,7 @@ describe("the /products filters", () => {
     // something to render: `details.params.min_price`, not a generic message.
     const error = apiError(get("/products", "min_price=abc"));
     expect(error.status).toBe(400);
-    expect(error.code).toBe("rest_invalid_param");
+    expect(error.code).toBe("invalid_request");
     expect(error.details).toMatchObject({ params: { min_price: expect.any(String) } });
   });
 
@@ -2556,7 +2556,7 @@ describe("GET /coupons", () => {
 
     // The refusal names them in the panel's own order, empty string first.
     const refused = apiError(get("/coupons", "status=trash"));
-    expect(refused.params?.status).toBe("status is not one of , publish, and draft");
+    expect(refused.params?.status).toBe("status is not one of , publish, and draft.");
   });
 
   /**
@@ -2647,8 +2647,8 @@ describe("GET /coupons", () => {
     // asserted rather than left to be rediscovered.
     expect(ids("orderby=date")).toEqual(base);
     expect(ids("orderby=date&order=desc")).toEqual(base);
-    // `?orderby=` is the absence of the parameter, not a fifth value.
-    expect(ids("orderby=")).toEqual(base);
+    // `?orderby=` is **not** the absence of the parameter — see the empty-string
+    // test below. This line asserted the opposite and was wrong.
     // And it genuinely sorts: the other direction is that sequence reversed.
     expect(ids("orderby=date&order=asc")).toEqual([...base].reverse());
 
@@ -2682,6 +2682,108 @@ describe("GET /coupons", () => {
     expect(get("/coupons", "per_page=101").status).toBe(400);
     expect(get("/coupons/eligible-products", "per_page=101").status).toBe(400);
     expect(get("/coupons/eligible-categories", "per_page=101").status).toBe(400);
+  });
+
+  /**
+   * **`?orderby=` is a value, not an absence** — and `?status=` on this same
+   * collection is an absence, which is why one test asserts both halves.
+   *
+   * The router checks each parameter against an enum and `""` passes exactly
+   * where `""` is a member. It is a member of the coupon status enum — the 400
+   * names it first, `status is not one of , publish, and draft.` — and of neither
+   * sort enum. This file used to read `""` as absence everywhere, so a select
+   * reset to its placeholder verified clean here and 400s in the shop.
+   *
+   * Measured 2026-08-25.
+   */
+  it("refuses an empty orderby or order and still reads an empty status as absence", () => {
+    const refusedOrderby = apiError(get("/coupons", "orderby="));
+    expect(refusedOrderby.status).toBe(400);
+    expect(refusedOrderby.params?.orderby).toBe("orderby is not one of date, id, code, and usage.");
+
+    const refusedOrder = apiError(get("/coupons", "order="));
+    expect(refusedOrder.status).toBe(400);
+    // Two values, and WordPress writes those **without a comma**. This file's
+    // `oxford` had only the three-or-more branch and answered "asc, and desc";
+    // lib/transfer.ts:189 records a measured two-value refusal from another
+    // endpoint — "mode is not one of create and update." — which is the form.
+    expect(refusedOrder.params?.order).toBe("order is not one of asc and desc.");
+
+    // The other two on this collection are untouched: `""` is absence for both.
+    // Compared against the bare listing rather than a row count, so the
+    // assertion survives a fixture being added to this shop.
+    const listed = (query: string) =>
+      parseList(couponList, get("/coupons", `per_page=100&${query}`)).data.map((row) => row.id);
+    expect(listed("status=")).toEqual(listed(""));
+    expect(listed("search=")).toEqual(listed(""));
+  });
+
+  /**
+   * **Five paging edges, and this file refused one of them.**
+   *
+   * The two sentences are different on purpose: a value that is not a whole
+   * number fails the schema, an integer outside the bounds fails the range, and
+   * only the second can tell a person what the bounds are.
+   *
+   * `page=-3` was the dangerous one — not a silent 200 but `rows.slice(-3 * 20)`,
+   * which answered the **tail of the list** as though it were a page.
+   *
+   * Measured 2026-08-25 on `/coupons` and `/products`; asserted on the pickers
+   * too, because those validate nothing else and go through the same `paginate`.
+   */
+  it("refuses every per_page and page edge value, on the pickers as well", () => {
+    const between = "per_page must be between 1 (inclusive) and 100 (inclusive)";
+    const atLeastOne = "page must be greater than or equal to 1";
+
+    for (const path of ["/coupons", "/products", "/coupons/eligible-products"]) {
+      for (const query of ["per_page=0", "per_page=-1", "per_page=101"]) {
+        const refused = apiError(get(path, query));
+        expect(refused.status).toBe(400);
+        expect(refused.params?.per_page).toBe(between);
+      }
+
+      const badType = apiError(get(path, "per_page=abc"));
+      expect(badType.status).toBe(400);
+      expect(badType.params?.per_page).toBe("per_page is not of type integer.");
+
+      for (const query of ["page=0", "page=-3"]) {
+        const refused = apiError(get(path, query));
+        expect(refused.status).toBe(400);
+        expect(refused.params?.page).toBe(atLeastOne);
+      }
+
+      const badPage = apiError(get(path, "page=abc"));
+      expect(badPage.status).toBe(400);
+      expect(badPage.params?.page).toBe("page is not of type integer.");
+
+      /*
+       * **`?per_page=` is a type refusal, not an absence** — measured
+       * 2026-08-25, after the enum model predicted it. `""` is not an integer
+       * for the same reason it is not a member of a sort enum, and only a
+       * parameter that is absent entirely reaches the default.
+       */
+      expect(apiError(get(path, "per_page=")).params?.per_page)
+        .toBe("per_page is not of type integer.");
+      expect(apiError(get(path, "page=")).params?.page)
+        .toBe("page is not of type integer.");
+    }
+  });
+
+  /**
+   * **The one the audit got wrong, kept as a test so it stays got-wrong.**
+   *
+   * The pickers validate nothing but the paging parameters, and that really is
+   * the live behaviour — measured 2026-08-25 one parameter at a time, with
+   * `/coupons` as the positive control. It looks like a divergence next to
+   * `/coupons` and is not one.
+   */
+  it("leaves the pickers permissive about everything except paging", () => {
+    for (const query of ["orderby=zzz", "order=sideways", "status=zzz"]) {
+      expect(get("/coupons/eligible-products", query).status).toBe(200);
+      expect(get("/coupons/eligible-categories", query).status).toBe(200);
+    }
+    // The control: the same value, one route up, is a 400.
+    expect(get("/coupons", "orderby=zzz").status).toBe(400);
   });
 
   /**
@@ -3073,6 +3175,66 @@ describe("the coupon writes", () => {
   });
 
   /**
+   * **The destructive one.** `PATCH {"code": ""}` answered 200 here and *blanked
+   * the code* — destroying both the coupon's identity and the key the uniqueness
+   * check runs on — while a form that cleared the field and saved passed every
+   * gate against this file.
+   *
+   * Measured 2026-08-25, on `POST` and `PATCH` alike, for `""` and for `"   "`.
+   * The whole response, because two thirds of it were this file's own invention:
+   * the envelope was `rest_invalid_param` / "Invalid parameter(s): code",
+   * inherited from a helper measured on `POST /orders/{id}/shipments` and never
+   * on a coupon.
+   */
+  it("refuses an empty or whitespace-only code rather than storing it", () => {
+    for (const code of ["", "   "]) {
+      const refused = apiError(write("PATCH", "/coupons/301", { code }));
+      expect(refused.status).toBe(400);
+      expect(refused.code).toBe("invalid_request");
+      expect(refused.apiMessage).toBe("The coupon is invalid.");
+      expect(refused.fields).toEqual({ code: "A coupon needs a code." });
+
+      expect(apiError(write("POST", "/coupons", { code, amount: "5.00" })).fields)
+        .toEqual({ code: "A coupon needs a code." });
+    }
+
+    // The code it would have erased is still there, and a real one still saves.
+    expect(parse(coupon, get("/coupons/301")).data.code).toBe("bienvenue10");
+    expect(parse(couponDetail, write("PATCH", "/coupons/301", { code: "NOEL-2026" }))
+      .data.code).toBe("noel-2026");
+
+    /*
+     * A POST with **no `code` key at all** keeps its own sentence. That refusal
+     * is an inference — nothing published one — and folding it into the measured
+     * message would dress a guess as a measurement.
+     */
+    expect(apiError(write("POST", "/coupons", { amount: "5.00" })).fields)
+      .toEqual({ code: "Required." });
+  });
+
+  /**
+   * **Every entry is checked, and one bad entry refuses the list.** This
+   * accepted any list of strings, so a restriction control verified here would
+   * have shipped and the shop would have refused the save.
+   *
+   * Measured 2026-08-25, including the wildcard form, which is legal.
+   */
+  it("refuses an email restriction that is neither an address nor a wildcard", () => {
+    const message = "Every entry must be an email address or a wildcard.";
+
+    for (const list of [["not an email"], ["a@b.dz", "nope"]]) {
+      const refused = apiError(write("PATCH", "/coupons/301", { email_restrictions: list }));
+      expect(refused.status).toBe(400);
+      expect(refused.fields).toEqual({ email_restrictions: message });
+    }
+
+    for (const list of [["a@b.dz"], ["*@exemple.dz"], []]) {
+      expect(parse(couponDetail, write("PATCH", "/coupons/301", { email_restrictions: list }))
+        .data.email_restrictions).toEqual(list);
+    }
+  });
+
+  /**
    * **Two acts with different consequences, answering identical bodies.** Trash
    * is reversible and keeps the code; `?force=true` is permanent, frees the code,
    * and is the only path to a 404.
@@ -3124,7 +3286,7 @@ describe("query parameters", () => {
       parse(orderList, response);
       expect.unreachable("a 400 must throw");
     } catch (error) {
-      expect((error as ApiError).code).toBe("rest_invalid_param");
+      expect((error as ApiError).code).toBe("invalid_request");
       expect((error as ApiError).status).toBe(400);
     }
   });
@@ -3166,10 +3328,23 @@ describe("query parameters", () => {
    * exactly the five combinations `SORTS` in lib/product-status.ts records as
    * re-measured after the backend repair — and for nothing else. `title desc`
    * is the case that matters: nobody measured it, so it is accepted with a 200
-   * and comes back unsorted, and an agent who builds that control watches it do
-   * nothing here rather than in production.
+   * and comes back unsorted.
    *
    * Compared as id sequences, the way the live router was measured.
+   *
+   * ── **Dated 2026-08-18, and contradicted 2026-08-25** ────────────────────
+   *
+   * A probe on 2026-08-25 got genuine reverse-alphabetical from `title desc`,
+   * genuine SKU order from `sku asc` and genuine id order from `id asc` — all
+   * three pinned dead here. **Re-measurement pending. Do not read the five
+   * combinations as current.**
+   *
+   * The behaviour is deliberately left alone: it reaches the products screen, so
+   * it is a scope call rather than a mock repair. What *was* repaired on this
+   * collection is the sort **validation** — see the enum test below — and the
+   * two are separate questions. This test's `orderby=nonsense` 200 was itself a
+   * real 2026-08-18 measurement that outlived the backend repair and was never
+   * re-taken; that is the same failure, one field over, already corrected.
    */
   it("sorts /products by exactly the five measured combinations", () => {
     const ids = (query: string) =>
@@ -3209,10 +3384,75 @@ describe("query parameters", () => {
     expect(ids("orderby=title&order=desc")).not.toEqual(
       [...ids("orderby=title&order=asc")].reverse(),
     );
+    // `sku` and `popularity` are **in the enum** and sort nothing, which is the
+    // gap this test is about. `nonsense` is not in the enum and is a 400 — see
+    // the sort-validation test below. The two used to be asserted together, as
+    // though "accepted" and "honoured" were one thing.
     expect(ids("orderby=sku&order=asc")).toEqual(unsorted);
     expect(ids("orderby=popularity&order=desc")).toEqual(unsorted);
-    expect(ids("orderby=nonsense&order=asc")).toEqual(unsorted);
-    expect(get("/products", "orderby=nonsense").status).toBe(200);
+  });
+
+  /**
+   * **`/products` validates its sort, and this file used to think it did not.**
+   *
+   * Measured 2026-08-25 through the empty string, which is outside the enum and
+   * therefore names the whole of it:
+   *
+   *   /products?orderby=  400 "orderby is not one of date, id, title, price,
+   *                            sku, menu_order, popularity, and rating"
+   *
+   * Eight accepted values against five honoured combinations — the test above is
+   * the other half of that, and it is stale in its own way.
+   *
+   * `orderby=nonsense` was asserted here as a 200, and that **was** a real
+   * measurement — taken 2026-08-18, before the backend repair, and never
+   * re-taken. A dated measurement that outlives its repair is worse than an
+   * unmeasured guess: it looks settled. Re-measured 2026-08-25, `""` and
+   * `nonsense` answer the identical sentence.
+   */
+  it("validates the /products sort against an eight-value enum", () => {
+    const refused = apiError(get("/products", "orderby="));
+    expect(refused.status).toBe(400);
+    expect(refused.params?.orderby).toBe(
+      "orderby is not one of date, id, title, price, sku, menu_order, popularity, and rating.",
+    );
+    expect(get("/products", "orderby=nonsense").status).toBe(400);
+    expect(get("/products", "order=").status).toBe(400);
+    expect(get("/products", "order=sideways").status).toBe(400);
+
+    // The eight are accepted, whether or not they reorder anything.
+    for (const orderby of [
+      "date",
+      "id",
+      "title",
+      "price",
+      "sku",
+      "menu_order",
+      "popularity",
+      "rating",
+    ]) {
+      expect(get("/products", `orderby=${orderby}`).status).toBe(200);
+    }
+  });
+
+  /**
+   * **`?status=` is a 400 here and a 200 on `/coupons`**, and that is the shop's
+   * asymmetry rather than an inconsistency: the empty string is a member of the
+   * coupon status enum and not of this one. Each 400 names its own enum and
+   * proves it — `status is not one of , publish, and draft.` there, with the
+   * empty string listed first; without it here.
+   *
+   * Measured 2026-08-25. This answered 200 and read `""` as absence, so a filter
+   * sheet that cleared its status select verified clean and 400s in the shop.
+   */
+  it("refuses an empty status where /coupons accepts one", () => {
+    const refused = apiError(get("/products", "status="));
+    expect(refused.status).toBe(400);
+    expect(refused.params?.status).toBe(
+      "status is not one of draft, pending, private, and publish.",
+    );
+    // The neighbouring collection, unchanged and deliberately different.
+    expect(get("/coupons", "status=").status).toBe(200);
   });
 
   it("refuses a per_page over 100 rather than clamping it", () => {
