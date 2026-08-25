@@ -220,6 +220,22 @@ const list = (rows) =>
     total_pages: rows.length === 0 ? 0 : 1,
   });
 
+/**
+ * **`code` is the *normalised* code, never WordPress's own.** Corrected
+ * 2026-08-25, when a live-versus-mock diff found all fourteen parameter
+ * refusals here answering `rest_invalid_param` — a code no client can ever
+ * receive. `src/API/ErrorNormalizer.php:31-32` maps both
+ * `rest_invalid_param` and `rest_missing_callback_param` to `invalid_request`
+ * on the way out, so the wire vocabulary is the short list and nothing else:
+ *
+ *     invalid_request · not_found · conflict · unauthenticated
+ *
+ * All four re-measured on the same day. The messages were right the whole time,
+ * which is why this survived so long: every assertion compared the sentence and
+ * none compared the code. No screen branches on it today — that was checked, not
+ * assumed — so this cost nothing yet, and would have cost a screen the first
+ * time one did.
+ */
 const fail = (status, code, message, details = {}) => ({
   status,
   body: { success: false, error: { code, message, details } },
@@ -3008,7 +3024,7 @@ const allowedMoves = (from) =>
  * throw the per-control half away.
  */
 const invalidBody = (message, fields) =>
-  fail(400, "rest_invalid_param", message, { fields });
+  fail(400, "invalid_request", message, { fields });
 
 const conflict = (message, details) => fail(409, "conflict", message, details);
 
@@ -3277,18 +3293,69 @@ function verifyPayment(id) {
  */
 const DEFAULT_PER_PAGE = 20;
 
-function paginate(rows, params) {
-  const page = Number.parseInt(params.get("page") ?? "1", 10) || 1;
-  const perPage =
-    Number.parseInt(params.get("per_page") ?? String(DEFAULT_PER_PAGE), 10) || DEFAULT_PER_PAGE;
+const INTEGER = /^-?\d+$/;
 
-  if (perPage < 1 || perPage > 100) {
-    return {
-      error: fail(400, "rest_invalid_param", "Invalid parameter(s): per_page", {
-        params: { per_page: "per_page must be between 1 (inclusive) and 100 (inclusive)" },
-      }),
-    };
+/**
+ * One paging parameter, and **the two refusals are different sentences on
+ * purpose** — the same distinction `date_expires` makes further down, one layer
+ * lower. A value that is not a whole number fails the *schema*; a whole number
+ * outside the bounds fails the *range*, and only the second one can tell a
+ * person what the bounds are. Measured 2026-08-25 on `/coupons` and `/products`
+ * alike:
+ *
+ *   per_page=abc  400  "per_page is not of type integer."
+ *   per_page=0    400  "per_page must be between 1 (inclusive) and 100 (inclusive)"
+ *   per_page=-1   400  (the same sentence — it is an integer, out of range)
+ *   per_page=101  400  (the same sentence, and the only one of the five this
+ *                       file already refused)
+ *   page=abc      400  "page is not of type integer."
+ *   page=0        400  "page must be greater than or equal to 1"
+ *   page=-3       400  (the same sentence)
+ *
+ * Shared rather than per-collection, which is what makes the pickers refuse them
+ * too — `/coupons/eligible-products` validates nothing else and must still
+ * validate these.
+ *
+ * `page=-3` was the worst of the five: it was not merely a silent 200, it
+ * reached `rows.slice(-3 * perPage)` and answered the **tail of the list** as
+ * though it were a page.
+ *
+ * **`?per_page=` and `?page=` are type refusals, not absences** — measured
+ * 2026-08-25, after the enum model above predicted it: `""` is not an integer,
+ * exactly as `""` is not a member of a sort enum. Only a parameter that is not
+ * sent at all reaches the defaults.
+ *
+ *   per_page=  400  "per_page is not of type integer."
+ *   page=      400  "page is not of type integer."
+ */
+function pagingNumber(params, name, fallback, range) {
+  const raw = params.get(name);
+  if (raw === null) return { value: fallback };
+  if (!INTEGER.test(raw)) {
+    return { error: invalidParam(name, `${name} is not of type integer.`) };
   }
+  const value = Number.parseInt(raw, 10);
+  const problem = range(value);
+  return problem === null ? { value } : { error: invalidParam(name, problem) };
+}
+
+function paginate(rows, params) {
+  // `per_page` first, so a request with both wrong reports the same one this
+  // file has always reported. Which comes first is not measured.
+  const perPageRead = pagingNumber(params, "per_page", DEFAULT_PER_PAGE, (value) =>
+    value >= 1 && value <= 100
+      ? null
+      : "per_page must be between 1 (inclusive) and 100 (inclusive)",
+  );
+  if (perPageRead.error) return { error: perPageRead.error };
+
+  const pageRead = pagingNumber(params, "page", 1, (value) =>
+    value >= 1 ? null : "page must be greater than or equal to 1",
+  );
+  if (pageRead.error) return { error: pageRead.error };
+
+  const page = pageRead.value;
+  const perPage = perPageRead.value;
 
   const start = (page - 1) * perPage;
   return {
@@ -3343,7 +3410,7 @@ function filterByStatus(rows, params) {
     return {
       error: fail(
         400,
-        "rest_invalid_param",
+        "invalid_request",
         `status is not one of ${ORDER_STATUSES.join(", ")}`,
         { params: { status: `status is not one of ${ORDER_STATUSES.join(", ")}` } },
       ),
@@ -3363,11 +3430,45 @@ function filterByStatus(rows, params) {
 const PRODUCT_STATUSES = ["publish", "draft", "pending", "private"];
 const STOCK_STATUSES = ["instock", "outofstock", "onbackorder"];
 
-/** WordPress lists a refused enum in its own words: "a, b, c, and d". */
+/**
+ * WordPress lists a refused enum in its own words: "a, b, c, and d" — and
+ * **"a and b" for exactly two, with no comma.** `wp_sprintf_l`'s two-item case
+ * is a separate branch from its three-or-more case, and this had only the
+ * latter, so every two-value enum here answered "asc, and desc".
+ *
+ * The only two-value enum in this file is `SORT_DIRECTIONS`, so `?order=` and
+ * `?order=sideways` were the whole of the damage — on every collection that
+ * validates a sort. Corrected against lib/transfer.ts:189, which records a
+ * measured two-value refusal from a different endpoint entirely:
+ * `"mode is not one of create and update."`
+ */
 const oxford = (values) =>
   values.length < 2
     ? values.join("")
-    : `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+    : values.length === 2
+      ? `${values[0]} and ${values[1]}`
+      : `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+
+/**
+ * **An enum refusal is a sentence and ends in a full stop. A range refusal does
+ * not.** Measured 2026-08-25, across three families that this file used to write
+ * as two:
+ *
+ *   enum   "orderby is not one of date, id, code, and usage."   full stop
+ *   type   "per_page is not of type integer."                   full stop
+ *   range  "per_page must be between 1 (inclusive) and 100 (inclusive)"   none
+ *          "page must be greater than or equal to 1"                      none
+ *
+ * The inconsistency is WordPress's own — `rest_not_in_enum` and the type check
+ * are written as sentences, the numeric bounds are not — so it cannot be tidied
+ * into a rule, only copied. Every enum message in this file dropped the stop; a
+ * form quoting one back rendered a sentence the shop never sends.
+ *
+ * Written as one helper so the next enum added here cannot drift again. The type
+ * family already carries its stop at each site; the range family is two literals
+ * in `paginate` and must keep going without one.
+ */
+const notOneOf = (name, values) => `${name} is not one of ${oxford(values)}.`;
 
 /** `?category=` and `?tag=` take term **ids**; `?category=tapis` is a 400. */
 const ID_LIST = "^$|^[0-9]+(,[0-9]+)*$";
@@ -3382,7 +3483,7 @@ const BOOLEANS = new Map([
 ]);
 
 const invalidParam = (name, message) =>
-  fail(400, "rest_invalid_param", `Invalid parameter(s): ${name}`, {
+  fail(400, "invalid_request", `Invalid parameter(s): ${name}`, {
     params: { [name]: message },
   });
 
@@ -3411,15 +3512,28 @@ function parseProductFilters(params) {
     attributes: new Map(),
   };
 
+  /*
+   * **`?status=` is a 400 on this collection and a 200 on `/coupons`**, and the
+   * asymmetry is not an inconsistency in the shop: the empty string is a member
+   * of the coupon status enum and is not a member of this one. Both 400s name
+   * their own enum and prove it — `status is not one of , publish, and draft.`
+   * there, with the empty string listed first; `status is not one of draft,
+   * pending, private, and publish.` here, without it.
+   *
+   * Measured 2026-08-25. This read `""` as absence and answered 200, so a filter
+   * sheet that cleared its status select and refetched looked correct here and
+   * 400s in the shop — the same defect `checkSort` had, on a parameter where the
+   * neighbouring collection genuinely does read `""` as absence.
+   */
   const status = params.get("status");
-  if (status !== null && status !== "") {
+  if (status !== null) {
     // A comma list is a 400 by falling straight through this — the measured
     // behaviour every single-select control in the panel is built on — and so
     // is `trash`, which is readable and unlistable.
     if (!PRODUCT_STATUSES.includes(status)) {
-      const message = `status is not one of ${oxford([...PRODUCT_STATUSES].sort())}`;
+      const message = notOneOf("status", [...PRODUCT_STATUSES].sort());
       return {
-        error: fail(400, "rest_invalid_param", message, { params: { status: message } }),
+        error: fail(400, "invalid_request", message, { params: { status: message } }),
       };
     }
     filters.status = status;
@@ -3458,7 +3572,7 @@ function parseProductFilters(params) {
       return {
         error: invalidParam(
           "stock_status",
-          `stock_status is not one of ${oxford([...STOCK_STATUSES].sort())}`,
+          notOneOf("stock_status", [...STOCK_STATUSES].sort()),
         ),
       };
     }
@@ -3487,7 +3601,7 @@ function parseProductFilters(params) {
     const taxonomy = match[1];
     if (!ATTRIBUTES.some((attribute) => attribute.taxonomy === taxonomy)) {
       return {
-        error: fail(400, "rest_invalid_param", "Invalid parameter(s): attributes", {
+        error: fail(400, "invalid_request", "Invalid parameter(s): attributes", {
           // **Not** `details.params`, which is where every other parameter's
           // errors go. The attributes filter reports under `details.fields` and
           // publishes the set it would have accepted beside it, at the `details`
@@ -3590,6 +3704,47 @@ const PRODUCT_SORTS = new Map([
   ["price asc", byPrice],
   ["price desc", descending(byPrice)],
 ]);
+
+/**
+ * **What `/products` will *accept* as a sort, which is not what it *honours*.**
+ * Eight values, in the API's own order — measured 2026-08-25 through the empty
+ * string, which is outside the enum and therefore names the whole of it:
+ *
+ *   /products?orderby=         400 params.orderby
+ *   /products?orderby=nonsense 400 params.orderby — the identical sentence
+ *     "orderby is not one of date, id, title, price, sku, menu_order, popularity, and rating."
+ *   /products?order=sideways   400 "order is not one of asc and desc."
+ *
+ * **This collection validated nothing at all before**, and the unit suite pinned
+ * `?orderby=nonsense` as a 200. That assertion was a real measurement taken
+ * 2026-08-18 — *before the backend repair this file's own header describes* —
+ * and was never re-taken. **A stale measurement outliving its repair is exactly
+ * the failure this branch exists to correct**, and it is worse than an unmeasured
+ * guess: it carries a date and looks settled. Re-measured 2026-08-25 and flipped.
+ *
+ * ── Validation is not sorting coverage ───────────────────────────────────────
+ *
+ * `PRODUCT_SORTS` below is five *combinations* and answers the other question:
+ * which accepted values actually reorder the rows.
+ *
+ * **That claim is dated 2026-08-18 and a 2026-08-25 probe contradicts it** —
+ * `title desc` came back genuine reverse-alphabetical, `sku asc` genuine SKU
+ * order and `id asc` genuine id order, where all three are pinned dead here.
+ * **Re-measurement pending, and the sorting behaviour is deliberately left
+ * alone**: it reaches the products screen, so it is a scope call rather than a
+ * mock repair. Only the validation above was changed. Do not read the five
+ * combinations as current.
+ */
+const PRODUCT_ORDERBY = [
+  "date",
+  "id",
+  "title",
+  "price",
+  "sku",
+  "menu_order",
+  "popularity",
+  "rating",
+];
 
 function sortProducts(rows, params) {
   // `desc` is WooCommerce's default `order`, so `?orderby=title` on its own is
@@ -3733,6 +3888,9 @@ function facetsFor(params, filters) {
 
 /** The whole `/products` listing: filter, sort, paginate, then count. */
 function productsListing(params) {
+  const sort = checkSort(params, PRODUCT_ORDERBY);
+  if (sort !== null) return sort;
+
   const parsed = parseProductFilters(params);
   if (parsed.error) return parsed.error;
 
@@ -3970,7 +4128,7 @@ const PRODUCT_FIELD_RULES = {
  */
 function patchProduct(current, body) {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
   const fields = {};
@@ -3996,7 +4154,7 @@ function patchProduct(current, body) {
   if (Object.keys(writes).length === 0) {
     // The message names nothing because the API's own names nothing, which is
     // exactly why "drop what is read-only" cannot be a client's only rule.
-    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
   if (typeof writes.sku === "string" && writes.sku !== "") {
@@ -4109,18 +4267,35 @@ const CUSTOMER_ORDERS_ORDERBY = ["date", "id", "modified", "total"];
 
 const SORT_DIRECTIONS = ["asc", "desc"];
 
-/** Null when the pair is acceptable, a 400 when either value is outside its set. */
+/**
+ * Null when the pair is acceptable, a 400 when either value is outside its set.
+ *
+ * **`?orderby=` is a value and not an absence**, and the distinction is the
+ * router's own rather than a convention: each parameter is checked against an
+ * enum, and `""` passes exactly where `""` is a member of that enum. It is a
+ * member for `?status=` on coupons — which is why the 400 there reads
+ * `status is not one of , publish, and draft.`, naming the empty string first —
+ * and it is a member of neither sort enum. Measured 2026-08-25:
+ *
+ *   /coupons?orderby=   400 params.orderby "orderby is not one of date, id, code, and usage."
+ *   /coupons?order=     400 params.order   "order is not one of asc and desc."
+ *   /coupons?status=    200, 4 rows        — `""` is in *that* enum
+ *   /coupons?search=    200, 4 rows        — not an enum at all
+ *
+ * Reading `""` as absence here made three of this file's collections answer 200
+ * to a parameter the shop refuses, so a screen that emitted an empty `orderby`
+ * — a select reset to its placeholder — verified clean and 400s in production.
+ */
 function checkSort(params, orderbyValues) {
   for (const [name, allowed] of [
     ["orderby", orderbyValues],
     ["order", SORT_DIRECTIONS],
   ]) {
     const raw = params.get(name);
-    // `""` is the absence of the parameter, the way it is everywhere else here.
-    if (raw === null || raw === "") continue;
+    if (raw === null) continue;
     if (!allowed.includes(raw)) {
-      const message = `${name} is not one of ${oxford(allowed)}`;
-      return fail(400, "rest_invalid_param", message, { params: { [name]: message } });
+      const message = notOneOf(name, allowed);
+      return fail(400, "invalid_request", message, { params: { [name]: message } });
     }
   }
   return null;
@@ -4208,7 +4383,7 @@ const YMD = /^\d{4}-\d{2}-\d{2}$/;
 function notificationsListing(params) {
   const status = params.get("status");
   if (status !== null && status !== "" && !NOTIFICATION_STATUSES.includes(status)) {
-    const message = `status is not one of ${oxford(NOTIFICATION_STATUSES)}.`;
+    const message = notOneOf("status", NOTIFICATION_STATUSES);
     return fail(400, "invalid_request", message, { params: { status: message } });
   }
 
@@ -4315,7 +4490,7 @@ function filterInventory(rows, params) {
     return {
       error: invalidParam(
         "stock_status",
-        `stock_status is not one of ${oxford([...STOCK_STATUSES].sort())}`,
+        notOneOf("stock_status", [...STOCK_STATUSES].sort()),
       ),
     };
   }
@@ -4460,7 +4635,7 @@ function movementWindow(params) {
 function movementsListing(params) {
   const reason = params.get("reason");
   if (reason !== null && reason !== "" && !MOVEMENT_REASONS.includes(reason)) {
-    return invalidParam("reason", `reason is not one of ${oxford([...MOVEMENT_REASONS].sort())}`);
+    return invalidParam("reason", notOneOf("reason", [...MOVEMENT_REASONS].sort()));
   }
 
   const windowed = movementWindow(params);
@@ -4791,7 +4966,7 @@ const INVENTORY_FIELD_RULES = {
 
 function patchInventory(row, body) {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
   const fields = {};
@@ -4818,7 +4993,7 @@ function patchInventory(row, body) {
     return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
   }
   if (Object.keys(writes).length === 0) {
-    return bareFail(400, "rest_invalid_param", "No supported fields were provided.");
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
   const settings = { ...state.stockSettings.get(row.id) };
@@ -4905,7 +5080,7 @@ const DISCOUNT_TYPES = ["percent", "fixed_cart", "fixed_product"];
  * a typo to tidy up. The "no filter" sentinel is inside the enum the router
  * validates against, so the real 400 reads
  *
- *     status is not one of , publish, and draft
+ *     status is not one of , publish, and draft.
  *
  * — an offer of something that is not a status. lib/coupon-status.ts:18-25
  * records it, and a message shown to a person is worth knowing about first.
@@ -4996,9 +5171,11 @@ const COUPON_SORTS = new Map([
  * one for the five combinations it deliberately does not serve.
  */
 function sortCoupons(rows, params) {
-  // `""` is the absence of the parameter, the way `checkSort` reads it.
-  const orderby = params.get("orderby") || "date";
-  const order = params.get("order") || "desc";
+  // `checkSort` has already refused `""` along with everything else outside the
+  // enum, so `??` and `||` are the same thing here; only a truly absent
+  // parameter reaches the defaults.
+  const orderby = params.get("orderby") ?? "date";
+  const order = params.get("order") ?? "desc";
   // A stable sort, so rows that tie — every coupon a process creates shares one
   // `date_created`, because there is no clock — keep the order they came in.
   return [...rows].sort(COUPON_SORTS.get(`${orderby} ${order}`));
@@ -5032,9 +5209,9 @@ function filterCouponStatus(rows, params) {
     return { rows: rows.filter((row) => row.status !== "trash") };
   }
   if (!COUPON_STATUSES.includes(status)) {
-    const message = `status is not one of ${oxford(COUPON_STATUS_FILTERS)}`;
+    const message = notOneOf("status", COUPON_STATUS_FILTERS);
     return {
-      error: fail(400, "rest_invalid_param", message, { params: { status: message } }),
+      error: fail(400, "invalid_request", message, { params: { status: message } }),
     };
   }
   return { rows: rows.filter((row) => row.status === status) };
@@ -5095,12 +5272,27 @@ function couponsListing(params) {
  * The category search takes the **name only**. Nothing measured says the slug is
  * read, and this is the same restraint the code-only search above shows.
  *
- * **Neither route validates anything but `per_page`, and nobody measured whether
- * the real ones do.** `?orderby=zzz`, `?order=sideways` and `?status=zzz` are all
- * 200 here with the full list — `checkSort` runs on `/coupons` and on neither of
- * these. So a picker built with a sort or a status filter would look like it
- * worked here and could be a 400 in the shop. Recorded rather than guessed at,
- * because guessing either way is how the read-only refusal above got invented.
+ * **Neither route validates anything but the paging parameters — measured
+ * 2026-08-25, not merely observed here.** An audit flagged this as a suspected
+ * divergence on the strength of how odd it looks next to `/coupons`; it was
+ * queried against the live router one parameter at a time, against `/coupons` as
+ * the positive control, and the odd-looking behaviour is the real one:
+ *
+ *   /coupons/eligible-products?orderby=zzz        200, 28 rows
+ *   /coupons/eligible-products?order=sideways     200, 28 rows
+ *   /coupons/eligible-products?status=zzz         200, 28 rows
+ *   /coupons/eligible-categories?orderby=zzz      200, 6 rows
+ *   /coupons/eligible-products?per_page=101       400
+ *   /coupons?orderby=zzz          (the control)   400
+ *
+ * So `checkSort` runs on `/coupons` and on neither of these, and that is the
+ * shop's own asymmetry rather than this file's. A picker built with a sort or a
+ * status filter would look like it worked here **and would also work there** —
+ * it would simply sort nothing. The paging parameters are the exception and go
+ * through the shared `paginate()`, which refuses all five edge values.
+ *
+ * Written down with its date because this is the second time the question has
+ * been opened. It does not need a third.
  *
  * `sku: null` is unreachable in this shop and the schema allows it: every row in
  * this catalogue carries a SKU. Reproducing it would mean emptying one, and the
@@ -5258,6 +5450,26 @@ const COUPON_RESTRICTION_KIND = {
 /** The code as it will actually be stored — `normalizeCode()` in lib/coupons.ts. */
 const normalizeCouponCode = (value) => String(value).trim().toLowerCase();
 
+/**
+ * `code`, and **an empty one is refused rather than stored**. Measured
+ * 2026-08-25, on `POST` and on `PATCH` alike, for `""` and for `"   "`:
+ *
+ *   400 invalid_request "The coupon is invalid."
+ *   details.fields.code: "A coupon needs a code."
+ *
+ * This was the destructive divergence. `PATCH {"code": ""}` answered **200 and
+ * blanked the code** here, so a form that cleared the field and saved destroyed
+ * the coupon's identity *and* the key the uniqueness check runs on — against the
+ * harness, silently, with every gate still green.
+ *
+ * Trimmed before the test, because the store trims too: `"   "` would have been
+ * saved as `""` by `normalizeCouponCode` below and is refused for that reason.
+ */
+const mustBeCouponCode = (value) => {
+  if (typeof value !== "string") return "Must be a string.";
+  return value.trim() === "" ? "A coupon needs a code." : null;
+};
+
 const DECIMAL = /^-?\d+(\.\d+)?$/;
 
 /**
@@ -5338,13 +5550,35 @@ const mustBeExpiry = (value) => {
   return real ? null : "That date does not exist.";
 };
 
-const mustBeEmails = (value) =>
-  Array.isArray(value) && value.every((entry) => typeof entry === "string")
+/**
+ * `email_restrictions` — **every entry is checked, and one bad entry refuses the
+ * whole list.** Measured 2026-08-25:
+ *
+ *   ["not an email"]   400    ["a@b.dz", "nope"]   400 — the good entry does not
+ *   ["a@b.dz"]         200                               rescue the list
+ *   ["*@exemple.dz"]   200 — the wildcard form is legal
+ *
+ * This accepted any list of strings, which is the quiet half of the same class
+ * of error as the code above: a restriction control verified here would have
+ * shipped, and the shop would have refused the save.
+ *
+ * `*@exemple.dz` needs no special case — `*` is an ordinary local part under
+ * this test. Only the two forms above are measured; a bare `*` and `*@*` are
+ * not, and are refused here rather than guessed into the accepting direction.
+ */
+const EMAIL_OR_WILDCARD = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const mustBeEmails = (value) => {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    return "Must be a list of email addresses.";
+  }
+  return value.every((entry) => EMAIL_OR_WILDCARD.test(entry.trim()))
     ? null
-    : "Must be a list of email addresses.";
+    : "Every entry must be an email address or a wildcard.";
+};
 
 const COUPON_FIELD_RULES = {
-  code: mustBeText,
+  code: mustBeCouponCode,
   // `trash` is readable and **not writable** — a coupon is trashed by DELETE,
   // exactly as a product is, which is why this list is the filterable pair.
   status: mustBeOneOf(COUPON_STATUSES),
@@ -5433,15 +5667,16 @@ function readCouponBody(body, creating) {
     // uniqueness check.
     if (!("amount" in writes) && fields.amount === undefined) fields.amount = "Required.";
     /*
-     * **`code` being required is an inference, not a measurement.** Nothing
-     * published a refusal for a POST without one. A coupon's code *is* its
-     * `post_title` and the duplicate check runs on it, so a codeless coupon
-     * would collide with the next codeless coupon — but the API has not been
-     * seen to say so. Refusing is the conservative direction and it is flagged
-     * here rather than presented as measured.
+     * **`code` being *absent* on a POST is an inference, not a measurement.**
+     * An empty one is measured — `mustBeCouponCode` above has refused it before
+     * this runs, which is why the arm here only ever sees a body with no `code`
+     * key at all. Nothing published a refusal for that case. A coupon's code
+     * *is* its `post_title` and the duplicate check runs on it, so a codeless
+     * coupon would collide with the next codeless coupon — but the API has not
+     * been seen to say so. Refusing is the conservative direction, and the two
+     * sentences stay different so the measured one is not diluted by the guess.
      */
-    const code = "code" in writes ? normalizeCouponCode(writes.code) : "";
-    if (code === "" && fields.code === undefined) fields.code = "Required.";
+    if (!("code" in writes) && fields.code === undefined) fields.code = "Required.";
   }
 
   for (const field of COUPON_RESTRICTION_FIELDS) {
@@ -5467,9 +5702,25 @@ function readCouponBody(body, creating) {
   }
 
   if (Object.keys(fields).length > 0) {
-    return {
-      error: invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields),
-    };
+    /*
+     * **The coupon envelope, and it is not this file's usual one.** Measured
+     * 2026-08-25, the whole response to `PATCH {"code": ""}`:
+     *
+     *   400 {"code":"invalid_request","message":"The coupon is invalid.",
+     *        "details":{"fields":{"code":"A coupon needs a code."}}}
+     *
+     * `invalid_request`, not `rest_invalid_param`; a generic sentence, not
+     * `Invalid parameter(s): code`. Both halves were this file's — inherited
+     * from `invalidBody`, which was measured on `POST /orders/{id}/shipments`
+     * and never on a coupon.
+     *
+     * **Scope is a judgement, not a measurement.** One refusal was measured and
+     * it is applied to the whole coupon write pass, because "The coupon is
+     * invalid." names no field and cannot plausibly be per-field. If a second
+     * refusal here — `{"amount": "-5"}`, say — turns out to answer
+     * `rest_invalid_param`, this is the line to narrow.
+     */
+    return { error: fail(400, "invalid_request", "The coupon is invalid.", { fields }) };
   }
   return { writes };
 }

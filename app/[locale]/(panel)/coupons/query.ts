@@ -45,8 +45,16 @@ export type StatusFilter = (typeof STATUS_FILTERS)[number];
  *   usage  `desc` → 99, 50, 5, 1;  `asc` → 1, 5, 50, 99 — **numeric**, not lexical
  *   date   the default ordering, and the one value that can prove nothing
  *
- * Anything else is a 400, `order=sideways` is a 400, `?orderby=` is the absence
- * of the parameter rather than a fifth value, and `order` defaults to `desc`.
+ * Anything else is a 400, `order=sideways` is a 400, and `order` defaults to
+ * `desc`.
+ *
+ * **`?orderby=` is a 400, not the absence of the parameter** — corrected
+ * 2026-08-25, this file said the opposite. The empty string is not a member of
+ * the enum, so it is refused with the same sentence `?orderby=zzz` gets. It is
+ * `?status=` and `?search=` that read as absence on this collection, which is
+ * where the confusion came from — and `?status=` reads as absence *here* while
+ * being a 400 on `/products`, so the two are not one rule. Nothing on this
+ * screen can send it: `listParams` always writes a concrete guarded value.
  *
  * ## Why this file used to say nothing sorts — the part worth writing down
  *

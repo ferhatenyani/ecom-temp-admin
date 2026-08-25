@@ -340,15 +340,42 @@ sentence quoted here and in `CouponForm` until now was the mock's invention.
   here the resting order is `date`, which no column claims either way, so
   "none" on every visible header stays true and reaching the gap takes a
   deliberate sort-then-hide. `DataTable` wants a rule about it.
-- **Five mock-vs-API divergences found by the coupons honesty audit**, none
-  fixed, all outside that branch: `PATCH {"code":""}` is a 200 that blanks a
-  coupon's identity while `POST` refuses the same value (**measure this one
-  first** — it is the destructive arm); both picker routes validate nothing but
-  `per_page` where `/coupons` 400s the same input; `email_restrictions` accepts
-  strings that are not addresses; `/products` reads `orderby=""` as a fifth
-  value where `checkSort`, `filterCouponStatus` and `searchRows` all read it as
-  absence; and `per_page=0`, `per_page=abc` and `page=0` are silent 200s while
-  `per_page=101` is a 400.
+- **The five mock-vs-API divergences from the coupons honesty audit: measured,
+  and four were real.** Fixed in `scripts/mock-api.mjs`: the empty `code` (a 200
+  that blanked a coupon's identity — the destructive one); `email_restrictions`
+  accepting non-addresses; `orderby=""`/`order=""` read as absence, which is a
+  400 on every collection that validates a sort; and the four unrefused
+  `per_page`/`page` edges, now in the shared `paginate()` so the pickers refuse
+  them too. **The picker one was not a defect** — measured 2026-08-25, the
+  pickers really do validate nothing but paging, and their docblock now says so
+  with the date so a third audit does not re-open it.
+  Four more surfaced while measuring, all fixed: `oxford()` wrote a two-value
+  enum as `asc, and desc` where WordPress writes `asc and desc`;
+  `/products?status=` was a 200 where it is a 400 (`""` is in the coupon status
+  enum and not the product one, which is also why `/coupons?status=` stays a
+  200); `?per_page=`/`?page=` are type refusals rather than absences; and **every
+  enum message in the file was missing its full stop.** The three refusal
+  families are now written down and differ — enum and type sentences end in `.`,
+  range sentences do not — behind one `notOneOf()` helper so the next enum
+  cannot drift.
+- **Every error `code` in the mock was WordPress's, not the wire's.** Found by
+  diffing live against the mock request-for-request rather than by reading
+  either: all fourteen parameter refusals answered `rest_invalid_param`, a code
+  no client can receive, because `ErrorNormalizer.php:31-32` maps it to
+  `invalid_request` on the way out. The wire vocabulary is four values —
+  `invalid_request`, `not_found`, `conflict`, `unauthenticated`. It survived
+  because **every assertion compared the sentence and none compared the code**;
+  no screen branches on it today, which was checked rather than assumed. That
+  request-for-request diff is now the thing to run on any collection before
+  trusting it — it caught in one pass what three readings of the file had not.
+- **`/products` sorting is dated 2026-08-18 and a 2026-08-25 probe contradicts
+  it.** `title desc`, `sku asc` and `id asc` came back genuinely sorted where the
+  mock pins all three dead, so the "five combinations" claim is stale. Behaviour
+  deliberately unchanged — it reaches the products screen, so it is a scope call,
+  not a mock repair — and both the mock and the unit suite now carry the date and
+  the contradiction. **Re-measurement pending.** Sort *validation* was a separate
+  question and is fixed: the suite's `orderby=nonsense` 200 was a real
+  pre-repair measurement that outlived its repair and was never re-taken.
 - `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
   Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
 - The sticky first column has no divider at its frozen edge.

@@ -133,7 +133,13 @@ export function queryFromParams(params: URLSearchParams): ProductsQuery {
 /**
  * The query as the API's own parameters.
  *
- * Empty strings are dropped rather than sent: `?status=` is harmless but
+ * Empty strings are dropped rather than sent — and on this collection that is
+ * load-bearing rather than tidiness. **`?status=` is a 400 here** (corrected
+ * 2026-08-25; this said "harmless"), as are `?orderby=` and `?order=`: the empty
+ * string is not a member of any of those enums and is refused with the same
+ * sentence a nonsense value gets. `/coupons` differs — there `?status=` really
+ * does read as absence — so the two collections do not share one rule.
+ *
  * `?min_price=` is not obviously so, and an unknown or empty parameter is
  * **ignored with a 200** rather than refused — measured, `?bogus_param=1`
  * returns all 28 rows, identical to no filter at all. So a filter that does
