@@ -200,6 +200,33 @@ const DEFAULT_ROUTES = [
    */
   "/shipping",
   "/shipping/rules",
+  /*
+   * **The panel's only screen with two capabilities and two readerships on it**,
+   * which is the whole reason it is captured rather than left to the order
+   * detail's payments section.
+   *
+   * `/payments` is `ac_manage_payments` — the Super Admin tier alone after the
+   * two-tier collapse — while the COD funnel below it reads `/cod/statistics`,
+   * which is `ac_view_analytics` and every staff account holds. So one page has a
+   * section a Manager is 403 on sitting directly above a section they are
+   * entitled to, and neither state can be photographed anywhere else in the
+   * panel. The mock enforces exactly that split, so the second identity captures
+   * the half-refused page rather than a blank one:
+   *
+   *     MOCK_IDENTITY=reduced node scripts/capture.mjs /payments
+   *
+   * The transactions list is the fixture's discriminating half: 45 rows over
+   * three pages at the default `per_page`, so `TableFooter` renders "1 / 3" and
+   * the Arabic capture can actually catch a reordered page indicator — "1 / 1" is
+   * symmetric and proves nothing, which is the lesson shipping paid for. The
+   * shop's single `failed` transaction sits second in the resting order, so the
+   * badge's other state is on page one rather than buried on page three.
+   *
+   * There is no `/payments/{id}` route to capture. `GET /payments/{id}` returns
+   * the list row exactly, so a peek drawer would be free here, but a drawer is an
+   * overlay on this route rather than a route of its own.
+   */
+  "/payments",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
