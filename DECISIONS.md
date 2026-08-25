@@ -50,7 +50,7 @@ Apply these to every remaining screen unless something measured says otherwise.
 
 | Rule | Why |
 | --- | --- |
-| **Sorting ships only with a positive control.** Products only. | Two values agreeing *with each other* proves nothing. Orders, customers and inventory ship none. |
+| **Sorting ships only with a positive control** — and the control must not be the collection's *default* ordering. Products and coupons. | Two values agreeing *with each other* proves nothing, and a value that is already the resting order proves nothing either — `date` on coupons tied on every row and answered the bare listing, which is how "validated then ignored" got recorded for a working sort. Absence of a positive control is not evidence of absence: go and take one. Orders, customers and inventory still ship none. |
 | **A peek drawer is a judgement, not a default.** | Free only when `GET /{id}` returns the list row exactly. Orders and products yes; customers, inventory, coupons no. |
 | **A detail screen's primary action goes in `PageHeader`.** | Below `lg` the aside drops beneath a variable-length list. |
 | **A long form's save is a sticky bar that appears when dirty.** | §3.4 legislates it separately from the header rule. |
@@ -80,6 +80,14 @@ session shipped a broken stylesheet past a green build.
 **It reproduces the API's dishonesty on purpose.** `orderby` is accepted and
 ignored where the live router ignores it, so nobody can verify a sort against
 the harness and ship one that does nothing.
+
+**And that cuts both ways — it did, on coupons.** The mock ignored an `orderby`
+the router honours, invented a `"Read-only."` refusal the API never sends, and
+wrote its own wording for a restriction error; a screen was then built to all
+three. A harness that is *stricter* than the API is not the safe direction, it
+is just the quieter one: it grows error paths production never takes and hides
+controls that work. So the honesty audit runs in both directions, and anything
+this file records as measured carries the request that measured it.
 
 **Proof it works:** with the dark token block disabled, all 12 per-capture
 assertions passed. Only the cross-capture light-vs-dark comparison caught it.
@@ -224,14 +232,21 @@ rows instead of five.
 
 - List: `DataTable`/`RecordList` + `columns.tsx`, status `FilterTabs` — three
   states, the first sending nothing, because absent means publish AND draft.
-  Search, and it matches the **code only**; the placeholder says so. No sorting
-  shipped — but **not because the API ignores `orderby`**: re-measured 2026-08-25,
-  all four values sort in both directions, `usage` numerically, `order` defaulting
-  to `desc`. `date` proves nothing either way — the shop's four coupons share one
-  `post_date`, so both directions tie — and using it as its own control is how
-  "validated then ignored" got recorded. The mock and its suite now sort, with a
-  fixture whose `usage_count: 9` against 305's `37` catches a lexical regression.
-  The columns are a later pass.
+  Search, and it matches the **code only**; the placeholder says so. **Sorting
+  ships** — the second screen to carry it, and the first whose control is backed
+  by a positive control in the API's own suite. Re-measured 2026-08-25: all four
+  `orderby` values sort in both directions, `usage` numerically, `order`
+  defaulting to `desc`; the mock and its suite sort too, with a fixture whose
+  `usage_count: 9` against 305's `37` catches a lexical regression. `code`,
+  `usage` and `id` carry a `sortKey`; the other six do not, because the API
+  cannot sort them. **`date` gets no column and no control** — it is
+  `date_created`, the list's only date is `expires` (`date_expires`), and adding
+  a column to hang a sort on is chrome; it stays the resting order, which the
+  third header click returns to by dropping `orderby`. `date` is also what proved
+  nothing either way — the shop's four coupons share one `post_date`, so both
+  directions tie — and using it as its own control is how "validated then
+  ignored" got recorded. No sort below `md`: `RecordList` takes no sort props,
+  and that is correct rather than a gap.
   No peek, no bulk, no export — coupons is not in `EXPORT_SUBJECTS`.
 - Create ships as a `PageHeader` primary: `POST /coupons` **is** allowlisted,
   unlike products.
@@ -244,7 +259,8 @@ rows instead of five.
 - Delete in a header `Menu` → `ConfirmDialog`; permanent delete requires typing
   the code. Restriction picker is a `Drawer`, search **submit-gated** — it fired
   a request per keystroke and the form can open it four times.
-- Omitted: sorting, peek, bulk, export, and any `status=trash` request (a 400).
+- Omitted: peek, bulk, export, a `date`/created column, and any `status=trash`
+  request (a 400).
 
 **The two recorded bugs, both fixed and both verified on screen:**
 1. A 400 on a restriction id rendered nowhere — a silent failed save. The orphan
@@ -317,6 +333,22 @@ sentence quoted here and in `CouponForm` until now was the mock's invention.
   asserts `toBeVisible()` on an anchor that only the `md`+ table renders, on a
   phone project. It has never surfaced because the suite is env-gated and has
   never run here. The fix is the `tbody tr, li.ui-card` helper coupons now uses.
+- **A sort can outlive the column that shows it.** `id` on coupons is
+  `optional: true`, so sorting by it and then hiding the column leaves the list
+  ordered by something no header claims. Weaker than §2's products defect — there
+  the *default* `orderby` sat on a hidden column, so every first paint lied;
+  here the resting order is `date`, which no column claims either way, so
+  "none" on every visible header stays true and reaching the gap takes a
+  deliberate sort-then-hide. `DataTable` wants a rule about it.
+- **Five mock-vs-API divergences found by the coupons honesty audit**, none
+  fixed, all outside that branch: `PATCH {"code":""}` is a 200 that blanks a
+  coupon's identity while `POST` refuses the same value (**measure this one
+  first** — it is the destructive arm); both picker routes validate nothing but
+  `per_page` where `/coupons` 400s the same input; `email_restrictions` accepts
+  strings that are not addresses; `/products` reads `orderby=""` as a fifth
+  value where `checkSort`, `filterCouponStatus` and `searchRows` all read it as
+  absence; and `per_page=0`, `per_page=abc` and `page=0` are silent 200s while
+  `per_page=101` is a 400.
 - `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
   Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
 - The sticky first column has no divider at its frozen edge.

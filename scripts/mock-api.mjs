@@ -4937,11 +4937,15 @@ const COUPON_STATUS_FILTERS = ["", ...COUPON_STATUSES];
  * `usage` is the one to get wrong from the other direction: compared as text, 99
  * sorts above 7.
  *
- * app/[locale]/(panel)/coupons/query.ts:27-31 names these four as the set *the
- * 400 enumerates*, and `queryFromParams()` carries a guard whose only purpose is
- * to stop a stale or hand-edited URL provoking that 400. Note the panel offers
- * three of these four — `id` is accepted and is not in the control — and nothing
- * on that screen sorts yet; a later pass owns it.
+ * `app/[locale]/(panel)/coupons/query.ts` names these four as the set *the 400
+ * enumerates*, and `orderbyFromKey()` is the guard that stops a stale or
+ * hand-edited URL provoking one.
+ *
+ * **The screen ships three of the four**, and the missing one is `date`, not
+ * `id`: `date` is `date_created` and the only date column on that list is
+ * `date_expires`, a different field the API cannot sort by. So `date` stays the
+ * resting order with no header claiming it, and `DataTable`'s
+ * `none → asc → desc → none` cycle is what returns to it.
  */
 const COUPON_ORDERBY = ["date", "id", "code", "usage"];
 

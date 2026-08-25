@@ -47,13 +47,30 @@ import type { Column } from "@/components/ui/DataTable";
  * one anchor and not two — both presentations are in the DOM at every width, and
  * a link in each would double every `a[href*="/coupons/"]` a suite counts.
  *
- * ## No sortable columns
+ * ## Three sortable columns, out of nine
  *
- * `orderby` is accepted here, validated here, and ignored: `date`, `id`, `code`
- * and `usage` all return an identical id sequence. So no column carries a
- * `sortKey` and the list passes no `onSortChange` — which is also what keeps
- * `aria-sort` off the headers, since the primitive gates the attribute on a
- * handler existing. `query.ts` carries the argument.
+ * `orderby` takes `date`, `id`, `code` and `usage`, and — re-measured 2026-08-25
+ * against a positive control, after this file recorded the whole set as
+ * validated-then-ignored — **all four sort, in both directions**. Three of them
+ * are columns here, so `code`, `usage` and `id` carry a `sortKey` and the list
+ * passes `onSortChange`. That pair is what puts `aria-sort` on those three
+ * headers and, just as deliberately, keeps it off the other six: the primitive
+ * gates the attribute on `sortKey && onSortChange`, and a `sortKey` on
+ * `description`, `discount`, `type`, `minimum`, `expires` or `restrictions`
+ * would announce a sortability the API does not have. That exact defect was
+ * found on the products branch and is DECISIONS.md §2.
+ *
+ * None of the three declares `sortDirections`. All eight combinations were
+ * measured, so the default `none → asc → desc → none` cycle is fully backed;
+ * that prop exists for products' `title`, where only ascending ever was.
+ *
+ * **`date` gets no column and no control**, and not for want of evidence. It is
+ * `date_created`; the only date on this list is `expires` (`date_expires`),
+ * which is a different field and one the API cannot sort by. Adding a "created"
+ * column purely to hang a sort on would be chrome. `date` stays the resting
+ * order, which the third click on any sorted header returns to by dropping
+ * `orderby` from the URL. `query.ts` carries the measurement and the trap behind
+ * the old reading.
  *
  * ## No row-actions `Menu`
  *
@@ -131,6 +148,9 @@ export function buildColumns(ctx: CouponColumnContext): Column<Coupon>[] {
       key: "code",
       header: t("columns.code"),
       required: true,
+      /* Alphabetical on the folded code, both directions measured. Required, so
+         this header can never be the sorted-but-hidden one. */
+      sortKey: "code",
       cell: (coupon) => (
         <span className="flex min-w-0 items-center gap-2">
           <Link
@@ -211,6 +231,11 @@ export function buildColumns(ctx: CouponColumnContext): Column<Coupon>[] {
       key: "usage",
       header: t("columns.usage"),
       align: "end",
+      /* **Numeric, not lexical** — `desc` answers 99, 50, 5, 1, and the mock
+         carries a `usage_count: 9` fixture against a 37 so a string comparison
+         fails there rather than on screen. The cell can render either a bare
+         count or "n / limit"; the sort is on `usage_count` in both cases. */
+      sortKey: "usage",
       /* Moved by `POST /cart/coupons` on the storefront and by nothing in this
          panel. `usageOf` is a translated sentence carrying two numbers, so it is
          `Isolate` rather than `Ltr`; a bare count is a figure and is `Ltr`. */
@@ -265,8 +290,19 @@ export function buildColumns(ctx: CouponColumnContext): Column<Coupon>[] {
        * name may be a login. A coupon's *code* is already that — unique, typed by
        * shoppers, and what a colleague would say down a phone — so the numeric id
        * is machinery and only earns its place when somebody is reading a URL.
+       *
+       * Being optional makes its sort reachable only once the column is shown,
+       * and hiding it again while it is the active sort leaves the list ordered
+       * with no header saying so. That is an **incompleteness, not the products
+       * defect**: there the *default* `orderby=date` sat on a hidden column, so
+       * every first paint announced "none" on every header while the panel had
+       * explicitly asked for a sort. Here the resting order is `date`, which no
+       * column claims and no control offers, so "none" on every visible header
+       * is true — and the only route to the gap is to sort by id and then
+       * deliberately hide the column you just sorted by.
        */
       optional: true,
+      sortKey: "id",
       cell: (coupon) => <Ltr className="text-ui-subtle">{coupon.id}</Ltr>,
     },
   ];

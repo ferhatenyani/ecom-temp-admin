@@ -14,6 +14,7 @@ import {
   TableControls,
   TableFooter,
   useTablePreferences,
+  type SortState,
 } from "@/components/ui/DataTable";
 import { FilterRow, FilterTabs, SearchField } from "@/components/ui/FilterBar";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
@@ -26,8 +27,10 @@ import {
   couponsKey,
   isFiltered,
   listParams,
+  orderbyFromKey,
   queryFromParams,
   toUrlParams,
+  EMPTY_QUERY,
   type CouponsQuery,
   type StatusFilter,
 } from "./query";
@@ -60,10 +63,26 @@ async function fetchCoupons(query: CouponsQuery) {
  * themselves — the search term in its box, the status in the highlighted tab —
  * and a chip would repeat what is already on screen.
  *
+ * ## Sorting, on three of the nine columns
+ *
+ * `orderby` was re-measured against a positive control and **all four of its
+ * values sort, both ways**. `code`, `usage` and `id` are the three that map onto
+ * columns, so those headers cycle and announce `aria-sort`; the other six carry
+ * no `sortKey`, because the API cannot sort them and a header that says
+ * otherwise is the defect DECISIONS.md §2 records. `date` is the default order
+ * and gets no control at all — it is `date_created`, and the only date on this
+ * list is the *expiry*. `columns.tsx` and `query.ts` carry the argument and the
+ * trap that had this recorded as unsortable for a week.
+ *
+ * The controls are the table's headers and nothing else. **Below `md` there is
+ * no sort control**, because below `md` there is no table: `RecordList` is the
+ * presentation and it takes no sort props. That is the same reasoning that keeps
+ * `TableControls` out of the phone toolbar — a control with nothing on screen to
+ * act on is worse than no control — so there is no mobile sort menu to add.
+ *
  * ## What this screen does not ship
  *
- * **No sorting** — `orderby` is validated and then ignored, so no column carries
- * a `sortKey` and no header announces `aria-sort`. **No peek** — the detail is
+ * **No peek** — the detail is
  * the row plus `restrictions`, which is what you would open a preview for; the
  * code is a real anchor instead. **No bulk selection**, because there is no
  * measured bulk endpoint. **No export**: `EXPORT_SUBJECTS` in `lib/transfer.ts`
@@ -154,7 +173,10 @@ export function CouponsList({
     });
   }
 
-  /* A new filter resets to page one; paging and per-page do not. */
+  /* A new filter or a new sort resets to page one; paging and per-page do not.
+     Page 3 of a re-ordered list is a different set of rows, not the same ones
+     rearranged, so keeping the number would keep a position that no longer
+     refers to anything. */
   const commitFilter = (next: CouponsQuery) => commit({ ...next, page: 1 });
 
   /* Not memoized: `now` is deliberately new on every render, so a dependency
@@ -166,6 +188,10 @@ export function CouponsList({
   /* Held here rather than inside `DataTable` so the controls sit in the toolbar
      beside the search field instead of floating above the card. */
   const preferences = useTablePreferences("coupons", columns);
+
+  /* Read straight off the URL state — see the `sort` prop below for why `date`
+     resting here leaves every header honestly unsorted. */
+  const sortState: SortState = { key: query.orderby, direction: query.order };
 
   return (
     <div className="min-h-dvh bg-ui-canvas">
@@ -306,10 +332,33 @@ export function CouponsList({
                is a real anchor on top of this, for the keyboard and the middle
                click; it stops propagation so only one push happens. */
             onRowClick={(coupon) => router.push(`/${locale}/coupons/${coupon.id}`)}
-            /* No `sort` and no `onSortChange`. Passing neither is what keeps
-               `aria-sort` off the headers: the primitive gates the attribute on a
-               handler existing, precisely so a table cannot announce itself
-               sortable by columns nothing on screen can sort. */
+            /*
+             * The URL is the sort state; nothing is mirrored in component state.
+             *
+             * At rest `query.orderby` is `date`, which no column declares, so
+             * `Table` matches it against nothing and every header reads
+             * `aria-sort="none"` — true, rather than the "sorted somewhere you
+             * cannot see" the products list had to design around.
+             */
+            sort={sortState}
+            onSortChange={(next) =>
+              /*
+               * `null` is the third click, and it restores the default pair
+               * rather than sending `orderby=date&order=desc` as an explicit
+               * ask: `toUrlParams` omits both when they equal `EMPTY_QUERY`, so
+               * the URL goes back to clean.
+               *
+               * `orderbyFromKey` round-trips the key for the same reason
+               * products runs its own through `sortFromKey` — `SortState.key` is
+               * a plain `string`, and a value outside the four is a 400 rather
+               * than a 200 that quietly does nothing.
+               */
+              commitFilter({
+                ...query,
+                orderby: next === null ? EMPTY_QUERY.orderby : orderbyFromKey(next.key),
+                order: next === null ? EMPTY_QUERY.order : next.direction,
+              })
+            }
             footer={
               <TableFooter
                 page={query.page}

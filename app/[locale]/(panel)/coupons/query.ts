@@ -34,20 +34,53 @@ export const STATUS_FILTERS = ["", ...COUPON_STATUSES] as const;
 export type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 /**
- * `date, id, code, usage`, as the 400 enumerates them — and **nothing on this
- * screen sorts.**
+ * `date, id, code, usage`, as the 400 enumerates them — and **all four sort, in
+ * both directions.**
  *
- * `orderby` is accepted, validated and then ignored: all four values return an
- * identical id sequence, measured against the mock in `tests/mock-api.test.ts`,
- * which reproduces the live router's behaviour on purpose so a sort cannot be
- * "verified" here and shipped broken. This is Orders' and Customers' position
- * rather than Products', which ships sortable headers off five re-measured
- * combinations. So no column carries a `sortKey`, the list passes no
- * `onSortChange`, and no header announces `aria-sort`.
+ * Re-measured 2026-08-25 against the live router, one value at a time and
+ * against a positive control:
  *
- * The guard below stays regardless, and it is the only reason this list is kept:
- * a hand-edited or stale URL must not be able to provoke a 400 the screen then
- * has to render as an error.
+ *   id     no `order` → 30, 29, 28, 27;   `asc` → 27, 28, 29, 30
+ *   code   `asc` → bienvenue10, livraison, ramadan2000, tapis15 — alphabetical
+ *   usage  `desc` → 99, 50, 5, 1;  `asc` → 1, 5, 50, 99 — **numeric**, not lexical
+ *   date   the default ordering, and the one value that can prove nothing
+ *
+ * Anything else is a 400, `order=sideways` is a 400, `?orderby=` is the absence
+ * of the parameter rather than a fifth value, and `order` defaults to `desc`.
+ *
+ * ## Why this file used to say nothing sorts — the part worth writing down
+ *
+ * It recorded `orderby` as "accepted, validated and then ignored", and the
+ * control behind that was taken on `date`. `date` is this collection's *default*
+ * ordering, so `date asc` and `date desc` are both compared against the sequence
+ * they already produce. Worse: the shop's four coupons share a single
+ * `post_date`, so every comparison ties and both directions fall back to
+ * primary-key order — answering the unparameterised listing byte for byte. A
+ * working sort and a dead one are indistinguishable through that value.
+ *
+ * **A control taken on a collection's default ordering is not a control**, and
+ * the absence of a positive control is not evidence of absence. The same shape
+ * recurs wherever a collection's default `orderby` is also one of its offered
+ * values, which is most of them — so measure a *non-default* value, against rows
+ * whose order under it is known to differ.
+ *
+ * ## What ships, and what deliberately does not
+ *
+ * `code`, `usage` and `id` carry a `sortKey` in `columns.tsx`, the list passes
+ * `onSortChange`, and those three headers announce `aria-sort`. No column
+ * declares `sortDirections`: all eight combinations were measured, unlike
+ * products' `title`, where only ascending ever was.
+ *
+ * **`date` gets no header control**, and not for want of evidence. It is
+ * `date_created`; the only date on this list is `expires` (`date_expires`),
+ * which is a different field and one the API cannot sort by. Adding a "created"
+ * column purely to hang a sort on would be chrome. So `date` stays the resting
+ * order with no control, which is honest — and `DataTable`'s
+ * `none → asc → desc → none` cycle returns to it by dropping `orderby` from the
+ * URL on the third click.
+ *
+ * The guard below stays regardless of any of that: a hand-edited or stale URL
+ * must not be able to provoke a 400 the screen then has to render as an error.
  */
 const ACCEPTED_ORDERBY = ["date", "id", "code", "usage"] as const;
 export type OrderBy = (typeof ACCEPTED_ORDERBY)[number];
@@ -92,9 +125,23 @@ function positive(value: string | null): number {
   return Math.max(1, Number.parseInt(value ?? "1", 10) || 1);
 }
 
+/**
+ * The one guard, used by both directions of travel.
+ *
+ * A hand-edited or stale URL must not be able to provoke a 400 the screen then
+ * has to render as an error, and a header cycle handing back a key must not be
+ * able to either — `SortState.key` is a plain `string`, so the column's `sortKey`
+ * and this enum are only related by construction until something checks. Both
+ * paths fall back to the default rather than travelling.
+ */
+export function orderbyFromKey(key: string | null): OrderBy {
+  return (ACCEPTED_ORDERBY as readonly string[]).includes(key ?? "")
+    ? (key as OrderBy)
+    : EMPTY_QUERY.orderby;
+}
+
 export function queryFromParams(params: URLSearchParams): CouponsQuery {
   const status = params.get("status") ?? "";
-  const orderby = params.get("orderby") ?? "";
   const perPage = Number.parseInt(params.get("per_page") ?? "", 10);
 
   return {
@@ -107,9 +154,13 @@ export function queryFromParams(params: URLSearchParams): CouponsQuery {
     status: (COUPON_STATUSES as readonly string[]).includes(status)
       ? (status as CouponStatus)
       : "",
-    orderby: (ACCEPTED_ORDERBY as readonly string[]).includes(orderby)
-      ? (orderby as OrderBy)
-      : "date",
+    /* `?orderby=zzz` is a 400 the same way `?status=trash` is, so it falls back
+       too. `?orderby=date` is honoured rather than rewritten even though no
+       header can produce it: it is a legal request that happens to name the
+       resting order, and `toUrlParams` drops it again on the next commit. */
+    orderby: orderbyFromKey(params.get("orderby")),
+    /* `order` is only ever read alongside `orderby`, and the API's own default
+       is `desc` — measured: `orderby=id` with no `order` answers 30, 29, 28, 27. */
     order: params.get("order") === "asc" ? "asc" : "desc",
     page: positive(params.get("page")),
     /* Falls back rather than travelling: the footer's select could not represent
