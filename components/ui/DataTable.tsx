@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
+import { Ltr } from "@/components/primitives/Ltr";
 import { Button, IconButton } from "./Button";
 import { Popover, FloatGroup, FloatToggle, FloatRadio } from "./Float";
 import { CountBadge } from "./Badge";
@@ -776,9 +777,31 @@ export function TableFooter({
             disabled={page <= 1}
             onClick={() => onPageChange(page - 1)}
           />
-          <span className="px-1 text-ui-label text-ui-muted" data-numeric="">
+          {/*
+            **`Ltr`, and it is a bug fix rather than a precaution: in Arabic this
+            rendered page 1 of 7 as "7 / 1".**
+
+            `ui.table.pageOf` is `"{page} / {pages}"` in both locales, and the
+            spaces around the slash break what would otherwise be one bidi number
+            run — so the paragraph's RTL direction reorders the two numbers and
+            the reader is told they are on the last page. It is a *wrong number*,
+            not an ugly one, which is the same class of defect `DataRow`'s
+            clipped money was.
+
+            **It survived two branches because every Arabic list captured before
+            this one had exactly one page**, and "1 / 1" is symmetric: the bug
+            renders identically to the fix. `/products` in Arabic has been showing
+            "2 / 1" for page 1 of 2 the whole time. Shipping is the run's first
+            fixture with seven pages, which is the only reason anyone saw it.
+
+            `Ltr` rather than `Isolate`: this is a pair of figures with a
+            separator, not a translated sentence with a number in it, so it wants
+            a forced direction and not merely an isolate. `data-numeric` moves on
+            to it, since `Ltr` is what carries the tabular figures now.
+          */}
+          <Ltr className="px-1 text-ui-label text-ui-muted">
             {t("pageOf", { page, pages })}
-          </span>
+          </Ltr>
           <IconButton
             label={t("nextPage")}
             icon="chevron"

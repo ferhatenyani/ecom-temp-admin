@@ -55,6 +55,7 @@ export function ParcelsSection({
 }) {
   const t = useTranslations("shipping");
   const tStatus = useTranslations("shipmentStatus");
+  const tProvider = useTranslations("shippingProvider");
   const tOrders = useTranslations("orders");
   const router = useRouter();
   const toast = useToast();
@@ -164,7 +165,9 @@ export function ParcelsSection({
                       dir="auto"
                       className="min-w-0 break-words text-ui-label text-ui-subtle"
                     >
-                      {providerLabel(parcel.provider, providers)}
+                      {providerLabel(parcel.provider, providers, (key) =>
+                        tProvider.has(key as "manual") ? tProvider(key as "manual") : null,
+                      )}
                       {place ? (
                         <>
                           <span aria-hidden="true"> · </span>

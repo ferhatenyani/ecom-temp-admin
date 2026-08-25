@@ -53,10 +53,24 @@ function StateFrame({
  */
 export function EmptyState({
   message,
+  /**
+   * A second line, below the message and above the action — what the absence
+   * *costs*, when that is not obvious.
+   *
+   * `StateFrame` has carried this slot since the redesign and only `ErrorState`
+   * exposed it, so an empty state could say what was missing and never why it
+   * mattered. The shipping tariff is the case that found it: "no delivery rate is
+   * configured" is a fact, and "without one a destination has no price and the
+   * shop cannot charge for it" is the reason to press the button underneath.
+   * Optional, and most empty states are right not to pass it — a second line
+   * that restates the first is noise.
+   */
+  detail,
   action,
   icon = "search",
 }: {
   message: string;
+  detail?: string;
   action?: { label: string; onClick: () => void };
   icon?: IconName;
 }) {
@@ -64,6 +78,7 @@ export function EmptyState({
     <StateFrame
       icon={icon}
       body={message}
+      detail={detail}
       action={
         action ? (
           <Button variant="secondary" size="sm" onClick={action.onClick}>

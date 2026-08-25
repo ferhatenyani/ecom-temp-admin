@@ -22,7 +22,7 @@ left looking like an oversight.
 [x]  5. Customers — list + detail
 [x]  6. Inventory — list + detail + ledger
 [x]  7. Coupons — list + form
-[ ]  8. Shipping
+[x]  8. Shipping — parcels list + rules route
 [ ]  9. Payments
 [ ] 10. Dashboard
 [ ] 11. Analytics — revenue / orders / products / customers / shipping / COD
@@ -39,7 +39,7 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **90
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **84
 files left.**
 
 ---
@@ -336,6 +336,164 @@ sentence quoted here and in `CouponForm` until now was the mock's invention.
 
 ---
 
+## 8. Shipping — parcels list + rules route
+
+**Split into two routes, and `/shipping` flipped to the parcels.** `query.ts`
+justified one route by a tab-bar slot the section could not spend twice;
+`layout.tsx` replaced that bar with `AppShell`, so the reason expired. What is
+left is the shape `/inventory` and `/inventory/movements` already take —
+different data, different filters, its own writes. `?view=rules` **redirects** to
+`/shipping/rules`, between the session check and the capability gate, because the
+flip means an old bookmark now names a different screen. `nav-tree.ts` keeps its
+single `/shipping` entry; the tariff is reached from the parcels header.
+
+- **Parcels list**: `DataTable`/`RecordList` + one `columns.tsx`, status
+  `FilterTabs` (ten values plus "all", the first sending nothing), and an
+  **order-number lookup** — submit-gated, digits only, non-digits stripped rather
+  than refused so a pasted "Commande 4586" means 4586. `per_page` in the URL on
+  the coupons/customers shape. Stale marker present: it holds a client cache and
+  it writes, so both halves of §3.7 bite.
+- **No provider filter**, and the parameter works (87 `manual` / 42 `acfake` of
+  129). `GET /shipping/providers` returns **only `manual`**, so a picker built
+  from the sole allowlisted enumeration cannot offer the value that matters, and
+  a free-text box is not a filter here — `?provider=zzz` is a silent 200 with 0
+  rows, not a refusal.
+- **No `is_live` filter** — re-measured 2026-08-25 with a live row present:
+  `?is_live=true` returned all 130. **No sorting and no `aria-sort` anywhere**:
+  nine `orderby` values × both directions were byte-identical to
+  `?bogus_param=1`, and **`?orderby=zzz` is a 200** — it never reaches a
+  validator. 100 distinct ids on page one, so nothing ties. No bulk, no export
+  (shipping is not in `EXPORT_SUBJECTS`).
+- **The parcel drawer is the record's only surface.** No detail route, and
+  `GET /shipments/{id}` is key-identical to the list row, so it costs no request
+  bar the commune name. Whole row opens it; no trailing `Menu`.
+- **`is_live` is not rendered as a marker.** It equals
+  `!isTerminalShipmentStatus(status)` on 129 of 129 rows — the badge is the same
+  fact. This deletes the §3.5 defect at `ShipmentRow.tsx:83-85` rather than
+  promoting it to a badge.
+- **On a terminal parcel there are no write controls and one line says why** —
+  not a disabled control, and in this shop that is every row. The 409 those
+  buttons would produce carries **no `allowed` list**, unlike an order's, which
+  is why the picker is hidden rather than offered-and-refused.
+- **`sync` is not rendered at all.** Measured in all three states it can be in:
+  409 `sync_unsupported` on a live `manual` parcel, a **200 that changes nothing**
+  on a terminal one, and `manual` is the only provider the panel can enumerate.
+  There is no state in which it acts.
+- **Every terminal status move is confirmed; only two are coloured danger.** A
+  first draft marked all four `destructive` on the `Menu` and rendered **"Livré"
+  in `--color-danger-fg`** — the one outcome everybody wants, in the panel's
+  colour for *something is wrong*. The flag now follows the outcome and the
+  dialog still fires for all four.
+- **Rules route**: `PageBody width="split"` — rules list in main, resolver in the
+  aside. Ordered by the server's `specificity`, never derived. Form is a `Modal`
+  size `md` (eight controls, nothing behind it being read from — that is what
+  makes `CreateParcelDrawer` a drawer and this not one). No `Section`: it is a
+  bordered group at `gap-1` sized for check rows, and eight labelled fields need
+  no internal border. `provider` is a `Select` fed by `/shipping/providers` plus
+  an "any" option — it **is writable and validated**, and the picker is what keeps
+  `Unknown provider "acfake".` unreachable, which is why nothing reads
+  `details.available` and nothing should.
+- **Delete → `ConfirmDialog`, danger, no type-to-confirm, and DESIGN.md §3.1 was
+  amended in the same edit.** §3.1 asks for the record's identifier to be typed;
+  a rule's only identifier is a database key the list deliberately never shows.
+  The dialog names it the way the row does — scope, place, amount.
+- **The resolver stays**, because it is why the editor exists. `.tone-warning` is
+  gone; a server/local disagreement is a `Notice`. `/shipping/rates` 400s without
+  **both** parameters, so the answer area is an empty state until both are set,
+  not a disabled control. **No stale marker here** — server-fetched, every write
+  ends in `router.refresh()`, and the resolver re-requests per selection.
+
+**Three defects found by driving a real browser, which the capture harness
+cannot see — two of them primitive fixes older than this branch:**
+
+1. **`TableFooter`'s page indicator reordered in Arabic: page 1 of 7 rendered as
+   "7 / 1".** `ui.table.pageOf` is `"{page} / {pages}"`, and the
+   spaces around the slash break what would otherwise be one bidi number run, so
+   an RTL paragraph swaps the two figures and tells the reader they are on the
+   last page. A wrong number, not an ugly one. **It survived two branches because
+   every Arabic list captured before this one had exactly one page** — "1 / 1" is
+   symmetric, so the bug and the fix render identically; `/products` in Arabic
+   had been showing "2 / 1" the whole time. Shipping is the run's first fixture
+   with seven pages. Fixed in the primitive with `Ltr`, so orders, products,
+   customers, coupons, inventory, inventory/movements and shipping all inherit
+   it. **The lesson is the fixture, not the wrap:** a bidi assertion taken on a
+   one-page, one-row or one-item collection proves nothing, because the broken
+   order and the correct one are the same string.
+2. **There was no keyboard path to the parcel drawer at `md`+.** `DataTable`
+   hangs `onRowClick` off the `<tr>`, and a `<tr>` is not focusable; below `md`
+   that is invisible because `RecordList` draws a stretched overlay button
+   carrying `rowLabel`. Measured at 1440: one focusable per row, the anchor to
+   `/orders/{id}`, which goes somewhere else. Coupons and customers are unaffected
+   — there the row's anchor *is* its purpose — but here the drawer is the
+   parcel's only record surface and it was mouse-only. The identifying cell is a
+   real `<button>` now, not a stretched overlay, because the row already contains
+   the order anchor and two interactive elements must not nest.
+   **And it did not fix focus restoration for free.** Escape from a
+   pointer-opened drawer still landed on `<body>`, because `useOpenerFocus`
+   restores to whatever held focus at open and a click on a `<tr>` leaves that as
+   `<body>`. Naming the opener explicitly is the fix, and it has to be **latched**
+   in the drawer: Radix fires `onCloseAutoFocus` *after* `onOpenChange`, so a
+   `returnFocusTo` derived from the open parcel is already `undefined` by the time
+   it is read — which is exactly why the first attempt passed every keyboard
+   assertion and still failed on the mouse. `useOpenerFocus` also gained a
+   **rendered** check (`getClientRects().length`) rather than `isConnected`: with
+   both presentations always in the DOM, a caller naming a control in the `md`+
+   table hands it a connected, findable, `display: none` node on a phone, where
+   `focus()` is a silent no-op and the fallback has already been cancelled.
+3. **The provider label was English inside both localised panels.** The API's
+   `label` for `manual` is "In-house delivery", and it rendered on most parcel
+   rows and three times on the rules card in French *and* Arabic. It is data, but
+   so is a shipment's `status`, which the panel has always translated. So
+   `providerLabel` became **message key → API `label` → raw `name`**: `manual`
+   reads properly in both locales, `acfake` still renders as itself rather than
+   as a string the panel invented, and a real courier configured later is shown
+   under its own brand — nobody translates "Yalidine". Applied at all six call
+   sites including the two on the order detail. **The filter decision does not
+   change**: there is still no provider filter, for the reason above.
+
+**Two `lib/` fixes, both extending the primitive rather than working around it:**
+
+1. **`ApiError.params` had no `Array.isArray` guard**, so `/shipping/rates`'
+   bare-array `details.params` read back as `{"0":"wilaya_id","1":"commune_id"}` —
+   parameter *names* posing as messages under numeric keys. `lib/api/browser.ts`
+   has guarded both of its readers since the inventory branch; the server-side
+   reader now matches, on `fields` as well as `params`. Every caller was checked:
+   `analytics/page.tsx:147` is the only one, and it reads `.params?.range`.
+   `tests/mock-api.test.ts` **asserted the broken shape as the behaviour**, which
+   is how it survived — the mock could reproduce the wire and not fix the reader.
+2. **`lib/shipment-status.ts` claimed the API lists statuses alphabetically.**
+   Measured false: both refusals use the **physical** order — `"status is not one
+   of pending, created, …, and failed."` and `"Must be one of: pending, created,
+   …, failed."`. They differ in punctuation and in nothing else.
+
+**Commune names came back on the rules list** after a first draft dropped them:
+without one, a commune rule and a wilaya rule for the same wilaya both read
+"Alger" and differ only by their badge — the exact ambiguity the resolver exists
+to settle. One `useQueries` over the *distinct wilayas the tariff mentions* (one
+request on this shop), and `placeOf` is passed down to the resolver so the winner
+and the rules it beat are named with the same words.
+
+**i18n**: the `shipping` namespace is shared — 21 of its keys are read by
+`orders/[id]/ParcelsSection.tsx` and `CreateParcelDrawer.tsx`, and
+`shipmentStatus` by `analytics/ShippingView.tsx`; none was renamed or removed.
+Seven keys lost their last caller and went: `back`, `cancel`, `finished` (already
+orphaned), `live` (the marker that is the badge spelled twice), `syncNow` (the
+control that cannot act), and `tabShipments`/`parcels` (the retired Segmented).
+`orderLink`, `label` and `source` were orphans and are now used. Added
+`states.capability.ac_manage_shipping`, which was **missing** — the forbidden
+state was falling back to printing the raw capability slug.
+
+**`e2e/shipping.spec.ts`: 14 tests before, 14 after, titles identical.** Eight
+belong to this screen and were updated for the new routes and selectors; the
+orders-detail and payments tests were not touched. `:154`'s `button` row selector
+became the `tbody tr, li.ui-card` visible-filtered helper coupons introduced. Two
+selectors had to be **scoped** rather than merely moved: the drawer's "Suivi" and
+"Transporteur" collide with the table's own column headers, and `/^Commune/`
+collides with every commune-scoped rule row, whose stretched overlay button is
+named "Commune · Alger · 350,00 DA".
+
+---
+
 ## Carried forward — teardown owns these
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
@@ -393,7 +551,41 @@ sentence quoted here and in `CouponForm` until now was the mock's invention.
   values so a fixture that ties on every row cannot pass as proof.
 - `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
   Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
+  **Still true, and now visible on a screenshot** — the shipping rule-delete
+  dialog opens with the focus ring on ×, which is the one control that is not the
+  safe default. Unchanged here because it is a primitive fix affecting every
+  destructive dialog in the panel.
 - The sticky first column has no divider at its frozen edge.
+- **`DataTable.onRowClick` still hands its caller a `<tr>` and no keyboard path.**
+  Shipping fixed *its own* screen by putting a real `<button>` in the identifying
+  cell, but the primitive is unchanged: any future page that wires `onRowClick`
+  and does not separately put a focusable control in a cell gets a mouse-only
+  screen at `md`+ and a working one below it, because `RecordList` draws its own
+  overlay button. That asymmetry is what made this invisible for four branches —
+  every earlier list happened to carry an anchor that *was* the row's purpose, so
+  the missing path never cost anything. `DataTable` wants a rule about it: either
+  it renders the opener itself from `rowLabel`, or it refuses `onRowClick` without
+  one.
+- **`POST /orders/{id}/cod/attempts` is the last create still pinned at 200 and
+  never measured.** Three of the four were measured on 2026-08-25 and all three
+  answered **201** — `/shipping/rules`, `/coupons`, `/orders/{id}/shipments` — so
+  200 is now the odd one rather than the safe default. It is unmeasured because
+  provoking it is **irreversible, not because it is unreachable**: a coupon can be
+  force-deleted and a parcel cancelled, but a recorded delivery attempt cannot be
+  un-recorded. Whoever is willing to spend one on a disposable order should take
+  it.
+- **The API names a legal set in `details.available` and nothing reads it.** A
+  rule refusing an unregistered provider answers `{"fields":{"provider":"Unknown
+  provider \"acfake\"."},"available":["manual"]}` — `available` a *sibling* of
+  `fields`, not a member. It is the service a 409's `allowed` array performs for
+  order transitions, and `ApiError` exposes `fields` and `params` and nothing
+  else. Not wired on shipping deliberately: the provider picker is what keeps that
+  refusal unreachable. A screen that ever lets someone type a provider will need
+  it.
+- **`GET /analytics/shipping` is the one allowlisted route on this subject still
+  answering `rest_no_route`** — a code no client can receive. Unimplemented in the
+  mock and listed `UNCOVERED` with a reason, so it is a declared gap rather than a
+  hidden one; the analytics branch owns it.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
 - `movementReasonHint` has no caller in either message file.

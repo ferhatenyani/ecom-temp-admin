@@ -476,7 +476,9 @@ for (const [name, options] of TARGETS) {
     check(`${name}/${locale}: the save button is reachable`, saveReachable, "reachable");
 
     // ---------------------------------------------------------- shipping ---
-    await page.goto(`${BASE}/${locale}/shipping`, { waitUntil: "networkidle" });
+    /* The tariff has its own route since the redesign; `/shipping` is the
+       parcels list and is captured below. */
+    await page.goto(`${BASE}/${locale}/shipping/rules`, { waitUntil: "networkidle" });
     await page.waitForTimeout(600);
     await page.screenshot({ path: `${OUT}/shipping-${name}-${locale}.png`, fullPage: true });
 
@@ -499,20 +501,33 @@ for (const [name, options] of TARGETS) {
     );
 
     /*
-     * **A rule row's secondary line stays on one line.** In Arabic — a step
-     * larger than French — it wrapped and split the isolated "1 ي", leaving the
-     * unit orphaned under its own number. Measured on the rendered box.
+     * **A rule row's secondary line is bounded, and it is allowed to wrap.**
+     *
+     * This asserted "does not wrap" and measured nothing: it selected
+     * `.list-row`, the retired iOS class, so it returned -1 and the `<= 1`
+     * predicate passed vacuously — green while blind.
+     *
+     * The rule it was written for has also been re-decided. The old row
+     * truncated that line to one, which in Arabic clipped away the free-shipping
+     * threshold — the fact somebody is reading the row *for*. It wraps now, at
+     * the separators, and `Isolate` keeps a day count together with its unit. So
+     * the bound is what is worth checking: four facts on a 340px row is two
+     * lines, and anything past that is the line breaking mid-token.
      */
     const ruleLines = await page.evaluate(() => {
-      const row = document.querySelector("section .list-row span.truncate");
+      const row = document.querySelector("section li span[dir='auto'].break-words");
       if (!row) return -1;
       const style = getComputedStyle(row);
       return Math.round(row.getBoundingClientRect().height / parseFloat(style.lineHeight));
     });
-    check(`${name}/${locale}: a rule's secondary line does not wrap`, ruleLines, (v) => v <= 1);
+    check(
+      `${name}/${locale}: a rule's secondary line stays within two lines`,
+      ruleLines,
+      (v) => v >= 1 && v <= 2,
+    );
 
     // ----------------------------------------------------------- parcels ---
-    await page.goto(`${BASE}/${locale}/shipping?view=parcels`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/${locale}/shipping`, { waitUntil: "networkidle" });
     await page.waitForTimeout(600);
     await page.screenshot({ path: `${OUT}/parcels-${name}-${locale}.png` });
 

@@ -12,10 +12,23 @@
 /**
  * Ten statuses, in the order a parcel passes through them.
  *
- * Measured 2026-08-20 — `?status=zzz` on `/shipments` answers 400 naming all ten,
- * and `PATCH /shipments/{id}` refuses an eleventh with the same list. The order
- * here is the physical one, which is what a timeline renders; the API sends them
- * alphabetically in its error message and neither is a ranking.
+ * Re-measured 2026-08-25 — `?status=zzz` on `/shipments` answers 400 naming all
+ * ten, and `PATCH /shipments/{id}` refuses an eleventh with the same list.
+ *
+ * **This file used to say the API lists them alphabetically. It does not**, and
+ * the two refusals are the evidence:
+ *
+ * > `"status is not one of pending, created, picked_up, in_transit,
+ * > out_for_delivery, delivered, returning, returned, cancelled, and failed."`
+ *
+ * > `"Must be one of: pending, created, picked_up, in_transit,
+ * > out_for_delivery, delivered, returning, returned, cancelled, failed."`
+ *
+ * Both are the **physical** order — the order below, the order a parcel passes
+ * through them in. Alphabetical would open `cancelled, created, delivered`. The
+ * two sentences differ in punctuation and in nothing else, which is the
+ * query-parameter enum family against the body-field one. Neither is a ranking:
+ * only `TERMINAL_SHIPMENT_STATUSES` divides this list into anything.
  *
  * **This is the shop's vocabulary, not a courier's.** Yalidine and ZR Express each
  * name their states differently and each adapter maps onto these, keeping the

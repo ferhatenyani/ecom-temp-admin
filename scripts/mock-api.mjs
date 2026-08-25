@@ -2992,9 +2992,10 @@ function seedPayments() {
  * create-parcel form asks for both halves of a destination and the API validates
  * them before anything else on the body.
  *
- * **There is no Zod schema for this route in the panel** — `CreateParcelSheet`
- * and `RulesView` both read it with an untyped `acRead<Commune[]>` and a local
- * `{id, name, name_ar}` — so the shape here is those three keys plus the two a
+ * **There is no Zod schema for this route in the panel** — `CreateParcelDrawer`,
+ * `RulesScreen`, `Resolver`, `RuleForm` and `ParcelDrawer` all read it with an
+ * untyped `acRead<Commune[]>` and a local `{id, name, name_ar}` — so the shape
+ * here is those three keys plus the two a
  * wilaya row carries for the same purpose. Ids run globally rather than per
  * wilaya, the way the measured shipping rules use them (wilaya 16 / commune 484).
  *
@@ -3575,8 +3576,9 @@ function findById(map, id) {
  * route away and answers a different question; copying it here gave the panel a
  * `from`/`to` pair for a request that names no `to` at all.
  *
- * `ShipmentSheet.tsx:45-46` already quotes the measured sentence, so the screen
- * and the harness disagreed and the harness was the stale one.
+ * `ParcelDrawer.tsx` (`ShipmentSheet.tsx` when this was written) already quotes
+ * the measured sentence, so the screen and the harness disagreed and the harness
+ * was the stale one.
  */
 function cancelShipment(id) {
   const shipment = findById(state.shipments, id);
@@ -3675,7 +3677,7 @@ function shipmentsListing(params) {
  *
  * A coupon or a product takes its own GET body back and drops the read-only keys
  * without comment; sending a shipment's GET body back is a 400 naming nine
- * fields. So `ShipmentSheet` sends `{status}` alone because the API requires it
+ * fields. So `ParcelDrawer` sends `{status}` alone because the API requires it
  * to, not out of caution — and a mock that dropped `provider` quietly here would
  * have let a screen PATCH the whole row and watch it work.
  *

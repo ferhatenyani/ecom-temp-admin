@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import { DELIVERY_TYPES } from "@/lib/shipment-status";
+import { providerLabel } from "@/lib/shipping";
 import type { ShippingProvider } from "@/lib/api/schemas/shipping";
 import type { Wilaya } from "@/lib/api/schemas/order";
 import { Drawer } from "@/components/ui/Overlay";
@@ -70,6 +71,7 @@ export function CreateParcelDrawer({
 }) {
   const t = useTranslations("shipping");
   const tDelivery = useTranslations("deliveryType");
+  const tProvider = useTranslations("shippingProvider");
   const tUi = useTranslations("ui");
   const router = useRouter();
   const toast = useToast();
@@ -222,9 +224,14 @@ export function CreateParcelDrawer({
               value={provider}
               onChange={setProvider}
               error={fields.provider}
+              /* Message key → API `label` → raw slug: the API calls `manual`
+                 "In-house delivery", which is English in both localised panels.
+                 See `providerLabel`. */
               options={providers.map((p) => ({
                 value: p.name,
-                label: p.label,
+                label: providerLabel(p.name, providers, (key) =>
+                  tProvider.has(key as "manual") ? tProvider(key as "manual") : null,
+                ),
               }))}
             />
           </div>

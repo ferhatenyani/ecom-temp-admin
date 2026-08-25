@@ -178,26 +178,28 @@ const DEFAULT_ROUTES = [
   "/coupons/303",
   "/coupons/new",
   /*
-   * **Shipping is one route and two screens**, the arrangement inventory
-   * already uses. `/shipping` is the tariff — `view` defaults to `rules` — and
-   * `?view=parcels` is the parcels table, which shares nothing with it but the
-   * header: different data, different filters, its own paging. Capturing only
-   * the default would leave half the section unphotographed, and it is the half
-   * with the 340px overflow risk in it (a courier's tracking number is the
-   * unbroken string on this screen).
+   * **Shipping is two routes**, the arrangement inventory already uses for its
+   * ledger. `/shipping` is the parcels table and `/shipping/rules` is the tariff
+   * beside its resolver: different data, different filters, its own paging and
+   * its own writes. Both are captured, because each is half the section and the
+   * parcels half carries the 340px overflow risk (a courier's tracking number is
+   * the unbroken string on this screen) while the rules half is the only
+   * two-column layout in the section.
    *
-   * **There is no `/shipping/rules` route** — the panel holds
-   * `app/[locale]/(panel)/shipping/page.tsx` and nothing under it — so a capture
-   * of that path would photograph the not-found page under a directory named
-   * after a screen, which is the quietest possible way for a harness to lie.
+   * **The `?view=` parameter is gone.** This block used to say "there is no
+   * `/shipping/rules` route", and it was true — the panel held one `page.tsx`
+   * and a `Segmented` control switching between two views inside it. The
+   * redesign split them, so the route exists and `?view=rules` now **redirects**
+   * to it. Capturing `/shipping?view=parcels` would photograph a redirect target
+   * rather than a screen; capturing `/shipping/rules` photographs the screen.
    *
-   * The parcel sheet's own states — the status picker, the cancel confirm and
-   * the sync refusal — are overlays on this route rather than routes, so they
+   * The parcel drawer's own states — the status picker, the cancel confirm and
+   * the terminal note — are overlays on this route rather than routes, so they
    * are not capturable here. 7014 is the only live parcel in the fixture and is
-   * the only row that offers any of the three.
+   * the only row that offers the first two.
    */
   "/shipping",
-  "/shipping?view=parcels",
+  "/shipping/rules",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */

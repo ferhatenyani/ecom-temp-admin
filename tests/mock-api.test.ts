@@ -361,11 +361,12 @@ describe("the detail's reference lists", () => {
 
   /**
    * **This is the one route in this suite with no real schema to parse against,
-   * and it is written here rather than pretended away.** `CreateParcelSheet` and
-   * `RulesView` both read `/locations/wilayas/{id}/communes` with an untyped
-   * `acRead<Commune[]>` against a local `{id, name, name_ar}` — there is no Zod
-   * boundary anywhere in `lib/api/schemas` for it — so this asserts exactly the
-   * three keys those two components index into, and nothing more.
+   * and it is written here rather than pretended away.** `CreateParcelDrawer`,
+   * `RulesScreen`, `Resolver`, `RuleForm` and `ParcelDrawer` all read
+   * `/locations/wilayas/{id}/communes` with an untyped `acRead<Commune[]>` against
+   * a local `{id, name, name_ar}` — there is no Zod boundary anywhere in
+   * `lib/api/schemas` for it — so this asserts exactly the three keys those
+   * components index into, and nothing more.
    */
   it("serves communes four segments deep, bilingual and paginated", () => {
     const commune = z.array(
@@ -847,18 +848,23 @@ describe("GET /shipping/rates", () => {
     expect(Array.isArray(error.details.params)).toBe(true);
 
     /*
-     * **And here is the trap, reproduced rather than described.**
-     * `ApiError.params` runs `Object.entries` over whatever is under the key, so
-     * an array comes back as an object keyed by its *indices* — a form binding
-     * `params` to its controls binds `wilaya_id` to a control called `0`. The
-     * browser's own `BrowserApiError.fields` guards with `!Array.isArray(...)`
-     * and `firstMessage()` falls through to the generic sentence for exactly
-     * this shape; `lib/api/errors.ts` has no such guard on either getter, which
-     * is a real asymmetry between the two error types and not something this
-     * mock can fix from here.
+     * **The trap, and the guard that now closes it.**
+     *
+     * `ApiError.params` used to run `Object.entries` over whatever was under the
+     * key, so this array came back as an object keyed by its *indices* —
+     * `{"0":"wilaya_id","1":"commune_id"}`, parameter *names* posing as messages,
+     * which a form would bind to controls called `0` and `1` and a banner would
+     * print at a person as an explanation. This test asserted that shape as the
+     * behaviour, which is how it survived: the mock could reproduce the wire and
+     * not fix the reader.
+     *
+     * Fixed on the shipping branch. `lib/api/errors.ts` now guards both getters
+     * with `!Array.isArray(...)`, matching `BrowserApiError.fields` and
+     * `firstMessage()`, which have guarded since the inventory branch. An array
+     * carries no sentence, so there is nothing to return and the caller falls
+     * through to `apiMessage` — which on this route is the readable half.
      */
-    expect(error.params).toEqual({ "0": "wilaya_id", "1": "commune_id" });
-    expect(error.params?.wilaya_id).toBeUndefined();
+    expect(error.params).toBeNull();
 
     // The other shape, on the same subject, one route away.
     const other = refusedWith(get("/shipments", "status=zzz"), 400, "invalid_request");
@@ -1096,7 +1102,7 @@ describe("the shipment writes", () => {
    * A coupon or a product takes its own GET body back and drops the read-only
    * keys without comment. A shipment refuses every key it does not own, so
    * sending its GET body back is a 400 naming nine fields — which is why
-   * `ShipmentSheet` sends `{status}` alone out of requirement rather than
+   * `ParcelDrawer` sends `{status}` alone out of requirement rather than
    * caution.
    */
   it("rejects unknown keys rather than dropping them, unlike coupons", () => {
