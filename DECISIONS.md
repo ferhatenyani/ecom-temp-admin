@@ -225,8 +225,14 @@ rows instead of five.
 - List: `DataTable`/`RecordList` + `columns.tsx`, status `FilterTabs` — three
   states, the first sending nothing, because absent means publish AND draft.
   Search, and it matches the **code only**; the placeholder says so. No sorting
-  (`orderby` is validated then ignored — `date,id,code,usage` all return one id
-  sequence), no peek, no bulk, no export — coupons is not in `EXPORT_SUBJECTS`.
+  shipped — but **not because the API ignores `orderby`**: re-measured 2026-08-25,
+  all four values sort in both directions, `usage` numerically, `order` defaulting
+  to `desc`. `date` proves nothing either way — the shop's four coupons share one
+  `post_date`, so both directions tie — and using it as its own control is how
+  "validated then ignored" got recorded. The mock and its suite now sort, with a
+  fixture whose `usage_count: 9` against 305's `37` catches a lexical regression.
+  The columns are a later pass.
+  No peek, no bulk, no export — coupons is not in `EXPORT_SUBJECTS`.
 - Create ships as a `PageHeader` primary: `POST /coupons` **is** allowlisted,
   unlike products.
 - `per_page` moved into the URL on the customers shape, so `TableFooter` is used
@@ -286,8 +292,16 @@ The live codes stay: the suite runs against the shop, not the mock.
 threshold is stored as null and can never read back as `"0.00"`. `date_expires`
 is written `Y-m-d` and read back full ISO, so only `expiryInputValue()` may put
 it in a control. `missing` is on every restriction row. The code folds on
-keystroke so the 409 names a code the person recognises. `restrictions` is
-emitted by GET and **refused on write**, so the payload stays a named subset.
+keystroke so the 409 names a code the person recognises.
+
+**Corrected 2026-08-25:** coupons and products share one read-only rule — the key
+is **dropped in silence**, and only a genuinely unknown key is a 400. The whole
+GET body PATCHes back, `restrictions` included. They differ only in the ending: a
+body left with nothing supported is a coupon's 200 no-op and a product's 400. The
+named subset `CouponForm` sends is still right, but as caution, not as the API's
+requirement. And the restriction refusal is `"No product with id 8842."`,
+pluralising to `ids` and reading `"No product category"` on the category arm — the
+sentence quoted here and in `CouponForm` until now was the mock's invention.
 
 ---
 

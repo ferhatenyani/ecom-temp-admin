@@ -957,9 +957,13 @@ export function CouponForm({
                   in the draft — which `product_ids` is. So the refusal cleared
                   `saving`, left the bar dirty, and put nothing on screen at all.
 
-                  The message is the API's own English: "No product was found for:
-                  8842." names the offending id, which is the only actionable part
-                  and the part a translated generic would throw away. The field is
+                  The message is the API's own English: "No product with id 8842."
+                  names the offending id, which is the only actionable part and the
+                  part a translated generic would throw away. It pluralises to "No
+                  product with ids 8842, 8844." and the category arm says "No
+                  product category with id …", so nothing here may reformat it. The
+                  sentence quoted at this spot until 2026-08-25 was the mock's
+                  invention, not the API's, and was corrected in both. The field is
                   not repeated here — the row it sits under is labelled — and
                   `ErrorSummary` at the top of the form is where the pairing
                   happens, because there the row is off screen.

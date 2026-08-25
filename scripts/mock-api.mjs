@@ -12,8 +12,8 @@
  *
  * ── The rule that matters most ────────────────────────────────────────────────
  *
- * **`orderby` and `order` are accepted and ignored, on purpose. Do not "fix"
- * this.**
+ * **On most collections `orderby` and `order` are accepted and ignored, on
+ * purpose. Do not "fix" that.**
  *
  * The real API does exactly that. Measured 2026-08-18 against the live router:
  * five of the eight published `orderby` values on `/products` — `id`, `price`,
@@ -26,10 +26,11 @@
  * to catch that class of thing, not to manufacture it. So: same order every
  * time, whatever is asked for, and 200 for a value nobody has heard of.
  *
- * ── The one exception, and it is exactly five combinations ────────────────────
+ * ── The two exceptions, and they are not the same shape ──────────────────────
  *
- * **`/products` sorts. `/orders` still does not. Do not simplify this into
- * either extreme.**
+ * **`/products` sorts five of its ten combinations. `/coupons` sorts all eight of
+ * its own. `/orders` and `/customers` still sort nothing. Do not simplify this
+ * into either extreme.**
  *
  * The silent ignore was repaired in the backend — `ProductRepository::
  * orderingClause()`, which joins `wc_product_meta_lookup` through
@@ -46,6 +47,20 @@
  * build a `title desc` control, watch it work here and ship a control that does
  * nothing; sorting nothing would make the five controls the panel does offer
  * look broken against the harness and invite someone to delete them.
+ *
+ * **`/coupons` is the second exception and it is total**, not partial: `date`,
+ * `id`, `code` and `usage`, both directions, all eight re-measured working on
+ * 2026-08-25 against a positive control. `usage` sorts **numerically** — as text,
+ * 99 would come before 7.
+ *
+ * This file recorded those eight as ignored for two branches, and *why* is the
+ * part worth keeping: `date` is the default, so it is the one value whose answer
+ * is identical whether the sort works or not. It was used as its own control and
+ * proved nothing. See `COUPON_SORTS`.
+ *
+ * The warning above still holds everywhere else — `/orders` and `/customers`
+ * validate and then ignore, and the five unmeasured `/products` combinations come
+ * back unsorted with a 200.
  *
  * What *is* genuinely implemented, because a screen that silently ignored these
  * would be a screen that lies about how many rows exist:
@@ -81,14 +96,16 @@
  *                    `DELETE` trashes, `?force=true` removes, and the two answer
  *                    identical bodies. See "Which product id produces which
  *                    answer" beside them
- *   the coupon       real, and its rules are **not** the product's: a read-only
- *   writes           key is *refused* rather than dropped, `PATCH {}` is a 200
- *                    no-op rather than a 400, a duplicate code is a 409 under
- *                    `details.code` carrying the lower-cased form, and trash
- *                    keeps the code while `?force=true` frees it. `POST` is
- *                    served here and is a 404 on /products, which the allowlist
- *                    decides rather than this file. See "Which coupon id
- *                    produces which refusal"
+ *   the coupon       real, and it **shares** the product's read-only rule rather
+ *   writes           than inverting it: a read-only key is dropped in silence and
+ *                    an unknown one is a 400. The two differ only at the end — a
+ *                    body left with nothing supported is a 200 no-op here and a
+ *                    400 there — which is what lets the whole GET body PATCH back.
+ *                    A duplicate code is a 409 under `details.code` carrying the
+ *                    lower-cased form, and trash keeps the code while
+ *                    `?force=true` frees it. `POST` is served here and is a 404 on
+ *                    /products, which the allowlist decides rather than this file.
+ *                    See "Which coupon id produces which refusal"
  *   the two pickers  real: `/coupons/eligible-products` and
  *                    `/coupons/eligible-categories`, four and five fields, no
  *                    price and no stock — they exist because a Marketing Manager
@@ -1972,7 +1989,7 @@ const allMovements = () => [...state.movements, ...MOVEMENTS];
 /* ---------------------------------------------------------------- coupons --- */
 
 /**
- * ── Six, and the last two exist to reach states the first four cannot ────────
+ * ── Seven, and the last three exist to reach states the first four cannot ────
  *
  * The two null-versus-zero directions run on the same object and are the reason
  * the first four are shaped the way they are: `amount: "0.00"` is a real coupon
@@ -1995,6 +2012,10 @@ const allMovements = () => [...state.movements, ...MOVEMENTS];
  *        `/coupons/{id}` with a 200 and `status: "trash"`, which is why
  *        `READABLE_COUPON_STATUSES` is wider than what `?status=` accepts. It is
  *        also what makes the permanent-delete path reachable at all.
+ *   307  **`usage_count: 9` against 305's 37**, which is the only pair here that a
+ *        lexical sort orders differently from a numeric one — the guard on
+ *        `?orderby=usage`. Also the one `usage()` rendering nothing else reaches:
+ *        a count that matters with no limit to print it against.
  *
  * `usage_count` is read-only on every route here, exactly as it is on the API —
  * redemption is `POST /cart/coupons`, on the storefront — so these two rows are
@@ -2175,6 +2196,45 @@ const COUPONS = [
     email_restrictions: [],
     date_created: iso(80_000),
     date_modified: iso(2400),
+  },
+  {
+    id: 307,
+    code: "rentree-2026",
+    status: "publish",
+    discount_type: "percent",
+    amount: "12.00",
+    description: "Rentrée scolaire",
+    date_expires: null,
+    minimum_amount: null,
+    maximum_amount: null,
+    // No limit, and a count that still matters — the one `usage()` rendering with
+    // no fixture: a number with no denominator to print it against.
+    usage_limit: null,
+    usage_limit_per_user: null,
+    limit_usage_to_x_items: null,
+    /*
+     * **Nine, and the digit is the whole point of the row.** `usage` sorts
+     * numerically, and against 305's 37 that is the only pair in this shop where a
+     * lexical sort disagrees: by number 9 comes first ascending, by text "37"
+     * does. Every other count here is 0, where the two orderings agree and a
+     * regression to `localeCompare` would pass unnoticed.
+     *
+     * It is a *new* row rather than a repair to one of 301-304, on this table's
+     * standing rule: those four mirror the shop's own four, and lib/coupons.ts:136
+     * says `usage_count` is 0 on all of them. Moving one would make a docblock in
+     * lib/ wrong about a measured collection to make a test here convenient.
+     */
+    usage_count: 9,
+    individual_use: false,
+    free_shipping: false,
+    exclude_sale_items: false,
+    product_ids: [],
+    excluded_product_ids: [],
+    product_categories: [],
+    excluded_product_categories: [],
+    email_restrictions: [],
+    date_created: iso(10_000),
+    date_modified: iso(200),
   },
 ];
 
@@ -4853,23 +4913,98 @@ const DISCOUNT_TYPES = ["percent", "fixed_cart", "fixed_product"];
 const COUPON_STATUS_FILTERS = ["", ...COUPON_STATUSES];
 
 /**
- * **`orderby` is validated and then ignored**, which is the `/customers` shape
- * rather than the `/orders` one, and this collection did neither: it answered 200
- * to `?orderby=zzz` and to every other value.
+ * **`orderby` is validated and then *honoured*, all four values in both
+ * directions** — one of exactly two collections in this file that sorts at all.
+ *
+ * Re-measured 2026-08-25 against the live router, one value at a time and against
+ * a positive control, because this file recorded the whole set as ignored:
+ *
+ *   id     desc  30, 29, 28, 27; asc 27, 28, 29, 30
+ *   code   asc   bienvenue10, livraison, ramadan2000, tapis15 — alphabetical
+ *   usage  desc  99, 50, 5, 1; asc 1, 5, 50, 99 — **numeric**, not lexical
+ *   date   asc   27, 28, 29, 30; desc **the same** — see below
+ *
+ * Anything else is a 400, `order=sideways` is a 400, and `?orderby=` is the
+ * absence of the parameter rather than a fifth value.
+ *
+ * **`date` is the default, and it is the one value that can tell you nothing.**
+ * All four live coupons share a single `post_date`, so both directions are a tie
+ * across every row and both answer the bare listing's own sequence. That is why
+ * this collection was recorded as validate-then-ignore: `date` was used as its own
+ * control and proved nothing. It cannot establish the default direction either —
+ * see `sortCoupons` — and *that* trap caught a second pass on the way past.
+ *
+ * `usage` is the one to get wrong from the other direction: compared as text, 99
+ * sorts above 7.
  *
  * app/[locale]/(panel)/coupons/query.ts:27-31 names these four as the set *the
  * 400 enumerates*, and `queryFromParams()` carries a guard whose only purpose is
- * to stop a stale or hand-edited URL provoking that 400 — a guard that could have
- * been deleted with nothing anywhere noticing while this mock answered 200.
- *
- * Ignored after validating, on the header's rule: nothing measured says either
- * sort does anything, and a mock that sorted would let an agent verify a control
- * against the harness and ship one that does not work. Note the panel offers
- * three of these four — `id` is accepted and is not in the control.
+ * to stop a stale or hand-edited URL provoking that 400. Note the panel offers
+ * three of these four — `id` is accepted and is not in the control — and nothing
+ * on that screen sorts yet; a later pass owns it.
  */
 const COUPON_ORDERBY = ["date", "id", "code", "usage"];
 
-/** Every coupon this process can see, newest first, read through the writes. */
+/**
+ * All eight combinations, which is the difference between this collection and
+ * `/products`: there, five of ten were re-measured working and the other five are
+ * accepted-and-unsorted on purpose. Here every one of the eight was measured, so a
+ * Map that is *total* is the honest shape rather than a shortcut.
+ *
+ * `compareBy` uses `<`/`>`, which is numeric on numbers and lexical on strings —
+ * the distinction that decides whether 99 sorts above 7 — so `id` and `usage` must
+ * stay unwrapped. `code` is folded rather than `localeCompare`d for the reason
+ * `byTitle` is: a collation that depends on the runtime's ICU build is a
+ * screenshot that differs between machines.
+ */
+const byCouponDate = compareBy((row) => row.date_created);
+const byCouponId = compareBy((row) => row.id);
+const byCouponCode = compareBy((row) => fold(row.code));
+const byCouponUsage = compareBy((row) => row.usage_count);
+
+const COUPON_SORTS = new Map([
+  ["date asc", byCouponDate],
+  ["date desc", descending(byCouponDate)],
+  ["id asc", byCouponId],
+  ["id desc", descending(byCouponId)],
+  ["code asc", byCouponCode],
+  ["code desc", descending(byCouponCode)],
+  ["usage asc", byCouponUsage],
+  ["usage desc", descending(byCouponUsage)],
+]);
+
+/**
+ * **`order` defaults to `desc`** — `sortProducts`'s default, WooCommerce's own,
+ * and measured: `orderby=id` with no `order` answers 30, 29, 28, 27.
+ * `CouponRepository.php:73` is explicit about it —
+ * `strtoupper($order) === 'ASC' ? 'ASC' : 'DESC'`.
+ *
+ * **Do not re-derive that from `date`.** The bare listing answers 27, 28, 29, 30
+ * and so does `orderby=date` in *either* direction, which reads like an ascending
+ * default and is not one: the four live coupons share one `post_date`, so every
+ * comparison ties and the rows fall back to primary-key order. A pass that
+ * reasoned "the default sequence is oldest-first, therefore the default is `asc`"
+ * got this backwards — the same blind spot, one level down, that had the whole
+ * collection recorded as unsorted.
+ *
+ * `checkSort` has already refused anything outside the eight, so the lookup is
+ * total and there is no unsorted arm — the opposite of `sortProducts`, which needs
+ * one for the five combinations it deliberately does not serve.
+ */
+function sortCoupons(rows, params) {
+  // `""` is the absence of the parameter, the way `checkSort` reads it.
+  const orderby = params.get("orderby") || "date";
+  const order = params.get("order") || "desc";
+  // A stable sort, so rows that tie — every coupon a process creates shares one
+  // `date_created`, because there is no clock — keep the order they came in.
+  return [...rows].sort(COUPON_SORTS.get(`${orderby} ${order}`));
+}
+
+/**
+ * Every coupon this process can see, newest first, read through the writes — and
+ * `couponsListing()` sorts it into that same order by default, because `date desc`
+ * is what no `?orderby=` means. Every other caller here is a `find()` by id.
+ */
 const allCoupons = () =>
   [
     ...state.createdCoupons.map((id) => state.coupons.get(id)),
@@ -4927,8 +5062,7 @@ function couponsListing(params) {
 
   const rows = searchRows(filtered.rows, params, (row) => [row.code]);
 
-  // `orderby` and `order` are read by nothing past the validation above.
-  const page = paginate(rows, params);
+  const page = paginate(sortCoupons(rows, params), params);
   return page.error ?? ok(page.rows, page.meta);
 }
 
@@ -4956,6 +5090,13 @@ function couponsListing(params) {
  *
  * The category search takes the **name only**. Nothing measured says the slug is
  * read, and this is the same restraint the code-only search above shows.
+ *
+ * **Neither route validates anything but `per_page`, and nobody measured whether
+ * the real ones do.** `?orderby=zzz`, `?order=sideways` and `?status=zzz` are all
+ * 200 here with the full list — `checkSort` runs on `/coupons` and on neither of
+ * these. So a picker built with a sort or a status filter would look like it
+ * worked here and could be a 400 in the shop. Recorded rather than guessed at,
+ * because guessing either way is how the read-only refusal above got invented.
  *
  * `sku: null` is unreachable in this shop and the schema allows it: every row in
  * this catalogue carries a SKU. Reproducing it would mean emptying one, and the
@@ -5026,10 +5167,12 @@ function eligibleCategoriesListing(params) {
  *                                                    reports the amount alone
  *   301   PATCH {}                                   **200** no-op — not the 400
  *                                                    a product's `{}` gets
- *   301   PATCH {restrictions:{…}}                   400 fields{restrictions} —
- *                                                    emitted on every single
- *                                                    read and refused on write
- *   301   PATCH {usage_count: 5}                     400 fields{usage_count}
+ *   301   PATCH {restrictions:{…}}                   **200** no-op — emitted on
+ *                                                    every read and *dropped* on
+ *                                                    write, which is what lets the
+ *                                                    read body PATCH back whole
+ *   301   PATCH {usage_count: 5}                     200, and the count does not
+ *                                                    move
  *   301   PATCH {maximum_discount:"50"}              400 fields{maximum_discount}
  *                                                    — no such field exists
  *   301   PATCH {date_expires:"31/12/2026"}          400 — wrong format
@@ -5042,9 +5185,9 @@ function eligibleCategoriesListing(params) {
  *   301   PATCH {minimum_amount:0}                   200, and reads back **null**
  *   301   PATCH {date_expires:"2026-12-31"}          200, reads back
  *                                                    `2026-12-31T00:00:00+00:00`
- *   305   PATCH {product_ids:[101,8842]}             400 fields{product_ids}
- *                                                    naming 8842 — its own body,
- *                                                    refused
+ *   305   PATCH {product_ids:[101,8842]}             400 fields{product_ids} —
+ *                                                    "No product with id 8842.",
+ *                                                    its own body, refused
  *   306   GET                                        200 `status:"trash"`
  *   302   DELETE                                     200 {id,deleted:true}; the
  *                                                    next GET is 200 `trash` and
@@ -5059,19 +5202,29 @@ function eligibleCategoriesListing(params) {
  */
 
 /**
- * **Read-only *and refused*, which is the opposite of a product's rule**, and the
- * difference is measured rather than tidy.
+ * **Read-only and *dropped in silence*, which is a product's rule after all.**
  *
- * A product drops a read-only key in silence, so a client may PATCH a GET body
- * back without diffing it. A coupon refuses one, which is why `CouponForm` sends a
- * named subset — and `restrictions` is the trap: it is emitted on **every**
- * single-coupon response, including the answer to the write itself, so the
- * obvious "save what I was given" round trip fails on the field the API had just
- * handed over. The backend's own suite caught that the day the block was added.
+ * This list was refused by name for two branches, and that was this file inventing
+ * a stricter API than the one it fakes. Re-measured 2026-08-25 against the live
+ * router: `{"usage_count":999}`, `{"id":9999}`, `{"date_created":…}`,
+ * `{"used_by":[1,2]}` and **the entire GET body, `restrictions` and all** each
+ * answer 200 with the stored value unmoved, while `{"nonsense":1}` is a 400
+ * carrying `details.fields.nonsense = "Unknown field."`. Read-only and unknown are
+ * different answers, exactly as they are on a product.
  *
- * `used_by` is on the list and is emitted by nothing, so *who* redeemed a coupon
- * is unanswerable; it is refused here so a client cannot discover the field by
- * having a write accepted.
+ * What genuinely differs between the two collections is only what happens once
+ * nothing supported is left: a product's `PATCH {"id":9999}` is a 400 *"No
+ * supported fields were provided."* and a coupon's is the same 200 no-op its
+ * `PATCH {}` is. One rule, two endings.
+ *
+ * Inventing the refusal was not a harmless excess of caution. It manufactured an
+ * error path the panel handles and production can never take, and it made the
+ * "save what I was given" round trip — the one `docs/API.md` in the backend repo
+ * documents — look impossible from here.
+ *
+ * `used_by` stays on the list although nothing emits it: dropped rather than
+ * refused still means a client cannot discover the field by having a write
+ * accepted, which was the only thing the refusal ever bought.
  */
 const COUPON_READ_ONLY = [
   "id",
@@ -5223,9 +5376,11 @@ const eligibleCategoryIds = () => new Set(CATEGORIES.map((category) => category.
  * The gates are in the order the API applies them, so the reason on screen is the
  * reason the server would have given:
  *
- *   1. every bad field at once   400 `details.fields` — read-only keys, unknown
- *                                keys and invalid values in one object, because
- *                                the form renders one message per control
+ *   1. every bad field at once   400 `details.fields` — unknown keys and invalid
+ *                                values in one object, because the form renders
+ *                                one message per control. Read-only keys are not
+ *                                here: they leave in silence before this pass can
+ *                                see them
  *   2. **`amount` on a POST**    part of the same pass, and therefore *before*
  *                                the uniqueness check — measured, and the reason
  *                                a duplicate code with no amount reports only the
@@ -5252,11 +5407,10 @@ function readCouponBody(body, creating) {
   const writes = {};
 
   for (const [key, value] of Object.entries(source)) {
-    if (COUPON_READ_ONLY.includes(key)) {
-      // Refused, **not** dropped. See `COUPON_READ_ONLY`.
-      fields[key] = "Read-only.";
-      continue;
-    }
+    // Dropped, **not** refused — silently, which is what lets a client PATCH a
+    // GET body back without diffing it first. See `COUPON_READ_ONLY`.
+    if (COUPON_READ_ONLY.includes(key)) continue;
+
     const rule = COUPON_FIELD_RULES[key];
     if (rule === undefined) {
       // `maximum_discount` lands here, which is what "refused by name" means:
@@ -5292,11 +5446,20 @@ function readCouponBody(body, creating) {
     const known = products ? eligibleProductIds() : eligibleCategoryIds();
     const unknown = writes[field].filter((id) => !known.has(id));
     if (unknown.length === 0) continue;
-    // Named, because "one of these ids is wrong" is not something a person can
-    // act on when the field holds twenty of them.
-    fields[field] = products
-      ? `No product was found for: ${unknown.join(", ")}.`
-      : `No category was found for: ${unknown.join(", ")}.`;
+    /*
+     * Named, because "one of these ids is wrong" is not something a person can act
+     * on when the field holds twenty of them.
+     *
+     * **The API's own English, quoted, down to the singular/plural switch and the
+     * resource noun** — `No product with id 999999.`, `No product with ids 999999,
+     * 888888.`, `No product category with id 777777.`. This file carried an
+     * invented sentence for two branches and `CouponForm` quoted it back as
+     * measured; a fabricated message is as dishonest as a fabricated status code,
+     * and harder to notice because nothing fails.
+     */
+    const noun = products ? "product" : "product category";
+    const label = unknown.length === 1 ? "id" : "ids";
+    fields[field] = `No ${noun} with ${label} ${unknown.join(", ")}.`;
   }
 
   if (Object.keys(fields).length > 0) {
@@ -5442,6 +5605,10 @@ function patchCoupon(current, body) {
    * Three collections, three rules — the third is an order's COD, which
    * round-trips whole. A mock that shared one rule between them would make two of
    * the three screens wrong about their own save button.
+   *
+   * This is also where a body of nothing but read-only keys lands, now that they
+   * are dropped above: `PATCH {"id":9999}` is this same no-op, where a product's
+   * is the 400. That ending is the *only* thing separating the two rules.
    */
   if (Object.keys(parsed.writes).length === 0) return ok(withRestrictions(current));
 

@@ -2504,9 +2504,9 @@ describe("GET /inventory", () => {
 
 describe("GET /coupons", () => {
   it("parses the list, and keeps zero and null apart", () => {
-    // Five listed: the trashed one is in no listing at all.
+    // Six listed: the trashed one is in no listing at all.
     const { data, meta } = parseList(couponList, get("/coupons", "per_page=100"));
-    expect(meta.total).toBe(5);
+    expect(meta.total).toBe(6);
     // `"0.00"` is a real coupon; a threshold of zero is stored as null and can
     // never read back as `"0.00"`. Both directions on one object.
     expect(data.some((row) => row.amount === "0.00" && row.free_shipping)).toBe(true);
@@ -2574,7 +2574,7 @@ describe("GET /coupons", () => {
     const published = totals("status=publish");
     const drafted = totals("status=draft");
 
-    expect(published).toBe(4);
+    expect(published).toBe(5);
     expect(drafted).toBe(1);
     // The default carries both, and is therefore neither of them.
     expect(all).toBe(published + drafted);
@@ -2623,20 +2623,54 @@ describe("GET /coupons", () => {
   });
 
   /**
-   * **Validated and then ignored**, which is the `/customers` shape rather than
-   * the `/orders` one. app/[locale]/(panel)/coupons/query.ts names these four as
-   * the set the 400 enumerates, and `queryFromParams()` carries a guard whose
-   * only purpose is to stop a stale URL provoking that 400 — a guard that could
-   * have been deleted with nothing noticing while this mock answered 200.
+   * **Validated and then honoured — all four values, both directions.** This suite
+   * asserted the opposite for two branches, and the reason it survived is the
+   * assertion it used: `date` is the default, so it answers the same sequence
+   * whether the sort works or not, and it was compared against itself.
+   *
+   * **`order` defaults to `desc`**, and `date` cannot show you that: the four live
+   * coupons share one `post_date`, so both directions tie there and answer the
+   * bare sequence. `id` is the value that reveals it, and it is asserted below.
+   *
+   * `usage` must be **numeric**: sorted as text, 9 lands after 37. Fixture 307
+   * exists for exactly that — `usage_count: 9` against 305's `37` is the only pair
+   * in this shop the two orderings disagree about.
    */
-  it("validates orderby and then ignores it", () => {
-    const ids = (query: string) =>
-      parseList(couponList, get("/coupons", `per_page=100&${query}`)).data.map((r) => r.id);
+  it("sorts on all four keys, in both directions", () => {
+    const rows = (query: string) =>
+      parseList(couponList, get("/coupons", `per_page=100&${query}`)).data;
 
-    for (const orderby of ["date", "id", "code", "usage"]) {
-      expect(get("/coupons", `orderby=${orderby}`).status).toBe(200);
-      expect(ids(`orderby=${orderby}&order=asc`)).toEqual(ids(""));
-    }
+    const ids = (query: string) => rows(query).map((row) => row.id);
+    const base = ids("");
+
+    // `date` in the default direction *is* the default — the blind spot itself,
+    // asserted rather than left to be rediscovered.
+    expect(ids("orderby=date")).toEqual(base);
+    expect(ids("orderby=date&order=desc")).toEqual(base);
+    // `?orderby=` is the absence of the parameter, not a fifth value.
+    expect(ids("orderby=")).toEqual(base);
+    // And it genuinely sorts: the other direction is that sequence reversed.
+    expect(ids("orderby=date&order=asc")).toEqual([...base].reverse());
+
+    // `id` is where the default direction shows: descending, unasked.
+    expect(ids("orderby=id")).toEqual([...base].sort((a, b) => b - a));
+    expect(ids("orderby=id&order=desc")).toEqual([...base].sort((a, b) => b - a));
+    expect(ids("orderby=id&order=asc")).toEqual([...base].sort((a, b) => a - b));
+
+    const codes = (query: string) => rows(query).map((row) => row.code);
+    expect(codes("orderby=code&order=asc")).toEqual([...codes("")].sort());
+    expect(codes("orderby=code&order=desc")).toEqual([...codes("")].sort().reverse());
+
+    const counts = (query: string) => rows(query).map((row) => row.usage_count);
+    expect(counts("orderby=usage&order=asc")).toEqual([...counts("")].sort((a, b) => a - b));
+    expect(counts("orderby=usage&order=desc")).toEqual([...counts("")].sort((a, b) => b - a));
+
+    // **Numeric, not lexical**, spelled out rather than left to a comparator that
+    // agrees with the wrong one on every other row: 9 before 37 ascending, and a
+    // `localeCompare` would put 37 first and still satisfy the two lines above if
+    // 307 ever lost its count.
+    expect(counts("orderby=usage&order=asc")).toEqual([0, 0, 0, 0, 9, 37]);
+    expect(counts("orderby=usage&order=desc")).toEqual([37, 9, 0, 0, 0, 0]);
 
     const refused = apiError(get("/coupons", "orderby=nonsense"));
     expect(refused.status).toBe(400);
@@ -2852,7 +2886,7 @@ describe("the coupon writes", () => {
     expect(refused.fields).toBeNull();
 
     // Nothing was created.
-    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(5);
+    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(6);
 
     // And a PATCH onto another coupon's code is the same refusal.
     const collided = apiError(write("PATCH", "/coupons/302", { code: "BIENVENUE10" }));
@@ -2879,29 +2913,38 @@ describe("the coupon writes", () => {
   });
 
   /**
-   * **Read-only and refused, which is the opposite of a product's rule** — and
-   * `restrictions` is the trap: it is emitted on every single-coupon response,
-   * including the answer to the write itself, so "save what I was given" fails on
-   * the field the API had just handed over.
+   * **Read-only keys are dropped in silence, which is a product's rule after
+   * all.** This suite asserted a 400 by name for two branches — the mock inventing
+   * an error path the panel handles and production can never take, which is how a
+   * stricter fake does the same damage a more permissive one does.
+   *
+   * `restrictions` is the one to check hardest: it comes back on every
+   * single-coupon response, including the answer to the write itself, so if any
+   * key were going to break the round trip it would be that one.
    */
-  it("refuses every read-only field by name", () => {
+  it("drops every read-only field in silence, and round-trips a GET body", () => {
+    const before = parse(couponDetail, get("/coupons/301")).data;
+
     for (const [field, value] of [
       ["id", 999],
       ["usage_count", 5],
       ["used_by", []],
       ["date_created", "2026-01-01T00:00:00+00:00"],
       ["date_modified", null],
+      ["restrictions", {}],
     ] as const) {
-      const refused = apiError(write("PATCH", "/coupons/301", { [field]: value }));
-      expect(refused.status).toBe(400);
-      expect(refused.fields).toHaveProperty(field);
+      // A body left with nothing supported is the same 200 no-op `PATCH {}` is,
+      // and nothing moves.
+      const { data } = parse(couponDetail, write("PATCH", "/coupons/301", { [field]: value }));
+      expect(data).toEqual(before);
     }
 
-    // The whole GET body back, which is the round trip the form must not make.
-    const body = parse(couponDetail, get("/coupons/301")).data;
-    const refused = apiError(write("PATCH", "/coupons/301", body));
-    expect(refused.status).toBe(400);
-    expect(refused.fields).toHaveProperty("restrictions");
+    // The whole GET body back — the round trip this mock used to make impossible.
+    expect(parse(couponDetail, write("PATCH", "/coupons/301", before)).data).toEqual(before);
+
+    // A product's rule differs at the end and only at the end: once the read-only
+    // keys are gone there is nothing supported left, and that is a 400 there.
+    expect(write("PATCH", "/products/104", { id: 9999 }).status).toBe(400);
   });
 
   /** `maximum_discount` does not exist. Refused by name, so a client hears why. */
@@ -3040,7 +3083,7 @@ describe("the coupon writes", () => {
 
     // A trashed coupon reads back 200 with `status: "trash"` and leaves the list.
     expect(parse(couponDetail, get("/coupons/302")).data.status).toBe("trash");
-    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(4);
+    expect(parseList(couponList, get("/coupons", "per_page=100")).meta.total).toBe(5);
 
     // **It keeps its code**, so recreating with it is a 409.
     const clash = apiError(write("POST", "/coupons", { code: "livraison", amount: "1" }));
