@@ -33,13 +33,20 @@ export declare function respond(
 
 /**
  * Rebuild every mutable thing — order statuses, COD records, parcels, payments,
- * the products a PATCH or a DELETE has rewritten, and the coupons a POST, a PATCH
- * or either delete has — from the seeded baseline. Runs once at module load; the
- * unit suite calls it between tests so a write in one cannot be read by another.
+ * the products a PATCH or a DELETE has rewritten, the coupons a POST, a PATCH or
+ * either delete has, and the shipping rules a POST, a PATCH or a DELETE has —
+ * from the seeded baseline. Runs once at module load; the unit suite calls it
+ * between tests so a write in one cannot be read by another.
  *
- * A coupon is the one collection where a *create* is undone by this, which is
- * what keeps `nextCouponId` handing out the same id in every process and a
- * screenshot of a created coupon byte-stable.
+ * Coupons and shipping rules are the two collections where a *create* is undone
+ * by this, which is what keeps `nextCouponId` and `nextRuleId` handing out the
+ * same ids in every process and a screenshot of a created row byte-stable.
+ *
+ * Parcels are rebuilt too, and that matters more here than it reads: the fixture
+ * holds exactly **one live shipment**, and cancelling or delivering it is what
+ * makes the status picker, the cancel button and the sync refusal reachable at
+ * all. Without the rebuild, the first test to finish that parcel would leave
+ * every later one with the all-terminal shop the API actually has.
  */
 export declare function resetState(): void;
 

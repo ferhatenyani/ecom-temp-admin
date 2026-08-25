@@ -184,7 +184,8 @@
       "ac_manage_users": "المستخدمون",
       "ac_view_analytics": "الإحصاءات",
       "ac_manage_content": "المحتوى",
-      "ac_view_audit_logs": "سجل التدقيق"
+      "ac_view_audit_logs": "سجل التدقيق",
+      "ac_manage_shipping": "الشحن"
     },
     "notFoundTitle": "غير موجود",
     "notFoundBody": "هذا الطلب لم يعد موجودًا.",
@@ -218,7 +219,8 @@
     "productName": "المنتج {name}",
     "customerName": "العميل {name}",
     "couponCode": "رمز الخصم {code}",
-    "stockItem": "العنصر {name}"
+    "stockItem": "العنصر {name}",
+    "parcelTracking": "الطرد {tracking}"
   },
   "statusShort": {
     "pending": "الانتظار",
@@ -835,6 +837,9 @@
     "cancelled": "أُلغي",
     "failed": "فشل"
   },
+  "shippingProvider": {
+    "manual": "توصيل داخلي"
+  },
   "paymentStatus": {
     "pending": "قيد الانتظار",
     "paid": "مدفوع",
@@ -854,9 +859,7 @@
   },
   "shipping": {
     "title": "الشحن",
-    "back": "الشحن",
     "tabRules": "التعرفة",
-    "tabShipments": "الطرود",
     "tariff": "ما تفوتره المتجر",
     "tariffNote": "القاعدة الأضيق هي التي تفوز — البلدية، ثم الولاية، ثم الوطنية. القواعد لا تُجمع أبدًا.",
     "noRules": "لا توجد أي تعرفة شحن مضبوطة.",
@@ -884,13 +887,10 @@
     "source": "المصدر",
     "sourceRules": "تعرفة المتجر",
     "sourceProvider": "عرض الناقل",
-    "parcels": "الطرود",
     "noShipments": "لا توجد طرود.",
     "noShipmentsFilter": "لا توجد طرود بهذه الحالة.",
     "clearFilter": "عرض الكل",
     "allStatuses": "الكل",
-    "live": "جارٍ",
-    "finished": "منتهٍ",
     "tracking": "التتبع",
     "provider": "الناقل",
     "providerStatus": "حالة الناقل",
@@ -914,14 +914,12 @@
     "nationalOption": "كل الجزائر",
     "anyCommune": "كل الولاية",
     "save": "حفظ",
-    "cancel": "إلغاء",
     "destinationHint": "بدون ولاية، تصبح هذه التعرفة هي الرجوع الوطني.",
     "statusLabel": "الحالة",
     "changeStatus": "تغيير الحالة",
     "changeStatusTitle": "حالة الطرد الجديدة",
     "cancelParcel": "إلغاء الطرد",
     "cancelConfirm": "إلغاء هذا الطرد؟ العملية نهائية ولن تتأثر بها الطلبية.",
-    "syncNow": "المزامنة مع الناقل",
     "order": "الطلب",
     "createParcel": "إنشاء طرد",
     "createParcelTitle": "طرد جديد",
@@ -937,7 +935,39 @@
     "destinationNote": "يحتاج الناقل إلى وجهة صريحة: لا تُؤخذ من عنوان الطلب.",
     "carriage": "طريقة الإرسال",
     "pickDestinationFirst": "اختر ولاية وبلدية.",
-    "noTracking": "بلا رقم تتبّع"
+    "noTracking": "بلا رقم تتبّع",
+    "loading": "جارٍ التحميل…",
+    "refresh": "تحديث",
+    "rulesTitle": "تعرفات الشحن",
+    "searchLabel": "البحث برقم الطلب",
+    "searchPlaceholder": "رقم الطلب",
+    "clearSearch": "مسح البحث",
+    "noDestination": "الوجهة غير محدّدة",
+    "columns": {
+      "tracking": "التتبع",
+      "status": "الحالة",
+      "order": "الطلب",
+      "destination": "الوجهة",
+      "provider": "الناقل",
+      "delivery": "النوع",
+      "cod": "الدفع عند الاستلام",
+      "created": "أُنشئ"
+    },
+    "terminalTitle": "طرد منتهٍ",
+    "terminalNote": "الطرد المنتهي لا يتحرك: لا يمكن تغيير حالته ولا يمكن إلغاؤه.",
+    "moveConfirmTitle": "إنهاء هذا الطرد",
+    "moveConfirmBody": "نقل هذا الطرد إلى «{status}» يُنهيه. لن يمكن تغيير حالته بعدها ولن يمكن إلغاؤه.",
+    "moveConfirmAction": "النقل إلى «{status}»",
+    "rulesCount": "{total, plural, zero {لا تعرفات} one {تعرفة واحدة} two {تعرفتان} few {# تعرفات} many {# تعرفة} other {# تعرفة}}",
+    "rulesFailed": "تعذّر تحميل التعرفات.",
+    "ruleActions": "إجراءات التعرفة",
+    "ruleNamed": "{scope} · {place} · {amount}",
+    "providerAny": "أي ناقل",
+    "noSelection": "اختر…",
+    "resolverPrompt": "اختر ولاية وبلدية لمعرفة السعر.",
+    "resolverFailed": "تعذّر حساب السعر.",
+    "communesFailed": "تعذّر تحميل قائمة البلديات.",
+    "disagreeTitle": "الواجهة البرمجية وهذه الصفحة غير متفقتين"
   },
   "payments": {
     "title": "المدفوعات",

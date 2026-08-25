@@ -92,12 +92,28 @@ function useOpenerFocus(returnFocusTo?: string) {
       opener.current = document.activeElement as HTMLElement | null;
     },
     onCloseAutoFocus: (event: Event) => {
-      /* The caller's explicit target wins, then the recorded opener — and only
-         when it is still in the document. A row's action menu can be gone by the
-         time its drawer closes, and focusing a detached node silently does
-         nothing, which is worse than letting Radix's own fallback run. */
+      /*
+       * The caller's explicit target wins, then the recorded opener — and either
+       * only while it is still **rendered**. A row's action menu can be gone by
+       * the time its drawer closes, and focusing a detached node silently does
+       * nothing, which is worse than letting Radix's own fallback run.
+       *
+       * `getClientRects().length` rather than `isConnected` for the named one,
+       * and the difference is the responsive lists. `DataTable` keeps both
+       * presentations in the DOM and hides one per breakpoint, so a caller that
+       * names a control in the `md`+ table hands this a node that is connected,
+       * findable and `display: none` on a phone — where `focus()` is a silent
+       * no-op and `preventDefault()` has already cancelled the fallback, so focus
+       * lands on `<body>`. Being *present* is not the question; being focusable
+       * is. Found on the shipping parcels drawer, whose opener is a cell in the
+       * table and whose phone equivalent is `RecordList`'s own overlay button —
+       * which Radix restores to unaided, and now does again.
+       */
+      const rendered = (node: HTMLElement | null) =>
+        node && node.isConnected && node.getClientRects().length > 0 ? node : null;
+
       const named = returnFocusTo ? document.getElementById(returnFocusTo) : null;
-      const target = named ?? (opener.current?.isConnected ? opener.current : null);
+      const target = rendered(named) ?? rendered(opener.current);
       if (!target) return;
       event.preventDefault();
       target.focus();

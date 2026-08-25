@@ -49,7 +49,7 @@ export class ApiError extends Error {
    */
   get fields(): FieldErrors | null {
     const f = this.details.fields;
-    if (!f || typeof f !== "object") return null;
+    if (!f || typeof f !== "object" || Array.isArray(f)) return null;
     const out: FieldErrors = {};
     for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
       if (typeof v === "string") out[k] = v;
@@ -61,10 +61,33 @@ export class ApiError extends Error {
    * Query-parameter validation arrives under `details.params`, not
    * `details.fields`. Measured 2026-08-18: `?per_page=500` answers
    * 400 `{"params": {"per_page": "per_page must be between 1 …"}}`.
+   *
+   * ## `details.params` has two shapes, and only one of them is a message
+   *
+   * For a **bad value** it is an object keyed by parameter, as above. For a
+   * **missing required** parameter it is a bare **array of names** — measured
+   * 2026-08-25 on `/shipping/rates` with no query at all:
+   * `{"params": ["wilaya_id", "commune_id"]}`, and the same on
+   * `/inventory/lookup` with no `sku`.
+   *
+   * Without the `Array.isArray` guard `Object.entries` walks the array's
+   * indices, so that second shape read back as
+   * `{"0": "wilaya_id", "1": "commune_id"}` — parameter *names* posing as
+   * messages under numeric keys, which a form would bind to controls called
+   * `0` and `1` and a banner would print at a person as an explanation. An
+   * array carries no sentence, so there is nothing here to return: the caller
+   * falls through to `apiMessage`, which on that route is *"Missing
+   * parameter(s): wilaya_id, commune_id"* and is the readable half.
+   *
+   * `lib/api/browser.ts` has guarded both of its own readers since the
+   * inventory branch; this is the server-side reader catching up. `fields`
+   * above carries the same guard for the same reason — no measurement has ever
+   * shown it arriving as an array, and the two getters differing about a shape
+   * question is how the asymmetry survived here in the first place.
    */
   get params(): FieldErrors | null {
     const p = this.details.params;
-    if (!p || typeof p !== "object") return null;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return null;
     const out: FieldErrors = {};
     for (const [k, v] of Object.entries(p as Record<string, unknown>)) {
       if (typeof v === "string") out[k] = v;

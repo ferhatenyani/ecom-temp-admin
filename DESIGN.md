@@ -433,6 +433,23 @@ action.
 - Required props: `title`, `body`, `confirmLabel`, `tone`.
 - `confirmLabel` names the act — "Delete product", never "OK".
 - Irreversible acts require typing the record's identifier to enable confirm.
+
+  **Amended on the shipping branch: only where the record *has* an identifier a
+  person would recognise.** The rule was written for a product, an order and a
+  coupon, each of which has one — a SKU, a number, a code — that somebody could
+  read off the screen and type back. A shipping rule has none. Its only unique
+  handle is the database key, and `RulesView` deliberately never shows one:
+  rendering `#164` at a shopkeeper is a primary key pretending to be a name, and
+  a confirm box that demanded it typed would be asking a person to copy a number
+  the panel had just invented a reason to display.
+
+  So the guard becomes: **name the record in human terms in the dialog body, and
+  require typing only when there is a real identifier to type.** A rule is named
+  by what it is — its scope, its place and its amount — which is exactly how the
+  list row names it, so the dialog and the row agree. The tone stays `danger` and
+  Cancel still takes focus, which are the two halves that actually stop an
+  accident; type-to-confirm is the third and it only works when the string is
+  one the person already knows.
 - Cancel is the default focus.
 
 **`<Toast>`** — kept, restyled. Confirms something that already happened.

@@ -177,6 +177,29 @@ const DEFAULT_ROUTES = [
   "/coupons",
   "/coupons/303",
   "/coupons/new",
+  /*
+   * **Shipping is two routes**, the arrangement inventory already uses for its
+   * ledger. `/shipping` is the parcels table and `/shipping/rules` is the tariff
+   * beside its resolver: different data, different filters, its own paging and
+   * its own writes. Both are captured, because each is half the section and the
+   * parcels half carries the 340px overflow risk (a courier's tracking number is
+   * the unbroken string on this screen) while the rules half is the only
+   * two-column layout in the section.
+   *
+   * **The `?view=` parameter is gone.** This block used to say "there is no
+   * `/shipping/rules` route", and it was true — the panel held one `page.tsx`
+   * and a `Segmented` control switching between two views inside it. The
+   * redesign split them, so the route exists and `?view=rules` now **redirects**
+   * to it. Capturing `/shipping?view=parcels` would photograph a redirect target
+   * rather than a screen; capturing `/shipping/rules` photographs the screen.
+   *
+   * The parcel drawer's own states — the status picker, the cancel confirm and
+   * the terminal note — are overlays on this route rather than routes, so they
+   * are not capturable here. 7014 is the only live parcel in the fixture and is
+   * the only row that offers the first two.
+   */
+  "/shipping",
+  "/shipping/rules",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
@@ -275,7 +298,15 @@ async function waitForPanel(log) {
 
 /* --------------------------------------------------------------- captures --- */
 
-const slugOf = (route) => route.replace(/^\//, "").replace(/\//g, "-") || "root";
+/**
+ * A route's directory name.
+ *
+ * Query separators fold to `-` along with the path ones, because a route can
+ * carry state that makes it a different *screen* rather than a different page —
+ * `/shipping?view=parcels` is the first — and `?`/`=`/`&` in a directory name is
+ * legal on this filesystem and on almost no other.
+ */
+const slugOf = (route) => route.replace(/^\//, "").replace(/[/?&=]/g, "-") || "root";
 
 /**
  * One capture: one route at one width, theme and locale.

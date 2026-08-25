@@ -34,12 +34,29 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|shipping)`));
 }
 
+/**
+ * The row helper, and the bug it exists to avoid.
+ *
+ * Both presentations are in the DOM at every width — `DataTable` renders the
+ * table `hidden md:block` and the record list `md:hidden` — and every Playwright
+ * project bar one is phone-sized. A selector that resolves rows through the
+ * *table* therefore matches elements that are present and invisible, and
+ * `toBeVisible()` fails before the test reaches its own assertion. The coupons
+ * suite hit this on ten tests at once; the fix is to name both shapes and filter
+ * to whichever one the viewport is actually showing.
+ */
+function parcelRows(page: Page) {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
 test.describe("the shipping tariff", () => {
   test("resolves commune over wilaya over national, and shows what it beat", async ({
     page,
   }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/shipping");
+    /* The tariff moved to its own route on the redesign. `/shipping` is the
+       parcels list now, and `?view=rules` redirects here. */
+    await page.goto("/fr/shipping/rules");
 
     // The tariff, narrowest first — the order the rules win in.
     await expect(page.getByText("Ce que la boutique facture")).toBeVisible();
@@ -85,7 +102,7 @@ test.describe("the shipping tariff", () => {
     page,
   }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/shipping");
+    await page.goto("/fr/shipping/rules");
 
     await page.getByLabel("Wilaya", { exact: true }).selectOption({ label: "Algiers" });
     const commune = page.getByLabel("Commune", { exact: true });
@@ -103,29 +120,42 @@ test.describe("the shipping tariff", () => {
 
   test("the commune picker is inert until a wilaya is chosen", async ({ page }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/shipping");
+    await page.goto("/fr/shipping/rules");
 
     await expect(page.getByText("Choisissez d’abord une wilaya")).toBeVisible();
     /*
-     * `^Commune` rather than an exact match, and the reason is a property of the
-     * `Field` primitive worth knowing: **the hint renders inside the `<label>`**,
-     * so it becomes part of the control's accessible name. With no wilaya chosen
-     * the name is "Commune Choisissez d'abord une wilaya"; once one is chosen the
-     * hint disappears and the name becomes "Commune". An exact match therefore
-     * passes in one state and fails in the other, which is what this test found.
+     * `^Commune` rather than an exact match, and it stays a prefix on purpose
+     * even though the reason changed underneath it.
      *
-     * `FieldError` already uses `aria-describedby` for its message, so the
-     * primitive describes errors and *names* hints — an inconsistency shared by
-     * every form in the panel, and a change too wide for this branch.
+     * The retired `Field` primitive rendered the hint **inside the `<label>`**,
+     * so the hint became part of the control's accessible name: "Commune
+     * Choisissez d'abord une wilaya" with no wilaya chosen and "Commune" once one
+     * was, which made an exact match pass in one state and fail in the other.
+     * `components/ui/Form.tsx` puts the hint in its own `<p>` wired through
+     * `aria-describedby`, so the name is now "Commune" in both states and the
+     * inconsistency the old comment recorded is gone panel-wide.
+     *
+     * The prefix is kept regardless: it is true under both primitives, and this
+     * test is about the control being inert rather than about how it is named.
+     *
+     * **Scoped to the resolver**, which is new and is not decoration. Each rule
+     * row is a stretched overlay button named after the rule it opens — "Commune
+     * · Alger · 350,00 DA", the same words the delete dialog uses — so an
+     * unscoped `/^Commune/` resolves the picker *and* every commune-scoped row,
+     * and strict mode throws before the assertion runs.
      */
-    await expect(page.getByLabel(/^Commune/)).toBeDisabled();
+    const resolver = page
+      .locator("section")
+      .filter({ hasText: "Simuler une destination" });
+    await expect(resolver.getByLabel(/^Commune/)).toBeDisabled();
   });
 });
 
 test.describe("parcels", () => {
   test("the status filter is real, and an unmatched one says so", async ({ page }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/shipping?view=parcels");
+    /* The parcels are what `/shipping` lands on since the split — no `?view=`. */
+    await page.goto("/fr/shipping");
 
     // The positive control: with no filter there are parcels.
     await expect(page.locator("text=/MAN-|TRK-|FAKE-/").first()).toBeVisible({
@@ -138,7 +168,7 @@ test.describe("parcels", () => {
      * is a 400. So this asserts the filter reached the server and came back
      * empty, not that the panel dropped it.
      */
-    await page.goto("/fr/shipping?view=parcels&status=pending");
+    await page.goto("/fr/shipping?status=pending");
     await expect(page.getByText("Aucun colis avec ce statut.")).toBeVisible({
       timeout: 15000,
     });
@@ -149,14 +179,21 @@ test.describe("parcels", () => {
     page,
   }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/shipping?view=parcels");
+    await page.goto("/fr/shipping");
 
-    const row = page.locator("button").filter({ hasText: /MAN-|TRK-/ }).first();
-    await expect(row).toBeEnabled({ timeout: 15000 });
+    const row = parcelRows(page).first();
+    await expect(row).toBeVisible({ timeout: 15000 });
     await row.click();
 
-    await expect(page.getByText("Suivi", { exact: true })).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText("Transporteur", { exact: true })).toBeVisible();
+    /*
+     * Scoped to the drawer, and it has to be: the table's own column headers read
+     * "Suivi" and "Transporteur" too, and both presentations are in the DOM at
+     * every width — so an unscoped exact match resolves two elements and strict
+     * mode throws before either is checked.
+     */
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.getByText("Suivi", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(drawer.getByText("Transporteur", { exact: true })).toBeVisible();
   });
 });
 
@@ -231,11 +268,12 @@ test.describe("what a Manager may and may not reach", () => {
   }) => {
     await signIn(page, "fr", MANAGER_USER!, MANAGER_PASS!);
 
-    // The positive half: `ac_manage_shipping` is a capability this tier holds.
+    /* The positive half: `ac_manage_shipping` is a capability this tier holds.
+       The count is the header's own subtitle and is rendered only past the
+       capability gate — a refused screen carries no total, deliberately, rather
+       than reporting a figure nobody was allowed to read. */
     await page.goto("/fr/shipping");
-    await expect(page.getByText("Ce que la boutique facture")).toBeVisible({
-      timeout: 15000,
-    });
+    await expect(page.getByTestId("parcels-count")).toBeVisible({ timeout: 15000 });
 
     // The negative half, on the same run: `ac_manage_payments` is Super Admin's.
     await page.goto("/fr/payments");
@@ -306,7 +344,7 @@ test.describe("the COD funnel's two confirmed counts", () => {
 test.describe("Arabic", () => {
   test("renders rtl and keeps a tracking number's digit order", async ({ page }) => {
     await signIn(page, "ar");
-    await page.goto("/ar/shipping?view=parcels");
+    await page.goto("/ar/shipping");
 
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
 
@@ -325,7 +363,7 @@ test.describe("Arabic", () => {
     page,
   }) => {
     await signIn(page, "ar");
-    await page.goto("/ar/shipping");
+    await page.goto("/ar/shipping/rules");
 
     // The national row read "وطني · وطني" — the scope badge printed twice — until
     // a screenshot showed it. The destination is the place, not the scope.

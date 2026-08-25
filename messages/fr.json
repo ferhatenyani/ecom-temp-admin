@@ -184,7 +184,8 @@
       "ac_manage_users": "Utilisateurs",
       "ac_view_analytics": "Statistiques",
       "ac_manage_content": "Contenu",
-      "ac_view_audit_logs": "Journal d’audit"
+      "ac_view_audit_logs": "Journal d’audit",
+      "ac_manage_shipping": "Livraison"
     },
     "notFoundTitle": "Introuvable",
     "notFoundBody": "Cette commande n’existe plus.",
@@ -218,7 +219,8 @@
     "productName": "Produit {name}",
     "customerName": "Client {name}",
     "couponCode": "Code promo {code}",
-    "stockItem": "Article {name}"
+    "stockItem": "Article {name}",
+    "parcelTracking": "Colis {tracking}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -835,6 +837,9 @@
     "cancelled": "Annulé",
     "failed": "Échec"
   },
+  "shippingProvider": {
+    "manual": "Livraison interne"
+  },
   "paymentStatus": {
     "pending": "En attente",
     "paid": "Payé",
@@ -854,9 +859,7 @@
   },
   "shipping": {
     "title": "Livraison",
-    "back": "Livraison",
     "tabRules": "Tarifs",
-    "tabShipments": "Colis",
     "tariff": "Ce que la boutique facture",
     "tariffNote": "La règle la plus précise gagne — commune, puis wilaya, puis national. Les règles ne s’additionnent jamais.",
     "noRules": "Aucun tarif de livraison n’est configuré.",
@@ -884,13 +887,10 @@
     "source": "Source",
     "sourceRules": "Tarif de la boutique",
     "sourceProvider": "Devis du transporteur",
-    "parcels": "Colis",
     "noShipments": "Aucun colis.",
     "noShipmentsFilter": "Aucun colis avec ce statut.",
     "clearFilter": "Tout afficher",
     "allStatuses": "Tous",
-    "live": "En cours",
-    "finished": "Terminé",
     "tracking": "Suivi",
     "provider": "Transporteur",
     "providerStatus": "Statut transporteur",
@@ -914,14 +914,12 @@
     "nationalOption": "Toute l’Algérie",
     "anyCommune": "Toute la wilaya",
     "save": "Enregistrer",
-    "cancel": "Annuler",
     "destinationHint": "Sans wilaya, ce tarif est le repli national.",
     "statusLabel": "Statut",
     "changeStatus": "Changer le statut",
     "changeStatusTitle": "Nouveau statut du colis",
     "cancelParcel": "Annuler le colis",
     "cancelConfirm": "Annuler ce colis ? L’opération est définitive et la commande n’en sera pas affectée.",
-    "syncNow": "Synchroniser avec le transporteur",
     "order": "Commande",
     "createParcel": "Créer un colis",
     "createParcelTitle": "Nouveau colis",
@@ -937,7 +935,39 @@
     "destinationNote": "Le transporteur a besoin d’une destination explicite : elle n’est pas reprise de l’adresse de la commande.",
     "carriage": "Acheminement",
     "pickDestinationFirst": "Choisissez une wilaya et une commune.",
-    "noTracking": "Sans numéro de suivi"
+    "noTracking": "Sans numéro de suivi",
+    "loading": "Chargement…",
+    "refresh": "Actualiser",
+    "rulesTitle": "Tarifs de livraison",
+    "searchLabel": "Rechercher par numéro de commande",
+    "searchPlaceholder": "Numéro de commande",
+    "clearSearch": "Effacer la recherche",
+    "noDestination": "Destination non renseignée",
+    "columns": {
+      "tracking": "Suivi",
+      "status": "Statut",
+      "order": "Commande",
+      "destination": "Destination",
+      "provider": "Transporteur",
+      "delivery": "Type",
+      "cod": "Contre-remboursement",
+      "created": "Créé"
+    },
+    "terminalTitle": "Colis terminé",
+    "terminalNote": "Un colis terminé ne bouge plus : son statut ne peut plus changer et il ne peut plus être annulé.",
+    "moveConfirmTitle": "Terminer ce colis",
+    "moveConfirmBody": "Passer ce colis à « {status} » le termine. Son statut ne pourra plus changer et il ne pourra plus être annulé.",
+    "moveConfirmAction": "Passer à « {status} »",
+    "rulesCount": "{total, plural, =0 {aucun tarif} one {# tarif} other {# tarifs}}",
+    "rulesFailed": "Les tarifs n’ont pas pu être chargés.",
+    "ruleActions": "Actions du tarif",
+    "ruleNamed": "{scope} · {place} · {amount}",
+    "providerAny": "N’importe quel transporteur",
+    "noSelection": "Choisir…",
+    "resolverPrompt": "Choisissez une wilaya et une commune pour connaître le prix.",
+    "resolverFailed": "Le prix n’a pas pu être calculé.",
+    "communesFailed": "La liste des communes n’a pas pu être chargée.",
+    "disagreeTitle": "L’API et cette page ne s’accordent pas"
   },
   "payments": {
     "title": "Paiements",

@@ -118,19 +118,43 @@ export function stripLabelUrlsFrom(list: Shipment[]): SafeShipment[] {
 /* ---------------------------------------------------------- the row --- */
 
 /**
- * A provider's display name, falling back to its own slug.
+ * A provider's display name, in three fallbacks.
  *
  * **A shipment's provider is not constrained to `/shipping/providers`.** Shipment
  * 213 carries `acfake`, registered at runtime by the backend's webhook suite,
  * while the providers route reports only `manual`. A lookup that returned `""`
  * for an unknown provider would blank the column on exactly the rows worth
  * looking at.
+ *
+ * ## The message key comes first, and that is a correction
+ *
+ * The API's `label` for `manual` is **"In-house delivery"** — English, and it was
+ * rendering as English on most parcel rows and three times on the rules card in
+ * *both* localised panels. It is data, but so is a shipment's `status`, and the
+ * panel has always translated that through `shipmentStatus` rather than printing
+ * the shop's own vocabulary raw. `manual` is the same kind of word: a state of
+ * this shop, not a courier's brand.
+ *
+ * So: **message key → API `label` → raw `name`.** `manual` reads properly in
+ * French and Arabic; `acfake` — which no message file knows and no providers
+ * route lists — still renders as itself rather than as a string the panel
+ * invented for it. A real courier the shop configures later arrives with its own
+ * brand in `label` and is shown under that, which is right: nobody translates
+ * "Yalidine".
+ *
+ * `translated` is a parameter rather than a `useTranslations` call because this
+ * module is imported by Server Components, by client components and by the unit
+ * suite, and only the caller knows which of those it is in.
  */
 export function providerLabel(
   name: string,
   providers: readonly ShippingProvider[],
+  /** `(name) => t.has(name) ? t(name) : null`, from the `shippingProvider` namespace. */
+  translated?: (name: string) => string | null,
 ): string {
-  return providers.find((provider) => provider.name === name)?.label ?? name;
+  return (
+    translated?.(name) ?? providers.find((provider) => provider.name === name)?.label ?? name
+  );
 }
 
 /**
