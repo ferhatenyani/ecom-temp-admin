@@ -64,25 +64,52 @@ export const CATALOG_VISIBILITIES = ["visible", "catalog", "search", "hidden"] a
 /**
  * The sorts that actually sort.
  *
- * `docs/API.md` publishes eight `orderby` values. Measured 2026-08-18 against the
- * live router by comparing each one's full 28-row id sequence against
- * `orderby=date`, **five of them returned byte-identical order to `date`** in
- * both directions: `id`, `price`, `sku`, `popularity` and `rating` were accepted
- * with a 200 and silently did not sort.
+ * `docs/API.md` publishes eight `orderby` values. **Six of them sort, both
+ * directions, twelve combinations** — re-measured 2026-08-25 over the full
+ * 28-row catalogue, each ordering checked against the order its own field
+ * implies rather than against "differs from the default", with the count of
+ * distinct values that backs it:
  *
- * That was repaired in the backend (`ProductRepository::orderingClause()`, which
- * joins `wc_product_meta_lookup` through `posts_clauses`), and the panel offers
- * the four a person actually reaches for. `popularity` and `rating` are omitted
- * because this shop has no ratings and `total_sales` is 0–2 across the whole
- * catalogue: a sort whose keys are all equal is a control that does nothing, and
- * that is the defect this list exists to avoid repeating.
+ *     date 16 · id 28 · title 28 · price 21 · sku 28 · popularity 13
+ *
+ * ## This list said five until 2026-08-25, and the reason is worth keeping
+ *
+ * The 2026-08-18 measurement it recorded was real: `id`, `price`, `sku`,
+ * `popularity` and `rating` did each return byte-identical order to `date`. Then
+ * `ProductRepository::orderingClause()` repaired it — and **the record outlived
+ * the repair**. `title desc` sat here for two branches described as never
+ * measured; it had been working the whole time. A dated measurement is not a
+ * permanent fact, and nothing re-took this one because the suite was green:
+ * `tests/Api/products.php` asserted `price` and `sku` on a fixture where id,
+ * title, sku and price all ascended together, so any of them could stand in for
+ * another. That fixture is fixed now and the suite proves all seven separately.
+ *
+ * ## `menu_order` and `rating` are omitted, and they are not the same case
+ *
+ * Neither ships, because neither can act on this shop's data: every product
+ * carries `menu_order` 0 and `_wc_average_rating` 0, so both sorts return the
+ * catalogue untouched and a control offering them would do nothing.
+ *
+ * They differ underneath, which matters if the data ever changes. The backend
+ * suite now proves the **endpoint** sorts by `menu_order` — on a fixture with
+ * distinct values, because WooCommerce honours it natively — so that one is a
+ * missing-data problem and nothing else. `rating` has no such proof and cannot
+ * get one here: `_wc_average_rating` is derived from real reviews, and writing
+ * the meta directly would assert a value WooCommerce recomputes.
  */
 export const SORTS = [
   { orderby: "date", order: "desc" },
   { orderby: "date", order: "asc" },
   { orderby: "title", order: "asc" },
+  { orderby: "title", order: "desc" },
   { orderby: "price", order: "asc" },
   { orderby: "price", order: "desc" },
+  { orderby: "sku", order: "asc" },
+  { orderby: "sku", order: "desc" },
+  { orderby: "id", order: "asc" },
+  { orderby: "id", order: "desc" },
+  { orderby: "popularity", order: "desc" },
+  { orderby: "popularity", order: "asc" },
 ] as const;
 
 export type Sort = (typeof SORTS)[number];

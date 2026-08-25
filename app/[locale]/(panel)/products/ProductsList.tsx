@@ -53,15 +53,25 @@ import {
 /**
  * The products list, rebuilt on the new design system.
  *
- * ## Sorting ships here, and it is the one screen in the run where it does
+ * ## Sorting ships here, on five columns
  *
  * The orders list carries no sortable columns on purpose: this API has a measured
  * history of accepting `orderby` and silently ignoring it. On `/products` that
- * was **repaired** — `ProductRepository::orderingClause()` — and exactly five
- * combinations were re-measured as working, which is what `SORTS` in
- * `lib/product-status.ts` is. The column headers offer those five and no more;
- * `columns.tsx` carries the per-column evidence and the reason the name header
- * never reaches descending.
+ * was **repaired** — `ProductRepository::orderingClause()` — and six values sort
+ * in both directions, re-measured 2026-08-25 and asserted in the backend's own
+ * suite against a fixture that can tell them apart. `SORTS` in
+ * `lib/product-status.ts` is that list.
+ *
+ * Five of the six have a column: name, SKU, created, price and id. `popularity`
+ * sorts and has no header, because the API orders by `total_sales` and emits it
+ * nowhere — there is no cell to put under the label. `columns.tsx` carries the
+ * per-column evidence.
+ *
+ * **This list said five combinations until 2026-08-25 and it had been twelve for
+ * two branches.** The 2026-08-18 measurement behind it was real and the backend
+ * repair outgrew it; nothing re-took it because the suite stayed green on a
+ * fixture where id, title, sku and price all produced one sequence. The lesson
+ * is in `SORTS`: a dated measurement is not a permanent fact.
  *
  * ## What is deliberately absent
  *

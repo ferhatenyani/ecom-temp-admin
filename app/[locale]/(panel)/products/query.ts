@@ -73,7 +73,7 @@ export type ProductsQuery = {
   featured: string;
   /** taxonomy → comma-separated term slugs. Values within one attribute are alternatives. */
   attributes: Record<string, string>;
-  /** `"{orderby}-{order}"`, and only ever one of the five in `SORTS`. */
+  /** `"{orderby}-{order}"`, and only ever one of the twelve in `SORTS`. */
   sort: string;
   /** Component state, not the URL. See the module docblock. */
   page: number;

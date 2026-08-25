@@ -313,31 +313,46 @@ describe("the query model", () => {
 
 describe("sorting", () => {
   /**
-   * The panel offers only the sorts that sort. Measured 2026-08-18 before the
-   * backend repair: `id`, `price`, `sku`, `popularity` and `rating` each returned
-   * the catalogue in byte-identical order to `date`, in both directions —
-   * accepted with a 200 and silently unsorted.
+   * The panel offers only the sorts that sort — **six values, both directions**,
+   * re-measured 2026-08-25 over the full catalogue and asserted in the backend's
+   * own suite against a fixture whose orders are mutually distinct.
    *
-   * `price` is in the list because the backend now honours it;
-   * `popularity` and `rating` are not, because this shop has no ratings and
-   * `total_sales` is 0–2 across the whole catalogue, so the control would sort
-   * by a key whose values are all equal.
+   * This test asserted three values until that date, on a real 2026-08-18
+   * measurement that the backend repair outgrew. That is the failure worth
+   * pinning here: a dated measurement is not a permanent fact, and this suite
+   * stayed green through two branches of it.
+   *
+   * `menu_order` and `rating` stay out, and they are not the same case. Every
+   * product carries 0 for both, so neither control could act — but the backend
+   * suite proves the *endpoint* sorts by `menu_order`, while `rating` has no such
+   * proof and can get none here, `_wc_average_rating` being derived from reviews
+   * this shop has none of.
    */
   it("offers no sort the API cannot honour", () => {
     const offered = new Set<string>(SORTS.map((s) => s.orderby));
-    expect(offered).toEqual(new Set(["date", "title", "price"]));
-    expect(offered.has("popularity")).toBe(false);
+    expect(offered).toEqual(new Set(["date", "title", "price", "sku", "id", "popularity"]));
+    expect(offered.has("menu_order")).toBe(false);
     expect(offered.has("rating")).toBe(false);
-    // Both directions on price, because the repair made both work and a
-    // one-directional sort control is half a control.
-    expect(SORTS.filter((s) => s.orderby === "price")).toHaveLength(2);
+    // Every offered value carries both directions: a one-directional sort
+    // control is half a control, and `title` shipped as exactly that until the
+    // re-measurement — recorded as "descending was never measured" when it
+    // had been working the whole time.
+    for (const orderby of offered) {
+      expect(SORTS.filter((s) => s.orderby === orderby)).toHaveLength(2);
+    }
   });
 
   it("falls back to the default for an unknown sort key", () => {
     expect(sortKey(sortFromKey("price-asc"))).toBe("price-asc");
-    // A stale bookmark naming a sort that no longer exists must render the list,
+    // `popularity` sorts and is deliberately reachable only by URL — it orders by
+    // `total_sales`, which the API emits on no response, so there is no column to
+    // hang a header on. Honoured rather than rewritten, the way `customers`
+    // treats the two `orderby` values it accepts and does not offer.
+    expect(sortKey(sortFromKey("popularity-desc"))).toBe("popularity-desc");
+    // A stale bookmark naming a sort that does not exist must render the list,
     // not an error.
-    expect(sortKey(sortFromKey("popularity-desc"))).toBe(DEFAULT_SORT_KEY);
+    expect(sortKey(sortFromKey("rating-desc"))).toBe(DEFAULT_SORT_KEY);
+    expect(sortKey(sortFromKey("nonsense"))).toBe(DEFAULT_SORT_KEY);
     expect(sortKey(sortFromKey(null))).toBe(DEFAULT_SORT_KEY);
   });
 });

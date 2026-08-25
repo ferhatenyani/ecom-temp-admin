@@ -28,25 +28,40 @@
  *
  * ── The two exceptions, and they are not the same shape ──────────────────────
  *
- * **`/products` sorts five of its ten combinations. `/coupons` sorts all eight of
- * its own. `/orders` and `/customers` still sort nothing. Do not simplify this
- * into either extreme.**
+ * **`/products` sorts twelve of its sixteen combinations. `/coupons` sorts all
+ * eight of its own. `/orders` and `/customers` still sort nothing. Do not
+ * simplify this into either extreme.**
  *
  * The silent ignore was repaired in the backend — `ProductRepository::
  * orderingClause()`, which joins `wc_product_meta_lookup` through
- * `posts_clauses` — and exactly five combinations were re-measured as working:
+ * `posts_clauses`. This file said "exactly five combinations" until 2026-08-25,
+ * on a measurement taken 2026-08-18, and **the repair had already outgrown it**.
+ * Re-measured over the full 28-row catalogue, each ordering checked against the
+ * order its own field implies rather than against "differs from the default",
+ * with the count of distinct values that backs it:
  *
- *     date desc · date asc · title asc · price asc · price desc
+ *     date  16 · id 28 · title 28 · price 21 · sku 28 · popularity 13
  *
- * Those five sort here and nothing else does. Any other `orderby`, and any
- * other combination — **including `title desc`, which nobody measured** — is
- * accepted with a 200 and comes back in the default catalogue order, unsorted.
- * `SORTS` in lib/product-status.ts is that list and it is the same five.
+ * Six values, both directions, twelve combinations. **`title desc` is among
+ * them** — this file called it "deliberately absent, nobody measured it" and it
+ * had been working the whole time.
+ *
+ * `menu_order` and `rating` are the other two, and they are **unprovable rather
+ * than dead**: every one of the 28 products carries the same value for both, so
+ * the two directions tie and answer identically whether the sort runs or not.
+ * They are accepted, validated, and left unsorted here — the run's rule is that
+ * a control ships only where someone measured it working, and nobody can measure
+ * these until the shop has data that separates them.
  *
  * Both halves of this are load-bearing. Sorting everything would let an agent
- * build a `title desc` control, watch it work here and ship a control that does
- * nothing; sorting nothing would make the five controls the panel does offer
- * look broken against the harness and invite someone to delete them.
+ * build a `rating` control, watch it work here and ship a control nothing in the
+ * shop can exercise; sorting nothing would make the twelve controls the panel
+ * offers look broken against the harness and invite someone to delete them.
+ *
+ * **The lesson this file paid for twice**: a dated measurement is not a
+ * permanent fact. Both times the sort was recorded dead, the record outlived the
+ * repair, and both times the tell was the same — the control had been taken on a
+ * value that could not distinguish working from broken.
  *
  * **`/coupons` is the second exception and it is total**, not partial: `date`,
  * `id`, `code` and `usage`, both directions, all eight re-measured working on
@@ -3692,17 +3707,62 @@ const byDate = compareBy((product) => product.date_created);
 // ICU build is a screenshot that differs between machines.
 const byTitle = compareBy((product) => fold(product.name));
 const byPrice = compareBy(priceOf);
+const byId = compareBy((product) => product.id);
+const bySku = compareBy((product) => fold(product.sku ?? ""));
 
 /**
- * The five combinations that were re-measured as working, and only those. See
- * the header — `title desc` is deliberately absent and deliberately a 200.
+ * `popularity` is `total_sales`, which the live API **sorts by and does not
+ * emit** — it is on no product response, measured. So it lives beside the rows
+ * rather than on them: putting it on the fixture would leak a field into every
+ * listing and `tests/mock-api.test.ts` parses those with the real Zod schema.
+ *
+ * Two fixture properties, both deliberate:
+ *
+ * **Not monotonic in the id** — ranked by each id's digits reversed, so a
+ * fallback from `popularity` to `id` cannot pass as the real thing. That is the
+ * flaw the backend's own ordering fixture carried until 2026-08-25, where sku,
+ * id, title and price all ascended together and any of them could stand in for
+ * another.
+ *
+ * **Distinct for every row**, so `desc` is exactly the reverse of `asc` and the
+ * test can say so. The live catalogue is not like this — 28 products carry 13
+ * distinct `total_sales`, so there the two directions are reverses only up to
+ * ties, which a stable sort keeps in place. A fixture is chosen to discriminate;
+ * that is what it is for.
+ */
+const PRODUCT_POPULARITY = new Map(
+  // `CATALOGUE`, not `PRODUCTS`: the listing is `NEW_ARRIVALS` and
+  // `BACK_CATALOGUE` too, and seeding from the middle third alone left the other
+  // twenty rows sharing a default and clustering wherever the tie landed.
+  CATALOGUE.map((row) => row.id)
+    .sort((a, b) => {
+      const reversed = (id) => String(id).split("").reverse().join("");
+      return reversed(a) < reversed(b) ? -1 : reversed(a) > reversed(b) ? 1 : 0;
+    })
+    .map((id, rank) => [id, rank]),
+);
+const byPopularity = compareBy((product) => PRODUCT_POPULARITY.get(product.id) ?? 0);
+
+/**
+ * The twelve combinations re-measured as working on 2026-08-25 — see the header.
+ *
+ * `menu_order` and `rating` are absent on purpose and are **not** an oversight:
+ * every product in the shop carries an identical value for both, so neither can
+ * be told apart from a dead parameter. They validate and return unsorted.
  */
 const PRODUCT_SORTS = new Map([
   ["date desc", descending(byDate)],
   ["date asc", byDate],
+  ["id desc", descending(byId)],
+  ["id asc", byId],
+  ["title desc", descending(byTitle)],
   ["title asc", byTitle],
   ["price asc", byPrice],
   ["price desc", descending(byPrice)],
+  ["sku asc", bySku],
+  ["sku desc", descending(bySku)],
+  ["popularity asc", byPopularity],
+  ["popularity desc", descending(byPopularity)],
 ]);
 
 /**

@@ -55,23 +55,33 @@ import type { Column } from "@/components/ui/DataTable";
  * ## The sort keys, which are the measured half of this file
  *
  * `sortKey` is the API's `orderby`, and `sortDirections` is how far the evidence
- * goes. `lib/product-status.ts` records the measurement: the silent-ignore was
- * repaired in the backend and **exactly five combinations** were re-measured —
- * `date desc · date asc · title asc · price asc · price desc`. So:
+ * goes. `lib/product-status.ts` records the measurement, re-taken 2026-08-25:
+ * **six values sort, both directions.** Five of them have a column here:
  *
- *   name       `["asc"]`            — `title desc` was never measured at all. It
- *                                     answers 200 and returns default order, so a
- *                                     header that cycled to descending would look
- *                                     like it worked and would not. The cycle is
- *                                     `none → ascending → none`.
- *   created    `["desc", "asc"]`    — both measured, and `date desc` is already
- *                                     the resting order, so the first click is
- *                                     the one that changes something.
- *   price      the default, both    — both measured.
+ *   name       both  — `sortDirections: ["asc"]` was here for two branches,
+ *                      because `title desc` was recorded as never measured. It
+ *                      sorts, and had been sorting the whole time. The cycle is
+ *                      the full `none → asc → desc → none` again.
+ *   created    both  — `date desc` is the resting order, so `["desc", "asc"]`
+ *                      keeps the first click the one that changes something.
+ *   price      both
+ *   sku        both  — was recorded as silently not sorting. It sorts.
+ *   id         both  — same. The column is `optional`, so the control arrives
+ *                      with it.
  *
- * `sku`, `popularity` and `rating` carry no `sortKey`: `sku` was measured
- * silently not sorting, and the other two sort by a key whose values are all
- * equal in this shop.
+ * ## `popularity` sorts and still gets no header, which is not a taste call
+ *
+ * The API orders by `total_sales` and **does not emit it** — it is on no product
+ * response, measured. So there is nothing to put in a cell, and a sortable header
+ * over an empty column is not a design choice, it is impossible. It stays in
+ * `SORTS`, so a URL carrying `?sort=popularity-desc` is honoured rather than
+ * rewritten — the arrangement `customers/query.ts` already uses for the two
+ * `orderby` values the API accepts and that screen does not offer.
+ *
+ * `menu_order` and `rating` are absent for a different reason again: every
+ * product in this shop carries 0 for both, so those sorts return the catalogue
+ * untouched and the control could not act. See `SORTS` for why those two are not
+ * the same case as each other either.
  */
 
 export type ProductColumnContext = {
@@ -157,7 +167,6 @@ export function buildColumns(ctx: ProductColumnContext): Column<Product>[] {
       header: t("columns.name"),
       required: true,
       sortKey: "title",
-      sortDirections: ["asc"],
       cell: (product) => (
         /* `dir="auto"` so a French product name in the Arabic list is clipped at
            its own end rather than the paragraph's. This is the exact string the
@@ -172,6 +181,7 @@ export function buildColumns(ctx: ProductColumnContext): Column<Product>[] {
     {
       key: "sku",
       header: t("columns.sku"),
+      sortKey: "sku",
       cell: (product) =>
         product.sku ? (
           /* `Ltr`, because a SKU is exactly the identifier the bidi algorithm
@@ -273,6 +283,7 @@ export function buildColumns(ctx: ProductColumnContext): Column<Product>[] {
       header: t("columns.id"),
       align: "end",
       optional: true,
+      sortKey: "id",
       cell: (product) => <Ltr className="text-ui-subtle">{product.id}</Ltr>,
     },
   ];
