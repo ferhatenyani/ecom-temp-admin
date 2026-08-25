@@ -147,6 +147,69 @@ test.describe("the coupon list", () => {
     await expect(page).toHaveURL(/status=draft/);
     await expect(page.getByTestId("coupons-count")).toBeVisible();
   });
+
+  /**
+   * Sorting, and the two halves of it that can silently go wrong.
+   *
+   * All four `orderby` values were re-measured working in both directions, so
+   * unlike the products name header this one may reach descending — but the
+   * *third* click must drop `orderby` from the URL rather than sit on a fourth
+   * state, because `date` is the default order and the only way back to it.
+   *
+   * Asserted on `aria-sort` and the URL rather than on row order: the suite runs
+   * against the live shop, where usage counts move whenever somebody redeems
+   * something. `aria-sort` is also the accessible contract and the only
+   * externally visible record of what the panel thinks it asked for — and the
+   * unsorted headers beside it must keep reading "none", never inherit the sort.
+   */
+  test("the usage column sorts both ways, and the third click returns to the default", async ({
+    page,
+  }) => {
+    await signIn(page, "fr");
+    await openCoupons(page, "fr");
+
+    const usage = page.getByRole("columnheader", { name: /Utilisations/ });
+    // Below `md` the records are cards: `RecordList` takes no sort props and
+    // there is no column header to click. That is the design, not a gap.
+    if (!(await usage.isVisible())) test.skip(true, "no table at this width");
+
+    const code = page.getByRole("columnheader", { name: /Code/ });
+    await expect(usage).toHaveAttribute("aria-sort", "none");
+
+    await usage.getByRole("button").click();
+    await expect(usage).toHaveAttribute("aria-sort", "ascending");
+    await expect(page).toHaveURL(/orderby=usage/);
+    await expect(page).toHaveURL(/order=asc/);
+    // The neighbouring sortable column is unaffected, and says so.
+    await expect(code).toHaveAttribute("aria-sort", "none");
+
+    await usage.getByRole("button").click();
+    await expect(usage).toHaveAttribute("aria-sort", "descending");
+    // `desc` is the API's default `order`, so the panel stops naming it.
+    await expect(page).toHaveURL(/orderby=usage/);
+    await expect(page).not.toHaveURL(/order=asc/);
+
+    await usage.getByRole("button").click();
+    await expect(usage).toHaveAttribute("aria-sort", "none");
+    await expect(page).not.toHaveURL(/orderby=/);
+  });
+
+  /**
+   * A `sortKey` on a column the API cannot sort would announce a sortability
+   * that does not exist — DECISIONS.md §2, found and fixed on products. Six of
+   * the nine columns are in that position here, so the attribute must be absent
+   * rather than "none": in ARIA, "none" means *sortable, currently unsorted*.
+   */
+  test("a column the API cannot sort carries no aria-sort at all", async ({ page }) => {
+    await signIn(page, "fr");
+    await openCoupons(page, "fr");
+
+    const type = page.getByRole("columnheader", { name: /^Type$/ });
+    if (!(await type.isVisible())) test.skip(true, "no table at this width");
+
+    await expect(type).not.toHaveAttribute("aria-sort", /.*/);
+    await expect(type.getByRole("button")).toHaveCount(0);
+  });
 });
 
 test.describe("the coupon form", () => {
