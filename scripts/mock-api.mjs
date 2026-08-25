@@ -207,6 +207,10 @@ const iso = (minutesAgo) =>
 const LONG_SKU = `AC-${"X".repeat(54)}-01`;
 const LONG_EMAIL =
   "commande-tres-longue-sans-aucune-espace@boutique-artisanale-algerienne-exemple.dz";
+/** The parcels list's own, and it is the tracking number because that is the
+    column a courier fills with an unbroken run of characters. Provider-neutral
+    on purpose: it lands on whichever row index 0 turns out to be. */
+const LONG_TRACKING = `AC-${"7".repeat(52)}-DZ`;
 
 /* --------------------------------------------------------------- envelope --- */
 
@@ -219,6 +223,36 @@ const ok = (data, meta) => ({
   status: 200,
   body: meta === undefined ? { success: true, data } : { success: true, data, meta },
 });
+
+/**
+ * A create's envelope: the same body as `ok()`, and **201**.
+ *
+ * Measured 2026-08-25 on `POST /shipping/rules` — both with `provider: ""` and
+ * with the key omitted — where this file had been answering 200. The body was
+ * identical, which is exactly why it survived: a request-for-request diff of
+ * envelopes and sentences compares neither the status nor the error `code`, and
+ * **the status is the third thing that can drift in silence.** The error codes
+ * went the same way, hiding behind assertions that only ever read messages.
+ *
+ * `unwrap()` accepts anything in 200-299, so a screen cannot tell the two apart
+ * — which is the argument for reproducing it rather than against.
+ *
+ * **Three of the file's four creates, each measured on its own request** —
+ * `POST /shipping/rules`, `POST /coupons` and `POST /orders/{id}/shipments`,
+ * all 2026-08-25. They were moved here one measurement at a time rather than
+ * swept: the first 201 was treated as a fact about one route, not a pattern,
+ * because this API is not reliable about REST conventions and assuming
+ * otherwise is the move the harness exists to prevent. Three agreeing is what
+ * settled it.
+ *
+ * The fourth, `POST /orders/{id}/cod/attempts`, stays 200 and stays
+ * **unmeasured — because provoking it is irreversible, not because it is
+ * unreachable.** A coupon can be force-deleted and a parcel cancelled; a
+ * recorded delivery call cannot be un-recorded, so nobody has fired one at the
+ * shop to see what it answers. Whoever is willing to spend an attempt on a
+ * disposable order should take that measurement.
+ */
+const created = (data) => ({ status: 201, body: { success: true, data } });
 
 /**
  * A list that is **not** paginated, with the `meta` every list endpoint carries.
@@ -2600,10 +2634,142 @@ function seedCod(order) {
 
 /* -------------------------------------------------------------- shipments --- */
 
-/** Measured 2026-08-20: exactly one provider, and it is the default. */
+/**
+ * Measured 2026-08-20 and again 2026-08-25: exactly one provider, and it is the
+ * default.
+ *
+ * **`acfake` is deliberately absent and must stay absent.** The collection
+ * carries two provider values and the only allowlisted enumeration of them
+ * offers one, so a picker built from this endpoint cannot offer the provider
+ * that is 42 of 129 rows. That is a fact about the API a screen decision rests
+ * on; "helpfully" adding the second value here would delete the decision.
+ */
 const SHIPPING_PROVIDERS = [
   { name: "manual", label: "In-house delivery", is_default: true },
 ];
+
+/**
+ * Ten statuses in the order a parcel passes through them — and **that is the
+ * order both refusals list them in.** Measured 2026-08-25:
+ *
+ *   ?status=zzz             "status is not one of pending, created, …, and failed."
+ *   PATCH {status:"zzz"}    "Must be one of: pending, created, …, failed."
+ *
+ * Neither list is alphabetical, so neither is sorted here — unlike `/products`,
+ * whose refusal genuinely is sorted. lib/shipment-status.ts:17-18 says the API
+ * "sends them alphabetically in its error message"; the wire disagrees, and this
+ * file follows the wire.
+ */
+const SHIPMENT_STATUSES = [
+  "pending",
+  "created",
+  "picked_up",
+  "in_transit",
+  "out_for_delivery",
+  "delivered",
+  "returning",
+  "returned",
+  "cancelled",
+  "failed",
+];
+
+/**
+ * Finished, one way or another.
+ *
+ * `is_live` is the negation of this and nothing else — measured 2026-08-25 on
+ * all 129 rows in the shop, zero disagreements — which is why nothing here
+ * stores the two independently.
+ */
+const TERMINAL_SHIPMENT_STATUSES = ["delivered", "returned", "cancelled", "failed"];
+const isTerminalShipment = (status) => TERMINAL_SHIPMENT_STATUSES.includes(status);
+
+/** `""` is the third value and means *any*, which is why the refusal names it. */
+const DELIVERY_TYPES = ["home", "desk"];
+
+/* ---------------------------------------------------------- shipping rules --- */
+
+/**
+ * How narrow a rule is — **computed here on every write and never accepted from
+ * a client.** A body carrying `specificity` has it dropped in silence, like
+ * `id`, the two stamps and `provider`.
+ *
+ * The formula is *fitted to four observations*, not read off the backend:
+ *
+ *   wilaya 0  / commune 0   / home   →  3   (rule 162)
+ *   wilaya 16 / commune 0   / home   →  7   (rule 163)
+ *   wilaya 16 / commune 484 / home   → 15   (rule 164)
+ *   wilaya 31 / commune 0   / desk   →  6   (the round-trip POST)
+ *
+ * Commune 8, wilaya 4, and the delivery type 3 for `home` against 2 for `desk`
+ * is the narrowest rule that produces all four. **The weight of `""` — a rule
+ * that covers both delivery types — is unmeasured**, because no such rule
+ * exists in the shop and none was created; 0 is a guess and is marked as one so
+ * a future audit takes the measurement rather than trusting this line.
+ */
+function ruleSpecificity(rule) {
+  const scope = (rule.commune_id > 0 ? 8 : 0) + (rule.wilaya_id > 0 ? 4 : 0);
+  const type = rule.delivery_type === "home" ? 3 : rule.delivery_type === "desk" ? 2 : 0;
+  return scope + type;
+}
+
+/**
+ * The three rules the shop actually holds, measured 2026-08-25.
+ *
+ * `scripts/seed-shipping-rules.mjs` put them there — before it ran,
+ * `GET /shipping/rules` answered `[]` and `/shipping/rates` could only ever
+ * answer `[]` too, which is why the resolver could not have been built against
+ * this shop at all. Alger Centre is covered by all three, so one destination
+ * exercises every arm of the resolution the rules table exists to show.
+ *
+ * **`provider` is `"manual"` on all three, not `""`** — corrected 2026-08-25
+ * from the measured `GET /shipping/rules/164`, and the mistake is worth naming
+ * because it came from over-reading a real measurement. Two facts were recorded:
+ * a POST *with no provider* stores `""`, and a PATCH of the whole GET body is a
+ * 200 with `provider` "dropped in silence". The second cannot distinguish
+ * *dropped* from *written back with the value it already had*, and the first is
+ * about a body that omits the key. `seed-shipping-rules.mjs:77,88,99` POSTs
+ * `provider: "manual"` on all three rules, so the server plainly stores what it
+ * is given; `""` is the default for a body that names none, and nothing more.
+ *
+ * The two stamps' notation is **not measured** — a shipment's ends `+00:00` and
+ * a payment's ends `Z`, and nothing recorded which of the two a rule uses. The
+ * shipment notation is used here because a rule is on that subject; the schema
+ * takes any string, so nothing in the panel can tell.
+ */
+const SHIPPING_RULE_SEED = [
+  { id: 164, wilaya_id: 16, commune_id: 484, amount: "350.00", free_over: null, estimated_days: 1 },
+  {
+    id: 163,
+    wilaya_id: 16,
+    commune_id: 0,
+    amount: "500.00",
+    free_over: "10000.00",
+    estimated_days: 2,
+  },
+  { id: 162, wilaya_id: 0, commune_id: 0, amount: "800.00", free_over: null, estimated_days: 5 },
+];
+
+function seedRules() {
+  return new Map(
+    SHIPPING_RULE_SEED.map((seed, index) => {
+      const row = {
+        id: seed.id,
+        provider: "manual",
+        wilaya_id: seed.wilaya_id,
+        commune_id: seed.commune_id,
+        delivery_type: "home",
+        amount: seed.amount,
+        free_over: seed.free_over,
+        estimated_days: seed.estimated_days,
+        is_active: true,
+        specificity: 0,
+        created_at: iso(4000 - index * 20),
+        updated_at: iso(3800 - index * 20),
+      };
+      return [row.id, { ...row, specificity: ruleSpecificity(row) }];
+    }),
+  );
+}
 
 /**
  * Two parcels, and neither is tidy on purpose.
@@ -2622,11 +2788,86 @@ const SHIPPING_PROVIDERS = [
  * provider's own spelling of the status beside the mapped one, which is the only
  * way a mis-mapped adapter is visible at all.
  */
+/**
+ * The archive `GET /shipments` lists, and the reason it exists at all.
+ *
+ * **The live shop is all-terminal**: 129 rows, `delivered` 85 and `cancelled`
+ * 44, `is_live: true` on exactly none of them. A harness seeded to that reality
+ * exactly could never reach the status picker, the cancel button or sync, so the
+ * three writes on this subject would be unverifiable — which is why 7014 stays
+ * live and this archive is everything else.
+ *
+ * The resulting split is **`delivered` 86 / `cancelled` 42 / `created` 1 over
+ * 129 rows**. The shop's own 85/44 is not reproduced to the row: the live parcel
+ * has to come from somewhere and a fixture distribution is not a claim about the
+ * contract. What *is* reproduced is every fact a screen can read off the shape —
+ * both providers present, most rows finished, and the metadata key union.
+ *
+ * `metadata` carries exactly the measured union across the collection —
+ * `delivery_type, wilaya_id, commune_id, cod_amount, provider_status` — and no
+ * single row carries all of it, because no row in the shop does: `cod_amount` is
+ * a manual shipment's and `provider_status` is the courier's own spelling, which
+ * only `acfake` sends.
+ *
+ * Orders 1100-1163 carry these, two apiece bar one. That range deliberately
+ * excludes 1007 (no parcel at all — the state the create button is *for*), 1014
+ * (the live one) and 1023 (the capture route), whose lists are pinned by the
+ * refusal table above and must not grow.
+ */
+const ARCHIVE_COUNT = 127;
+const ARCHIVE_ID_BASE = 6000;
+const ARCHIVE_ORDER_BASE = 1100;
+const ARCHIVE_ORDERS = 64;
+
+function seedArchive() {
+  return Array.from({ length: ARCHIVE_COUNT }, (_, index) => {
+    const id = ARCHIVE_ID_BASE + index;
+    const orderId = ARCHIVE_ORDER_BASE + (index % ARCHIVE_ORDERS);
+    // Interleaved rather than grouped, so page one of the list is not one
+    // status and one provider.
+    const status = index % 3 === 1 ? "cancelled" : "delivered";
+    const acfake = index % 3 === 2;
+    const wilayaId = 1 + (index % WILAYAS.length);
+    const communeId = COMMUNES.get(wilayaId)[index % COMMUNES.get(wilayaId).length].id;
+
+    return {
+      id,
+      order_id: orderId,
+      provider: acfake ? "acfake" : "manual",
+      provider_shipment_id: acfake ? `FAKE-${id}` : `MAN-${id}`,
+      tracking_number: index === 0 ? LONG_TRACKING : acfake ? `ACFAKE${id}` : `AC${id}DZ`,
+      status,
+      is_live: false,
+      metadata: {
+        wilaya_id: wilayaId,
+        commune_id: communeId,
+        delivery_type: index % 2 === 0 ? "home" : "desk",
+        // A manual courier collects cash and reports no status of its own; an
+        // adapter reports its own spelling and collects nothing. Neither row
+        // carries the other's key, which is what makes the union a union.
+        ...(acfake
+          ? { provider_status: status === "cancelled" ? "RAW_CANCELLED" : "RAW_DELIVERED" }
+          : { cod_amount: ORDERS.find((row) => row.id === orderId).total }),
+      },
+      // Spread rather than stamped alike: the measured page one carries 82
+      // distinct `created_at`, so a sort that "works" by tying on every row
+      // cannot pass as proof against this fixture either.
+      created_at: iso(3000 + index * 37),
+      updated_at: iso(2400 + index * 29),
+    };
+  });
+}
+
 function seedShipments() {
   // Off the order, not written out: a courier collecting a figure the order does
   // not show is a bug report about arithmetic waiting to be filed.
   const codAmount = ORDERS.find((row) => row.id === LIVE_PARCEL_ORDER).total;
+  const archive = new Map();
+  for (const row of seedArchive()) {
+    archive.set(row.order_id, [...(archive.get(row.order_id) ?? []), row]);
+  }
   return new Map([
+    ...archive,
     /*
      * The third state, and it is written out rather than left to fall through
      * `shipmentsOf`'s `?? []`. An order with no parcel at all is what the create
@@ -2784,6 +3025,24 @@ const COMMUNES = new Map();
       })),
     );
   }
+
+  /*
+   * **483 and 484, by hand, because the resolver cannot be exercised without
+   * them.** The generator above hands out 231 ids for 58 wilayas while the real
+   * table runs to 1 541, so Alger's communes here stop around 64 — and the
+   * measured commune rule (164) is pinned to commune **484**, which no picker
+   * could ever select. The rules preview would then have had only the wilaya and
+   * national arms to resolve, and *commune beats wilaya* — the one thing the
+   * whole rules table exists to display — would have been unreachable in the
+   * harness while working perfectly in the shop.
+   *
+   * These are also the two ids the seeded parcels are sent to, so a shipment row
+   * can name its destination rather than showing an id that resolves to nothing.
+   */
+  COMMUNES.get(16).push(
+    { id: 483, wilaya_id: 16, name: "Alger Aïn Taya", name_ar: "الجزائر عين طاية", is_active: true },
+    { id: 484, wilaya_id: 16, name: "Alger Centre", name_ar: "الجزائر الوسط", is_active: true },
+  );
 }
 
 /* ------------------------------------------------------------ write state --- */
@@ -2811,6 +3070,13 @@ const state = {
   shipments: new Map(),
   payments: new Map(),
   nextShipmentId: 0,
+  /**
+   * Rule id → the whole row as it reads now, holding the three seeded rules a
+   * PATCH has rewritten **and** the rows `POST /shipping/rules` created. A
+   * delete removes the entry outright — unlike a coupon, a rule has no trash.
+   */
+  rules: new Map(),
+  nextRuleId: 0,
   /** Product id → the whole row as it reads now. Empty until something PATCHes. */
   products: new Map(),
   /** Force-deleted product ids. A permanent delete is the one thing that 404s. */
@@ -2856,6 +3122,11 @@ export function resetState() {
   state.payments = seedPayments();
   // Above the two seeded ids and far enough from them to read as new.
   state.nextShipmentId = 7100;
+  state.rules = seedRules();
+  // The id the measured round-trip actually got — `POST` created 179 and the
+  // `DELETE` after it put the shop back to three rules. Fixed rather than
+  // derived, which is what keeps a screenshot of a created rule byte-stable.
+  state.nextRuleId = 179;
   state.products = new Map();
   state.gone = new Set();
   state.variations = new Map();
@@ -2876,6 +3147,19 @@ resetState();
 
 const statusOf = (order) => state.statuses.get(order.id) ?? order.status;
 const shipmentsOf = (orderId) => state.shipments.get(orderId) ?? [];
+
+/**
+ * Every parcel in the shop, newest id first.
+ *
+ * **The resting order is not measured.** What *is* measured is that nothing can
+ * change it: `orderby` × eight fields × both directions returned a byte-identical
+ * id sequence to `?bogus_param=1`, and `?orderby=zzz` is a 200 — the parameter
+ * never reaches a validator, so it cannot be reaching a sort. Descending id is
+ * the choice this file makes; the point of the fixture is that no request can
+ * make it any other order.
+ */
+const allShipments = () =>
+  [...state.shipments.values()].flat().sort((a, b) => b.id - a.id);
 const paymentsOf = (orderId) => state.payments.get(orderId) ?? [];
 
 /**
@@ -3048,7 +3332,7 @@ function patchOrder(order, body) {
   const to = body?.status;
   if (typeof to !== "string" || !ORDER_STATUSES.includes(to)) {
     return invalidBody("Invalid parameter(s): status", {
-      status: `Must be one of: ${ORDER_STATUSES.join(", ")}.`,
+      status: oneOf(ORDER_STATUSES),
     });
   }
 
@@ -3100,15 +3384,27 @@ function patchCod(order, body) {
 function postCodAttempt(order, body) {
   const outcome = body?.outcome;
   if (typeof outcome !== "string" || outcome === "") {
-    // A *missing* outcome gets a different sentence from an invalid one —
-    // measured, and the difference is the word "Required".
-    return fail(400, "rest_missing_callback_param", "Missing parameter(s): outcome", {
+    /*
+     * A *missing* outcome gets a different sentence from an invalid one —
+     * measured, and the difference is the word "Required".
+     *
+     * **The code was `rest_missing_callback_param` until 2026-08-25**, and it
+     * is the same defect DECISIONS.md records against fourteen refusals on this
+     * file: `ErrorNormalizer.php:31-32` maps that code *and*
+     * `rest_invalid_param` to `invalid_request` on the way out, so no client
+     * can ever receive either. This one and `/inventory/lookup` survived that
+     * sweep because they are **missing**-parameter refusals rather than
+     * invalid-value ones, so a search for the code that had been named turned
+     * them up and a search for the class did not. The sentences were right the
+     * whole time, which is what let it hide.
+     */
+    return fail(400, "invalid_request", "Missing parameter(s): outcome", {
       fields: { outcome: `Required. One of: ${COD_ATTEMPT_OUTCOMES.join(", ")}.` },
     });
   }
   if (!COD_ATTEMPT_OUTCOMES.includes(outcome)) {
     return invalidBody("Invalid parameter(s): outcome", {
-      outcome: `Must be one of: ${COD_ATTEMPT_OUTCOMES.join(", ")}.`,
+      outcome: oneOf(COD_ATTEMPT_OUTCOMES),
     });
   }
 
@@ -3179,19 +3475,44 @@ function postShipment(order, body) {
   const fields = {};
   const wilayaId = Number(body?.wilaya_id);
   const communeId = Number(body?.commune_id);
-  if (!Number.isInteger(wilayaId) || wilayaId <= 0) {
-    fields.wilaya_id = "Required. The destination wilaya.";
-  }
-  if (!Number.isInteger(communeId) || communeId <= 0) {
-    fields.commune_id = "Required. The destination commune.";
-  }
+  /*
+   * **Measured 2026-08-25 on a live parcel, and both sentences here were this
+   * file's own prose.** `POST /orders/4586/shipments {}` answers
+   *
+   *     {"code":"invalid_request","message":"The shipment data is invalid.",
+   *      "details":{"fields":{"wilaya_id":"Required.","commune_id":"Required."}}}
+   *
+   * A plain `"Required."` on each — the same word the rules collection uses for
+   * the same problem — and the envelope's own message is the generic
+   * `"The shipment data is invalid."`, not the `Invalid parameter(s): …` this
+   * line used to build out of the field names. Both were inventions: the
+   * *requirement* was measured on an earlier branch and the *wording* was
+   * filled in, which is exactly how a screen ends up quoting a sentence the
+   * shop never sends.
+   */
+  if (!Number.isInteger(wilayaId) || wilayaId <= 0) fields.wilaya_id = "Required.";
+  if (!Number.isInteger(communeId) || communeId <= 0) fields.commune_id = "Required.";
   if (Object.keys(fields).length > 0) {
-    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+    return invalidBody("The shipment data is invalid.", fields);
   }
 
   const live = shipmentsOf(order.id).find((shipment) => shipment.is_live);
   if (live !== undefined) {
-    return conflict("This order already has a shipment in flight.", {
+    /*
+     * **Measured 2026-08-25**, by creating parcel 258 against order 4586 and
+     * posting a second one while it was live:
+     *
+     *     {"code":"conflict","message":"This order already has a shipment in
+     *      progress.","details":{"shipment_id":258,"provider":"manual",
+     *      "status":"created"}}
+     *
+     * This said **"in flight"** until that measurement — ADMIN_PANEL.md had
+     * recorded the `details` and no message beside them, and the sentence was
+     * filled in here. The shop is all-terminal again, so the wording above is
+     * the only observation of it there will be until someone makes another
+     * parcel; it is written out rather than paraphrased for that reason.
+     */
+    return conflict("This order already has a shipment in progress.", {
       shipment_id: live.id,
       provider: live.provider,
       status: live.status,
@@ -3199,7 +3520,9 @@ function postShipment(order, body) {
   }
 
   const id = state.nextShipmentId++;
-  const created = {
+  // `parcel`, not `created` — the module's `created()` envelope helper is what
+  // this returns through, and a local of the same name would shadow it.
+  const parcel = {
     id,
     order_id: order.id,
     provider: typeof body?.provider === "string" && body.provider !== "" ? body.provider : "manual",
@@ -3221,8 +3544,9 @@ function postShipment(order, body) {
     created_at: iso(0),
     updated_at: iso(0),
   };
-  state.shipments.set(order.id, [...shipmentsOf(order.id), created]);
-  return ok(created);
+  state.shipments.set(order.id, [...shipmentsOf(order.id), parcel]);
+  // **201**, measured 2026-08-25 on `POST /orders/4705/shipments`.
+  return created(parcel);
 }
 
 /** One row by id across every order's list. Parcels and payments both need it. */
@@ -3241,25 +3565,539 @@ function findById(map, id) {
  * A terminal parcel refuses, and **its 409 carries no `allowed` list** — an
  * order's carries one and a shipment's does not, which is the one place this
  * subject cannot follow the panel's usual "render what the API says is legal"
- * rule. `{from, to, is_live}` is what there is.
+ * rule.
+ *
+ * **Corrected 2026-08-25, and both halves were wrong.** This answered
+ * `"A cancelled shipment cannot be cancelled."` with `{from, to, is_live}`. The
+ * wire is `"This shipment has already finished."` with `{"status":"cancelled"}`
+ * — one key, the parcel's own status, and nothing about a destination. The
+ * `{from, to, is_live}` shape belongs to `PATCH /shipments/{id}`, which is one
+ * route away and answers a different question; copying it here gave the panel a
+ * `from`/`to` pair for a request that names no `to` at all.
+ *
+ * `ShipmentSheet.tsx:45-46` already quotes the measured sentence, so the screen
+ * and the harness disagreed and the harness was the stale one.
  */
 function cancelShipment(id) {
   const shipment = findById(state.shipments, id);
-  if (shipment === undefined) return notFound();
+  if (shipment === undefined) return shipmentNotFound();
   if (!shipment.is_live) {
-    return conflict(`A ${shipment.status} shipment cannot be cancelled.`, {
+    return conflict("This shipment has already finished.", { status: shipment.status });
+  }
+
+  return ok(writeShipment({ ...shipment, status: "cancelled", is_live: false, updated_at: iso(0) }));
+}
+
+/**
+ * A parcel's own 404, and it is **not** `notFound()`.
+ *
+ * `GET /shipments/999999` answers `404 not_found` with `"No shipment with that
+ * id."` — measured 2026-08-25 — where an unrouted path answers `rest_no_route`.
+ * The same distinction `/inventory/lookup` already makes, and `SkuLookup` reads
+ * the code by name to tell "no such row" from "the request went nowhere".
+ *
+ * The message is measured on the `GET`. The three writes below reuse it, which
+ * is not measured — nothing tried to cancel a parcel that does not exist.
+ */
+const shipmentNotFound = () => fail(404, "not_found", "No shipment with that id.");
+
+/** Put a rewritten parcel back under its order, which is how they are stored. */
+function writeShipment(next) {
+  state.shipments.set(
+    next.order_id,
+    shipmentsOf(next.order_id).map((row) => (row.id === next.id ? next : row)),
+  );
+  return next;
+}
+
+/**
+ * `GET /shipments`, and **what it refuses to do is the point of it.**
+ *
+ * Measured 2026-08-25, one parameter at a time against `?bogus_param=1`:
+ *
+ *   status     honoured, and refused by name outside its ten
+ *   provider   honoured and **not validated** — `?provider=zzz` is a 200 with 0
+ *              rows, so a typo is a silent empty list rather than a refusal
+ *   order_id   honoured
+ *
+ *   is_live    ACCEPTED AND IGNORED — 129 rows, identical to the bogus control,
+ *              on both `true` and `false`
+ *   orderby    ACCEPTED AND IGNORED, **and not even validated**: `?orderby=zzz`
+ *              is a 200
+ *   order      the same
+ *   search     the same — it is not a parameter of this route at all
+ *
+ * The four ignored ones are ignored *here* by nothing reading them, which is the
+ * only way to reproduce "accepted and ignored". **`orderby` must not be
+ * validated**, either: a 400 on `?orderby=zzz` would be the mock claiming the
+ * parameter reaches a validator, and a validator is the first evidence anyone
+ * would take for a sort existing. Eight fields × two directions returned a
+ * byte-identical id sequence, over a page carrying 100 distinct ids and 82
+ * distinct `created_at`, so there is nothing to tie on and nothing to sort by.
+ *
+ * `is_live` is the trap worth naming twice: it is a real field on every row, it
+ * reads exactly like a filter, and the one question an operator most wants to
+ * ask — *live parcels only* — is not a request this server can answer.
+ */
+function shipmentsListing(params) {
+  const status = params.get("status");
+  if (status !== null && !SHIPMENT_STATUSES.includes(status)) {
+    // `""` is a value and not an absence — the model this file's other
+    // collections were measured against — and it is not a member of this enum,
+    // so it is refused like any other non-member. Inferred from that model
+    // rather than measured on this route: the panel omits the parameter for
+    // "every status" and never sends an empty one.
+    return invalidParam("status", notOneOf("status", SHIPMENT_STATUSES));
+  }
+
+  const provider = params.get("provider");
+  const orderId = params.get("order_id");
+  const rows = allShipments().filter((row) => {
+    if (status !== null && row.status !== status) return false;
+    if (provider !== null && row.provider !== provider) return false;
+    if (orderId !== null && String(row.order_id) !== orderId) return false;
+    return true;
+  });
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/**
+ * `PATCH /shipments/{id}` — `status`, and **nothing else is dropped in silence.**
+ *
+ * This is where the shipment breaks the rule coupons and products share.
+ * Measured 2026-08-25:
+ *
+ *   {"zzz":1}                400  details.fields.zzz      "Unknown field."
+ *   {"provider":"acfake"}    400  details.fields.provider "Unknown field."
+ *   {"status":"zzz"}         400  details.fields.status   "Must be one of: …"
+ *
+ * A coupon or a product takes its own GET body back and drops the read-only keys
+ * without comment; sending a shipment's GET body back is a 400 naming nine
+ * fields. So `ShipmentSheet` sends `{status}` alone because the API requires it
+ * to, not out of caution — and a mock that dropped `provider` quietly here would
+ * have let a screen PATCH the whole row and watch it work.
+ *
+ * The refusal sentence is the **body-field** enum family — `"Must be one of: a,
+ * b, c."` — and not the query-parameter family `?status=zzz` answers one route
+ * away. Same vocabulary, same subject, two different sentences.
+ *
+ * **`{}` is a 400 asking for a status**, recorded in ADMIN_PANEL.md; the word
+ * `"Required."` is this file's, borrowed from the rules collection where it *is*
+ * measured, and the pairing is unmeasured. Unknown keys are reported alone when
+ * there are any, so `{"zzz":1}` answers exactly the one field the wire showed.
+ */
+function patchShipment(id, body) {
+  const shipment = findById(state.shipments, id);
+  if (shipment === undefined) return shipmentNotFound();
+
+  const fields = {};
+  for (const key of Object.keys(body ?? {})) {
+    if (key !== "status") fields[key] = "Unknown field.";
+  }
+  if (Object.keys(fields).length === 0) {
+    const status = body?.status;
+    if (status === undefined) fields.status = "Required.";
+    else if (typeof status !== "string" || !SHIPMENT_STATUSES.includes(status)) {
+      fields.status = oneOf(SHIPMENT_STATUSES);
+    }
+  }
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The shipment data is invalid.", fields);
+  }
+
+  const status = body.status;
+  /*
+   * A live parcel moves **anywhere, including backwards** — `in_transit` →
+   * `pending` answered 200 — and a finished one moves nowhere. There is no
+   * transition table on this subject, deliberately: a courier reports what it
+   * reports, sometimes late and out of order, and refusing a status to defend a
+   * diagram would put the shop's record at odds with the physical world.
+   *
+   * The 409's quotes are literal. Measured: `This shipment cannot move from
+   * "cancelled" to "in_transit".` — and `{from, to, is_live}` with **no
+   * `allowed` list**, which is the one refusal in this panel that cannot be
+   * rendered as "here is what is legal".
+   */
+  if (!shipment.is_live) {
+    return conflict(`This shipment cannot move from "${shipment.status}" to "${status}".`, {
       from: shipment.status,
-      to: "cancelled",
+      to: status,
       is_live: false,
     });
   }
 
-  const cancelled = { ...shipment, status: "cancelled", is_live: false, updated_at: iso(0) };
-  state.shipments.set(
-    shipment.order_id,
-    shipmentsOf(shipment.order_id).map((row) => (row.id === id ? cancelled : row)),
+  return ok(
+    writeShipment({
+      ...shipment,
+      status,
+      // Never stored twice: `is_live` is the negation of the terminal set and
+      // the server recomputes it on every write.
+      is_live: !isTerminalShipment(status),
+      updated_at: iso(0),
+    }),
   );
-  return ok(cancelled);
+}
+
+/**
+ * `POST /shipments/{id}/sync` — **a 200 on the parcel you would not sync and a
+ * refusal on the one you would.**
+ *
+ * On a terminal parcel it is a **200 returning the row unchanged**, measured
+ * 2026-08-25 on shipment 253: not a 409, because the terminal check
+ * short-circuits before the provider is ever asked. That is the only arm this
+ * shop can still exercise, since it holds no live parcel.
+ *
+ * On a *live* one it is a **409 `sync_unsupported`** — **measured 2026-08-25**
+ * on parcel 258, created against order 4586 for exactly this:
+ *
+ *     {"code":"sync_unsupported","message":"In-house delivery reports no status
+ *      of its own; update this shipment directly."}
+ *
+ * **So `sync` can never succeed on this shop.** `manual` is the only provider
+ * `/shipping/providers` returns, and a manual parcel is either live — refused —
+ * or finished, where the answer is a 200 that changes nothing. Both states are
+ * reachable in the fixture on purpose, because "the button did nothing" and
+ * "the button was refused" are different screens.
+ *
+ * **The sentence quotes the provider's own `label`**, not its slug: *In-house
+ * delivery* is what `/shipping/providers` calls `manual`. So it is built from
+ * that row rather than written out — a label that changed and a message that
+ * did not would be a mock disagreeing with its own provider list.
+ *
+ * The code settles a question this file had to reason about rather than read.
+ * `sync_unsupported` is outside the four DECISIONS.md lists
+ * (`invalid_request`, `not_found`, `conflict`, `unauthenticated`), and both are
+ * right: `ErrorNormalizer.php:31-32` rewrites `rest_invalid_param` and
+ * `rest_missing_callback_param` — WordPress's own **parameter** codes — and
+ * leaves a domain code raised by a controller alone. The vocabulary is the four
+ * a *parameter* refusal can carry; the wire as a whole is five.
+ */
+function syncShipment(id) {
+  const shipment = findById(state.shipments, id);
+  if (shipment === undefined) return shipmentNotFound();
+  if (isTerminalShipment(shipment.status)) return ok(shipment);
+
+  const label =
+    SHIPPING_PROVIDERS.find((entry) => entry.name === shipment.provider)?.label ??
+    shipment.provider;
+  return fail(
+    409,
+    "sync_unsupported",
+    `${label} reports no status of its own; update this shipment directly.`,
+  );
+}
+
+/* ------------------------------------------------------------- rule writes --- */
+
+/** The rules collection's own 404. Measured on the second `DELETE` of one id. */
+const ruleNotFound = () => fail(404, "not_found", "No shipping rule with that id.");
+
+/** A decimal string, which is what an amount is and stays. `"abc"` is refused. */
+const AMOUNT = /^\d+(\.\d+)?$/;
+
+/**
+ * What a rule's `provider` may be, off the same array `/shipping/providers`
+ * serves. One source, so a refusal naming `available` and the picker offering
+ * the choices can never drift apart.
+ */
+const RULE_PROVIDERS = SHIPPING_PROVIDERS.map((entry) => entry.name);
+
+const readAmount = (value) => {
+  const raw = typeof value === "number" ? String(value) : value;
+  return typeof raw === "string" && AMOUNT.test(raw)
+    ? // Normalised to the two decimals every measured amount carries. The panel
+      // sends what a person typed, and `"999"` reading back as `"999"` where the
+      // shop stores `"999.00"` would be a difference a form could see.
+      { value: Number.parseFloat(raw).toFixed(2) }
+    : { error: "Must be an amount." };
+};
+
+/**
+ * The eight writable fields, and the six sentences.
+ *
+ * **Four of these messages are measured and two are not.** `"Required."`,
+ * `"Must be an amount."`, `"Unknown field."` and the `delivery_type` enum are
+ * verbatim from the wire, 2026-08-25. `"Must be a whole number."` and
+ * `"Must be true or false."` were written here: nothing sent a bad `wilaya_id`
+ * or a bad `is_active`, so the *refusal* is inferred from the fields being typed
+ * at all. They are here rather than absent because a body that stored `NaN`
+ * would answer a row the panel's own schema rejects — a mock producing data the
+ * real boundary would refuse is the failure this suite exists to prevent — but
+ * a future audit should take the two measurements rather than trust these.
+ */
+const WHOLE_NUMBER = "Must be a whole number.";
+const readWholeNumber = (value, { nullable = false } = {}) => {
+  if (nullable && value === null) return { value: null };
+  return Number.isInteger(value) && value >= 0 ? { value } : { error: WHOLE_NUMBER };
+};
+
+const RULE_FIELDS = {
+  amount: readAmount,
+  /*
+   * **Writable, and validated against the registered provider list** — measured
+   * 2026-08-25 on both verbs:
+   *
+   *     PATCH {"provider":"acfake"}
+   *     → 400 {"fields":{"provider":"Unknown provider \"acfake\"."},
+   *            "available":["manual"]}
+   *
+   * `""` is accepted on both and stores `""`; a POST that omits the key stores
+   * `""` too. A POST that sends `"manual"` stores `"manual"`, which is the whole
+   * of why the shop's three seeded rules read `manual` while the round-trip rule
+   * 179 read `""`.
+   *
+   * **A rule's provider and a shipment's are two vocabularies under one word.**
+   * 42 of the 129 parcels carry `acfake` and this route refuses it, because
+   * `acfake` is registered at runtime by the backend's webhook suite and is not
+   * a registered *shipping* provider. So they must not share an enum here: a
+   * mock that validated shipments against this list would refuse a third of the
+   * collection, and one that let rules through would let a screen save a tariff
+   * the shop rejects.
+   *
+   * `available` comes off `SHIPPING_PROVIDERS` — the same array
+   * `GET /shipping/providers` serves — so the refusal and the picker cannot
+   * disagree about what is registered.
+   */
+  provider: (value) => {
+    if (typeof value !== "string") return { error: "Must be a string." };
+    if (value === "" || RULE_PROVIDERS.includes(value)) return { value };
+    return {
+      error: unknownOf("provider", value),
+      /*
+       * **A sibling of `fields`, not a member of it** — and nothing in the
+       * panel reads it. Every reader in `lib/api/` looks at `details.fields`
+       * and `details.params` and stops, so this key is invisible today. It is
+       * the API naming the legal set, which is the service a 409's `allowed`
+       * array performs for an order transition and which
+       * `lib/shipment-status.ts` records the *shipment* 409 as lacking. Written
+       * out here so a future screen has it and a future audit does not have to
+       * rediscover that it was ever sent.
+       */
+      details: { available: RULE_PROVIDERS },
+    };
+  },
+  free_over: (value) => (value === null ? { value: null } : readAmount(value)),
+  wilaya_id: (value) => readWholeNumber(value),
+  commune_id: (value) => readWholeNumber(value),
+  estimated_days: (value) => readWholeNumber(value, { nullable: true }),
+  delivery_type: (value) =>
+    typeof value === "string" && (value === "" || DELIVERY_TYPES.includes(value))
+      ? { value }
+      : { error: oneOf(DELIVERY_TYPES, "empty for any") },
+  is_active: (value) =>
+    typeof value === "boolean" ? { value } : { error: "Must be true or false." },
+};
+
+/**
+ * The four keys a write carries and the server throws away **without saying so**.
+ *
+ * Measured: `PATCH` the whole `GET` body back and it is a **200** rather than a
+ * 400, so the keys the server owns are dropped rather than refused. This
+ * collection follows the coupons/products rule — only a genuinely unknown key is
+ * a 400 — and `PATCH /shipments/{id}`, one route away on the same subject, does
+ * not.
+ *
+ * **`provider` was on this list and has been removed** — see `RULE_FIELDS`. It
+ * was put here by reading "the whole GET body PATCHes back and `provider` is
+ * unchanged" as *dropped*, when a value written back identically is unchanged
+ * either way. The two are indistinguishable by that request, and the seed script
+ * settles it: the server stores what it is sent.
+ */
+const RULE_DROPPED = ["id", "specificity", "created_at", "updated_at"];
+
+function readRuleWrites(body) {
+  const fields = {};
+  const writes = {};
+  // Whatever a reader wants beside `fields` rather than inside it. Only the
+  // provider refusal uses this today, and it is the reason this is a third
+  // return value rather than a flag.
+  let siblings = {};
+  for (const [key, value] of Object.entries(body ?? {})) {
+    if (RULE_DROPPED.includes(key)) continue;
+    const reader = RULE_FIELDS[key];
+    if (reader === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const read = reader(value);
+    if (read.error !== undefined) {
+      fields[key] = read.error;
+      if (read.details !== undefined) siblings = { ...siblings, ...read.details };
+    } else writes[key] = read.value;
+  }
+  return { fields, writes, siblings };
+}
+
+/**
+ * The rules collection's field refusal. `fields` first, then whatever sits
+ * beside it — the measured key order.
+ */
+const ruleInvalid = (fields, siblings) =>
+  fail(400, "invalid_request", "The shipping rule is invalid.", { fields, ...siblings });
+
+/**
+ * `POST /shipping/rules` — **`amount` is the only required field.**
+ *
+ * Everything else is server-defaulted, measured by round-trip: a body of
+ * `{"amount":"999.00","wilaya_id":31,"delivery_type":"desk","estimated_days":3}`
+ * came back as a full rule, and `{"wilaya_id":16}` came back 400 with
+ * `details.fields.amount` = `"Required."`.
+ *
+ * The defaults for the keys nobody sent are **not** measured — no POST omitted
+ * `delivery_type` — and `"home"` is used because all three rules in the shop
+ * carry it. Every bad field is reported at once, the way `POST
+ * /orders/{id}/shipments` names both halves of a destination; which of two
+ * problems the API would report first was not measured.
+ */
+function postRule(body) {
+  const { fields, writes, siblings } = readRuleWrites(body);
+  if (fields.amount === undefined && writes.amount === undefined) {
+    fields.amount = "Required.";
+  }
+  if (Object.keys(fields).length > 0) return ruleInvalid(fields, siblings);
+
+  const row = {
+    id: state.nextRuleId++,
+    provider: "",
+    wilaya_id: 0,
+    commune_id: 0,
+    delivery_type: "home",
+    amount: "0.00",
+    free_over: null,
+    estimated_days: null,
+    is_active: true,
+    specificity: 0,
+    // The fixture epoch, because there is no clock in this file. Every rule
+    // created in a given process carries the same stamp, which is the price of a
+    // byte-stable screenshot.
+    created_at: iso(0),
+    updated_at: iso(0),
+    ...writes,
+  };
+  row.specificity = ruleSpecificity(row);
+  state.rules.set(row.id, row);
+  // **201**, not 200 — measured 2026-08-25. The body is byte-identical either
+  // way, which is how this hid from a diff that compared bodies.
+  return created(row);
+}
+
+/**
+ * `PATCH /shipping/rules/{id}` — partial, and its empty body is a **products**
+ * ending rather than a coupon's.
+ *
+ * Measured: `{"amount":"111.00"}` alone is a 200; the whole GET body is a 200;
+ * `{"zzz":1}` is a 400 naming the field; and `{}` is a 400 `"No supported fields
+ * were provided."` **with no `details` key at all** — not the empty-object
+ * `details` a careless mock emits, and not the 200 no-op a coupon answers.
+ *
+ * The order matters and is measured both ways round: a body of nothing but
+ * unknown keys is the *field* refusal, and a body with nothing writable left in
+ * it is the bare one.
+ */
+function patchRule(id, body) {
+  const current = state.rules.get(id);
+  if (current === undefined) return ruleNotFound();
+
+  const { fields, writes, siblings } = readRuleWrites(body);
+  if (Object.keys(fields).length > 0) return ruleInvalid(fields, siblings);
+  if (Object.keys(writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const next = { ...current, ...writes, updated_at: iso(0) };
+  next.specificity = ruleSpecificity(next);
+  state.rules.set(id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /shipping/rules/{id}` — `{"deleted":true,"id":179}`, and the second
+ * one is a 404. A rule has no trash: unlike a coupon there is no soft state to
+ * come back from, so the row is gone and the id never answers again.
+ */
+function deleteRule(id) {
+  if (!state.rules.has(id)) return ruleNotFound();
+  state.rules.delete(id);
+  return ok({ deleted: true, id });
+}
+
+/**
+ * `GET /shipping/rates` — the server's own resolution, and **the second shape of
+ * `details.params` in this file.**
+ *
+ * With no parameters it answers 400 `invalid_request` `"Missing parameter(s):
+ * wilaya_id, commune_id"` and `details.params` is a **bare array of names** —
+ * `["wilaya_id","commune_id"]` — where `/shipments?status=zzz` puts an *object
+ * of messages* under the same key. Both shapes are reproduced and neither is
+ * tidied into the other: `Object.values` of an array returns its elements, so a
+ * reader written for one renders the bare word `wilaya_id` at a person as though
+ * it were an explanation. `lib/api/browser.ts:81-95` exists for exactly that.
+ *
+ * The resolution itself: **the narrowest active match wins and rules are never
+ * added together.** One rate comes back, not three, even where all three rules
+ * cover the destination — measured 350 / 500 / 800 across the three arms.
+ *
+ * `provider` on the rate is the winning **rule's** provider, falling back to the
+ * configured default for a rule that names none. Measured `"manual"`, which is
+ * what rule 164 carries — the two were indistinguishable while this file wrongly
+ * seeded `""`, and reading it off the rule is the arm that does not need a
+ * coincidence. `label` is the display string `"Delivery"` and is **not** the
+ * credential a shipment's `metadata.label` is. `free_shipping` is `false` and
+ * can be nothing
+ * else here — `free_over` is a threshold against an order total and this route
+ * is never given one.
+ *
+ * With no matching rule it is a **200 with `[]`**, not an error — which is what
+ * the whole shop answered before `seed-shipping-rules.mjs` ran, and is reachable
+ * again here by deleting the national rule.
+ */
+function shippingRates(params) {
+  const missing = ["wilaya_id", "commune_id"].filter((name) => params.get(name) === null);
+  if (missing.length > 0) {
+    return fail(400, "invalid_request", `Missing parameter(s): ${missing.join(", ")}`, {
+      params: missing,
+    });
+  }
+
+  const read = {};
+  for (const name of ["wilaya_id", "commune_id"]) {
+    const raw = params.get(name);
+    // Inferred, not measured: nothing sent a non-numeric destination. The type
+    // family's sentence is used because it is the one this API writes for a
+    // parameter that is present and of the wrong shape.
+    if (!INTEGER.test(raw)) return invalidParam(name, `${name} is not of type integer.`);
+    read[name] = Number.parseInt(raw, 10);
+  }
+
+  const matches = [...state.rules.values()]
+    .filter(
+      (rule) =>
+        rule.is_active &&
+        (rule.commune_id === 0 || rule.commune_id === read.commune_id) &&
+        (rule.wilaya_id === 0 || rule.wilaya_id === read.wilaya_id),
+    )
+    .sort((a, b) => b.specificity - a.specificity || a.id - b.id);
+
+  if (matches.length === 0) return list([]);
+
+  const winner = matches[0];
+  return list([
+    {
+      provider:
+        winner.provider === ""
+          ? SHIPPING_PROVIDERS.find((entry) => entry.is_default).name
+          : winner.provider,
+      service: winner.delivery_type === "" ? "home" : winner.delivery_type,
+      label: "Delivery",
+      amount: winner.amount,
+      currency: "DZD",
+      estimated_days: winner.estimated_days,
+      source: "rules",
+      free_shipping: false,
+    },
+  ]);
 }
 
 /**
@@ -3484,6 +4322,58 @@ const oxford = (values) =>
  * in `paginate` and must keep going without one.
  */
 const notOneOf = (name, values) => `${name} is not one of ${oxford(values)}.`;
+
+/**
+ * **The third family, found on shipping 2026-08-25 and written down here because
+ * `notOneOf` covers the first only.**
+ *
+ * A *query parameter* refuses in WordPress's own words and names itself; a *body
+ * field* refuses in the API's, names nothing, and punctuates differently:
+ *
+ *   1. query-parameter enum  "status is not one of a, b, and c."   Oxford comma
+ *   2. body-field enum       "Must be one of: a, b, c."            colon, no "and"
+ *   3. body-field enum with  "Must be one of: home, desk, or empty for any."
+ *      an escape hatch
+ *
+ * The third is the second plus a trailing alternative that is not a value — the
+ * empty string, which is a real `delivery_type` meaning *any* and cannot be
+ * printed as a list item. Measured verbatim on `PATCH /shipping/rules/{id}
+ * {"delivery_type":"zzz"}`.
+ *
+ * One helper for both, so the next body enum added to this file cannot drift the
+ * way every enum in it once drifted its full stop. Every site that wrote family
+ * 2 inline now calls this and emits a byte-identical sentence: `patchOrder`,
+ * `postCodAttempt`, and the product write validator `mustBeOneOf()`, which is
+ * this sentence wrapped in a null-or-message reader.
+ *
+ * Named against `notOneOf` on purpose. The two look alike because they *are* the
+ * same idea; which one a route uses is decided by where the value arrived — the
+ * query string or the body — and never by taste.
+ */
+const oneOf = (values, escape) =>
+  `Must be one of: ${values.join(", ")}${escape === undefined ? "" : `, or ${escape}`}.`;
+
+/**
+ * **The fourth family, and it is the first that does not enumerate anything.**
+ *
+ * Measured 2026-08-25 on `PATCH /shipping/rules/{id} {"provider":"acfake"}`:
+ *
+ *     Unknown provider "acfake".
+ *
+ * Families 1-3 name the legal set inside the sentence and leave the offending
+ * value out; this one quotes the **offending value** back and names the legal
+ * set nowhere — it arrives beside the sentence instead, as `details.available`.
+ * So the two halves that the other families fuse into one string are split
+ * across two keys here, and a reader that only renders the sentence loses the
+ * half that says what to do about it.
+ *
+ * The quoting is the same notation the shipment 409 uses for its statuses
+ * (`This shipment cannot move from "cancelled" to "in_transit".`), which is why
+ * this is a family rather than a one-off: a value quoted back is how this API
+ * writes *the thing you sent*, and an unquoted list is how it writes *what is
+ * allowed*.
+ */
+const unknownOf = (noun, value) => `Unknown ${noun} "${value}".`;
 
 /** `?category=` and `?tag=` take term **ids**; `?category=tapis` is a 400. */
 const ID_LIST = "^$|^[0-9]+(,[0-9]+)*$";
@@ -4060,9 +4950,7 @@ const PRODUCT_READ_ONLY = [
 const mustBeText = (value) => (typeof value === "string" ? null : "Must be a string.");
 const mustBeFlag = (value) => (typeof value === "boolean" ? null : "Must be true or false.");
 const mustBeOneOf = (values) => (value) =>
-  typeof value === "string" && values.includes(value)
-    ? null
-    : `Must be one of: ${values.join(", ")}.`;
+  typeof value === "string" && values.includes(value) ? null : oneOf(values);
 
 /** Money stays a decimal string, so `1200` — a number — is as wrong as `"abc"`. */
 const mustBeMoney = (value) => {
@@ -4622,7 +5510,10 @@ function filterInventory(rows, params) {
 function inventoryLookup(params) {
   const sku = (params.get("sku") ?? "").trim();
   if (sku === "") {
-    return fail(400, "rest_missing_callback_param", "Missing parameter(s): sku", {
+    // `invalid_request`, corrected 2026-08-25 — see `postCodAttempt` for why
+    // this and it were the two the earlier code sweep missed. The **array**
+    // shape under `params` is measured and stays exactly as it is.
+    return fail(400, "invalid_request", "Missing parameter(s): sku", {
       params: ["sku"],
     });
   }
@@ -5901,13 +6792,16 @@ function createCoupon(body) {
   if (clash !== null) return clash;
 
   const id = state.nextCouponId++;
-  const created = applyCouponWrites(blankCoupon(id), parsed.writes);
-  state.coupons.set(id, created);
+  // `coupon`, not `created` — the module's `created()` envelope helper is what
+  // this returns through, and a local of the same name would shadow it.
+  const coupon = applyCouponWrites(blankCoupon(id), parsed.writes);
+  state.coupons.set(id, coupon);
   state.createdCoupons = [id, ...state.createdCoupons];
 
   // `restrictions` is emitted by POST as well as by GET — which is exactly what
   // makes it the round-trip trap it is.
-  return ok(withRestrictions(created));
+  // **201**, measured 2026-08-25 on `POST /coupons`.
+  return created(withRestrictions(coupon));
 }
 
 function patchCoupon(current, body) {
@@ -5994,7 +6888,18 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
    * silently reads is worse than a 404, because a screen would look like it had
    * saved.
    */
-  const WRITES = ["orders", "shipments", "payments", "products", "inventory", "coupons"];
+  const WRITES = [
+    "orders",
+    "shipments",
+    "payments",
+    "products",
+    "inventory",
+    "coupons",
+    // `/shipping/rules` is the only writable thing under this collection —
+    // `providers` and `rates` are reads and stay reads, and the case below
+    // refuses a verb on either rather than letting this list decide it.
+    "shipping",
+  ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
   if (segments.length === 2 && collection === "auth" && second === "me") {
@@ -6106,11 +7011,44 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     /*
-     * `/shipments/{id}/cancel` and `/payments/{id}/verify`, and **nothing else
-     * on either collection**. There is no `GET /shipments` and no `GET
-     * /payments` here: a parcel and a transaction are reached through the order
-     * they belong to, which is the only way the detail screen reaches them, and
-     * an endpoint nobody calls must stay unreachable.
+     * The standalone parcels collection: the list, the detail, and the three
+     * writes on one parcel.
+     *
+     * **`GET /shipments/{id}` returns the list row exactly** — measured, an
+     * identical key set with no extra block — which is what makes a peek drawer
+     * free on this collection where it costs a request on customers.
+     *
+     * **There is still no `POST /shipments`.** A parcel is created against an
+     * order, lib/api/allowlist.ts allows `POST /orders/{id}/shipments` and this
+     * route for nothing but reads and the three writes below, and an endpoint
+     * nobody calls must stay unreachable.
+     */
+    case "shipments": {
+      if (second === undefined) {
+        return method === "GET" ? shipmentsListing(searchParams) : notFound();
+      }
+      // The allowlist's pattern is `\d+`, so a non-numeric segment is a path
+      // nobody wrote — `rest_no_route`, not this collection's own 404.
+      const id = numericId(second);
+      if (id === null || segments.length > 3) return notFound();
+
+      if (segments.length === 3) {
+        if (method !== "POST") return notFound();
+        if (segments[2] === "cancel") return cancelShipment(id);
+        if (segments[2] === "sync") return syncShipment(id);
+        return notFound();
+      }
+
+      if (method === "PATCH") return patchShipment(id, body);
+      if (method !== "GET") return notFound();
+      const row = findById(state.shipments, id);
+      return row === undefined ? shipmentNotFound() : ok(row);
+    }
+
+    /*
+     * `/payments/{id}/verify` and **nothing else on this collection**. There is
+     * no `GET /payments` here: a transaction is reached through the order it
+     * belongs to, which is the only way the detail screen reaches it.
      *
      * `POST /payments` is absent for a stronger reason than that, and it is the
      * one write on this subject the API offers: it opens a checkout at the
@@ -6118,11 +7056,6 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * lib/api/allowlist.ts:164-178 refuses it deliberately, so it must 404 here
      * too — a fixture that answered would be an invitation to build the screen.
      */
-    case "shipments":
-      return method === "POST" && segments.length === 3 && segments[2] === "cancel"
-        ? cancelShipment(numericId(second))
-        : notFound();
-
     case "payments":
       if (method === "GET" && segments.length === 2 && second === "methods") {
         return list(PAYMENT_METHODS);
@@ -6131,10 +7064,62 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         ? verifyPayment(numericId(second))
         : notFound();
 
-    case "shipping":
-      return segments.length === 2 && second === "providers"
-        ? list(SHIPPING_PROVIDERS)
-        : notFound();
+    /*
+     * Three routes: the provider list, the tariff, and the resolver.
+     *
+     * **`GET /shipping/rules/{id}` is served, and leaving it a 404 was wrong.**
+     * It was left out on the grounds that nothing calls it and nobody had
+     * measured it; measured 2026-08-25, it is a real route returning the list
+     * row exactly — all twelve keys, same order — like `GET /shipments/{id}`.
+     *
+     * The reasoning was wrong in both directions at once. An unimplemented route
+     * here is not neutral: it answers `rest_no_route`, a code
+     * `ErrorNormalizer` never emits, so a screen branching on this 404 would be
+     * built against a code the API cannot send — the same family as the fourteen
+     * in DECISIONS.md and the two just fixed in `postCodAttempt` and
+     * `inventoryLookup`. And it is the *less capable* direction, which is the
+     * one the coupons branch was burned by: a 404 where the shop answers a rule
+     * grows an error path production never takes.
+     *
+     * **`GET /analytics/shipping` is the one allowlisted route on this subject
+     * that still answers `rest_no_route`, and it stays that way.** It belongs to
+     * the `analytics` schema module, which the unit suite lists `UNCOVERED` with
+     * a reason — a declared gap owned by the analytics branch, not an oversight
+     * on this one. Written here so the next person diffing this surface finds
+     * the answer instead of re-deriving it.
+     *
+     * The rules list is paginated through the shared `paginate()`, which is what
+     * makes it refuse the four paging edges every other collection refuses.
+     * Whether the real route pages at all is **unmeasured** — it holds three
+     * rows and the panel sends no parameters, so the two behaviours are
+     * indistinguishable from the panel's side.
+     */
+    case "shipping": {
+      if (segments.length === 2) {
+        if (method === "GET" && second === "providers") return list(SHIPPING_PROVIDERS);
+        if (method === "GET" && second === "rates") return shippingRates(searchParams);
+        if (second === "rules") {
+          if (method === "POST") return postRule(body);
+          if (method !== "GET") return notFound();
+          const rows = [...state.rules.values()].sort((a, b) => b.id - a.id);
+          const page = paginate(rows, searchParams);
+          return page.error ?? ok(page.rows, page.meta);
+        }
+        return notFound();
+      }
+
+      if (segments.length !== 3 || second !== "rules") return notFound();
+      const ruleId = numericId(segments[2]);
+      if (ruleId === null) return notFound();
+      if (method === "PATCH") return patchRule(ruleId, body);
+      if (method === "DELETE") return deleteRule(ruleId);
+      if (method !== "GET") return notFound();
+      // The same object the list carries and the same 404 the second `DELETE`
+      // answers — shared rather than copied, so the sentence cannot drift into
+      // two versions of itself.
+      const rule = state.rules.get(ruleId);
+      return rule === undefined ? ruleNotFound() : ok(rule);
+    }
 
     case "locations": {
       if (second !== "wilayas") return notFound();

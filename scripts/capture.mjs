@@ -177,6 +177,27 @@ const DEFAULT_ROUTES = [
   "/coupons",
   "/coupons/303",
   "/coupons/new",
+  /*
+   * **Shipping is one route and two screens**, the arrangement inventory
+   * already uses. `/shipping` is the tariff — `view` defaults to `rules` — and
+   * `?view=parcels` is the parcels table, which shares nothing with it but the
+   * header: different data, different filters, its own paging. Capturing only
+   * the default would leave half the section unphotographed, and it is the half
+   * with the 340px overflow risk in it (a courier's tracking number is the
+   * unbroken string on this screen).
+   *
+   * **There is no `/shipping/rules` route** — the panel holds
+   * `app/[locale]/(panel)/shipping/page.tsx` and nothing under it — so a capture
+   * of that path would photograph the not-found page under a directory named
+   * after a screen, which is the quietest possible way for a harness to lie.
+   *
+   * The parcel sheet's own states — the status picker, the cancel confirm and
+   * the sync refusal — are overlays on this route rather than routes, so they
+   * are not capturable here. 7014 is the only live parcel in the fixture and is
+   * the only row that offers any of the three.
+   */
+  "/shipping",
+  "/shipping?view=parcels",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
@@ -275,7 +296,15 @@ async function waitForPanel(log) {
 
 /* --------------------------------------------------------------- captures --- */
 
-const slugOf = (route) => route.replace(/^\//, "").replace(/\//g, "-") || "root";
+/**
+ * A route's directory name.
+ *
+ * Query separators fold to `-` along with the path ones, because a route can
+ * carry state that makes it a different *screen* rather than a different page —
+ * `/shipping?view=parcels` is the first — and `?`/`=`/`&` in a directory name is
+ * legal on this filesystem and on almost no other.
+ */
+const slugOf = (route) => route.replace(/^\//, "").replace(/[/?&=]/g, "-") || "root";
 
 /**
  * One capture: one route at one width, theme and locale.

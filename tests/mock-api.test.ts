@@ -36,7 +36,17 @@ import {
   shipment as shipmentSchema,
   shipments as shipmentsSchema,
   shippingProviders,
+  shippingRate as shippingRateSchema,
+  shippingRates as shippingRatesSchema,
+  shippingRule as shippingRuleSchema,
+  shippingRules as shippingRulesSchema,
 } from "@/lib/api/schemas/shipping";
+import {
+  DELIVERY_TYPES,
+  SHIPMENT_STATUSES,
+  isTerminalShipmentStatus,
+} from "@/lib/shipment-status";
+import { applicableRules, byNarrowestFirst, ruleScope, stripLabelUrls } from "@/lib/shipping";
 import {
   paymentMethods,
   payments as paymentsSchema,
@@ -375,6 +385,886 @@ describe("the detail's reference lists", () => {
     ).toHaveLength(2);
     // And a wilaya that does not exist is a 404 rather than an empty list.
     expect(get("/locations/wilayas/999/communes").status).toBe(404);
+
+    /*
+     * **483 and 484 exist because the rules resolver cannot be exercised
+     * without them.** The generator hands out 231 ids for 58 wilayas where the
+     * real table runs to 1 541, so the measured commune rule — pinned to
+     * commune 484 — sat on an id no picker could ever select, and *commune
+     * beats wilaya*, the one thing the rules table exists to display, was
+     * unreachable in the harness while working in the shop.
+     */
+    expect(data.map((row) => row.id)).toEqual(expect.arrayContaining([483, 484]));
+  });
+});
+
+/* ------------------------------------------------------------------ shipping --- */
+
+/**
+ * The shipping section, which is the first collection whose harness had to be
+ * built in **both** directions at once: the mock must not offer a sort the API
+ * does not implement, and it must not refuse a body the API accepts.
+ *
+ * Everything below is parsed with the panel's own schema through the panel's own
+ * `unwrap()`, and every refusal is checked for its **code** as well as its
+ * sentence. DECISIONS.md records why: fourteen parameter refusals once carried
+ * `rest_invalid_param`, a code no client can receive, and it survived three
+ * readings of the file because every assertion compared the sentence and none
+ * compared the code.
+ */
+const WIRE_CODES = ["invalid_request", "not_found", "conflict", "unauthenticated"];
+
+/** A refusal, checked for status and code together. Neither alone is enough. */
+function refusedWith(response: MockResponse, status: number, code: string): ApiError {
+  const error = apiError(response);
+  expect(error.status).toBe(status);
+  expect(error.code).toBe(code);
+  return error;
+}
+
+describe("GET /shipping/rules", () => {
+  it("serves the three measured rules, specificity and all", () => {
+    const { data, meta } = parseList(shippingRulesSchema, get("/shipping/rules"));
+    expect(meta.total).toBe(3);
+
+    // The shop's own tariff, measured 2026-08-25. Written out rather than
+    // spot-checked: a rule whose amount drifts is a screen showing a price the
+    // shop does not charge, and every field here is one a cell renders.
+    expect(data).toEqual([
+      expect.objectContaining({
+        id: 164,
+        wilaya_id: 16,
+        commune_id: 484,
+        amount: "350.00",
+        free_over: null,
+        estimated_days: 1,
+        is_active: true,
+        specificity: 15,
+      }),
+      expect.objectContaining({
+        id: 163,
+        wilaya_id: 16,
+        commune_id: 0,
+        amount: "500.00",
+        free_over: "10000.00",
+        estimated_days: 2,
+        specificity: 7,
+      }),
+      expect.objectContaining({
+        id: 162,
+        wilaya_id: 0,
+        commune_id: 0,
+        amount: "800.00",
+        free_over: null,
+        estimated_days: 5,
+        specificity: 3,
+      }),
+    ]);
+
+    /*
+     * **`provider` is `"manual"` on every one**, corrected 2026-08-25 from the
+     * measured `GET /shipping/rules/164`. This asserted `""` — read out of "a
+     * POST with no provider stores the empty string" plus "the whole GET body
+     * PATCHes back with provider dropped", neither of which says what a rule
+     * created *with* a provider holds. `seed-shipping-rules.mjs:77,88,99` sends
+     * `"manual"` on all three, so the server stores what it is given.
+     */
+    expect(data.every((rule) => rule.provider === "manual")).toBe(true);
+
+    // The panel's own three scopes, each with a row to render.
+    expect(data.map(ruleScope)).toEqual(["commune", "wilaya", "national"]);
+    // And the server's ranking already agrees with the panel's sort, so the
+    // table showing its own resolution is showing the server's.
+    expect(byNarrowestFirst(data).map((rule) => rule.id)).toEqual([164, 163, 162]);
+  });
+
+  /**
+   * **The detail, and the 404 that was the real defect.**
+   *
+   * This route was left unimplemented on the grounds that nothing calls it and
+   * nobody had measured it. Measured 2026-08-25: it is real, and it returns the
+   * list row exactly. An unimplemented route is not a neutral gap — it answers
+   * `rest_no_route`, a code `ErrorNormalizer` never emits, so a screen
+   * branching on this 404 would have been written against a code the API cannot
+   * send; and it is the *less capable* direction, which grows an error path
+   * production never takes.
+   */
+  it("serves a rule detail whose key set is the list row exactly", () => {
+    const row = parseList(shippingRulesSchema, get("/shipping/rules")).data[0];
+    const { data, meta } = parse(shippingRuleSchema, get(`/shipping/rules/${row.id}`));
+    expect(meta).toBeNull();
+    expect(data).toEqual(row);
+    expect(Object.keys(data)).toEqual(Object.keys(row));
+    expect(Object.keys(data)).toHaveLength(12);
+
+    // The collection's own 404, shared with the second `DELETE` rather than
+    // copied — and the code compared, not only the sentence.
+    const error = refusedWith(get("/shipping/rules/999999"), 404, "not_found");
+    expect(error.apiMessage).toBe("No shipping rule with that id.");
+    expect(error.details).toEqual({});
+    expect(error.code).not.toBe("rest_no_route");
+    // A deleted rule answers the same way, which is what "shared" has to mean.
+    write("DELETE", `/shipping/rules/${row.id}`);
+    expect(apiError(get(`/shipping/rules/${row.id}`)).apiMessage).toBe(
+      "No shipping rule with that id.",
+    );
+    // A non-numeric segment is still a path nobody wrote.
+    expect(apiError(get("/shipping/rules/abc")).code).toBe("rest_no_route");
+  });
+
+  it("refuses the paging edges every other collection refuses", () => {
+    // Shared `paginate()`, which is what makes the pickers refuse these too.
+    expect(refusedWith(get("/shipping/rules", "per_page=0"), 400, "invalid_request").params)
+      .toEqual({ per_page: "per_page must be between 1 (inclusive) and 100 (inclusive)" });
+    expect(refusedWith(get("/shipping/rules", "page=abc"), 400, "invalid_request").params)
+      .toEqual({ page: "page is not of type integer." });
+  });
+});
+
+/**
+ * The rule writes, and the whole measured refusal table with them.
+ *
+ * This collection follows the **coupons/products** read-only rule — a key the
+ * server owns is dropped in silence and only a genuinely unknown key is a 400 —
+ * while `PATCH /shipments/{id}`, one route away on the same subject, rejects
+ * every key it does not own. Two rules, one section, and a screen built to the
+ * wrong one saves nothing and says it saved.
+ */
+describe("the shipping rule writes", () => {
+  const created = () =>
+    parse(
+      shippingRuleSchema,
+      write("POST", "/shipping/rules", {
+        amount: "999.00",
+        wilaya_id: 31,
+        delivery_type: "desk",
+        estimated_days: 3,
+      }),
+    ).data;
+
+  /**
+   * **A create answers 201, and the status is the third thing that drifts.**
+   *
+   * Measured 2026-08-25; this file answered 200 with a byte-identical body, so
+   * a request-for-request diff of envelopes and sentences could not see it —
+   * the same blind spot that hid `rest_invalid_param` behind fourteen
+   * assertions that compared only messages. `unwrap()` accepts all of 200-299,
+   * so no screen can tell the two apart, which is the argument for pinning it
+   * here rather than against.
+   */
+  it("answers a create with 201, not 200", () => {
+    expect(write("POST", "/shipping/rules", { amount: "1.00", provider: "" }).status).toBe(201);
+    // The bare body too — the second case that was measured.
+    expect(write("POST", "/shipping/rules", { amount: "2.00" }).status).toBe(201);
+    // A refusal is still a refusal, and a PATCH is still a 200.
+    expect(write("POST", "/shipping/rules", {}).status).toBe(400);
+    expect(write("PATCH", "/shipping/rules/164", { amount: "3.00" }).status).toBe(200);
+  });
+
+  /**
+   * **Every create in the file, and the one that is still a question.**
+   *
+   * Three are measured — `/shipping/rules`, `/coupons` and
+   * `/orders/{id}/shipments`, all 201 on 2026-08-25 — and they were moved one
+   * at a time rather than swept, because one route's behaviour is not a pattern
+   * on an API this file exists to distrust. Three agreeing is what settled it.
+   *
+   * `POST /orders/{id}/cod/attempts` stays 200 and stays **unmeasured because
+   * provoking it is irreversible, not because it is unreachable.** A coupon can
+   * be force-deleted and a parcel cancelled, so both were probed and cleaned up;
+   * a recorded delivery call cannot be un-recorded. The distinction matters to
+   * whoever picks this up: the measurement is available, it just costs an
+   * attempt on a real order.
+   */
+  it("answers all three measured creates with 201, and pins the fourth at 200", () => {
+    expect(
+      write("POST", "/coupons", {
+        code: "harness-201",
+        discount_type: "fixed_cart",
+        amount: "5.00",
+      }).status,
+    ).toBe(201);
+    expect(
+      write("POST", "/orders/1007/shipments", { wilaya_id: 16, commune_id: 484 }).status,
+    ).toBe(201);
+
+    // Unmeasured, and 200 here is what the file answers rather than what the
+    // shop was seen to answer.
+    expect(write("POST", "/orders/1007/cod/attempts", { outcome: "confirmed" }).status).toBe(200);
+  });
+
+  it("creates a rule whose specificity is computed, never accepted", () => {
+    const rule = created();
+    expect(rule.id).toBe(179);
+    expect(rule.amount).toBe("999.00");
+    // Measured: a wilaya rule at `desk` ranks 6, where the same scope at `home`
+    // ranks 7. The client never sends this and cannot.
+    expect(rule.specificity).toBe(6);
+    // With no provider on the body the server stores the empty string.
+    expect(rule.provider).toBe("");
+
+    // A sent `specificity` is dropped rather than honoured — the one assertion
+    // that proves the number is the server's.
+    const forced = parse(
+      shippingRuleSchema,
+      write("PATCH", `/shipping/rules/${rule.id}`, { specificity: 99, amount: "999.00" }),
+    ).data;
+    expect(forced.specificity).toBe(6);
+
+    expect(parseList(shippingRulesSchema, get("/shipping/rules")).meta.total).toBe(4);
+  });
+
+  it("requires amount, and requires nothing else at all", () => {
+    const error = refusedWith(
+      write("POST", "/shipping/rules", { wilaya_id: 16 }),
+      400,
+      "invalid_request",
+    );
+    expect(error.apiMessage).toBe("The shipping rule is invalid.");
+    expect(error.fields).toEqual({ amount: "Required." });
+
+    // Everything else is server-defaulted, so an amount alone is a whole rule.
+    const bare = parse(shippingRuleSchema, write("POST", "/shipping/rules", { amount: "12.00" }))
+      .data;
+    expect(bare.wilaya_id).toBe(0);
+    expect(bare.commune_id).toBe(0);
+    expect(bare.is_active).toBe(true);
+  });
+
+  it("names a bad amount, an unknown field and a bad delivery type verbatim", () => {
+    expect(
+      refusedWith(write("POST", "/shipping/rules", { amount: "abc" }), 400, "invalid_request")
+        .fields,
+    ).toEqual({ amount: "Must be an amount." });
+
+    expect(
+      refusedWith(
+        write("POST", "/shipping/rules", { amount: "123.00", zzz: 1 }),
+        400,
+        "invalid_request",
+      ).fields,
+    ).toEqual({ zzz: "Unknown field." });
+
+    /*
+     * **The third refusal family**, and the reason `notOneOf()` was not enough.
+     * A query parameter refuses as `"status is not one of a, b, and c."`; a body
+     * field refuses as `"Must be one of: a, b, c."`; and this one carries an
+     * escape hatch that is not a value, because `""` is a real `delivery_type`
+     * meaning *any* and cannot be printed as a list item.
+     */
+    const enumError = refusedWith(
+      write("PATCH", "/shipping/rules/164", { delivery_type: "zzz" }),
+      400,
+      "invalid_request",
+    );
+    expect(enumError.fields).toEqual({
+      delivery_type: "Must be one of: home, desk, or empty for any.",
+    });
+    // And the escape hatch is real: the empty string is accepted.
+    for (const value of ["", ...DELIVERY_TYPES]) {
+      expect(write("PATCH", "/shipping/rules/164", { delivery_type: value }).status).toBe(200);
+    }
+  });
+
+  /**
+   * **`provider` is validated, and its refusal is the fourth family** — the
+   * first that quotes the *offending value* back instead of listing the legal
+   * set inside the sentence. The legal set arrives beside it, under a key
+   * nothing in the panel reads.
+   */
+  it("refuses an unregistered provider, and names the legal set beside the field", () => {
+    for (const verb of ["POST", "PATCH"] as const) {
+      const path = verb === "POST" ? "/shipping/rules" : "/shipping/rules/164";
+      const error = refusedWith(
+        write(verb, path, { amount: "350.00", provider: "acfake" }),
+        400,
+        "invalid_request",
+      );
+      expect(error.apiMessage).toBe("The shipping rule is invalid.");
+      expect(error.fields).toEqual({ provider: 'Unknown provider "acfake".' });
+
+      /*
+       * **A sibling of `fields`, not a member of it — and no reader in
+       * `lib/api/` looks at it.** `ApiError` exposes `fields` and `params` and
+       * nothing else, so this key is invisible to every screen today. It is the
+       * API naming the legal set, the service a 409's `allowed` array performs
+       * for an order transition and which the shipment 409 is recorded as
+       * lacking. Asserted so it survives until something reads it.
+       */
+      expect(error.details.available).toEqual(["manual"]);
+      expect(error.fields?.available).toBeUndefined();
+      // The sentence carries no list of its own; the two halves are split.
+      expect(error.fields?.provider).not.toContain("manual");
+    }
+
+    // The two values a rule may hold, on both verbs.
+    expect(write("PATCH", "/shipping/rules/164", { provider: "manual" }).status).toBe(200);
+    expect(
+      parse(shippingRuleSchema, write("PATCH", "/shipping/rules/164", { provider: "" })).data
+        .provider,
+    ).toBe("");
+    // And an omitted key still defaults to the empty string on a create.
+    expect(
+      parse(shippingRuleSchema, write("POST", "/shipping/rules", { amount: "5.00" })).data
+        .provider,
+    ).toBe("");
+
+    // `available` is the same list the picker is built from, so a refusal and
+    // the choices on screen cannot disagree about what is registered.
+    const registered = parseList(shippingProviders, get("/shipping/providers")).data;
+    expect(
+      apiError(write("POST", "/shipping/rules", { amount: "1.00", provider: "zzz" })).details
+        .available,
+    ).toEqual(registered.map((entry) => entry.name));
+  });
+
+  /**
+   * **`acfake` is a parcel's provider and is not a rule's**, and the split must
+   * stay. It is registered at runtime by the backend's webhook suite, so it is
+   * on 42 of the 129 shipments and on no registered-provider list. A mock that
+   * shared one enum between the two would either refuse a third of the parcels
+   * or let a screen save a tariff the shop rejects.
+   */
+  it("keeps the parcel provider vocabulary and the rule one apart", () => {
+    const parcels = [1, 2].flatMap(
+      (n) => parseList(shipmentsSchema, get("/shipments", `per_page=100&page=${n}`)).data,
+    );
+    expect(parcels.filter((row) => row.provider === "acfake").length).toBeGreaterThan(0);
+    // The same word: honoured on a parcel, refused on a rule.
+    expect(get("/shipments", "provider=acfake").status).toBe(200);
+    expect(write("POST", "/shipping/rules", { amount: "1.00", provider: "acfake" }).status).toBe(
+      400,
+    );
+  });
+
+  it("takes its own GET body back, dropping five keys in silence", () => {
+    const before = parseList(shippingRulesSchema, get("/shipping/rules")).data[0];
+    const after = parse(
+      shippingRuleSchema,
+      write("PATCH", `/shipping/rules/${before.id}`, before),
+    ).data;
+
+    // **A 200, not a 400.** `id`, `specificity`, `created_at`, `updated_at` and
+    // `provider` are dropped without comment — the coupons/products rule, and
+    // the opposite of what `PATCH /shipments/{id}` does one route away.
+    expect(after.id).toBe(before.id);
+    expect(after.specificity).toBe(before.specificity);
+    expect(after.created_at).toBe(before.created_at);
+    // Unchanged — and this is the request that *cannot* tell "dropped" from
+    // "written back with the value it already had", which is how `provider`
+    // spent a branch on the read-only list by mistake.
+    expect(after.provider).toBe("manual");
+
+    // A partial PATCH is a 200 too, and moves only what it names.
+    const patched = parse(
+      shippingRuleSchema,
+      write("PATCH", "/shipping/rules/163", { amount: "111.00" }),
+    ).data;
+    expect(patched.amount).toBe("111.00");
+    expect(patched.free_over).toBe("10000.00");
+  });
+
+  it("answers an empty PATCH with a message and NO details key at all", () => {
+    const response = write("PATCH", "/shipping/rules/164", {});
+    const error = refusedWith(response, 400, "invalid_request");
+    expect(error.apiMessage).toBe("No supported fields were provided.");
+
+    /*
+     * A products ending, not a coupon's 200 no-op — and `details` is *absent*
+     * rather than empty, which is a shape a mock emitting `details: {}` would
+     * let a screen read `details.fields` off and never find out.
+     */
+    const body = response.body as { error: Record<string, unknown> };
+    expect("details" in body.error).toBe(false);
+    expect(error.fields).toBeNull();
+
+    // A body of nothing but keys the server owns lands in the same place: they
+    // are dropped, and dropping them leaves nothing supported. `provider` is
+    // deliberately not in this list any more — it is writable.
+    expect(
+      write("PATCH", "/shipping/rules/164", { id: 1, specificity: 99 }).status,
+    ).toBe(400);
+  });
+
+  it("deletes once, and the second delete is this collection's own 404", () => {
+    const rule = created();
+    const { data } = parse(deleteResult, write("DELETE", `/shipping/rules/${rule.id}`));
+    expect(data).toEqual({ deleted: true, id: rule.id });
+
+    const error = refusedWith(
+      write("DELETE", `/shipping/rules/${rule.id}`),
+      404,
+      "not_found",
+    );
+    expect(error.apiMessage).toBe("No shipping rule with that id.");
+    // A rule has no trash: unlike a coupon there is no state to come back from.
+    expect(parseList(shippingRulesSchema, get("/shipping/rules")).meta.total).toBe(3);
+  });
+});
+
+describe("GET /shipping/rates", () => {
+  it("resolves narrowest-first and never adds two rules together", () => {
+    // Measured 350 / 500 / 800 across the three arms, with all three rules in
+    // place — and **one** rate comes back each time, not the three that match.
+    for (const [wilaya, commune, amount] of [
+      [16, 484, "350.00"],
+      [16, 61, "500.00"],
+      [1, 1, "800.00"],
+    ] as const) {
+      const { data } = parseList(
+        shippingRatesSchema,
+        get("/shipping/rates", `wilaya_id=${wilaya}&commune_id=${commune}`),
+      );
+      expect(data).toHaveLength(1);
+      expect(data[0].amount).toBe(amount);
+      expect(data[0].source).toBe("rules");
+      // The quote is attributed to the configured default provider, while the
+      // rule's own `provider` is the empty string.
+      expect(data[0].provider).toBe("manual");
+      // `label` here is a display string and is **not** the credential a
+      // shipment's `metadata.label` is. The two share a name and nothing else.
+      expect(data[0].label).toBe("Delivery");
+      expect(data[0].free_shipping).toBe(false);
+    }
+
+    // The panel's own preview agrees with the server's answer, which is the
+    // property the rules screen puts on the page.
+    const rules = parseList(shippingRulesSchema, get("/shipping/rules")).data;
+    expect(applicableRules(rules, 16, 484)[0].amount).toBe("350.00");
+  });
+
+  /**
+   * **The second shape of `details.params` in this API**, and the reason the two
+   * are reproduced rather than unified: `/shipments?status=zzz` puts an *object
+   * of messages* under this key and `/shipping/rates` puts a *bare array of
+   * names*. `Object.values` of an array returns its elements, so a reader built
+   * for one renders the bare word `wilaya_id` at a person as an explanation.
+   */
+  it("reports missing parameters as a bare ARRAY, unlike every other route", () => {
+    const error = refusedWith(get("/shipping/rates"), 400, "invalid_request");
+    expect(error.apiMessage).toBe("Missing parameter(s): wilaya_id, commune_id");
+    expect(error.details.params).toEqual(["wilaya_id", "commune_id"]);
+    expect(Array.isArray(error.details.params)).toBe(true);
+
+    /*
+     * **And here is the trap, reproduced rather than described.**
+     * `ApiError.params` runs `Object.entries` over whatever is under the key, so
+     * an array comes back as an object keyed by its *indices* — a form binding
+     * `params` to its controls binds `wilaya_id` to a control called `0`. The
+     * browser's own `BrowserApiError.fields` guards with `!Array.isArray(...)`
+     * and `firstMessage()` falls through to the generic sentence for exactly
+     * this shape; `lib/api/errors.ts` has no such guard on either getter, which
+     * is a real asymmetry between the two error types and not something this
+     * mock can fix from here.
+     */
+    expect(error.params).toEqual({ "0": "wilaya_id", "1": "commune_id" });
+    expect(error.params?.wilaya_id).toBeUndefined();
+
+    // The other shape, on the same subject, one route away.
+    const other = refusedWith(get("/shipments", "status=zzz"), 400, "invalid_request");
+    expect(Array.isArray(other.details.params)).toBe(false);
+    expect(other.params?.status).toBe(
+      "status is not one of pending, created, picked_up, in_transit, out_for_delivery, delivered, returning, returned, cancelled, and failed.",
+    );
+  });
+
+  it("answers 200 with [] once no rule covers the destination", () => {
+    // What the whole shop answered before `seed-shipping-rules.mjs` ran: not an
+    // error, just nothing — which is a state the screen has to render.
+    for (const id of [164, 163, 162]) write("DELETE", `/shipping/rules/${id}`);
+    const { data, meta } = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484"),
+    );
+    expect(data).toEqual([]);
+    expect(meta.total).toBe(0);
+    expect(shippingRateSchema.safeParse(data[0]).success).toBe(false);
+  });
+});
+
+describe("GET /shipments", () => {
+  const page = (query: string) => parseList(shipmentsSchema, get("/shipments", query));
+
+  it("parses every row, and the shop it reproduces is all but finished", () => {
+    const { meta } = page("per_page=1");
+    expect(meta.total).toBe(129);
+
+    const rows = [1, 2].flatMap((n) => page(`per_page=100&page=${n}`).data);
+    expect(rows).toHaveLength(129);
+
+    /*
+     * **`is_live === !isTerminalShipmentStatus(status)` on every row**, which is
+     * the measurement the whole parcels screen turns on: the two are the same
+     * fact spelled twice, so `is_live` must never be rendered as a second marker
+     * beside the status badge.
+     */
+    for (const row of rows) {
+      expect(row.is_live).toBe(!isTerminalShipmentStatus(row.status));
+    }
+
+    // One live parcel, and it is the only reason the status picker, cancel and
+    // sync are reachable at all. The shop itself has none — 129 finished rows —
+    // so a harness seeded to that exactly could verify none of the three writes.
+    expect(rows.filter((row) => row.is_live)).toHaveLength(1);
+
+    // Both providers present, because `provider` filtering needs two values and
+    // because one of them is not in `/shipping/providers`.
+    const providers = new Set(rows.map((row) => row.provider));
+    expect([...providers].sort()).toEqual(["acfake", "manual"]);
+    const listed = parseList(shippingProviders, get("/shipping/providers")).data;
+    expect(listed).toHaveLength(1);
+    expect(listed.some((entry) => entry.name === "acfake")).toBe(false);
+
+    // The measured `metadata` key union, across the collection and never on one
+    // row: `cod_amount` is a manual parcel's and `provider_status` is a
+    // courier's own spelling.
+    const keys = new Set(rows.flatMap((row) => Object.keys(row.metadata)));
+    for (const key of [
+      "delivery_type",
+      "wilaya_id",
+      "commune_id",
+      "cod_amount",
+      "provider_status",
+    ]) {
+      expect(keys, `metadata must carry ${key} somewhere`).toContain(key);
+    }
+
+    // And the one credential the fixture carries on purpose, so the stripper is
+    // exercised by a capture rather than only by its own unit test.
+    const labelled = rows.find((row) => row.metadata.label !== undefined);
+    expect(labelled).toBeDefined();
+    expect(stripLabelUrls(labelled!).metadata.label).toBeUndefined();
+    expect(stripLabelUrls(labelled!).labelKeys).toEqual(["label"]);
+  });
+
+  it("filters by status, provider and order_id — and validates only status", () => {
+    expect(page("status=delivered&per_page=1").meta.total).toBe(86);
+    expect(page("status=cancelled&per_page=1").meta.total).toBe(42);
+    // A status no parcel holds is a real, empty answer.
+    expect(page("status=returning&per_page=1").meta.total).toBe(0);
+
+    expect(page("provider=manual&per_page=1").meta.total).toBe(86);
+    expect(page("provider=acfake&per_page=1").meta.total).toBe(43);
+    /*
+     * **`?provider=zzz` is a 200 with 0 rows**, not a 400 — measured, and the
+     * asymmetry is the point: the route declares an enum for `status` and does
+     * not for `provider`, so a typo in one is a refusal and a typo in the other
+     * is a silent empty list. A screen must not read emptiness as "none match".
+     */
+    expect(get("/shipments", "provider=zzz").status).toBe(200);
+    expect(page("provider=zzz&per_page=1").meta.total).toBe(0);
+
+    const orderId = page("per_page=1").data[0].order_id;
+    const byOrder = page(`order_id=${orderId}&per_page=100`);
+    expect(byOrder.data.length).toBeGreaterThan(0);
+    expect(byOrder.data.every((row) => row.order_id === orderId)).toBe(true);
+  });
+
+  /**
+   * **The point of the whole harness, on the one collection that proves it.**
+   *
+   * `orderby` × eight fields × both directions returned a byte-identical id
+   * sequence to `?bogus_param=1`, over a page carrying 100 distinct ids and 82
+   * distinct `created_at` — so there is nothing to tie on and the explanation
+   * cannot be a flat fixture. And `?orderby=zzz` is a **200**: the parameter
+   * never reaches a validator, so it cannot be reaching a sort.
+   *
+   * A mock that 400'd `?orderby=zzz` would be claiming the opposite, and a
+   * validator is the first evidence anyone would take for a sort existing.
+   */
+  it("accepts and ignores is_live, orderby and order — without validating them", () => {
+    const control = page("per_page=100&bogus_param=1").data.map((row) => row.id);
+
+    /*
+     * **`is_live` is airtight now, not merely probable.** Re-measured
+     * 2026-08-25 with a live parcel present: `?bogus_param=1` 130,
+     * `?is_live=true` **130**, `?is_live=false` **130**. Every earlier
+     * measurement was taken on an all-terminal shop, where `is_live=false`
+     * returning everything is exactly what a *working* filter would also do —
+     * so the parameter had never actually been proved inert. It has been now,
+     * and the fixture holds a live row for the same reason.
+     */
+    expect(page("per_page=1&is_live=true").meta.total).toBe(129);
+    expect(page("per_page=1&is_live=false").meta.total).toBe(129);
+    // And the ambiguity really is resolved here too: a live row exists, so
+    // `is_live=false` returning all 129 cannot be a filter doing its job.
+    expect(page("per_page=100").data.some((row) => row.is_live)).toBe(true);
+
+    for (const query of [
+      "is_live=true",
+      "is_live=false",
+      "search=MAN",
+      "orderby=zzz",
+      "order=sideways",
+      ...["id", "order_id", "created_at", "status", "tracking_number", "provider"].flatMap(
+        (field) => [`orderby=${field}`, `orderby=${field}&order=asc`],
+      ),
+    ]) {
+      const response = get("/shipments", `per_page=100&${query}`);
+      expect(response.status, `${query} must not be refused`).toBe(200);
+      expect(
+        parseList(shipmentsSchema, response).data.map((row) => row.id),
+        `${query} must not reorder anything`,
+      ).toEqual(control);
+    }
+
+    // The tie explanation is excluded here the same way it was on the wire.
+    expect(new Set(control).size).toBe(control.length);
+    expect(new Set(page("per_page=100").data.map((row) => row.created_at)).size).toBeGreaterThan(
+      50,
+    );
+  });
+
+  it("refuses a status outside the ten, naming the parameter", () => {
+    const error = refusedWith(get("/shipments", "status=zzz"), 400, "invalid_request");
+    expect(error.apiMessage).toBe("Invalid parameter(s): status");
+    // The **query-parameter** enum family: Oxford comma, `is not one of`, and
+    // the physical order rather than an alphabetical one.
+    expect(error.params?.status).toBe(`status is not one of ${SHIPMENT_STATUSES.slice(0, -1).join(", ")}, and failed.`);
+    // Every one of the ten is accepted, whether or not any row holds it.
+    for (const status of SHIPMENT_STATUSES) {
+      expect(get("/shipments", `status=${status}`).status).toBe(200);
+    }
+  });
+
+  it("serves a detail whose key set is the list row exactly", () => {
+    const row = page("per_page=1").data[0];
+    const { data, meta } = parse(shipmentSchema, get(`/shipments/${row.id}`));
+    expect(meta).toBeNull();
+    expect(data).toEqual(row);
+
+    // Written out rather than compared to itself: the measured key set is what
+    // makes a peek free on this collection, and a fixture that grew an
+    // eleventh key would silently stop proving it.
+    expect(Object.keys(data).sort()).toEqual([
+      "created_at",
+      "id",
+      "is_live",
+      "metadata",
+      "order_id",
+      "provider",
+      "provider_shipment_id",
+      "status",
+      "tracking_number",
+      "updated_at",
+    ]);
+
+    const error = refusedWith(get("/shipments/999999"), 404, "not_found");
+    expect(error.apiMessage).toBe("No shipment with that id.");
+    // A routed id that holds nothing, against a path nobody wrote.
+    expect(apiError(get("/shipments/abc")).code).toBe("rest_no_route");
+  });
+});
+
+describe("the shipment writes", () => {
+  it("moves a live parcel anywhere, and recomputes is_live from the status", () => {
+    /*
+     * **Backwards is legal while live**, re-measured 2026-08-25 on parcel 258:
+     * `{"status":"in_transit"}` 200, then `{"status":"pending"}` 200. A courier
+     * reports what it reports, sometimes late and out of order, and refusing a
+     * status to defend a diagram would put the shop's record at odds with the
+     * physical world — so there is no transition matrix here, only `is_live`.
+     */
+    const forward = parse(
+      shipmentSchema,
+      write("PATCH", "/shipments/7014", { status: "in_transit" }),
+    ).data;
+    expect(forward.status).toBe("in_transit");
+
+    const back = parse(shipmentSchema, write("PATCH", "/shipments/7014", { status: "pending" }))
+      .data;
+    expect(back.status).toBe("pending");
+    expect(back.is_live).toBe(true);
+
+    // Every live→live move, not a curated few: a matrix would show up here as
+    // one of the ten being refused.
+    for (const status of SHIPMENT_STATUSES.filter((value) => !isTerminalShipmentStatus(value))) {
+      expect(write("PATCH", "/shipments/7014", { status }).status, status).toBe(200);
+    }
+
+    const done = parse(shipmentSchema, write("PATCH", "/shipments/7014", { status: "delivered" }))
+      .data;
+    expect(done.is_live).toBe(false);
+    // And the collection reads it back, which is what a screen that writes and
+    // refetches depends on.
+    expect(parse(shipmentSchema, get("/shipments/7014")).data.status).toBe("delivered");
+  });
+
+  /**
+   * **This is where a shipment breaks the rule coupons and products share.**
+   *
+   * A coupon or a product takes its own GET body back and drops the read-only
+   * keys without comment. A shipment refuses every key it does not own, so
+   * sending its GET body back is a 400 naming nine fields — which is why
+   * `ShipmentSheet` sends `{status}` alone out of requirement rather than
+   * caution.
+   */
+  it("rejects unknown keys rather than dropping them, unlike coupons", () => {
+    for (const [key, body] of [
+      ["zzz", { zzz: 1 }],
+      ["provider", { provider: "acfake" }],
+      ["tracking_number", { tracking_number: "AC1" }],
+    ] as const) {
+      const error = refusedWith(write("PATCH", "/shipments/7014", body), 400, "invalid_request");
+      expect(error.apiMessage).toBe("The shipment data is invalid.");
+      expect(error.fields?.[key]).toBe("Unknown field.");
+    }
+
+    // The whole GET row back is therefore a 400 here and a 200 on a rule.
+    const row = parse(shipmentSchema, get("/shipments/7014")).data;
+    expect(write("PATCH", "/shipments/7014", row).status).toBe(400);
+    expect(write("PATCH", "/shipping/rules/164", get("/shipping/rules").body).status).toBe(400);
+
+    // The **body-field** enum family, which is not the query-parameter family
+    // `?status=zzz` answers one route away: colon, no Oxford comma, no `and`.
+    const bad = refusedWith(
+      write("PATCH", "/shipments/7014", { status: "zzz" }),
+      400,
+      "invalid_request",
+    );
+    expect(bad.fields?.status).toBe(`Must be one of: ${SHIPMENT_STATUSES.join(", ")}.`);
+    expect(bad.fields?.status).not.toContain(" and ");
+
+    // An empty body asks for a status rather than answering the rules
+    // collection's "No supported fields were provided."
+    expect(refusedWith(write("PATCH", "/shipments/7014", {}), 400, "invalid_request").fields)
+      .toEqual({ status: "Required." });
+  });
+
+  it("refuses a terminal move with the quoted statuses and no allowed list", () => {
+    const error = refusedWith(
+      write("PATCH", "/shipments/7023", { status: "in_transit" }),
+      409,
+      "conflict",
+    );
+    // The quotes are literal, and `{from, to, is_live}` is the whole body —
+    // this is the one refusal in the panel that cannot be rendered as "here is
+    // what is legal", which is why the picker is hidden rather than offered.
+    expect(error.apiMessage).toBe('This shipment cannot move from "delivered" to "in_transit".');
+    expect(error.details).toEqual({ from: "delivered", to: "in_transit", is_live: false });
+    expect(error.conflict?.allowed).toBeUndefined();
+  });
+
+  /**
+   * **Sync answers 200 on the parcel you would not sync and refuses the one you
+   * would**, which is confusing on the server's side rather than the panel's.
+   *
+   * **Both arms are measured 2026-08-25** — the live one on parcel 258, created
+   * against order 4586 for exactly this and cancelled afterwards.
+   *
+   * The consequence is worth stating as an assertion rather than a note: on
+   * this shop **sync can never succeed**, because `manual` is the only provider
+   * `/shipping/providers` returns and a manual parcel is either live (refused)
+   * or finished (a 200 that changes nothing).
+   */
+  it("syncs a terminal parcel to a 200 unchanged and refuses a live one", () => {
+    const before = parse(shipmentSchema, get("/shipments/7023")).data;
+    const after = parse(shipmentSchema, write("POST", "/shipments/7023/sync")).data;
+    expect(after).toEqual(before);
+
+    const error = apiError(write("POST", "/shipments/7014/sync"));
+    expect(error.status).toBe(409);
+    expect(error.apiMessage).toBe(
+      "In-house delivery reports no status of its own; update this shipment directly.",
+    );
+    // The sentence quotes the provider's **label**, not its slug, so it is
+    // built from the providers row rather than written out.
+    const provider = parseList(shippingProviders, get("/shipping/providers")).data[0];
+    expect(error.apiMessage.startsWith(provider.label)).toBe(true);
+
+    /*
+     * **`sync_unsupported` is real and now measured**, and it is the fifth wire
+     * code. `ErrorNormalizer.php:31-32` rewrites `rest_invalid_param` and
+     * `rest_missing_callback_param` — WordPress's own **parameter** codes — and
+     * leaves a domain code raised by a controller alone. So DECISIONS.md's four
+     * are the four a *parameter* refusal can carry, and this 409 is not one.
+     */
+    expect(error.code).toBe("sync_unsupported");
+    expect(WIRE_CODES).not.toContain(error.code);
+
+    // Neither state can move the parcel, which is the whole answer for this
+    // provider: refused while live, a no-op once finished.
+    write("POST", "/shipments/7014/cancel");
+    expect(parse(shipmentSchema, write("POST", "/shipments/7014/sync")).data.status).toBe(
+      "cancelled",
+    );
+  });
+
+  it("cancels a live parcel, and a cancelled parcel then refuses everything", () => {
+    const cancelled = parse(shipmentSchema, write("POST", "/shipments/7014/cancel")).data;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.is_live).toBe(false);
+
+    // A second cancel is the finished refusal, and the parcel is now terminal
+    // for the other two writes as well.
+    expect(refusedWith(write("POST", "/shipments/7014/cancel"), 409, "conflict").details).toEqual(
+      { status: "cancelled" },
+    );
+    expect(write("PATCH", "/shipments/7014", { status: "pending" }).status).toBe(409);
+    expect(write("POST", "/shipments/7014/sync").status).toBe(200);
+  });
+
+  /**
+   * **The sweep DECISIONS.md asks for**: every refusal this section can produce,
+   * checked for a code a client can actually receive. Fourteen refusals once
+   * carried `rest_invalid_param` — a code `ErrorNormalizer` rewrites on the way
+   * out — and it survived because no assertion anywhere compared a code.
+   */
+  it("answers every shipping refusal with a code a client can receive", () => {
+    const refusals: MockResponse[] = [
+      get("/shipments", "status=zzz"),
+      get("/shipments/999999"),
+      get("/shipping/rates"),
+      get("/shipping/rates", "wilaya_id=16"),
+      get("/shipping/rules", "per_page=101"),
+      write("POST", "/shipping/rules", {}),
+      write("POST", "/shipping/rules", { amount: "abc" }),
+      write("PATCH", "/shipping/rules/164", {}),
+      write("PATCH", "/shipping/rules/164", { zzz: 1 }),
+      write("DELETE", "/shipping/rules/999"),
+      write("PATCH", "/shipments/7014", { zzz: 1 }),
+      write("PATCH", "/shipments/7023", { status: "pending" }),
+      write("POST", "/shipments/7023/cancel"),
+      write("POST", "/orders/1014/shipments", { wilaya_id: 16, commune_id: 484 }),
+    ];
+
+    for (const response of refusals) {
+      const error = apiError(response);
+      expect(WIRE_CODES, `${error.status} ${error.code} is not on the wire`).toContain(
+        error.code,
+      );
+      // A refusal with no sentence is a refusal nothing can render.
+      expect(error.apiMessage.length).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * **The two the last code sweep missed, and why it missed them.**
+   *
+   * DECISIONS.md records fourteen refusals corrected from `rest_invalid_param`
+   * to `invalid_request` — a code `ErrorNormalizer.php:31-32` rewrites on the
+   * way out, so no client can receive it. These two answered
+   * `rest_missing_callback_param`, which the *same two lines* rewrite the same
+   * way: they are **missing**-parameter refusals rather than invalid-value
+   * ones, so a sweep for the code that had been named found neither. Both
+   * corrected 2026-08-25.
+   *
+   * Neither sentence changed, and that is the point — the sentences were right
+   * the whole time, which is exactly what let the codes hide behind assertions
+   * that only ever compared sentences.
+   */
+  it("answers the two MISSING-parameter refusals with a code a client can receive", () => {
+    const outcome = apiError(write("POST", "/orders/1007/cod/attempts", {}));
+    expect(outcome.code).toBe("invalid_request");
+    expect(outcome.apiMessage).toBe("Missing parameter(s): outcome");
+    expect(outcome.fields?.outcome).toContain("Required.");
+
+    const sku = apiError(get("/inventory/lookup"));
+    expect(sku.code).toBe("invalid_request");
+    expect(sku.apiMessage).toBe("Missing parameter(s): sku");
+    // The array shape under `params` is measured and is untouched by the code
+    // correction — it is the other half of the `/shipping/rates` asymmetry.
+    expect(sku.details.params).toEqual(["sku"]);
   });
 });
 
@@ -502,7 +1392,9 @@ describe("the writes", () => {
     expect(parseList(shipmentsSchema, get("/orders/1014/shipments")).data[0].is_live).toBe(false);
 
     // And with nothing live, the same create now succeeds — history accumulates
-    // and does not block.
+    // and does not block. **201**, measured 2026-08-25; this read 200 until
+    // then, which is what caught the change when the route moved onto the
+    // `created()` envelope.
     expect(
       write("POST", "/orders/1014/shipments", {
         provider: "manual",
@@ -510,7 +1402,7 @@ describe("the writes", () => {
         commune_id: 484,
         delivery_type: "home",
       }).status,
-    ).toBe(200);
+    ).toBe(201);
   });
 
   /**
@@ -658,7 +1550,16 @@ describe("the refusals, by fixture id", () => {
         delivery_type: "home",
       }),
     );
-    expect(error.details).toMatchObject({ shipment_id: 7014, status: "created" });
+    // Measured 2026-08-25 against a deliberately created live parcel. This read
+    // "in flight" until then — the `details` had been recorded and the sentence
+    // had been written here, which is the whole failure mode this suite exists
+    // for: a screen quoting a sentence the shop never sends.
+    expect(error.apiMessage).toBe("This order already has a shipment in progress.");
+    expect(error.details).toMatchObject({
+      shipment_id: 7014,
+      provider: "manual",
+      status: "created",
+    });
     // No field list on this one — the form has nothing wrong with it, so the
     // refusal renders as a sentence rather than binding to a control.
     expect(error.fields).toBeNull();
@@ -668,12 +1569,13 @@ describe("the refusals, by fixture id", () => {
     const error = apiError(write("POST", "/orders/1007/shipments", { provider: "manual" }));
     expect(error.status).toBe(400);
     expect(error.code).toBe("invalid_request");
+    // Measured 2026-08-25. `expect.any(String)` is what let two invented
+    // sentences — "Required. The destination wilaya." and its commune twin —
+    // sit here looking asserted, so the words are pinned now.
+    expect(error.apiMessage).toBe("The shipment data is invalid.");
     // `details.fields`, an object of messages — not `details.params` — because
     // each one binds to its own control on the create-parcel form.
-    expect(error.fields).toEqual({
-      wilaya_id: expect.any(String),
-      commune_id: expect.any(String),
-    });
+    expect(error.fields).toEqual({ wilaya_id: "Required.", commune_id: "Required." });
     expect(error.params).toBeNull();
     // The destination is validated before anything else, so a body carrying only
     // a provider fails the same way an empty one does.
@@ -682,12 +1584,23 @@ describe("the refusals, by fixture id", () => {
     );
   });
 
-  it("7023 — a finished parcel refuses cancellation, with no allowed list at all", () => {
+  /**
+   * **Both halves of this were wrong until 2026-08-25**, and the assertion that
+   * let it survive is the one below it: the mock answered `"A delivered shipment
+   * cannot be cancelled."` with `{from, to, is_live}` — the *`PATCH` conflict's*
+   * shape, on a request that names no `to` at all. The wire is one key.
+   */
+  it("7023 — a finished parcel refuses cancellation, blaming its own status", () => {
     const error = refusal(write("POST", "/shipments/7023/cancel"));
+    expect(error.apiMessage).toBe("This shipment has already finished.");
+    expect(error.details).toEqual({ status: "delivered" });
     // An order's 409 carries `allowed` and a shipment's does not, which is the
     // one place this subject cannot follow the panel's usual rule.
-    expect(error.details).toEqual({ from: "delivered", to: "cancelled", is_live: false });
     expect(error.conflict?.allowed).toBeUndefined();
+    // And the shape it is *not*: cancel names no destination, so a screen
+    // reading `to` off this would render "undefined".
+    expect(error.details.to).toBeUndefined();
+    expect(error.details.is_live).toBeUndefined();
   });
 
   it("refuses a status outside the vocabulary with a 400, not a 409", () => {
@@ -3537,18 +4450,24 @@ const UNCOVERED: Record<string, string> = {
  * quietly come to mean "finished".
  */
 describe("what the newly-covered modules still do not serve", () => {
-  it("leaves the shipping tariff and the standalone collections unmocked", () => {
-    // `shippingRule` / `shippingRate` — the rules screen's own endpoints.
-    expect(get("/shipping/rules").status).toBe(404);
-    expect(get("/shipping/rates", "wilaya_id=16&commune_id=484").status).toBe(404);
-    // A parcel and a transaction are reached through their order here, which is
-    // the only way the detail reaches them.
-    expect(get("/shipments").status).toBe(404);
-    expect(get("/shipments/7014").status).toBe(404);
+  /**
+   * **The shipping half of this block became real coverage on 2026-08-25** —
+   * `/shipping/rules`, `/shipping/rates`, `GET /shipments` and `GET
+   * /shipments/{id}` are all served and all parsed above, so the four
+   * assertions that used to pin them at 404 are gone rather than deleted
+   * quietly. What is left here is what is still genuinely unserved.
+   */
+  it("leaves the payments collection and the analytics report unmocked", () => {
+    // A transaction is reached through its order here, which is the only way
+    // the order detail reaches one.
     expect(get("/payments").status).toBe(404);
     expect(get("/payments/5231").status).toBe(404);
     // `codStatistics` — `/cod/statistics` belongs to the analytics screen.
     expect(get("/cod/statistics").status).toBe(404);
+
+    // There is still no `POST /shipments` — a parcel is created against an
+    // order and nowhere else.
+    expect(write("POST", "/shipments", { order_id: 1007 }).status).toBe(404);
   });
 
   /**
