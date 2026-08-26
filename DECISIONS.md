@@ -827,10 +827,20 @@ so the rendered box is the same.
   else. Not wired on shipping deliberately: the provider picker is what keeps that
   refusal unreachable. A screen that ever lets someone type a provider will need
   it.
-- **`GET /analytics/shipping` is the one allowlisted route on this subject still
-  answering `rest_no_route`** — a code no client can receive. Unimplemented in the
-  mock and listed `UNCOVERED` with a reason, so it is a declared gap rather than a
-  hidden one; the analytics branch owns it.
+- ~~**`GET /analytics/shipping` is the one allowlisted route on this subject still
+  answering `rest_no_route`**~~ — **struck 2026-08-26: it answers 200 with a full
+  payload**, `{range, shipments{total, by_status{…}}, …}`, and does so for a
+  Support Agent as well as a Super Admin. The record outlived a backend repair
+  rather than ever having been wrong, which is the *third* time that has happened
+  on this run after the two `orderby` cases — and it is the same failure mode each
+  time: a measurement is written down, the backend moves, and nothing re-takes it
+  because the note reads like a property of the API rather than a dated
+  observation. It stays unimplemented in the mock and listed `UNCOVERED`; the
+  analytics branch (item 11) owns building it, and now has one less excuse.
+
+  The general lesson is worth more than the entry: **a "this route is broken"
+  note needs a date and a re-check, exactly as a "this parameter is ignored" note
+  does.** Absence of capability is not more durable than presence of it.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
 - `movementReasonHint` has no caller in either message file. So do `cod.turnOff`

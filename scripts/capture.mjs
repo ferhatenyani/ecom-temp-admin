@@ -17,6 +17,12 @@
  * default run's with an `-reduced` suffix, so capture one run then the other and
  * compare the pair in the same folder.
  *
+ * **`support` is the third and it drops a different two** — `ac_manage_orders`
+ * and `ac_manage_inventory` — which is the measured credential the dashboard's
+ * money gate refuses. `reduced` cannot stand in for it: it keeps
+ * `ac_manage_orders`, deliberately, because that is what keeps `/orders/1023`
+ * a screen rather than a refusal.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale
@@ -159,6 +165,38 @@ const LOCALES = ["fr", "ar"];
  *     node scripts/capture.mjs /coupons/306
  */
 const DEFAULT_ROUTES = [
+  /*
+   * **The panel's landing screen, and it had never been captured at any width,
+   * theme or locale.** Not an oversight in this list: `/analytics/overview` was
+   * a `rest_no_route` until 2026-08-26, so every capture of `/dashboard` would
+   * have been a photograph of its error state. The mock serves it now, which is
+   * what makes the route worth listing rather than worth naming.
+   *
+   * **The money gate is the point of this screen and it needs the second run.**
+   * `canSeeMoney()` is `ac_view_analytics` *and* `ac_manage_orders`, and the API
+   * enforces it in the payload rather than in the status: a reader without the
+   * second gets a 200 whose `revenue` block is simply **absent** — not null, not
+   * zeroed — and `meta.money_visible: false` beside it. `dashboardCards()` then
+   * returns a different card set of the same length, so the half-payload state
+   * is a screen with different figures and no holes, which is exactly the thing
+   * a screenshot can check and a unit test cannot:
+   *
+   *     MOCK_IDENTITY=support node scripts/capture.mjs /dashboard
+   *
+   * **`support`, not `reduced`.** `reduced` keeps `ac_manage_orders` on purpose
+   * — that is what lets `/orders/1023` render with two sections missing instead
+   * of as a whole page refused — so it sees the money and cannot reach this
+   * state. `support` is the measured Support Agent credential: no
+   * `ac_manage_orders`, no `ac_manage_inventory`, and a 200 on `/customers`.
+   *
+   * The range control is a toolbar on this route rather than a route of its own,
+   * so the four other presets are states and not screens. `?range=today` is the
+   * empty one — every figure zero — and is worth capturing by name when the
+   * cards change, because a zero shop is the layout nobody designs at:
+   *
+   *     node scripts/capture.mjs "/dashboard?range=today"
+   */
+  "/dashboard",
   "/orders",
   "/orders/1023",
   "/products",

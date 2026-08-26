@@ -82,6 +82,16 @@ import {
   statFigures,
   statusBreakdown,
 } from "@/lib/customers";
+import { overviewReport } from "@/lib/api/schemas/analytics";
+import {
+  RANGE_PRESETS,
+  UNAVAILABLE_KEYS,
+  analyticsParams,
+  countedReconciliation,
+  customRangeProblem,
+  rateFraction,
+  unavailableLines,
+} from "@/lib/analytics";
 import { notificationList } from "@/lib/api/schemas/notification";
 import { QUEUE_STATES, stateCounts } from "@/lib/notifications";
 import {
@@ -163,7 +173,10 @@ function apiError(response: MockResponse): ApiError {
 
 describe("the envelope", () => {
   it("answers an unmocked path with a well-formed rest_no_route error", () => {
-    const response = get("/analytics/overview");
+    // `/analytics/revenue` rather than `/analytics/overview`, which this stood
+    // on until the overview was served: a 404 assertion is only worth anything
+    // while its path is genuinely unmocked, and the six reports below are.
+    const response = get("/analytics/revenue");
     expect(response.status).toBe(404);
 
     // Loudly, and through the same code path a real 404 would take. A mock that
@@ -1685,6 +1698,364 @@ describe("GET /cod/statistics", () => {
   });
 });
 
+/**
+ * ── The dashboard's one request ──────────────────────────────────────────────
+ *
+ * Until 2026-08-26 there was no `case "analytics"` in the mock at all, so every
+ * `/analytics/*` path answered `rest_no_route` and the dashboard rendered its
+ * error state against this harness — always, at every width, in both locales.
+ * That is why the route has never been captured.
+ *
+ * Only `/analytics/overview` is served. The other six stay 404s and are named
+ * below rather than left implied.
+ */
+describe("GET /analytics/overview", () => {
+  const overview = (query = "") => parse(overviewReport, get("/analytics/overview", query));
+
+  /**
+   * **`range` is the only parameter and it is honoured** — five presets over one
+   * shop, measured 2026-08-26. Both halves of this table are load-bearing:
+   * `inventory.low_stock` is identical across a 90× window because it is current
+   * state under a control that does not move it, and `customers.customers` moves
+   * because that control works. A fixture that inverted either would teach a
+   * screen the opposite of the truth, so both are asserted in one pass rather
+   * than left to two tests that could drift apart.
+   */
+  it("honours every preset, and moves only the figures the shop moves", () => {
+    const measured = [
+      // preset       low  customers  placed  shipments  net        days
+      ["today", 3, 0, 0, 0, "0.00", 1],
+      ["yesterday", 3, 0, 0, 2, "0.00", 1],
+      ["7d", 3, 5, 126, 20, "156900.00", 7],
+      ["30d", 3, 9, 901, 131, "812200.00", 30],
+      ["90d", 3, 9, 901, 131, "812200.00", 90],
+    ] as const;
+
+    for (const [preset, low, customers, placed, shipments, net, days] of measured) {
+      const { data } = overview(`range=${preset}`);
+      expect(data.range.preset, preset).toBe(preset);
+      expect(data.range.days, preset).toBe(days);
+      expect(data.range.timezone, preset).toBe("+00:00");
+      expect(data.inventory.low_stock, preset).toBe(low);
+      expect(data.customers.customers, preset).toBe(customers);
+      expect(data.orders.placed, preset).toBe(placed);
+      expect(data.shipping.shipments, preset).toBe(shipments);
+      expect(data.revenue?.net, preset).toBe(net);
+    }
+
+    // The two properties said as claims rather than as five rows of a table.
+    const lows = measured.map(([preset]) => overview(`range=${preset}`).data.inventory.low_stock);
+    expect(new Set(lows), "low_stock is not range-scoped").toEqual(new Set([3]));
+    const counts = measured.map(
+      ([preset]) => overview(`range=${preset}`).data.customers.customers,
+    );
+    expect(new Set(counts).size, "customers is range-scoped").toBeGreaterThan(1);
+
+    // And it is the same three rows `/inventory/low-stock` lists, rather than a
+    // number tabled beside them that could drift out of agreement with the
+    // screen the dashboard card links to.
+    expect(parseList(inventoryList, get("/inventory/low-stock")).meta.total).toBe(3);
+  });
+
+  /**
+   * **The widest preset answers the middle one**, measured identical on every
+   * column: this shop holds nothing older than about a month. A screen that
+   * treats a wider window as necessarily a larger number is wrong about this
+   * shop, and only the fixture can say so.
+   */
+  it("answers 90d with 30d, which is what the shop does", () => {
+    const wide = overview("range=90d").data;
+    const middle = overview("range=30d").data;
+    expect({ ...wide, range: null }).toEqual({ ...middle, range: null });
+    expect(wide.range.days).toBe(90);
+  });
+
+  /** No parameters at all is the 30-day default, not an error and not "all time". */
+  it("defaults to 30d when range is not sent", () => {
+    expect(overview().data.range.preset).toBe("30d");
+    expect(JSON.stringify(get("/analytics/overview").body)).toBe(
+      JSON.stringify(get("/analytics/overview", "range=30d").body),
+    );
+  });
+
+  /**
+   * **The payload's own invariants**, all of which a screen reads:
+   * `by_status` sums to `placed`, the four COUNTED_STATUSES sum to
+   * `counted_as_revenue` — which is what makes `countedReconciliation()` able to
+   * *prove* its explanation rather than assert it — and the money block's own
+   * arithmetic closes.
+   */
+  it("keeps the invariants the reconciliation and the money block depend on", () => {
+    const { data } = overview("range=30d");
+
+    const sum = Object.values(data.orders.by_status).reduce((a, b) => a + b, 0);
+    expect(sum).toBe(data.orders.placed);
+
+    const reconciliation = countedReconciliation(data.orders);
+    expect(reconciliation.proves, "the four counted statuses must sum exactly").toBe(true);
+    expect(reconciliation.counted).toBe(323);
+
+    const revenue = data.revenue;
+    expect(revenue).toBeDefined();
+    if (revenue === undefined) return;
+    expect(revenue.orders_placed).toBe(data.orders.placed);
+    expect(revenue.orders_counted).toBe(data.orders.counted_as_revenue);
+    expect(Number(revenue.gross) - Number(revenue.refunds)).toBeCloseTo(Number(revenue.net), 2);
+    expect(Number(revenue.average_order_value)).toBeCloseTo(
+      Number(revenue.gross) / revenue.orders_counted,
+      2,
+    );
+    expect(revenue.refund_count).toBe(data.orders.by_status.refunded);
+    expect(revenue.refunded_orders).toBe(data.orders.by_status.refunded);
+
+    // Every rate is its own numerator over its own denominator.
+    expect(rateFraction(data.cod.confirmation_rate)).toBeCloseTo(
+      data.cod.confirmed_orders / data.cod.total_orders,
+      4,
+    );
+    expect(rateFraction(data.shipping.delivery_rate)).toBeCloseTo(
+      data.shipping.delivered / data.shipping.shipments,
+      4,
+    );
+
+    // The COD block is a strict subset of `/cod/statistics`, measured key for
+    // key — derived from it here so the two cannot drift into two answers.
+    const { data: statistics } = parse(codStatisticsSchema, get("/cod/statistics"));
+    expect(data.cod).toEqual({
+      total_orders: statistics.total_orders,
+      confirmed_orders: statistics.confirmed_orders,
+      confirmation_rate: statistics.rates.confirmation,
+      delivery_rate: statistics.rates.delivery,
+    });
+  });
+
+  /**
+   * **`unavailable` is an object of sentences, not a list of names**, and it is
+   * the reason `unavailableLines()` exists. The *sentences* are reconstructions
+   * — only a fragment of the API's own wording survives anywhere in this repo —
+   * so nothing here asserts one. The three keys are what the panel switches on,
+   * and they are what is measured.
+   */
+  it("reports three unavailable lines as reasons rather than as names", () => {
+    const revenue = overview("range=30d").data.revenue;
+    expect(revenue).toBeDefined();
+    const lines = unavailableLines(revenue?.unavailable ?? {});
+    expect(lines.map((line) => line.key)).toEqual([...UNAVAILABLE_KEYS]);
+    expect(lines.every((line) => line.known)).toBe(true);
+    // Sentences, so a screen that renders one renders prose and not a slug.
+    expect(lines.every((line) => line.note.length > 40 && line.note.endsWith("."))).toBe(true);
+
+    /*
+     * **And `unavailable` sits where the API puts it** — between
+     * `average_order_value` and `refund_count`, not appended after the refund
+     * counts, which is where a plain spread had left it. Key order is part of
+     * the measured shape and this suite already holds the money-blind payload to
+     * it, so the money block is held to it too: a screen rendering this block by
+     * iterating its entries would otherwise print three prose reasons last.
+     */
+    expect(Object.keys(revenue ?? {})).toEqual([
+      "currency",
+      "order_total",
+      "orders_placed",
+      "orders_counted",
+      "gross",
+      "discounts",
+      "shipping_revenue",
+      "tax",
+      "refunds",
+      "net",
+      "collected",
+      "average_order_value",
+      "unavailable",
+      "refund_count",
+      "refunded_orders",
+    ]);
+  });
+
+  /**
+   * ── Two error shapes on one route, and both are real ─────────────────────────
+   *
+   * A bad `range` is the query-parameter enum family and lands in
+   * `details.params`; a bad custom window is the body-field family and lands in
+   * `details.fields` — on query parameters, from the controller. `ApiError`
+   * keeps the two apart, which is the whole reason it exposes both.
+   *
+   * **The code is asserted beside every sentence.** DECISIONS.md records that
+   * all fourteen parameter refusals in this file once answered
+   * `rest_invalid_param` — a code no client can receive — and that it survived
+   * because every assertion compared only the message.
+   */
+  it("refuses an unknown range as a parameter, naming all six presets", () => {
+    for (const query of ["range=zzz", "range=", "range=400d"]) {
+      const refused = apiError(get("/analytics/overview", query));
+      expect(refused.status, query).toBe(400);
+      expect(refused.code, query).toBe("invalid_request");
+      expect(refused.apiMessage, query).toBe("Invalid parameter(s): range");
+      expect(refused.params?.range, query).toBe(
+        "range is not one of today, yesterday, 7d, 30d, 90d, and custom.",
+      );
+      // The parameter family, so nothing arrives under `fields`.
+      expect(refused.fields, query).toBeNull();
+    }
+
+    // Every preset the panel offers is a member, so `RANGE_PRESETS` and the
+    // refusal cannot drift apart.
+    for (const preset of RANGE_PRESETS.filter((value) => value !== "custom")) {
+      expect(get("/analytics/overview", `range=${preset}`).status, preset).toBe(200);
+    }
+  });
+
+  it("refuses a custom window under fields, with the three measured sentences", () => {
+    const refusal = (query: string) => {
+      const refused = apiError(get("/analytics/overview", query));
+      expect(refused.status, query).toBe(400);
+      expect(refused.code, query).toBe("invalid_request");
+      expect(refused.apiMessage, query).toBe("The reporting range is invalid.");
+      // The field family, so nothing arrives under `params`.
+      expect(refused.params, query).toBeNull();
+      return refused.fields;
+    };
+
+    expect(refusal("range=custom")).toEqual({
+      date_from: "Required when range is custom.",
+      date_to: "Required when range is custom.",
+    });
+    expect(refusal("range=custom&date_from=2026-08-01")).toEqual({
+      date_to: "Required when range is custom.",
+    });
+    expect(refusal("range=custom&date_from=2026-08-20&date_to=2026-08-01")).toEqual({
+      date_from: "Must not be later than date_to.",
+    });
+    expect(refusal("range=custom&date_from=2020-01-01&date_to=2026-08-20")).toEqual({
+      date_from: "A custom range covers at most 366 days.",
+    });
+
+    /*
+     * **A `Y-m-d` the calendar does not have is refused rather than served.**
+     * `/payments?date_from=2026-13-45` is a measured 200 with 0 rows — the
+     * pattern matches and nothing checks the calendar — but this route computes
+     * `range.days` from the two dates, and `NaN` serialises as `null`, which
+     * `analyticsRange` refuses at the panel's own boundary. A 200 the dashboard
+     * throws on is worse than either answer, so it joins the malformed case.
+     */
+    expect(refusal("range=custom&date_from=2026-13-45&date_to=2026-13-46")).toEqual({
+      date_from: "Required when range is custom.",
+      date_to: "Required when range is custom.",
+    });
+    expect(refusal("range=custom&date_from=zzz&date_to=2026-08-20")).toEqual({
+      date_from: "Required when range is custom.",
+    });
+
+    // Every served custom window carries a finite `days`, which is the property
+    // the two refusals above exist to keep true.
+    for (const query of [
+      "range=custom&date_from=2026-02-30&date_to=2026-03-05",
+      "range=custom&date_from=2026-08-01&date_to=2026-08-01",
+    ]) {
+      expect(Number.isFinite(overview(query).data.range.days), query).toBe(true);
+    }
+
+    // The panel's own predicate agrees with the API on all three, which is what
+    // lets the picker refuse before the round trip rather than after it.
+    expect(customRangeProblem("2026-08-20", "2026-08-01")).toBe("reversed");
+    expect(customRangeProblem("2020-01-01", "2026-08-20")).toBe("too-long");
+    expect(customRangeProblem("", "2026-08-20")).toBe("missing");
+  });
+
+  it("serves a legal custom window, counting its days inclusively", () => {
+    const { data } = overview("range=custom&date_from=2026-08-01&date_to=2026-08-20");
+    expect(data.range).toEqual({
+      preset: "custom",
+      from: "2026-08-01",
+      to: "2026-08-20",
+      days: 20,
+      timezone: "+00:00",
+    });
+    // The cap is inclusive: 366 days is served and 367 is not.
+    expect(get("/analytics/overview", "range=custom&date_from=2025-08-19&date_to=2026-08-19").status)
+      .toBe(200);
+    expect(get("/analytics/overview", "range=custom&date_from=2025-08-18&date_to=2026-08-19").status)
+      .toBe(400);
+  });
+
+  /**
+   * ── The dishonesty this route is reproduced for ──────────────────────────────
+   *
+   * **`date_from`/`date_to` outside `range=custom` are accepted and ignored**,
+   * answering the thirty-day default with a 200. That is the trap
+   * `analyticsParams()` is built around: a picker that sent only the two dates
+   * would show an operator a ten-day window above thirty days of figures, and
+   * nothing anywhere would error. A mock that refused them would hide it.
+   *
+   * `per_page` is in the same set and is the quieter half — this route returns
+   * one object rather than a page, so `paginate()` is deliberately not called
+   * and `per_page=abc` is **not** the 400 every collection answers.
+   */
+  it("accepts and ignores every parameter but range", () => {
+    const thirty = JSON.stringify(get("/analytics/overview", "range=30d").body);
+    for (const query of [
+      "bogus_param=1",
+      "per_page=5",
+      "per_page=abc",
+      "page=0",
+      "orderby=id",
+      "date_from=2026-08-01&date_to=2026-08-10",
+      "range=30d&date_from=2026-08-01&date_to=2026-08-10",
+      "range=7d&date_from=2026-08-01&date_to=2026-08-10&per_page=5",
+    ]) {
+      const response = get("/analytics/overview", query);
+      expect(response.status, query).toBe(200);
+      if (!query.startsWith("range=7d")) {
+        expect(JSON.stringify(response.body), query).toBe(thirty);
+      }
+    }
+    // The 7d row above still answers 7d: the dates are ignored, the preset is not.
+    expect(overview("range=7d&date_from=2026-08-01&date_to=2026-08-10").data.range.preset).toBe(
+      "7d",
+    );
+
+    // What `analyticsParams()` actually sends, for each preset the panel offers.
+    for (const preset of RANGE_PRESETS.filter((value) => value !== "custom")) {
+      const query = new URLSearchParams(
+        analyticsParams({ preset, from: "", to: "" }),
+      ).toString();
+      expect(get("/analytics/overview", query).status, preset).toBe(200);
+    }
+  });
+
+  /**
+   * **`generated_at` is pinned by a 60-second server cache** — two live requests
+   * six seconds apart returned the identical stamp, and `meta.cache_ttl` reports
+   * the window. That is what lets a Server Component's figures be up to a minute
+   * older than the navigation that fetched them, which is why the dashboard
+   * prints the stamp at all: a screen must never read a fresh stamp as proof of
+   * a fresh request.
+   */
+  it("pins generated_at and reports the cache that pins it", () => {
+    // `meta` here is a report's, not a list's — `parse()` hands it back exactly
+    // as the panel's `acFetch` does, which is where the dashboard reads it.
+    const meta = (query = "") =>
+      overview(query).meta as Record<string, unknown> & { generated_at?: unknown };
+
+    const first = meta();
+    expect(first.cache_ttl).toBe(60);
+    expect(first.money_requires).toBe("ac_manage_orders");
+    expect(first.money_visible).toBe(true);
+    expect(typeof first.generated_at).toBe("string");
+    expect(first.generated_at).toMatch(/\+00:00$/);
+    // Unmoved across requests and across ranges: the stamp is the cache's, not
+    // the request's.
+    expect(meta("range=7d").generated_at).toBe(first.generated_at);
+    expect(meta("range=today").generated_at).toBe(first.generated_at);
+  });
+
+  it("serves no other verb and no other path under /analytics", () => {
+    expect(get("/analytics").status).toBe(404);
+    expect(get("/analytics/overview/zzz").status).toBe(404);
+    expect(write("POST", "/analytics/overview", {}).status).toBe(404);
+  });
+});
+
 describe("the shipment writes", () => {
   it("moves a live parcel anywhere, and recomputes is_live from the status", () => {
     /*
@@ -2260,6 +2631,7 @@ describe("MOCK_IDENTITY", () => {
     expect(data.capabilities).toHaveLength(13);
     expect(data.capabilities).toContain("ac_manage_shipping");
     expect(data.capabilities).toContain("ac_manage_payments");
+    expect(data.capabilities).toContain("ac_manage_orders");
   });
 
   it("drops the two the order detail's gated sections need, when asked to", async () => {
@@ -2334,6 +2706,93 @@ describe("MOCK_IDENTITY", () => {
       const statistics = ask("/cod/statistics");
       expect(statistics.status).toBe(200);
       expect(unwrap(codStatisticsSchema, statistics.body, 200).data.total_orders).toBe(599);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * ── The third identity, and the state `reduced` cannot reach ────────────────
+   *
+   * The dashboard's money gate is `canSeeMoney()` — `ac_view_analytics` **and**
+   * `ac_manage_orders` — and `reduced` holds both. It holds the second on
+   * purpose: dropping it would turn `/orders/1023` from a screen with two
+   * sections missing into a whole page refused, which is the one capture that
+   * identity exists for. So a third was added rather than the second bent.
+   *
+   * Measured 2026-08-26 with a real Support Agent credential, and this test is
+   * the whole of what was measured: the overview is a **200** whose keys are
+   * exactly `range, orders, customers, cod, shipping, inventory` — `revenue` is
+   * *absent*, not null and not zeroed — with `money_visible: false` beside it,
+   * and the same reader is 403 on `/orders` and `/inventory` and **200** on
+   * `/customers`.
+   *
+   * The absence is the part a schema cannot catch on its own: every money field
+   * in `lib/api/schemas/analytics.ts` is `.optional()`, so a fixture that emitted
+   * `revenue: {…}` for this credential would parse cleanly and be wrong, and the
+   * dashboard would render a money card no such reader can see.
+   */
+  it("omits the money block entirely for a credential without ac_manage_orders", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "support");
+    try {
+      const mock = await freshMock();
+      const ask = (path: string) => mock.respond("GET", `${mock.BASE_PATH}${path}`);
+
+      const response = ask("/analytics/overview");
+      expect(response.status).toBe(200);
+      const { data, meta } = unwrap(overviewReport, response.body, 200);
+
+      expect(Object.keys(data)).toEqual([
+        "range",
+        "orders",
+        "customers",
+        "cod",
+        "shipping",
+        "inventory",
+      ]);
+      expect(data).not.toHaveProperty("revenue");
+      expect(data.revenue).toBeUndefined();
+      expect(meta?.money_visible).toBe(false);
+      expect(meta?.money_requires).toBe("ac_manage_orders");
+
+      // The counts and rates are all still there, which is what lets
+      // `dashboardCards()` return a set of the same length rather than a grid
+      // with two holes in it.
+      expect(data.orders.placed).toBe(901);
+      expect(data.inventory.low_stock).toBe(3);
+      expect(data.cod.confirmation_rate).toBe("0.2104");
+
+      // The two collections the same credential was measured 403 on, and the one
+      // it was measured 200 on. The third is why there is no gate on
+      // `/customers` however plausible one would look.
+      for (const path of ["/orders", "/orders/1023", "/inventory", "/inventory/201"]) {
+        const refused = ask(path);
+        expect(refused.status, path).toBe(403);
+        expect((refused.body as { error: { code: string } }).error.code, path).toBe("forbidden");
+      }
+      expect(ask("/customers").status).toBe(200);
+      expect(ask("/cod/statistics").status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * The half-payload state is `support`'s and **not** `reduced`'s, and the
+   * distinction is worth an assertion rather than a comment: `reduced` sees the
+   * money, so a capture run asking it for the dashboard's gated state would
+   * photograph the ungated one and report green.
+   */
+  it("still shows the money to the reduced identity, which keeps ac_manage_orders", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "reduced");
+    try {
+      const mock = await freshMock();
+      const response = mock.respond("GET", `${mock.BASE_PATH}/analytics/overview`);
+      const { data, meta } = unwrap(overviewReport, response.body, 200);
+      expect(data.revenue).toBeDefined();
+      expect(meta?.money_visible).toBe(true);
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
@@ -5116,10 +5575,18 @@ const COVERED = [
   // the customer detail's section reads it. The two routes this module still
   // carries schemas for are named below, for the same reason.
   "notification",
+  /*
+   * **Covered by one of its seven reports, and the other six are named below.**
+   * `overviewReport` is the dashboard's whole request — the screen the
+   * specification describes as six round trips is one, because the overview
+   * nests every block the cards need. The remaining schemas in this module
+   * describe routes that are still 404s here, which is a declared gap owned by
+   * the analytics branch rather than an oversight on this one.
+   */
+  "analytics",
 ];
 
 const UNCOVERED: Record<string, string> = {
-  analytics: "the dashboard's report endpoints are not mocked yet",
   audit: "/audit is not mocked yet",
   campaign: "/campaigns is not mocked yet",
   cms: "/cms/* is not mocked yet",
@@ -5202,6 +5669,30 @@ describe("what the newly-covered modules still do not serve", () => {
    *   unanswerable in the shop. The mock refuses it on write and never sends it,
    *   which is the honest reproduction of a field that exists and says nothing.
    */
+  /**
+   * **Six of the seven analytics reports are still 404s here**, and the reason is
+   * scope rather than doubt: the dashboard needs one route and the analytics
+   * screen — item 11 — needs the other six, each with its own payload to measure.
+   * `revenueReport`, `ordersReport`, `productsReport`, `customersReport`,
+   * `shippingReport` and `codReport` all describe answers this file cannot give.
+   *
+   * **`GET /analytics/shipping` in particular is a gap in this file and not in
+   * the shop.** DECISIONS.md still records it as "the one allowlisted route on
+   * this subject still answering `rest_no_route`"; measured 2026-08-26 it answers
+   * **200 with a full payload**, for a Support Agent as well as for a Super
+   * Admin. The ledger needs the correction. Nothing here should teach anyone to
+   * branch on a `rest_no_route` the API does not send.
+   */
+  it("leaves six of the seven analytics reports unmocked", () => {
+    for (const report of ["revenue", "orders", "products", "customers", "shipping", "cod"]) {
+      const response = get(`/analytics/${report}`);
+      expect(response.status, report).toBe(404);
+    }
+    // And the one that is served, so this test cannot quietly come to mean
+    // "analytics is unmocked" again.
+    expect(get("/analytics/overview").status).toBe(200);
+  });
+
   it("leaves the coupon redemption story unanswerable, as the API does", () => {
     expect(get("/cart/coupons").status).toBe(404);
     expect(write("POST", "/cart/coupons", { code: "bienvenue10" }).status).toBe(404);
