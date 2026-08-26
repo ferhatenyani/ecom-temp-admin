@@ -517,11 +517,41 @@ responsive wrapper. A page defines its columns once.
 
 **`<StatGroup>` / `<Stat>`** — the metric row on dashboards and analytics.
 
-- Label `--text-label --color-muted`, value `--text-display` tabular, delta
-  `--text-label` in `--color-success-fg` / `--color-danger-fg` with an arrow icon.
-- 1-up at base, 2-up at `sm`, 4-up at `lg`.
+- Label `--text-label --color-muted`, value `--text-display` tabular, and a third
+  line under the label carrying the figure's **scope** — see the amendment below.
+- 1-up at base, 2-up at `sm`, 4-up at `lg`. A group's lead figure may span two
+  columns, which is what makes seven cards two full rows rather than two rows
+  with a hole in the second.
 - No sparkline inside a stat unless it has an axis or a labelled range. A line
   with no scale is decoration.
+- **`href` is optional.** A figure whose destination this reader is refused on,
+  or which has no honest destination at all, renders as a plain card with the
+  chevron dropped. Never a dimmed link, never a disabled one — §3.3's rule that a
+  control which cannot act is not rendered, reaching a dashboard card.
+
+> **Amended on the dashboard branch: the delta slot holds a scope, because this
+> API publishes no comparison period.**
+>
+> This used to specify label / value / **delta**, the delta being "+12 % vs last
+> month" in `--color-success-fg` or `--color-danger-fg` with an arrow. Measured
+> across all seven analytics reports: there is no `previous`, no `change`, no
+> `history` and no series anywhere in the payloads. A delta rendered here would
+> be a number the panel invented, which is the one thing this run's whole ledger
+> is written to prevent.
+>
+> The slot is not wasted, and on this data it earns more than a delta would. It
+> takes the **scope** — `DataRow.hint`'s job, added on the payments branch — and
+> it is required on any figure standing beside a figure it does not divide into.
+> The dashboard alone has three such pairs: `net` (booked) against `collected`
+> (taken); `orders_placed` 901 against `completed` 56 and `counted_as_revenue`
+> 323; `customers.customers` 9 — *accounts that ordered in this window* — against
+> 209 guest orders. That is DECISIONS.md §5's lesson and §9's arriving a third
+> time, and the answer each time has been the same: never two unlabelled figures
+> at one size on one line.
+>
+> If a comparison period is ever published, a delta belongs in a **fourth** line
+> rather than back in this one. The scope answers *what is this*, a delta answers
+> *how is it moving*, and a figure that needs the first does not stop needing it.
 
 **Charts** — one bar mark, one hue, value printed as text on every row. This rule
 survives from the old system and is still right: five semantic colours reserved
@@ -689,6 +719,25 @@ system, restyled per §1.
    > So: a screen that can hold data older than its own last fetch shows the
    > marker. A screen that cannot says so in its own docblock, and this is the
    > sentence it points at.
+
+   > **Extended on the dashboard branch: a third case, where the data is older
+   > than the navigation and the API says by how much.**
+   >
+   > `/analytics/overview` sits behind a **60-second server cache** — two live
+   > requests six seconds apart returned the identical `meta.generated_at`, and
+   > `meta.cache_ttl` reports the window. So a Server Component with no writes and
+   > no polling can still be handed figures that predate the navigation that
+   > fetched them, which the amendment above did not anticipate.
+   >
+   > That is still not the stale state: there is nothing to disable, nothing has
+   > drifted from anything, and the age is a published fact rather than a
+   > suspicion. It renders as a plain **"as of"** line under the title — a
+   > timestamp, not a warning colour and not a banner. The distinction is whether
+   > the screen is *reporting* an age or *warning* about one.
+   >
+   > What it replaced on that screen was worse than a redundant banner: a
+   > `StaleBanner` behind `!navigator.onLine`, which is an offline marker on a
+   > page with no writes to disable and no cache to go stale.
 
 ---
 

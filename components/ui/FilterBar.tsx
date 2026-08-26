@@ -28,7 +28,14 @@ export function FilterTabs<T extends string>({
   onChange,
   label,
 }: {
-  tabs: { value: T; label: string; count?: number }[];
+  /**
+   * `opensDialog` is for a tab that does not apply a filter on its own — the
+   * range control's "custom", which opens a `Modal` to collect two dates before
+   * anything is filtered at all. It sets `aria-haspopup="dialog"`, so the one tab
+   * in the strip that behaves differently announces that it does rather than
+   * looking identical to the five that apply immediately.
+   */
+  tabs: { value: T; label: string; count?: number; opensDialog?: boolean }[];
   value: T;
   onChange: (next: T) => void;
   label: string;
@@ -60,6 +67,7 @@ export function FilterTabs<T extends string>({
                  are not tabs in the ARIA sense anyway: there is no tabpanel, the
                  filter is a query parameter and the list re-fetches. */
               aria-current={active ? "page" : undefined}
+              aria-haspopup={tab.opensDialog ? "dialog" : undefined}
               onClick={() => onChange(tab.value)}
               className="ui-tab ui-ring flex min-h-10 cursor-pointer items-center gap-1.5 rounded-t-ui-md px-2.5 text-ui-compact"
             >

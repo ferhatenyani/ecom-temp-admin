@@ -5,6 +5,8 @@ import type {
   ShippingReport,
   WilayaRow,
 } from "@/lib/api/schemas/analytics";
+/* Types only, so nothing here reaches a client bundle — see the note below. */
+import type { Capability } from "@/lib/capabilities";
 
 /**
  * What the seven reports mean, in one place.
@@ -529,9 +531,31 @@ export function awaitingFulfilment(report: Pick<OrdersReport, "by_status">): num
 /**
  * A dashboard card: one figure, and the screen it came from.
  *
- * `href` is not decoration and is not optional. ADMIN_PANEL.md's rule is that
- * **a dashboard number that cannot be drilled into is decoration**, so the type
- * makes a card without a destination unrepresentable.
+ * ## `href` is optional, and that is an amendment
+ *
+ * ADMIN_PANEL.md's rule is that **a dashboard number that cannot be drilled into
+ * is decoration**, and this type used to enforce it by making a card without a
+ * destination unrepresentable. The rule is right about decoration and the
+ * enforcement was wrong, because "there is no honest destination" is a state the
+ * API can put a card in and a required field cannot express. It produced two
+ * defects on the shipped screen:
+ *
+ *   1. **`awaiting` linked to half its own number.** It counts `pending +
+ *      processing` and linked `/orders?status=processing`, because
+ *      `?status=processing,pending` is a measured 400 — so tapping a card
+ *      reading 375 landed on a list of 177 and neither screen said why.
+ *   2. **Four of a Support Agent's seven cards linked to a refusal.** Measured
+ *      2026-08-26: that credential is 403 on `/orders` and `/inventory`, and the
+ *      cards leading there still rendered as links.
+ *
+ * So the remedy for a figure with no honest destination is to render it
+ * **unlinked** — the number still shows, because the reader is entitled to it —
+ * and never a link to a refusal, never a disabled link (§3.3: a control that
+ * cannot act is not rendered). See DECISIONS.md §11.
+ *
+ * The two linkless reasons stay distinguishable, which is what lets the screen
+ * explain each one in its own words: a card with `requires` and no `href` is
+ * refused, and a card with neither is one the API cannot filter for.
  *
  * `value` stays in the API's own shape — a decimal string for money, a fraction
  * string for a rate, the number for a count — and `kind` says which formatter it
@@ -542,10 +566,32 @@ export type DashboardCard = {
   key: string;
   kind: "count" | "money" | "rate";
   value: string;
-  /** Appended to `/{locale}`. */
-  href: string;
+  /** Appended to `/{locale}`. Absent when there is no honest destination. */
+  href?: string;
+  /**
+   * The capability the destination needs, on the cards that have one.
+   *
+   * Present with no `href` means *this reader is refused there*, which is a
+   * different sentence from a card that never had a destination at all.
+   */
+  requires?: Capability;
   /** Exactly one card is the hero, and it is the first. */
   hero: boolean;
+};
+
+/**
+ * What the card set needs to know about the reader and the window.
+ *
+ * An options object rather than three more positional parameters: the call site
+ * reads `{ money, capabilities, range }` and cannot transpose two booleans.
+ */
+export type DashboardOptions = {
+  /** `canSeeMoney(me)` — the panel's own reading of the identity. */
+  money: boolean;
+  /** `me.capabilities`. A destination the reader is refused on is no destination. */
+  capabilities: readonly string[];
+  /** The window on screen, carried into the report links that can hold it. */
+  range: RangeQuery;
 };
 
 /**
@@ -571,36 +617,72 @@ export type DashboardCard = {
  * and reaches it exactly: measured 2026-08-21, a Support Agent gets a 403 from
  * `/analytics/revenue` and an overview with no `revenue` block at all.
  *
- * A pure function so the branch is a unit test rather than a screenshot.
+ * **The money gate is not the only gate, and the second one is per card.** That
+ * same Support Agent is **403 on `/orders` and `/inventory`** and 200 on
+ * `/customers` — measured 2026-08-26 — so four of the seven cards in the
+ * moneyless set lead somewhere they are refused. Those keep their figure and
+ * lose their link; see `DashboardCard`. The two gates are independent: money
+ * chooses the *set*, capabilities choose which of that set's cards are links.
+ *
+ * A pure function so both branches are a unit test rather than a screenshot.
  */
-export function dashboardCards(report: OverviewReport, money: boolean): DashboardCard[] {
+export function dashboardCards(
+  report: OverviewReport,
+  { money, capabilities, range }: DashboardOptions,
+): DashboardCard[] {
+  /**
+   * A report link keeps the window; a list link cannot.
+   *
+   * `/analytics` reads `range`, `date_from` and `date_to` off its own URL, so a
+   * card leading there hands the reader the same window they were looking at.
+   * `/orders`, `/customers` and `/inventory` have **no date parameter at all** —
+   * appending one would be the panel writing a filter the API ignores, which is
+   * this run's oldest rule. The screen says so in a footnote rather than leaving
+   * the asymmetry looking unfinished.
+   */
+  const reportHref = (view: string) => {
+    const search = rangeToParams(range).toString();
+    return `/analytics?view=${view}${search === "" ? "" : `&${search}`}`;
+  };
+
+  /** A destination the reader is refused on is recorded and not linked. */
+  const gated = (capability: Capability, href: string) => ({
+    requires: capability,
+    ...(capabilities.includes(capability) ? { href } : {}),
+  });
+
   const operational: DashboardCard[] = [
     {
       key: "awaiting",
       kind: "count",
       value: String(awaitingFulfilment(report.orders)),
-      href: "/orders?status=processing",
+      /*
+       * **No link, and that is the measurement rather than an omission.** This
+       * counts `pending + processing`; `?status=processing,pending` is a 400 and
+       * `?status=processing` is 177 of the 375 the card reads. There is no
+       * filtered list that is this number, so the figure ships without one.
+       */
       hero: false,
     },
     {
       key: "low_stock",
       kind: "count",
       value: String(report.inventory.low_stock),
-      href: "/inventory",
+      ...gated("ac_manage_inventory", "/inventory"),
       hero: false,
     },
     {
       key: "cod_confirmation",
       kind: "rate",
       value: report.cod.confirmation_rate,
-      href: "/analytics?view=cod",
+      href: reportHref("cod"),
       hero: false,
     },
     {
       key: "shipping_delivery",
       kind: "rate",
       value: report.shipping.delivery_rate,
-      href: "/analytics?view=shipping",
+      href: reportHref("shipping"),
       hero: false,
     },
   ];
@@ -614,19 +696,25 @@ export function dashboardCards(report: OverviewReport, money: boolean): Dashboar
   if (money && report.revenue !== undefined) {
     const revenue = report.revenue;
     return [
-      { key: "net", kind: "money", value: revenue.net, href: "/analytics?view=revenue", hero: true },
+      {
+        key: "net",
+        kind: "money",
+        value: revenue.net,
+        href: reportHref("revenue"),
+        hero: true,
+      },
       {
         key: "collected",
         kind: "money",
         value: revenue.collected,
-        href: "/analytics?view=revenue",
+        href: reportHref("revenue"),
         hero: false,
       },
       {
         key: "orders_placed",
         kind: "count",
         value: String(report.orders.placed),
-        href: "/orders",
+        ...gated("ac_manage_orders", "/orders"),
         hero: false,
       },
       ...operational,
@@ -638,7 +726,7 @@ export function dashboardCards(report: OverviewReport, money: boolean): Dashboar
       key: "orders_placed",
       kind: "count",
       value: String(report.orders.placed),
-      href: "/orders",
+      ...gated("ac_manage_orders", "/orders"),
       hero: true,
     },
     /*
@@ -654,14 +742,14 @@ export function dashboardCards(report: OverviewReport, money: boolean): Dashboar
       key: "completed",
       kind: "count",
       value: String(report.orders.completed),
-      href: "/orders?status=completed",
+      ...gated("ac_manage_orders", "/orders?status=completed"),
       hero: false,
     },
     {
       key: "customers",
       kind: "count",
       value: String(report.customers.customers),
-      href: "/customers",
+      ...gated("ac_manage_customers", "/customers"),
       hero: false,
     },
     ...operational,
