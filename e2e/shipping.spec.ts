@@ -308,9 +308,19 @@ test.describe("what a Manager may and may not reach", () => {
     await signIn(page, "fr");
 
     await page.goto("/fr/payments");
-    await expect(page.getByRole("heading", { name: "Transactions" })).toBeVisible({
-      timeout: 15000,
-    });
+    /*
+     * The count, which is the ledger's own header subtitle and is rendered only
+     * past the capability gate — exactly as `parcels-count` is above, and for the
+     * same reason: a refused screen carries no total rather than reporting a
+     * figure nobody was allowed to read.
+     *
+     * It used to be `getByRole("heading", { name: "Transactions" })`, which was a
+     * `ListGroup`'s `<h2>`. The redesign has no heading over the table — the page
+     * title and this count are what name it, the way every other list in the
+     * panel is named — so the assertion moved to the element that carries the
+     * same fact. What it checks is unchanged: a Super Admin reaches the ledger.
+     */
+    await expect(page.getByTestId("payments-count")).toBeVisible({ timeout: 15000 });
 
     await page.goto("/fr/more");
     await expect(page.getByRole("link", { name: "Paiements" })).toBeVisible();

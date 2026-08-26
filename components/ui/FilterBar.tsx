@@ -207,7 +207,35 @@ export function FilterChips({
   );
 }
 
-/** The row that holds search, the extra-filter trigger and the table controls. */
-export function FilterRow({ children }: { children: ReactNode }) {
-  return <div className="flex flex-wrap items-center gap-2">{children}</div>;
+/**
+ * The row that holds search, the extra-filter trigger and the table controls.
+ *
+ * `align` was added on the payments branch, and it exists because a row of
+ * *labelled* controls is a different box model from a row of bare ones. Every
+ * filter row before it held only controls with no visible label — a `SearchField`
+ * at 36px, a `Button` at 28 — so centring them was right. Payments puts a
+ * `Select` and two `DateField`s in the same row, and `Form.tsx`'s `FieldFrame` is
+ * a label over a control: 18px of label, a 6px gap, then the 36px box. Centred,
+ * the search field floats in the middle of a 60px line while the pickers' boxes
+ * sit at the bottom of it, so four controls that do the same job land on three
+ * different baselines.
+ *
+ * `end` puts every control's own box on one line and lets the labels stack above
+ * it. Below `sm` the row wraps to a column and the choice stops mattering, which
+ * is why it is one prop rather than a responsive variant.
+ */
+export function FilterRow({
+  children,
+  align = "center",
+}: {
+  children: ReactNode;
+  align?: "center" | "end";
+}) {
+  return (
+    <div
+      className={`flex flex-wrap gap-2 ${align === "end" ? "items-end" : "items-center"}`}
+    >
+      {children}
+    </div>
+  );
 }
