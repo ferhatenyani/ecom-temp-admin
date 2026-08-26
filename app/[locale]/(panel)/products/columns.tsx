@@ -11,7 +11,7 @@ import { formatMoney } from "@/lib/format/money";
 import { formatWhen } from "@/lib/format/date";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { Badge, Dot } from "@/components/ui/Badge";
-import type { Column } from "@/components/ui/DataTable";
+import { rowOpenerId, type Column } from "@/components/ui/DataTable";
 
 /**
  * The Products column definition — one source, two presentations.
@@ -156,6 +156,15 @@ function priceLine(product: Product, ctx: ProductColumnContext): ReactNode {
       </Ltr>
     </span>
   );
+}
+
+/**
+ * The DOM id of a row's peek opener, in one place because two files need it: the
+ * list that hands it to `DataTable`, and `ProductPeek`, which hands focus back to
+ * it on close. The pattern itself lives in `DataTable`.
+ */
+export function productOpenerId(id: number): string {
+  return rowOpenerId("product", id);
 }
 
 export function buildColumns(ctx: ProductColumnContext): Column<Product>[] {

@@ -10,7 +10,7 @@ import { formatWhen } from "@/lib/format/date";
 import { formatMoney } from "@/lib/format/money";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { Badge } from "@/components/ui/Badge";
-import type { Column } from "@/components/ui/DataTable";
+import { rowOpenerId, type Column } from "@/components/ui/DataTable";
 
 /**
  * The parcels column definition — one source, two presentations.
@@ -58,11 +58,6 @@ export type ParcelColumnContext = {
    * hook and a column definition is a plain function. See `providerLabel`.
    */
   providerName: (name: string) => string;
-  /**
-   * Opens the drawer. The identifying cell is a real button rather than the row
-   * being clickable and nothing else — see the `tracking` column.
-   */
-  onOpen: (parcel: SafeShipment) => void;
   /** id → display name, resolved once for the page rather than per row. */
   wilayaName: (id: number | null) => string | null;
   t: (key: string, values?: Record<string, string | number>) => string;
@@ -72,11 +67,12 @@ export type ParcelColumnContext = {
 };
 
 /**
- * The DOM id of a row's opener, in one place because two files need it: the cell
- * that renders the button and the drawer that hands focus back to it on close.
+ * The DOM id of a row's opener, in one place because two files need it: the list
+ * that hands it to `DataTable`, and the drawer that hands focus back to it on
+ * close. The pattern itself lives in `DataTable`.
  */
 export function parcelOpenerId(id: number): string {
-  return `parcel-opener-${id}`;
+  return rowOpenerId("parcel", id);
 }
 
 /** The badge, which every presentation of a parcel opens with. */
@@ -121,49 +117,26 @@ export function buildColumns(ctx: ParcelColumnContext): Column<SafeShipment>[] {
       header: t("columns.tracking"),
       required: true,
       /*
-       * The row's identity, and **a real `<button>` — which is the keyboard path
-       * to the drawer.**
-       *
-       * `DataTable`'s `onRowClick` hangs off the `<tr>`, and a `<tr>` is not
-       * focusable. Below `md` that is invisible because `RecordList` draws a
-       * stretched overlay button carrying `rowLabel`; at `md`+ there was no
-       * opener at all. Measured at 1440: seventy tabs through this screen reached
-       * exactly one focusable per row, the anchor to `/orders/{id}` — which goes
-       * somewhere else entirely. On coupons and customers the row's anchor *is*
-       * its purpose, so those lists are fine; here the drawer is the parcel's
-       * only record surface and it was mouse-only, against §5 and §8.
-       *
-       * On the identifying cell rather than stretched over the row, because the
-       * row already contains the order anchor and two interactive elements must
-       * not nest. It stops propagation so one click does not open the drawer
-       * twice, and it carries a stable `id` so the drawer can hand focus back to
-       * it — Radix restores to whatever had focus when the overlay opened, which
-       * for a click on the `<tr>`'s background is `<body>`.
+       * The row's identity, and the cell `DataTable` wraps in the drawer's
+       * opener — the list passes `rowOpenerId`, so the `<button>`, its
+       * `stopPropagation` and its stable DOM id are the primitive's now.
+       * DECISIONS.md §10 carries the measurement that put it there.
        *
        * Capped because `.ui-td` is `white-space: nowrap` and an auto-layout table
        * sizes a column to its widest cell; the fixture carries a deliberately
-       * long tracking number. `Ltr` because a tracking number reordered by the
-       * bidi algorithm is a *different* tracking number.
+       * long tracking number. The cap is on the truncating element rather than on
+       * the button, because the button is no longer written here. `Ltr` because a
+       * tracking number reordered by the bidi algorithm is a *different* tracking
+       * number.
        */
-      cell: (parcel) => (
-        <button
-          type="button"
-          id={parcelOpenerId(parcel.id)}
-          onClick={(event) => {
-            event.stopPropagation();
-            ctx.onOpen(parcel);
-          }}
-          className="ui-ring block max-w-56 cursor-pointer rounded-ui-md text-start"
-        >
-          {parcel.tracking_number === "" ? (
-            <span className="text-ui-subtle">{t("noTracking")}</span>
-          ) : (
-            <Ltr numeric={false} className="block truncate">
-              {parcel.tracking_number}
-            </Ltr>
-          )}
-        </button>
-      ),
+      cell: (parcel) =>
+        parcel.tracking_number === "" ? (
+          <span className="text-ui-subtle">{t("noTracking")}</span>
+        ) : (
+          <Ltr numeric={false} className="block max-w-56 truncate">
+            {parcel.tracking_number}
+          </Ltr>
+        ),
     },
     {
       key: "status",

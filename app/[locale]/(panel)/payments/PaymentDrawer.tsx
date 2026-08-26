@@ -9,7 +9,7 @@ import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import type { Payment, VerifyResult } from "@/lib/api/schemas/payment";
 import { formatMoney } from "@/lib/format/money";
 import { formatWhen } from "@/lib/format/date";
-import { Drawer } from "@/components/ui/Overlay";
+import { Drawer, useLatchedOpener } from "@/components/ui/Overlay";
 import { DataList, DataRow } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Notice } from "@/components/ui/States";
@@ -89,27 +89,9 @@ export function PaymentDrawer({
   const [report, setReport] = useState<{ id: number; result: VerifyResult } | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  /*
-   * **Which row focus goes back to, latched so it survives the close.**
-   *
-   * `<tr>` cannot take focus, so a pointer-opened drawer has no opener for
-   * `useOpenerFocus` to record and Escape dropped a person on `<body>` with the
-   * whole sidebar to tab past. The table's id button is a real element with a
-   * stable id and is the honest target.
-   *
-   * It has to be **latched** rather than read off `payment`. Radix fires
-   * `onCloseAutoFocus` *after* `onOpenChange`, so by the time focus is restored
-   * the screen has already set `payment` to null and a value derived from it is
-   * `undefined` — which is exactly why the shipping branch's first attempt at
-   * this passed every keyboard assertion and still failed on the mouse. Never
-   * cleared, because the only thing it is read for is a close that has already
-   * happened.
-   *
-   * Adjusted during render against the previous value, not in an effect: an
-   * effect runs after paint, and this has to be correct before the first Escape.
-   */
-  const [openerFor, setOpenerFor] = useState<number | null>(null);
-  if (payment !== null && payment.id !== openerFor) setOpenerFor(payment.id);
+  /* Which row focus goes back to. Latched, because Radix fires
+     `onCloseAutoFocus` after `onOpenChange` — see `useLatchedOpener`. */
+  const returnFocusTo = useLatchedOpener(payment && paymentOpenerId(payment.id));
 
   const verify = useMutation({
     mutationFn: async (id: number) =>
@@ -161,7 +143,7 @@ export function PaymentDrawer({
          rendered, falling back to `RecordList`'s own overlay button. The guard is
          in the primitive rather than a width check here, because reading the
          viewport during render is a hydration mismatch. */
-      returnFocusTo={openerFor === null ? undefined : paymentOpenerId(openerFor)}
+      returnFocusTo={returnFocusTo}
       footer={
         payment === null ? null : (
           <Button

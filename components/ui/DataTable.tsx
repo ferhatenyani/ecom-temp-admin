@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr } from "@/components/primitives/Ltr";
@@ -89,6 +89,9 @@ const CONTROL_PAD: Record<Density, string> = {
  * not exist on the server and reading it during render is a hydration mismatch.
  */
 export type TablePreferences = {
+  /** The `tableId` this was built with. Only used to name the table in a
+   *  development warning — see `useOpenerAssertion`. */
+  tableId: string;
   visible: string[];
   setVisible: (next: string[]) => void;
   density: Density;
@@ -132,12 +135,91 @@ export function useTablePreferences<T>(
   const density: Density = rawDensity === "compact" ? "compact" : "comfortable";
 
   return {
+    tableId,
     visible,
     setVisible: (next) =>
       writeStored(`ac-table-${tableId}-cols`, JSON.stringify(next)),
     density,
     setDensity: (next) => writeStored(`ac-table-${tableId}-density`, next),
   };
+}
+
+/**
+ * The DOM id of a row's opener — one definition, because four screens need the
+ * same string in two places each: the cell that renders the button, and the
+ * overlay that hands focus back to it on close.
+ *
+ * A **scope** rather than a bare key, because two tables can be mounted at once
+ * (a peek drawer over a list, a list inside a detail tab) and `id` is
+ * document-wide. Screens wrap it in a one-line named helper —
+ * `paymentOpenerId(id)` — so the scope literal is written once per screen.
+ *
+ * Not to be confused with `DataTable`'s `rowOpenerId` *prop*, which is the
+ * per-row function a caller builds out of this.
+ */
+export function rowOpenerId(scope: string, key: string | number): string {
+  return `${scope}-opener-${key}`;
+}
+
+/**
+ * Anything the browser will put a tab stop on. Used by the development
+ * assertion below and nowhere else.
+ */
+const FOCUSABLE =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * **The other half of the opener rule: a row that opens something must offer a
+ * way to open it that is not a mouse.**
+ *
+ * `onRowClick` hangs off the `<tr>`, and a `<tr>` is not focusable. Below `md`
+ * that is invisible because `RecordList` draws a stretched overlay button
+ * carrying `rowLabel`; at `md`+ there is no opener at all unless the caller put
+ * one in the identifying cell — which for four branches nobody noticed, because
+ * every list until then happened to carry an anchor there that *was* the row's
+ * purpose. Orders and payments both shipped a mouse-only peek. See DECISIONS.md
+ * §10.
+ *
+ * A **type**-level requirement would be the tighter enforcement and is the wrong
+ * one: coupons, customers and inventory navigate, their first cell is already a
+ * real anchor, and requiring `rowOpenerId` of them would either force a button
+ * around an anchor — nested interactive content, the thing payments and shipping
+ * deliberately avoided — or teach everyone to pass a value to silence a type.
+ * So it is a *measurement* instead, of the thing that actually matters: after
+ * mount, does the first row's identifying cell contain a tab stop?
+ *
+ * The identifying cell rather than the whole row, and that is the load-bearing
+ * choice. A row-actions `Menu` is a focusable in the row and is **not** an
+ * opener — it is a menu — so a whole-row check would have passed orders and
+ * products, which are the two screens this exists to have caught.
+ *
+ * One row, one `querySelector`, and `NODE_ENV` is inlined at build time so the
+ * body is dead code in production.
+ */
+function useOpenerAssertion(
+  ref: React.RefObject<HTMLTableElement | null>,
+  tableId: string,
+  enabled: boolean,
+  selectable: boolean,
+  rowCount: number,
+) {
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    if (!enabled || rowCount === 0) return;
+
+    const row = ref.current?.querySelector("tbody tr");
+    /* The checkbox is a control on the row, not a way into it, so the
+       identifying cell is the second child when selection is on. */
+    const cell = row?.children[selectable ? 1 : 0];
+    if (!cell || cell.querySelector(FOCUSABLE)) return;
+
+    console.error(
+      `DataTable(${tableId}): onRowClick is set but the identifying cell holds no ` +
+        `focusable opener, so this table is mouse-only at md and up. Pass ` +
+        `rowOpenerId to have the primitive render the opener, or make the first ` +
+        `column a link when navigating is the row's purpose. See DESIGN.md §3.2.`,
+    );
+  }, [ref, tableId, enabled, selectable, rowCount]);
 }
 
 /**
@@ -286,10 +368,12 @@ function nextSort(
  * rule and also just correct at 1024px with eight columns.
  */
 function Table<T>({
+  tableId,
   rows,
   columns,
   rowKey,
   onRowClick,
+  rowOpenerId,
   rowLabel,
   density,
   sort,
@@ -299,10 +383,12 @@ function Table<T>({
   onSelectedChange,
   rowActions,
 }: {
+  tableId: string;
   rows: T[];
   columns: Column<T>[];
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
+  rowOpenerId?: (row: T) => string;
   rowLabel: (row: T) => string;
   density: Density;
   sort?: SortState;
@@ -338,9 +424,18 @@ function Table<T>({
    */
   const identityStart = selectable ? "start-10" : "start-0";
 
+  const tableRef = useRef<HTMLTableElement>(null);
+  useOpenerAssertion(
+    tableRef,
+    tableId,
+    Boolean(onRowClick),
+    Boolean(selectable),
+    rows.length,
+  );
+
   return (
     <div className="ui-table-scroll">
-      <table className="ui-table">
+      <table ref={tableRef} className="ui-table">
         <thead>
           <tr>
             {selectable ? (
@@ -483,7 +578,41 @@ function Table<T>({
 
                 {columns.map((column, index) => {
                   const alignEnd = column.align === "end";
-                  const content = column.cell(row);
+                  /*
+                   * **The identifying cell becomes the row's opener**, when the
+                   * caller asked for one. See `useOpenerAssertion`: `onRowClick`
+                   * alone is a `<tr>` handler and a `<tr>` is not focusable, so
+                   * this is the keyboard path to whatever the row opens.
+                   *
+                   * Only on `index === 0`, and only when `rowOpenerId` is passed.
+                   * The three navigating lists put a real anchor in that cell
+                   * already, and wrapping an anchor in a button is nested
+                   * interactive content — which is precisely what the two
+                   * hand-rolled versions of this button were avoiding when they
+                   * chose the cell over a stretched overlay.
+                   *
+                   * `stopPropagation` so the `<tr>` handler does not also fire
+                   * and open the row twice, and a stable `id` so the overlay can
+                   * hand focus back here on close — Radix restores to whatever
+                   * held focus at open, which for a click on the row's own
+                   * background is `<body>`.
+                   */
+                  const content =
+                    index === 0 && onRowClick && rowOpenerId ? (
+                      <button
+                        type="button"
+                        id={rowOpenerId(row)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRowClick(row);
+                        }}
+                        className="ui-ring block cursor-pointer rounded-ui-md text-start"
+                      >
+                        {column.cell(row)}
+                      </button>
+                    ) : (
+                      column.cell(row)
+                    );
                   /* The first column is the row's own heading, which is what
                      lets a screen reader announce "row 4, order 10482" rather
                      than reading six unlabelled cells. */
@@ -833,6 +962,7 @@ export function DataTable<T>({
   rowLabel,
   record,
   onRowClick,
+  rowOpenerId,
   rowActions,
   sort,
   onSortChange,
@@ -850,6 +980,18 @@ export function DataTable<T>({
   /** The three lines shown below `md`. */
   record: (row: T) => { primary: ReactNode; secondary: ReactNode; meta: ReactNode };
   onRowClick?: (row: T) => void;
+  /**
+   * The DOM id of this row's opener. Passing it makes the table wrap the
+   * identifying cell in a real `<button>` that calls `onRowClick` — the keyboard
+   * path a `<tr>` handler cannot give, and a stable target for an overlay's
+   * `returnFocusTo`. Build it with `rowOpenerId(scope, key)`.
+   *
+   * Omit it when the identifying cell is already a link and following that link
+   * *is* what clicking the row does: a button around an anchor is nested
+   * interactive content. The development assertion checks either way — see
+   * `useOpenerAssertion`.
+   */
+  rowOpenerId?: (row: T) => string;
   rowActions?: (row: T) => ReactNode;
   sort?: SortState;
   onSortChange?: (next: SortState) => void;
@@ -893,11 +1035,13 @@ export function DataTable<T>({
         {/* The table: md and up. */}
         <div className="hidden md:block">
           <Table
+            tableId={prefs.tableId}
             rows={rows}
             columns={shown}
             rowKey={rowKey}
             rowLabel={rowLabel}
             onRowClick={onRowClick}
+            rowOpenerId={rowOpenerId}
             density={prefs.density}
             sort={sort}
             onSortChange={onSortChange}

@@ -478,6 +478,17 @@ information, never on a touch target.
   **above** the column header, inside the card. It does not replace the header:
   the column labels are what someone is reading while they decide what to tick,
   and taking them away costs more than the one-time 44px shift the bar causes.
+- **A row that opens something needs a focusable opener, and the table renders
+  it.** `onRowClick` hangs off the `<tr>`; a `<tr>` is not focusable, so on its
+  own it is a mouse-only row at `md`+ — invisible below `md`, where `RecordList`
+  draws its own overlay button. Pass `rowOpenerId` and the identifying cell's
+  content is wrapped in a real `<button>` with a stable DOM id, which is both the
+  keyboard path and the target an overlay's `returnFocusTo` names. Omit it only
+  when that cell is already a link and following it *is* what clicking the row
+  does — a button around an anchor is nested interactive content. Neither the
+  selection checkbox nor the row-actions `Menu` counts: one selects, the other is
+  a menu. In development the table checks the first row and says so if there is
+  no opener. See DECISIONS.md §10.
 - Row actions: one `Menu` in a trailing column, 40px wide. Not four icon buttons.
 - Sort: the header cell is the button, with `aria-sort` and a chevron. Sorted
   column's header text goes `--color-fg`.

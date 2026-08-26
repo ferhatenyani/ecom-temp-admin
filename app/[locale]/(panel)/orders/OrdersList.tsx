@@ -19,7 +19,12 @@ import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { Menu } from "@/components/ui/Menu";
 import { Isolate } from "@/components/primitives/Ltr";
-import { buildColumns, orderRecord, type OrderColumnContext } from "./columns";
+import {
+  buildColumns,
+  orderOpenerId,
+  orderRecord,
+  type OrderColumnContext,
+} from "./columns";
 import { OrderPeek } from "./OrderPeek";
 import { downloadCsv } from "@/lib/csv";
 import { toCsv } from "./export";
@@ -289,7 +294,15 @@ export function OrdersList({
             rowKey={(order) => String(order.id)}
             rowLabel={(order) => tA11y("orderNumber", { number: order.number })}
             record={(order) => orderRecord(order, ctx)}
+            /*
+             * `onRowClick` is the *pointer* path only — a `<tr>` is not
+             * focusable — and until this branch that was the *whole* path at
+             * `md`+: the row's only other focusables are the bulk checkbox and
+             * the actions `Menu`, and neither opens the peek. `rowOpenerId` makes
+             * the order-number cell a real `<button>`. See DECISIONS.md §10.
+             */
             onRowClick={(order) => setParams({ peek: String(order.id) }, false)}
+            rowOpenerId={(order) => orderOpenerId(order.id)}
             selectable
             selectionActions={(selected) => (
               <Button

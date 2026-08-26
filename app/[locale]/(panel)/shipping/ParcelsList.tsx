@@ -23,7 +23,12 @@ import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
 import { RecordListSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
 import { ButtonLink, IconButton } from "@/components/ui/Button";
 import { Isolate } from "@/components/primitives/Ltr";
-import { buildColumns, parcelRecord, type ParcelColumnContext } from "./columns";
+import {
+  buildColumns,
+  parcelOpenerId,
+  parcelRecord,
+  type ParcelColumnContext,
+} from "./columns";
 import { ParcelDrawer } from "./ParcelDrawer";
 import {
   EMPTY_QUERY,
@@ -183,7 +188,6 @@ export function ParcelsList({
     currency: SHOP_CURRENCY,
     providers,
     providerName,
-    onOpen: setOpen,
     wilayaName,
     t,
     tStatus: (status) => (tStatus.has(status as "pending") ? tStatus(status as "pending") : status),
@@ -328,11 +332,13 @@ export function ParcelsList({
              * the drawer holds the actions and a 40px column repeating "open" is
              * not an action.
              *
-             * This is the *pointer* path only. `<tr>` is not focusable, so the
-             * keyboard path is the button on the tracking cell — see
-             * `columns.tsx`. Both end here.
+             * `onRowClick` is the *pointer* path only — a `<tr>` is not
+             * focusable. `rowOpenerId` is what makes the tracking cell a real
+             * `<button>`, which is the keyboard path and the drawer's focus
+             * target. Both end here.
              */
             onRowClick={(parcel) => setOpen(parcel)}
+            rowOpenerId={(parcel) => parcelOpenerId(parcel.id)}
             footer={
               <TableFooter
                 page={query.page}
