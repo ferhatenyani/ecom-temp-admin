@@ -643,6 +643,78 @@ shipping-owned tests were not touched.
 
 ---
 
+## 10. `DataTable` — the row opener
+
+**Carried forward for three branches, and it was worse than the ledger recorded.**
+The entry below sat under "Carried forward" as a duplication complaint: `DataTable`
+hangs `onRowClick` off the `<tr>`, a `<tr>` is not focusable, and shipping then
+payments each worked around it locally. It closed with a claim that turns out to
+be false, and the correction is the reason this section exists rather than a
+tidy-up:
+
+> every earlier list happened to carry an anchor that *was* the row's purpose, so
+> the missing path never cost anything
+
+**Not true for orders and products.** All seven `onRowClick` callers were driven
+in Chromium at 1440 on 2026-08-26, counting the focusables in a row:
+
+```
+/orders      peek drawer   INPUT (bulk checkbox) + BUTTON "Actions"   ** NO KEYBOARD PATH **
+/products    peek drawer   INPUT (bulk checkbox) + BUTTON "Actions"   ** NO KEYBOARD PATH **
+/payments    peek drawer   BUTTON "#5231" + A /orders/1023            worked around locally
+/shipping    peek drawer   BUTTON "ACFAKE7023" + A /orders/1023       worked around locally
+/coupons     navigates     A /coupons/307                             the anchor IS the purpose
+/customers   navigates     A /customers/20                            fine
+/inventory   navigates     A /inventory/207                           fine
+```
+
+Orders and products carry two focusables per row and **neither is an opener**: the
+checkbox selects, and the Actions menu is a menu. Their peek was mouse-only at
+`md`+ — a live defect against §5, not merely an undefended primitive — and it was
+the *first* screen in the run, shipped before the shipping branch ever measured
+the pattern. And both drawers rendered a bare `<Drawer>`, so even given an opener
+Escape from a pointer open landed on `<body>`.
+
+**The primitive now renders the opener.** `DataTable` takes
+`rowOpenerId?: (row) => string`; with it and `onRowClick` both set, the table wraps
+the identifying cell's content in a real `<button>` carrying that id, stopping
+propagation. Absent, nothing is wrapped — the three navigating lists already put a
+real anchor there and a button around an anchor is nested interactive content,
+which is exactly what payments and shipping chose the cell over a stretched
+overlay to avoid. `rowOpenerId(scope, key)` is exported from the same file, so the
+four screens share one definition instead of four spellings of
+`` `…-opener-${id}` ``.
+
+**The other half is a measurement, not a type.** The ledger asked for "either it
+renders the opener itself, or it refuses `onRowClick` without one". A type-level
+requirement gives three false positives — coupons, customers and inventory have a
+legitimate opener — and would teach people to pass a value to silence a compiler.
+So after mount, in development only, the table asks whether the first row's
+**identifying cell** holds a tab stop and `console.error`s naming the table if
+not. The identifying cell rather than the whole row is the load-bearing part: a
+row-actions `Menu` is a focusable and is not an opener, so a whole-row check would
+have passed the two screens this exists to have caught. One row, one
+`querySelector`, `NODE_ENV`-guarded so it is dead code in production.
+
+**And the latch moved to `useLatchedOpener` in `Overlay.tsx`**, beside
+`useOpenerFocus`, where the reason lives: Radix fires `onCloseAutoFocus` *after*
+`onOpenChange`, so a `returnFocusTo` derived from the open record is already
+`undefined` when it is read. Only the **pointer** path depends on it — on the
+keyboard the opener also held focus at open, so `useOpenerFocus`'s recorded
+fallback is already correct — which is why shipping's first attempt passed every
+keyboard assertion and still failed on the mouse. The two peeks that come from a
+URL parameter need it most: closing clears `?peek=` and the component re-renders
+with a null record before focus is restored.
+
+Both orders and products now hand focus back to the row they were opened from,
+including from the row-actions menu's "preview" item, which previously dropped to
+`<body>` because Radix unmounts the item on select. Payments and shipping are
+byte-identical in behaviour; the only markup change is shipping's `max-w-56` cap,
+which moved from the hand-rolled button onto the `Ltr` that truncates inside it,
+so the rendered box is the same.
+
+---
+
 ## Carried forward — teardown owns these
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
@@ -731,23 +803,14 @@ shipping-owned tests were not touched.
   safe default. Unchanged here because it is a primitive fix affecting every
   destructive dialog in the panel.
 - The sticky first column has no divider at its frozen edge.
-- **`DataTable.onRowClick` still hands its caller a `<tr>` and no keyboard path.**
-  Shipping fixed *its own* screen by putting a real `<button>` in the identifying
-  cell, but the primitive is unchanged: any future page that wires `onRowClick`
-  and does not separately put a focusable control in a cell gets a mouse-only
-  screen at `md`+ and a working one below it, because `RecordList` draws its own
-  overlay button. That asymmetry is what made this invisible for four branches —
-  every earlier list happened to carry an anchor that *was* the row's purpose, so
-  the missing path never cost anything. `DataTable` wants a rule about it: either
-  it renders the opener itself from `rowLabel`, or it refuses `onRowClick` without
-  one.
-  **Payments is now the second screen to work around it locally**, with the same
-  three moving parts copied across: a `<button>` in the identifying cell, a
-  stable `…OpenerId(id)` shared between the columns and the drawer, and a latched
-  `returnFocusTo` — including the latch, which exists only because Radix fires
-  `onCloseAutoFocus` after `onOpenChange`. Two copies is where a primitive should
-  have absorbed it; a third is the point at which the workaround has become the
-  convention.
+- ~~**`DataTable.onRowClick` still hands its caller a `<tr>` and no keyboard
+  path.**~~ **Closed — see §10**, which also corrects this entry's claim that
+  "every earlier list happened to carry an anchor that *was* the row's purpose".
+  Orders and products did not: their peek was measured mouse-only at `md`+, so
+  this was a live defect on two shipped screens and not only an undefended
+  primitive. `DataTable` now renders the opener from `rowOpenerId`, warns in
+  development when a clickable row has none, and the latch lives in
+  `useLatchedOpener`.
 - **`POST /orders/{id}/cod/attempts` is the last create still pinned at 200 and
   never measured.** Three of the four were measured on 2026-08-25 and all three
   answered **201** — `/shipping/rules`, `/coupons`, `/orders/{id}/shipments` — so

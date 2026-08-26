@@ -8,7 +8,7 @@ import { formatWhen } from "@/lib/format/date";
 import { formatMoney } from "@/lib/format/money";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { Badge } from "@/components/ui/Badge";
-import type { Column } from "@/components/ui/DataTable";
+import { rowOpenerId, type Column } from "@/components/ui/DataTable";
 
 /**
  * The ledger's column definition — one source, two presentations.
@@ -37,11 +37,9 @@ import type { Column } from "@/components/ui/DataTable";
  * a real anchor in its own cell and stops propagation so a click does not also
  * open the drawer.
  *
- * The opener is a real `<button>` rather than `onRowClick` alone, because
- * `DataTable` hangs `onRowClick` off the `<tr>` and a `<tr>` is not focusable —
- * which shipped a mouse-only screen at `md`+ for four branches. It sits on the
- * identifying cell rather than being stretched over the row, because the row
- * already contains the order anchor and two interactive elements must not nest.
+ * The opener is a real `<button>` around this cell rather than `onRowClick`
+ * alone, and **`DataTable` renders it** now — the ledger passes `rowOpenerId`
+ * and the primitive does the wrapping. See DECISIONS.md §10.
  *
  * ## The amount is formatted with the payment's own `currency`
  *
@@ -59,18 +57,17 @@ export type PaymentColumnContext = {
    * hook and a column definition is a plain function. See `lib/payments.ts`.
    */
   providerName: (name: string) => string;
-  /** Opens the drawer. See the `id` column. */
-  onOpen: (payment: Payment) => void;
   t: (key: string, values?: Record<string, string | number>) => string;
   tStatus: (status: string) => string;
 };
 
 /**
- * The DOM id of a row's opener, in one place because two files need it: the cell
- * that renders the button and the drawer that hands focus back to it on close.
+ * The DOM id of a row's opener, in one place because three files need it: the
+ * ledger that hands it to `DataTable`, and the drawer that hands focus back to
+ * it on close. The pattern itself lives in `DataTable`.
  */
 export function paymentOpenerId(id: number): string {
-  return `payment-opener-${id}`;
+  return rowOpenerId("payment", id);
 }
 
 /** The badge, which every presentation of a payment opens with. */
@@ -97,37 +94,14 @@ export function buildColumns(ctx: PaymentColumnContext): Column<Payment>[] {
       header: t("columns.id"),
       required: true,
       /*
-       * The row's identity, and **a real `<button>` — which is the keyboard path
-       * to the drawer.**
-       *
-       * `DataTable`'s `onRowClick` hangs off the `<tr>`, and a `<tr>` is not
-       * focusable. Below `md` that is invisible because `RecordList` draws a
-       * stretched overlay button carrying `rowLabel`; at `md`+ there would be no
-       * opener at all, and the only focusable in the row is the anchor to
-       * `/orders/{order_id}` — which goes somewhere else entirely. DECISIONS.md
-       * carries the measurement from the shipping branch.
-       *
-       * It stops propagation so one click does not open the drawer twice, and it
-       * carries a stable `id` so the drawer can hand focus back to it — Radix
-       * restores to whatever had focus when the overlay opened, which for a click
-       * on the `<tr>`'s background is `<body>`.
+       * The row's identity, and the cell `DataTable` wraps in the drawer's
+       * opener — the ledger passes `rowOpenerId`, so the `<button>`, its
+       * `stopPropagation` and its stable DOM id are the primitive's now.
        *
        * `Ltr` because a transaction number is an identifier the shop assigned and
        * a bidi reordering of it is a *different* number.
        */
-      cell: (payment) => (
-        <button
-          type="button"
-          id={paymentOpenerId(payment.id)}
-          onClick={(event) => {
-            event.stopPropagation();
-            ctx.onOpen(payment);
-          }}
-          className="ui-ring block cursor-pointer rounded-ui-md text-start"
-        >
-          <Ltr>{`#${payment.id}`}</Ltr>
-        </button>
-      ),
+      cell: (payment) => <Ltr>{`#${payment.id}`}</Ltr>,
     },
     {
       key: "order",

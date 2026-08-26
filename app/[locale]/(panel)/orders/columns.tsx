@@ -7,7 +7,7 @@ import { formatWhen } from "@/lib/format/date";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
 import { Badge, Dot } from "@/components/ui/Badge";
-import type { Column } from "@/components/ui/DataTable";
+import { rowOpenerId, type Column } from "@/components/ui/DataTable";
 
 /**
  * The Orders column definition — one source, two presentations.
@@ -30,6 +30,18 @@ export type OrderColumnContext = {
   t: (key: string) => string;
   tStatus: (key: string) => string;
 };
+
+/**
+ * The DOM id of a row's peek opener, in one place because two files need it: the
+ * list that hands it to `DataTable`, and `OrderPeek`, which hands focus back to
+ * it on close. The pattern itself lives in `DataTable`.
+ *
+ * Keyed by `order.id` and not `order.number` — `?peek=` carries the id, so this
+ * matches the thing the URL names.
+ */
+export function orderOpenerId(id: number): string {
+  return rowOpenerId("order", id);
+}
 
 /** The customer's name, or what stands in for it. Never an empty cell. */
 export function displayName(order: Order, ctx: OrderColumnContext): string {

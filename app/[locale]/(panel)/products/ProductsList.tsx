@@ -35,7 +35,12 @@ import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { CountBadge } from "@/components/ui/Badge";
 import { Menu } from "@/components/ui/Menu";
 import { Isolate } from "@/components/primitives/Ltr";
-import { buildColumns, productRecord, type ProductColumnContext } from "./columns";
+import {
+  buildColumns,
+  productOpenerId,
+  productRecord,
+  type ProductColumnContext,
+} from "./columns";
 import { ProductFilters } from "./ProductFilters";
 import { ProductPeek } from "./ProductPeek";
 import { toCsv } from "./export";
@@ -503,7 +508,15 @@ export function ProductsList({
             rowKey={(product) => String(product.id)}
             rowLabel={(product) => tA11y("productName", { name: product.name })}
             record={(product) => productRecord(product, ctx)}
+            /*
+             * `onRowClick` is the *pointer* path only — a `<tr>` is not
+             * focusable — and until this branch that was the *whole* path at
+             * `md`+: the row's only other focusables are the bulk checkbox and
+             * the actions `Menu`, and neither opens the peek. `rowOpenerId` makes
+             * the name cell a real `<button>`. See DECISIONS.md §10.
+             */
             onRowClick={(product) => setPeek(String(product.id))}
+            rowOpenerId={(product) => productOpenerId(product.id)}
             sort={sortState}
             onSortChange={(next) => {
               /* Round-tripped through `sortFromKey`, which is the guard that

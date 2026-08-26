@@ -16,7 +16,7 @@ import {
 import { nextShipmentStatuses, isTerminalShipmentStatus, type ShipmentStatus } from "@/lib/shipment-status";
 import { SHOP_CURRENCY, formatMoney } from "@/lib/format/money";
 import { formatWhen } from "@/lib/format/date";
-import { Drawer } from "@/components/ui/Overlay";
+import { Drawer, useLatchedOpener } from "@/components/ui/Overlay";
 import { DataList, DataRow } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/Confirm";
 import { Menu, type MenuAction } from "@/components/ui/Menu";
@@ -110,28 +110,9 @@ export function ParcelDrawer({
   const [confirming, setConfirming] = useState<ShipmentStatus | "cancel" | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  /*
-   * **Which row focus goes back to, latched so it survives the close.**
-   *
-   * `<tr>` cannot take focus, so a pointer-opened drawer has no opener for
-   * `useOpenerFocus` to record and Escape dropped a person on `<body>` with the
-   * whole sidebar to tab past. The table's tracking button is a real element with
-   * a stable id and is the honest target — measured, it fixes the pointer path
-   * and leaves the keyboard path (where the recorded opener is already that same
-   * button) unchanged.
-   *
-   * It has to be **latched** rather than read off `parcel`. Radix fires
-   * `onCloseAutoFocus` *after* `onOpenChange`, so by the time focus is restored
-   * the screen has already set `parcel` to null and a value derived from it is
-   * `undefined` — which is exactly why the first attempt at this passed every
-   * keyboard assertion and still failed on the mouse. Never cleared, because the
-   * only thing it is read for is a close that has already happened.
-   *
-   * Adjusted during render against the previous value, not in an effect: an
-   * effect runs after paint, and this has to be correct before the first Escape.
-   */
-  const [openerFor, setOpenerFor] = useState<number | null>(null);
-  if (parcel !== null && parcel.id !== openerFor) setOpenerFor(parcel.id);
+  /* Which row focus goes back to. Latched, because Radix fires
+     `onCloseAutoFocus` after `onOpenChange` — see `useLatchedOpener`. */
+  const returnFocusTo = useLatchedOpener(parcel && parcelOpenerId(parcel.id));
 
   const wilayaId = parcel === null ? null : shipmentWilayaId(parcel);
 
@@ -253,7 +234,7 @@ export function ParcelDrawer({
            not rendered, falling back to `RecordList`'s own overlay button. The
            guard is in the primitive rather than a width check here, because
            reading the viewport during render is a hydration mismatch. */
-        returnFocusTo={openerFor === null ? undefined : parcelOpenerId(openerFor)}
+        returnFocusTo={returnFocusTo}
         footer={
           /* Only for a live parcel. A terminal one gets the sentence in the body
              instead — see the docblock. */

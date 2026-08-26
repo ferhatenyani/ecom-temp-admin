@@ -13,10 +13,10 @@ import { effectivePrice, isDiscounted, stockQuantity } from "@/lib/products";
 import { formatMoney } from "@/lib/format/money";
 import { formatDate } from "@/lib/format/date";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { Drawer } from "@/components/ui/Overlay";
+import { Drawer, useLatchedOpener } from "@/components/ui/Overlay";
 import { ButtonLink } from "@/components/ui/Button";
 import { Badge, Dot } from "@/components/ui/Badge";
-import type { ProductColumnContext } from "./columns";
+import { productOpenerId, type ProductColumnContext } from "./columns";
 
 /**
  * The product preview drawer.
@@ -51,12 +51,25 @@ export function ProductPeek({
   const categories =
     product?.category_ids.map((id) => categoryName.get(String(id)) ?? String(id)) ?? [];
 
+  /*
+   * Which row focus goes back to. Latched, because Radix fires
+   * `onCloseAutoFocus` after `onOpenChange` — see `useLatchedOpener`.
+   *
+   * The latch matters more here than on the two drawers it was lifted from: this
+   * peek's open record is a **URL parameter**, so closing it clears `?peek=` and
+   * the whole component re-renders with `product === null` before focus is
+   * restored. Below `md` the named button is `display: none` and `useOpenerFocus`
+   * falls back to `RecordList`'s own overlay button.
+   */
+  const returnFocusTo = useLatchedOpener(product && productOpenerId(product.id));
+
   return (
     <Drawer
       open={product !== null}
       onOpenChange={onOpenChange}
       title={product?.name ?? ""}
       size="sm"
+      returnFocusTo={returnFocusTo}
       headerExtra={
         product ? (
           <ButtonLink

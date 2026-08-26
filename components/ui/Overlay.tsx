@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { IconButton } from "./Button";
 
@@ -119,6 +119,40 @@ function useOpenerFocus(returnFocusTo?: string) {
       target.focus();
     },
   };
+}
+
+/**
+ * The `returnFocusTo` of an overlay whose opener belongs to the record it shows —
+ * held past the close, because otherwise it is not there to be read.
+ *
+ * Every peek in this panel is driven by an open *record* (`payment`, `parcel`,
+ * `?peek=id`), and the control that opened it is that record's row. So the honest
+ * `returnFocusTo` is derived from the record — and **Radix fires
+ * `onCloseAutoFocus` after `onOpenChange`**, so by the time `useOpenerFocus`
+ * reads it the screen has already cleared the record and the derived id is
+ * `undefined`. Focus lands on `<body>`.
+ *
+ * The keyboard path hides this: there the opener also *held* focus at open, so
+ * `useOpenerFocus`'s recorded fallback is already the right element and the
+ * missing name costs nothing. Only a pointer open — where the recorded opener is
+ * `<body>` — depends on the name. That asymmetry is why the shipping branch's
+ * first attempt passed every keyboard assertion and still failed on the mouse.
+ *
+ * So the last non-null id is latched and never cleared: the only thing it is ever
+ * read for is a close that has already happened.
+ *
+ * Adjusted during render rather than in an effect. React documents this as the
+ * way to derive state from a changing prop, and an effect runs after paint —
+ * which can be after the first Escape.
+ *
+ *     const returnFocusTo = useLatchedOpener(
+ *       payment && rowOpenerId("payment", payment.id),
+ *     );
+ */
+export function useLatchedOpener(openerId: string | null | undefined) {
+  const [latched, setLatched] = useState<string | undefined>(undefined);
+  if (openerId != null && openerId !== latched) setLatched(openerId);
+  return latched;
 }
 
 /**
