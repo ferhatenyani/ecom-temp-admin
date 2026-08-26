@@ -399,7 +399,13 @@ const notFound = () =>
  * `ac_manage_payments`:
  *
  *     403 {"code":"forbidden","message":"You are not allowed to perform this
- *          action.","details":{}}
+ *          action."}
+ *
+ * — with **no `details` key at all**, which is what `fail()`'s own docblock
+ * records from the same day's diff. This block quoted `"details":{}` until
+ * 2026-08-26 and was the stale half of a contradiction between two comments
+ * about one measurement; the emitted body was never wrong, because `fail()`
+ * omits an empty `details` outright.
  *
  * on `/payments`, `/payments/methods` and `/payments/{id}` alike, and a **200**
  * on `/cod/statistics` beside them — which is the whole reason the payments
@@ -519,7 +525,7 @@ const CAPABILITIES = [
 ];
 
 /**
- * ── The second identity, and how to ask for it ───────────────────────────────
+ * ── The other two identities, and how to ask for them ────────────────────────
  *
  * Holding all thirteen is what a harness needs and is also why, until now, **no
  * screen could be captured in its forbidden state** — DESIGN.md §3.7 makes that
@@ -531,12 +537,17 @@ const CAPABILITIES = [
  *
  *   node scripts/capture.mjs /orders/1023                        all thirteen
  *   MOCK_IDENTITY=reduced node scripts/capture.mjs /orders/1023  eleven of them
+ *   MOCK_IDENTITY=support node scripts/capture.mjs /dashboard    eleven others
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
  * than empty. It is not "a Manager": the two-tier collapse takes more than two
  * capabilities off a Manager, and naming it one here would be a claim about the
  * shop's roles that this file has not measured.
+ *
+ * `support` is a **different** two off the same list, and it exists because the
+ * dashboard's money gate is `ac_manage_orders` — which `reduced` holds. Its own
+ * block below says what was measured and what was not.
  *
  * Read **once, at module load**, so `respond()` stays pure and a capture run is
  * one identity from beginning to end. An unrecognised value throws rather than
@@ -562,6 +573,44 @@ const IDENTITIES = {
     roles: ["ac_staff"],
     capabilities: CAPABILITIES.filter(
       (capability) => capability !== "ac_manage_shipping" && capability !== "ac_manage_payments",
+    ),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The third identity, and why `reduced` could not be it ──────────────────
+   *
+   * The dashboard's money gate is `canSeeMoney()` — `ac_view_analytics` **and**
+   * `ac_manage_orders` — and `reduced` holds both, deliberately: it keeps
+   * `ac_manage_orders` so that `/orders/1023` renders with two sections missing
+   * rather than as a whole page refused, which is the only reason that identity
+   * exists. So `MOCK_IDENTITY=reduced` cannot reach the half-payload state, and
+   * making it reach one would destroy the capture it was built for.
+   *
+   * Measured 2026-08-26 with a real Support Agent credential, and it is the
+   * whole of what is claimed here:
+   *
+   *     /analytics/overview  200, `revenue` **absent**, money_visible false
+   *     /analytics/revenue   403
+   *     /orders              403
+   *     /inventory           403
+   *     /customers           **200**
+   *
+   * So `ac_manage_orders` and `ac_manage_inventory` are off and
+   * `ac_manage_customers` and `ac_view_analytics` are on. **The other nine were
+   * not measured and are left at the harness default**, which follows the rule
+   * `reduced` set: this is a credential with a measured shape, not a claim about
+   * what the shop's Support Agent role contains. Nothing is inferred from the
+   * name — that is why the delta from `full` is exactly the two 403s that were
+   * seen, and no more.
+   */
+  support: {
+    id: 516,
+    username: "harness-support",
+    display_name: "Harness Support",
+    email: "harness-support@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter(
+      (capability) => capability !== "ac_manage_orders" && capability !== "ac_manage_inventory",
     ),
     auth_method: "application_password",
   },
@@ -3285,6 +3334,507 @@ const COD_STATISTICS = {
     return: "0.0718",
   },
 };
+
+/* -------------------------------------------------------------- analytics --- */
+
+/**
+ * ── `GET /analytics/overview`, and it is the only one of the seven served ────
+ *
+ * Measured 2026-08-26 against the live shop. The other six reports stay 404s and
+ * stay named in `tests/mock-api.test.ts` — the analytics branch owns them.
+ *
+ * **`range` is the only parameter and it is honoured.** Over one shop:
+ *
+ *     range        low_stock  customers  placed  shipments  net
+ *     today            3          0          0        0     0.00
+ *     yesterday        3          0          0        2     0.00
+ *     7d               3          5        126       20     156900.00
+ *     30d              3          9        901      131     812200.00
+ *     90d              3          9        901      131     812200.00
+ *
+ * Two properties of that table are the reason the fixture is shaped the way it
+ * is, and inverting either would teach a screen the opposite of the truth:
+ *
+ *   1. **`inventory.low_stock` is not range-scoped.** Identical across a 90×
+ *      window — it is current state sitting under a range control that does not
+ *      move it. So it is not in the per-range table below at all: it is counted
+ *      off `inventoryRows()` on every request, which is both why it cannot drift
+ *      with the range and why it agrees with the `/inventory` screen the card
+ *      links to (3 rows, the same three).
+ *   2. **`customers.customers` is range-scoped** — 0 / 0 / 5 / 9 / 9. A fixture
+ *      that held it flat would hide a control that works.
+ *
+ * **Accepted and silently ignored**, all byte-identical to `?range=30d`:
+ * `bogus_param=1`, `per_page=5`, `orderby=id`, and — the one that matters —
+ * **`date_from`/`date_to` when `range` is not `custom`**, which answer 200 with
+ * the thirty-day default. That is this endpoint's own dishonesty and the reason
+ * a screen must never offer bare dates: an operator picking a ten-day window
+ * with no preset is shown thirty days of figures and nothing errors. Reproduced
+ * by reading neither parameter outside `custom`. Note the consequence for
+ * paging: `per_page` is not read here, so it is *not* refused here either —
+ * `paginate()` is deliberately not called, because this route returns one object
+ * and not a page.
+ *
+ * **Two error shapes on one route**, and both are real:
+ *
+ *     range=zzz  400  details.params.range  — the query-parameter enum family
+ *     range=custom without its dates
+ *                400  details.fields.*      — the body-field family, on query
+ *                                             parameters, from the controller
+ *
+ * The split is what an argument schema can and cannot express: `range`'s enum is
+ * declarative and refuses before the controller runs, while "required when
+ * `range` is custom" is a rule only the controller knows. `ApiError` keeps both
+ * halves, which is the whole reason it exposes `params` and `fields` separately.
+ *
+ * **The dates are this fixture's clock, not the measurement's.** The live
+ * 30-day window read `2026-07-28 → 2026-08-26` because that is the day it was
+ * taken; here every timestamp in the file descends from one `EPOCH`, so `to` is
+ * `2026-08-18` and the window is `2026-07-20 → 2026-08-18`. The *shape* is
+ * reproduced exactly — preset echoed, `days` the inclusive count, `timezone`
+ * `"+00:00"` which is not `Africa/Algiers` — and the figures are unaffected,
+ * because they are a measured table rather than a projection of this fixture's
+ * orders. Anchoring on the measured literal instead would put `generated_at`
+ * eight days behind the window it reports, and the dashboard renders the two
+ * side by side. One constant moves it if that is ever wanted.
+ *
+ * **The figures do not reconcile with `/orders` and are not meant to**, exactly
+ * as `COD_STATISTICS` does not: 901 placed against a fixture holding 633 rows.
+ * These are server-side aggregates over a live shop, and re-deriving them from
+ * the seeds would cost every measured rate string — the part a screen formats.
+ * Only the five columns above are measured; the rest of each block is invention
+ * held to the payload's own invariants, which is what the brief allowed.
+ */
+const ANALYTICS_TODAY = new Date(EPOCH).toISOString().slice(0, 10);
+const ANALYTICS_EPOCH = Date.parse(`${ANALYTICS_TODAY}T00:00:00Z`);
+
+/** `back` whole days before `ANALYTICS_TODAY`, as `Y-m-d`. */
+const analyticsDay = (back) =>
+  new Date(ANALYTICS_EPOCH - back * 86_400_000).toISOString().slice(0, 10);
+
+/** Inclusive at both ends, the way the server counts: 08-11 → 08-21 is eleven. */
+const daysBetween = (from, to) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+
+const analyticsRange = (preset, from, to) => ({
+  preset,
+  from,
+  to,
+  days: daysBetween(from, to),
+  timezone: "+00:00",
+});
+
+/** Days back from `ANALYTICS_TODAY`, `[from, to]`. `custom` states its own. */
+const PRESET_WINDOWS = {
+  today: [0, 0],
+  yesterday: [1, 1],
+  "7d": [6, 0],
+  "30d": [29, 0],
+  "90d": [89, 0],
+};
+
+const ANALYTICS_PRESETS = [...Object.keys(PRESET_WINDOWS), "custom"];
+
+/**
+ * The three lines the API reports as *unavailable* rather than as zero, which is
+ * a different answer and the reason `unavailable` is an object of sentences and
+ * not a list of names.
+ *
+ * **These sentences are reconstructions, not the measured wording.** Only one
+ * fragment of the real text survives anywhere in this repo — lib/analytics.ts
+ * quotes *"Gateway fees are not summable across providers.
+ * `ac_payment_transactions` has no fee column by design…"* — so `payment_fees`
+ * opens on that and the other two are written to match its register. They are
+ * here because a screen renders them and a screen that renders three empty
+ * strings is not the screen the API produces; they are **not** something to
+ * assert a sentence against, and the panel localises all three by key anyway,
+ * falling back to the API's text only for a key it has no wording for.
+ */
+const ANALYTICS_UNAVAILABLE = {
+  shipping_cost:
+    "Courier cost is not recorded against a shipment. The provider invoices the shop out of band and no column on a parcel carries what it actually cost to send, so a delivery cost cannot be summed here without inventing one.",
+  payment_fees:
+    "Gateway fees are not summable across providers. `ac_payment_transactions` has no fee column by design, and each provider reports its commission on its own statement rather than on the transaction, so any total would be a guess.",
+  margin:
+    "Margin needs a cost of goods and this catalogue does not carry one. Nothing on a product or on a line item records what it was bought for, so gross margin cannot be computed from anything the shop knows.",
+};
+
+/**
+ * The money block with `unavailable` **in its measured position** — between
+ * `average_order_value` and `refund_count`, not appended after them.
+ *
+ * Key order is part of the measured shape and this file already treats it that
+ * way: the unit suite asserts `Object.keys(data)` on the money-blind payload, so
+ * the same standard applies one level down. Spreading the constant and adding
+ * `unavailable` at the end was a byte the API does not send, and a screen that
+ * renders a money block by iterating its entries would have printed the three
+ * prose reasons after the refund counts rather than in the middle.
+ *
+ * Written as a splice rather than by putting `unavailable` into each of the
+ * three revenue literals, because the money-blind payload omits the whole block
+ * and a literal carrying it would have to be stripped on that path instead.
+ */
+const withUnavailable = ({ refund_count, refunded_orders, ...head }) => ({
+  ...head,
+  unavailable: ANALYTICS_UNAVAILABLE,
+  refund_count,
+  refunded_orders,
+});
+
+/**
+ * The COD block the overview nests is a strict subset of `/cod/statistics` —
+ * measured key for key at 30d, down to the two rate strings — so it is derived
+ * from that constant rather than restated beside it, where the two would drift.
+ */
+const codOverview = (stats) => ({
+  total_orders: stats.total_orders,
+  confirmed_orders: stats.confirmed_orders,
+  confirmation_rate: stats.rates.confirmation,
+  delivery_rate: stats.rates.delivery,
+});
+
+/** Every figure zero, for the two windows this shop has no activity in. */
+const NO_ORDERS = {
+  placed: 0,
+  by_status: {
+    pending: 0,
+    processing: 0,
+    "on-hold": 0,
+    completed: 0,
+    cancelled: 0,
+    refunded: 0,
+    failed: 0,
+  },
+  cancelled: 0,
+  completed: 0,
+  refunded: 0,
+  guest_orders: 0,
+  counted_as_revenue: 0,
+};
+
+const NO_CUSTOMERS = {
+  customers: 0,
+  new: 0,
+  returning: 0,
+  guest_orders: 0,
+  rates: { new: "0.0000", returning: "0.0000" },
+};
+
+const NO_COD = {
+  total_orders: 0,
+  confirmed_orders: 0,
+  confirmation_rate: "0.0000",
+  delivery_rate: "0.0000",
+};
+
+const NO_REVENUE = {
+  currency: "DZD",
+  order_total: "0.00",
+  orders_placed: 0,
+  orders_counted: 0,
+  gross: "0.00",
+  discounts: "0.00",
+  shipping_revenue: "0.00",
+  tax: "0.00",
+  refunds: "0.00",
+  net: "0.00",
+  collected: "0.00",
+  average_order_value: "0.00",
+  refund_count: 0,
+  refunded_orders: 0,
+};
+
+/**
+ * One block per preset, and the invariants every one of them holds:
+ *
+ *   `orders.by_status` sums **exactly** to `orders.placed`
+ *   `counted_as_revenue` is the four COUNTED_STATUSES out of `by_status` —
+ *       processing + on-hold + completed + refunded, which is what makes the
+ *       901-against-323 gap explainable rather than merely printed
+ *   `revenue.orders_placed`/`orders_counted` echo those two
+ *   `revenue.net` is `gross - refunds`; `average_order_value` is
+ *       `gross / orders_counted`
+ *   `refund_count` and `refunded_orders` equal `by_status.refunded`
+ *   every rate is its own numerator over its own denominator, to four places
+ *
+ * **`90d` is `30d`, deliberately.** Measured identical on every column: this
+ * shop holds nothing older than about a month, so the widest preset answers the
+ * middle one. A screen that treats a wider window as necessarily a larger number
+ * is wrong about this shop, and the fixture says so.
+ */
+const ANALYTICS_FIGURES = {
+  today: {
+    orders: NO_ORDERS,
+    customers: NO_CUSTOMERS,
+    cod: NO_COD,
+    shipping: { shipments: 0, delivered: 0, live: 0, delivery_rate: "0.0000" },
+    revenue: NO_REVENUE,
+  },
+  yesterday: {
+    orders: NO_ORDERS,
+    customers: NO_CUSTOMERS,
+    cod: NO_COD,
+    // Two parcels and no orders: a shipment leaves for an order placed days
+    // earlier, so these two figures are not two views of one number.
+    shipping: { shipments: 2, delivered: 1, live: 0, delivery_rate: "0.5000" },
+    revenue: NO_REVENUE,
+  },
+  "7d": {
+    orders: {
+      placed: 126,
+      by_status: {
+        pending: 28,
+        processing: 25,
+        "on-hold": 0,
+        completed: 8,
+        cancelled: 53,
+        refunded: 12,
+        failed: 0,
+      },
+      cancelled: 53,
+      completed: 8,
+      refunded: 12,
+      guest_orders: 59,
+      counted_as_revenue: 45,
+    },
+    customers: {
+      customers: 5,
+      new: 5,
+      returning: 0,
+      guest_orders: 31,
+      rates: { new: "1.0000", returning: "0.0000" },
+    },
+    cod: {
+      total_orders: 84,
+      confirmed_orders: 18,
+      confirmation_rate: "0.2143",
+      delivery_rate: "0.0714",
+    },
+    shipping: { shipments: 20, delivered: 13, live: 0, delivery_rate: "0.6500" },
+    revenue: {
+      currency: "DZD",
+      order_total: "412600.00",
+      orders_placed: 126,
+      orders_counted: 45,
+      gross: "177300.00",
+      discounts: "0.00",
+      shipping_revenue: "0.00",
+      tax: "0.00",
+      refunds: "20400.00",
+      net: "156900.00",
+      collected: "33700.00",
+      average_order_value: "3940.00",
+      refund_count: 12,
+      refunded_orders: 12,
+    },
+  },
+  "30d": {
+    orders: {
+      placed: 901,
+      by_status: {
+        pending: 198,
+        processing: 177,
+        "on-hold": 1,
+        completed: 56,
+        cancelled: 379,
+        refunded: 89,
+        failed: 1,
+      },
+      cancelled: 379,
+      completed: 56,
+      refunded: 89,
+      guest_orders: 422,
+      counted_as_revenue: 323,
+    },
+    customers: {
+      customers: 9,
+      new: 9,
+      returning: 0,
+      // Not `orders.guest_orders`: that one counts guest orders in the window,
+      // this one counts the orders the customer report could attribute to
+      // nobody. Two different questions, measured 422 against 209 in one payload.
+      guest_orders: 209,
+      rates: { new: "1.0000", returning: "0.0000" },
+    },
+    cod: codOverview(COD_STATISTICS),
+    shipping: { shipments: 131, delivered: 85, live: 0, delivery_rate: "0.6489" },
+    revenue: {
+      currency: "DZD",
+      order_total: "2345200.00",
+      orders_placed: 901,
+      orders_counted: 323,
+      gross: "918100.00",
+      discounts: "0.00",
+      shipping_revenue: "0.00",
+      tax: "0.00",
+      refunds: "105900.00",
+      net: "812200.00",
+      collected: "194150.00",
+      average_order_value: "2842.41",
+      refund_count: 89,
+      refunded_orders: 89,
+    },
+  },
+};
+ANALYTICS_FIGURES["90d"] = ANALYTICS_FIGURES["30d"];
+
+/**
+ * Which block a window gets. A preset takes its own; a **custom** window takes
+ * the preset whose length it is nearest, so a three-day custom range answers
+ * small numbers rather than the thirty-day table.
+ *
+ * That bucketing is invention and is the only part of this route with no
+ * measurement behind it — nobody has asked the shop for a custom window and
+ * compared. It is here because the alternative is worse in the direction this
+ * harness cares about: answering the 30-day figures for every custom window
+ * would let someone build a date picker, watch the numbers never move, and be
+ * unable to tell that from a control the API ignores.
+ */
+const bucketFor = (days) =>
+  days <= 1 ? "today" : days <= 7 ? "7d" : days <= 30 ? "30d" : "90d";
+
+/**
+ * The API's cap on a custom window, and the three refusals around it. Measured
+ * verbatim, all three under `details.fields`:
+ *
+ *     range=custom                          date_from + date_to  "Required when range is custom."
+ *     range=custom&date_from=…              date_to              the same
+ *     from > to                             date_from            "Must not be later than date_to."
+ *     2020-01-01 → 2026-08-20               date_from            "A custom range covers at most 366 days."
+ */
+const MAX_CUSTOM_DAYS = 366;
+
+const rangeInvalid = (fields) => invalidBody("The reporting range is invalid.", fields);
+
+/**
+ * `Y-m-d` **and a day the calendar has**, which is one check more than the
+ * `dayParam()` family makes and is here for a reason rather than for tidiness.
+ *
+ * `/payments?date_from=2026-13-45` is a measured **200 with 0 rows** — the shape
+ * matches, nothing checks the calendar, and a screen cannot tell "no rows in that
+ * window" from "that is not a date". This route cannot do the same thing: `days`
+ * is computed from the two dates and `2026-13-45` makes it `NaN`, which
+ * serialises as `null` and is refused by `analyticsRange.days` at the panel's own
+ * boundary — a 200 the dashboard would throw on. So an impossible date joins a
+ * malformed one under "Required when range is custom." rather than reaching the
+ * arithmetic. Unmeasured, like the malformed case beside it, and chosen the same
+ * way: it adds no sentence the API has never sent.
+ *
+ * Note `2026-02-30` is *not* impossible to `Date.parse` — it rolls into March —
+ * and is served as the window it rolls to. That is JavaScript's own leniency
+ * showing through, it keeps `days` finite, and no screen can reach it.
+ */
+const isCustomDay = (raw) =>
+  raw !== null && DAY.test(raw) && Number.isFinite(Date.parse(`${raw}T00:00:00Z`));
+
+/**
+ * Read `?range=` and its two companions, or refuse.
+ *
+ * **A missing `range` is the 30-day default and an empty one is a refusal** —
+ * `""` is not a member of the enum, which is the same rule `?per_page=` and
+ * `?status=` follow everywhere else in this file. Only a parameter that is not
+ * sent at all reaches a default.
+ *
+ * A `date_from`/`date_to` that is not `Y-m-d` is treated as **not sent**, so it
+ * reaches the "Required when range is custom." refusal rather than a pattern
+ * one. That is **unmeasured** — nobody has sent this route a malformed date —
+ * and it is the choice that invents nothing: it adds no sentence and no error
+ * family, it mirrors `customRangeProblem()` in lib/analytics.ts, and the panel's
+ * date control keeps it unreachable either way. A pattern refusal under
+ * `details.params` is the other plausible answer and would be stricter than
+ * anything anyone has seen this endpoint do.
+ */
+function readAnalyticsRange(params) {
+  const raw = params.get("range");
+  if (raw !== null && !ANALYTICS_PRESETS.includes(raw)) {
+    return { error: invalidParam("range", notOneOf("range", ANALYTICS_PRESETS)) };
+  }
+
+  const preset = raw ?? "30d";
+  if (preset !== "custom") {
+    // `date_from` and `date_to` are read by nothing here on purpose: outside
+    // `custom` the API accepts them and answers the preset's window anyway.
+    const [from, to] = PRESET_WINDOWS[preset];
+    return { value: analyticsRange(preset, analyticsDay(from), analyticsDay(to)) };
+  }
+
+  const from = params.get("date_from");
+  const to = params.get("date_to");
+  const fields = {};
+  if (!isCustomDay(from)) fields.date_from = "Required when range is custom.";
+  if (!isCustomDay(to)) fields.date_to = "Required when range is custom.";
+  if (Object.keys(fields).length > 0) return { error: rangeInvalid(fields) };
+
+  if (from > to) {
+    return { error: rangeInvalid({ date_from: "Must not be later than date_to." }) };
+  }
+  const days = daysBetween(from, to);
+  if (days > MAX_CUSTOM_DAYS) {
+    return {
+      error: rangeInvalid({ date_from: `A custom range covers at most ${MAX_CUSTOM_DAYS} days.` }),
+    };
+  }
+
+  return { value: analyticsRange("custom", from, to) };
+}
+
+/**
+ * The overview, and **the money gate is the whole reason this route is worth
+ * capturing.** Measured 2026-08-26 with three real credentials: a Super Admin
+ * and a Manager, both holding `ac_manage_orders`, get `revenue` and
+ * `money_visible: true`; a Support Agent without it gets a 200 whose keys are
+ * exactly `range, orders, customers, cod, shipping, inventory` — the block is
+ * **absent**, not null and not zeroed — with `money_visible: false`, and a flat
+ * 403 on `/analytics/revenue`.
+ *
+ * So the key is omitted here rather than emitted empty, and `meta.money_visible`
+ * is computed off the same capability rather than hard-coded: a fixture that
+ * printed `false` beside a present `revenue` would be the harness disagreeing
+ * with itself, and one that printed `true` for everybody would make the state
+ * DESIGN.md §3.7 asks for unreachable. `MOCK_IDENTITY=support` is the credential
+ * that reaches it.
+ *
+ * **`generated_at` is pinned and that is the honest reproduction.** Two live
+ * requests six seconds apart returned the identical stamp: the report sits
+ * behind a 60-second server cache, which `meta.cache_ttl` reports. It is what
+ * lets a Server Component's figures be up to a minute older than the navigation
+ * that fetched them — the dashboard prints the stamp for exactly that reason,
+ * and a screen must not read a fresh stamp as proof of a fresh request. Here it
+ * never moves at all, because nothing in this file may read a clock; the
+ * difference is that the harness can never show the stamp advancing, which no
+ * screen depends on.
+ */
+function analyticsOverview(params) {
+  const range = readAnalyticsRange(params);
+  if (range.error) return range.error;
+
+  const window = range.value;
+  const figures =
+    ANALYTICS_FIGURES[window.preset === "custom" ? bucketFor(window.days) : window.preset];
+
+  const money = IDENTITY.capabilities.includes("ac_manage_orders");
+
+  return ok(
+    {
+      range: window,
+      orders: figures.orders,
+      customers: figures.customers,
+      cod: figures.cod,
+      shipping: figures.shipping,
+      // Counted off the fixture on every request rather than tabled per range:
+      // this is current state, and the measurement says a 90× window does not
+      // move it. It is also the same three rows `/inventory/low-stock` lists.
+      inventory: { low_stock: inventoryRows().filter((row) => row.low_stock).length },
+      ...(money ? { revenue: withUnavailable(figures.revenue) } : {}),
+    },
+    {
+      generated_at: iso(0),
+      cache_ttl: 60,
+      money_visible: money,
+      money_requires: "ac_manage_orders",
+    },
+  );
+}
 
 /* --------------------------------------------------------------- communes --- */
 
@@ -7481,8 +8031,30 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     return page.error ?? ok(page.rows, page.meta);
   };
 
+  /**
+   * A capability gate, and there are three of them in this file.
+   *
+   * `/payments` came first, on 2026-08-26, and the rule it set is the one
+   * followed here: **a capability is enforced where it was measured and nowhere
+   * else.** `/orders` and `/inventory` are enforced because the Support Agent
+   * credential that measured the analytics money gate was measured 403 on both
+   * of them in the same pass — and `/customers` beside them was a 200, which is
+   * why there is no gate on that collection however plausible one would look.
+   *
+   * Both are inert for `full` and for `reduced`, which hold the two. Adding them
+   * without `support` would have been a refusal nothing could reach; adding
+   * `support` without them would have made the mock answer 200 where the shop
+   * answers 403, which is the *more permissive* direction the honesty audit
+   * exists to catch.
+   */
+  const gatedOn = (capability) =>
+    IDENTITY.capabilities.includes(capability) ? null : forbidden();
+
   switch (collection) {
     case "orders": {
+      const refused = gatedOn("ac_manage_orders");
+      if (refused !== null) return refused;
+
       const id = second === undefined ? null : numericId(second);
       const order = id === null ? undefined : ORDERS.find((row) => row.id === id);
 
@@ -7614,8 +8186,7 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * audit hunts for.
      */
     case "payments": {
-      const gate = () =>
-        IDENTITY.capabilities.includes("ac_manage_payments") ? null : forbidden();
+      const gate = () => gatedOn("ac_manage_payments");
 
       if (second === undefined) {
         if (method !== "GET") return notFound();
@@ -7658,6 +8229,27 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         : notFound();
 
     /*
+     * **One of the seven reports, and the other six are declared gaps.**
+     * `/analytics/overview` is served because the dashboard is a single request
+     * to it — the screen ADMIN_PANEL.md describes as six round trips is one,
+     * because the overview nests `orders`, `customers`, `cod`, `shipping`,
+     * `inventory` and `revenue` as blocks. Until now it answered
+     * `rest_no_route`, so the dashboard rendered its error state against this
+     * harness on every capture that has ever been taken of it. None have.
+     *
+     * `revenue`, `orders`, `products`, `customers`, `shipping` and `cod` under
+     * this collection stay 404s and stay named in tests/mock-api.test.ts with a
+     * reason — the analytics branch owns them. There is no gate on
+     * `ac_view_analytics` here: all three identities hold it, so a gate would be
+     * a refusal nothing in this file can reach, and this file does not grow
+     * error paths nobody can take.
+     */
+    case "analytics":
+      return method === "GET" && segments.length === 2 && second === "overview"
+        ? analyticsOverview(searchParams)
+        : notFound();
+
+    /*
      * Three routes: the provider list, the tariff, and the resolver.
      *
      * **`GET /shipping/rules/{id}` is served, and leaving it a 404 was wrong.**
@@ -7674,12 +8266,15 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * one the coupons branch was burned by: a 404 where the shop answers a rule
      * grows an error path production never takes.
      *
-     * **`GET /analytics/shipping` is the one allowlisted route on this subject
-     * that still answers `rest_no_route`, and it stays that way.** It belongs to
-     * the `analytics` schema module, which the unit suite lists `UNCOVERED` with
-     * a reason — a declared gap owned by the analytics branch, not an oversight
-     * on this one. Written here so the next person diffing this surface finds
-     * the answer instead of re-deriving it.
+     * **`GET /analytics/shipping` used to be described here as the one
+     * allowlisted route on this subject still answering `rest_no_route`. That is
+     * false and DECISIONS.md still carries it.** Measured 2026-08-26: it answers
+     * **200 with a full payload**, for a Support Agent as well as for a Super
+     * Admin. It is still a 404 *here* — the analytics branch owns it, and only
+     * `/analytics/overview` is served — but the gap is this file's and not the
+     * shop's, which is the opposite of what the old sentence said. Named so the
+     * next person diffing this surface does not re-derive it, and so nobody
+     * builds an error path for a `rest_no_route` the shop never sends.
      *
      * The rules list is paginated through the shared `paginate()`, which is what
      * makes it refuse the four paging edges every other collection refuses.
@@ -7929,6 +8524,10 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       return segments.length === 1 ? notificationsListing(searchParams) : notFound();
 
     case "inventory": {
+      // Measured 403 for the Support Agent credential, alongside `/orders`.
+      const refused = gatedOn("ac_manage_inventory");
+      if (refused !== null) return refused;
+
       // Depth is stated here, the way `/products` and `/orders` state theirs.
       if (segments.length > 3) return notFound();
 

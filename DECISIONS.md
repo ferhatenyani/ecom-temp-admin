@@ -24,7 +24,7 @@ left looking like an oversight.
 [x]  7. Coupons — list + form
 [x]  8. Shipping — parcels list + rules route
 [x]  9. Payments
-[ ] 10. Dashboard
+[x] 10. Dashboard
 [ ] 11. Analytics — revenue / orders / products / customers / shipping / COD
 [ ] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
 [ ] 13. Media
@@ -39,7 +39,7 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **82
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **79
 files left.**
 
 ---
@@ -59,6 +59,7 @@ Apply these to every remaining screen unless something measured says otherwise.
 | **Copy never names a screen or action that does not exist.** | Three such strings were found and fixed; one had just been written. |
 | **A picker over a working filter ships only when the allowlisted enumeration is complete.** Payments yes, shipping no. | Both parameters work and neither is validated — a wrong value is a silent 200 with 0 rows, not a refusal, so the *picker* is the only thing that can keep a typo unreachable. `/payments/methods` lists both values the collection carries, so it can; `/shipping/providers` lists one of two, so it cannot and shipping ships no provider filter. The test is the enumeration, never the parameter. |
 | **A translated word for a shop's own vocabulary, a brand for a brand.** | `providerLabel`'s message key → API `label` → raw name, now in two places. `manual` and `cod` are states of this shop and read in the reader's language; `acfake` and `chargily` keep what their own side of the wire calls them. Nobody translates "Yalidine". |
+| **A figure links only where its reader is not refused, and a figure with no honest destination renders unlinked.** Dashboard. | The same rule the nav and every disabled control follow, reaching a *number*. A link to a 403 is a control that cannot act, and a link to the wrong list is worse than none — `awaiting` counts two statuses the API cannot filter together and led to a list of half its own value. The figure always stays: a refused destination is not a refused number. A type that made the destination mandatory is what produced both defects, so "this cannot be drilled into" has to be representable. |
 
 ---
 
@@ -715,6 +716,180 @@ so the rendered box is the same.
 
 ---
 
+## 11. Dashboard — seven figures over one window
+
+**The section numbers have run one ahead of the checklist since `DataTable` took
+§10**, which is a screen-shaped entry in a list of screens and is not one. This is
+checklist item **10**. Nothing renumbered, because every reference already
+written points at the numbers as they stand.
+
+**One route, full width capped 1440** (`PageBody width="wide"`, §2.3's analytics
+row) rather than the `max-w-3xl` §0 retires by name. Seven cards 1-up at the floor,
+2-up at `sm`, 4-up at `lg`, the lead card double-width — which is what makes seven
+cards **two full rows** instead of two rows with a hole in the second.
+
+- **`StatGroup`/`Stat` built, and this is the branch that owed them.** §3.2 has
+  specified them since the redesign began; `customers/[id]/StatisticsCard.tsx:34`
+  and `payments/CodFunnel.tsx:28` each recorded "the analytics iteration owns it"
+  and shipped scope-labelled `DataRow`s instead — correctly, both times, because
+  those two payloads are pairs of figures that look like one figure. **And
+  `StatSkeleton` had sat in `Skeleton.tsx` with no consumer**, which is a
+  placeholder nobody had ever held against a real box: it was `p-5 gap-3` around
+  `h-3`/`h-7`/`h-3`, and all five numbers were wrong. It now carries `Stat`'s own
+  geometry — 16px of shift per tile, 112px across seven.
+- **§3.2 amended: the delta slot holds a scope.** No comparison period exists in
+  any of the seven payloads — no `previous`, no `change`, no series — so a delta
+  would be invented. The slot takes the scope instead, which this screen needs
+  three times over: `net` (booked) beside `collected` (taken), `orders_placed`
+  901 beside `completed` 56 and `counted_as_revenue` 323, and
+  `customers.customers` 9 — *accounts that ordered in the window* — beside 209
+  `guest_orders`. The customers lesson (§5), then the payments lesson (§9), now
+  the third time.
+- **`low_stock` says it is current state, and the footer no longer lies.**
+  Measured flat at 3 across a 90× window while `customers` moves 0→5→9: it is the
+  one figure under the range control that the range does not move. Its scope line
+  says so, and `dashboardNote` — which read "chaque carte … sur la période
+  affichée" — now names the exception rather than claiming every figure is
+  window-scoped.
+- **Drill-through is capability-gated, and `DashboardCard.href` became optional
+  to allow it.** The type used to "make a card without a destination
+  unrepresentable", enforcing ADMIN_PANEL.md's *a number that cannot be drilled
+  into is decoration*. The rule is right about decoration; the enforcement
+  produced two defects. It forced `awaiting` — `pending + processing` — to link
+  `?status=processing`, **half its own number**, because `?status=processing,pending`
+  is a measured 400. And it forced four of a Support Agent's seven cards to link
+  to a 403: that credential is refused on `/orders` and `/inventory` and 200 on
+  `/customers`. So a figure with no honest destination renders **unlinked** — the
+  number still shows, because the reader is entitled to it — and never a link to
+  a refusal, never a disabled link. `awaiting` ships linkless for everyone. The
+  two reasons stay distinguishable in the type (`requires` set with no `href` is
+  a refusal; neither is a figure nothing can filter), which is what lets each be
+  explained in its own words and only where it applies.
+- **A caveat goes on the card that needs it; only the reader-shaped one is a
+  footnote.** A first draft put four lines of prose under a seven-card grid, two
+  of them answering the same question — *why has this card no chevron?* — about
+  different cards. `awaiting`'s answer moved into its own **scope line**, which is
+  where `low_stock` already carries its exception and where the reader is already
+  looking. What is left below the grid is three lines at most: the window scope
+  with `low_stock`'s exception, the report-vs-list asymmetry, and the
+  refused-list line, which renders only for a reader some card is actually
+  refused to. `analytics.noteAwaiting` went with it, rather than a second key
+  being added beside the one it duplicated. Restraint applies to words as much as
+  to decoration.
+- **The three `/analytics?view=` links carry the range; the list links cannot,
+  and the screen says so.** `/orders`, `/customers` and `/inventory` have no date
+  parameter at all — appending one would be the panel writing a filter the API
+  ignores, which is this run's oldest rule. Left unstated it reads as an
+  unfinished control rather than as a property of the API.
+- **New `components/ui/RangeControl.tsx`; the old one left untouched.**
+  `components/patterns/RangeControl.tsx` builds its custom window in a `Sheet` —
+  §0-retired, §7-forbidden — and is **shared with `/analytics`**, which is item 11.
+  Migrating it in place would migrate a screen this branch does not own. The new
+  one is `FilterTabs` over the six presets (the same strip the status filters are,
+  scrolling rather than wrapping at 340) plus a `Modal` for the custom pair.
+  **A `Modal` and not a `Popover`**, and §3.1 lists both: it puts "date ranges"
+  under `Popover` and then rules that a `Popover` never holds a form that can fail
+  validation. This one fails three ways, all the API's own, so the second rule
+  wins — the first is describing a calendar you pick a day out of.
+  `FilterTabs` gained `opensDialog`, so the one tab in the strip that collects
+  input before filtering announces `aria-haspopup="dialog"` instead of looking
+  identical to the five that apply immediately.
+- **No chart, and the absence is the decision.** `orders.by_status` is the only
+  distribution in the payload and it is exactly what `/analytics?view=orders`
+  draws — a second copy of one report, on the screen whose job is to hand people
+  off to it.
+- **No stale banner; an "as of" line instead, and §3.7 carries the extension.**
+  The screen rendered `StaleBanner` behind `!navigator.onLine` — an offline marker
+  on a page with no writes to disable, which is `CodFunnel`'s reasoning. What is
+  true is different: the report sits behind a **60-second server cache**
+  (`meta.cache_ttl`, and two live requests six seconds apart returned one
+  `generated_at`), so a Server Component can legitimately hold figures older than
+  the navigation, by a published amount. That is a timestamp, not a warning state.
+  Rendered with `formatDate` rather than `formatWhen` **for a mechanical reason**:
+  a relative time computed from `new Date()` on the server and again on the client
+  differs the moment a rounding boundary falls between them, which is a hydration
+  error the capture harness fails on.
+- **The error state reads the refusal instead of discarding it.** `page.tsx` ended
+  in `.catch(() => null)`, so a 400 on a malformed custom window and a dead
+  network produced the same screen and neither said what happened. Two of the
+  three fields are load-bearing now: **status**, because a 403 is a forbidden
+  state and not an error state, and **message**, because this route answers with
+  two different refusal shapes — `details.params.range` for a bad preset and
+  `details.fields.date_*` for a bad custom window, with a different top-level
+  sentence on each path — so `apiMessage` alone is "The reporting range is
+  invalid." and the useful half is in the details. A bad `range` cannot arrive
+  (`rangeFromParams` resolves an unknown preset to the API's own default); a bad
+  custom *window* can, by URL, which is why the path is real rather than
+  defensive.
+- **And the sentence is the panel's own wherever the panel has one.** A first
+  draft rendered the API's English into a French and Arabic screen — "The
+  reporting range is invalid. Required when range is custom." — which is the
+  **fourth** time this run has fixed that class, after the provider labels,
+  `unavailable` and `scope_note`. What "surface the API's own message" protects is
+  the *information*, never the provider's English, and all three refusals this
+  route makes about a custom window are already mirrored in
+  `customRangeProblem()` with localised copy the range control renders while
+  somebody is still typing. So the panel asks **its own mirror** which refusal
+  this is rather than parsing the API's prose for it — a sentence can be reworded
+  upstream, a window is a fact — and consults it only when `details.fields` names
+  one of the two dates, so an unrelated 400 can never be answered with a sentence
+  about a window. `ErrorState.detail` stays the slot for genuinely foreign text
+  and gets the API's own words only when the mirror has none, which is exactly
+  `unavailableLines()`'s rule. **"Unreachable through the controls" is not a
+  defence** — it was said about two of the previous three.
+- **The empty window keeps its cards.** `range=today` answers 200 with every
+  figure zero, so the screen says the window was quiet rather than reading as a
+  report that failed. The `EmptyState` sits **above** the grid rather than
+  replacing it, and that is `low_stock` again: it is a real figure inside an empty
+  window, and an empty state that swallowed the grid would hide the one number
+  still worth reading. §3.7's distinction applies with the window as the filter,
+  so it offers to widen — to the widest preset the API has, and on `90d` the
+  action is not rendered rather than rendered doing nothing.
+- **`nav-tree.ts:62` gave `/dashboard` no capability** while the route refuses
+  without `ac_view_analytics` — a nav entry whose only possible outcome for some
+  sessions was the forbidden screen, against the rule that file's own docblock
+  states. `/analytics` beside it had held the capability all along.
+- `loading.tsx` matches first paint: the header block, the six-preset strip over
+  the applied-window line, the "as of" line, seven tiles with the lead one
+  double-width, and the three footnotes.
+
+**i18n**: the `analytics` namespace is **shared with `/analytics`** (item 11) and
+nothing it reads was renamed or removed — checked key by key. Six keys added
+(`cardsLabel`, `asOf`, `asOfCached`, `emptyWindowDetail`, `noteRange`,
+`noteForbidden`), three rewritten (`dashboardNote`, `cardScope.low_stock`,
+`cardScope.awaiting`), and one — `noteAwaiting` — added and then **removed** when
+its sentence moved onto the card's own scope line, rather than left beside the
+key that now says the same thing. `errorMissing`, `errorReversed` and
+`errorTooLong` gained a second caller in the error state and are the reason no
+new key was needed for it. Nothing lost its last caller. **1 837 keys in each
+file, at exact parity.**
+
+**`tests/setup.ts` gained a `scrollIntoView` no-op.** jsdom implements no layout
+and therefore no `Element.scrollIntoView`; `FilterTabs` calls one to keep the
+active tab in view when a filter is restored from a URL. Stubbed in the harness
+beside the `IntersectionObserver` no-op rather than guarded inside the primitive —
+a `typeof … === "function"` check there would be defensive code for a browser that
+does not exist. It had never surfaced because no component test had rendered a
+`FilterTabs` before; the dashboard's is the first.
+
+**`e2e/analytics.spec.ts`: 18 tests before, 18 after, titles identical.** Three of
+the four dashboard tests changed and the fourth (`:73`, one request) needed
+nothing — its selector is the card test id, which did not move. `:50`'s "every
+card carries an `href` matching `/^\/fr\//`" became **"every card that has a link
+points into the panel"**, which is the same guarantee correctly scoped now that
+some cards are deliberately linkless, plus a floor on how many links there must be
+so the scoped form cannot pass vacuously on a grid of seven plain cards. `:288`
+gained `card-net` containing "DA" — the positive half of `:316`'s
+`not.toMatch(/\bDA\b/)`, which without it would also pass on a screen that
+rendered no figure at all. `:316` keeps all five of its assertions and adds the
+second gate: the four cards this credential is refused on are visible, are not
+anchors, and carry no `href` — asserted on the element, because a disabled-looking
+anchor is still one the keyboard follows — against `card-customers`, which is
+`/fr/customers` because that is the collection the same credential is 200 on. The
+other fourteen belong to `/analytics` and were not touched.
+
+---
+
 ## Carried forward — teardown owns these
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
@@ -827,10 +1002,20 @@ so the rendered box is the same.
   else. Not wired on shipping deliberately: the provider picker is what keeps that
   refusal unreachable. A screen that ever lets someone type a provider will need
   it.
-- **`GET /analytics/shipping` is the one allowlisted route on this subject still
-  answering `rest_no_route`** — a code no client can receive. Unimplemented in the
-  mock and listed `UNCOVERED` with a reason, so it is a declared gap rather than a
-  hidden one; the analytics branch owns it.
+- ~~**`GET /analytics/shipping` is the one allowlisted route on this subject still
+  answering `rest_no_route`**~~ — **struck 2026-08-26: it answers 200 with a full
+  payload**, `{range, shipments{total, by_status{…}}, …}`, and does so for a
+  Support Agent as well as a Super Admin. The record outlived a backend repair
+  rather than ever having been wrong, which is the *third* time that has happened
+  on this run after the two `orderby` cases — and it is the same failure mode each
+  time: a measurement is written down, the backend moves, and nothing re-takes it
+  because the note reads like a property of the API rather than a dated
+  observation. It stays unimplemented in the mock and listed `UNCOVERED`; the
+  analytics branch (item 11) owns building it, and now has one less excuse.
+
+  The general lesson is worth more than the entry: **a "this route is broken"
+  note needs a date and a re-check, exactly as a "this parameter is ignored" note
+  does.** Absence of capability is not more durable than presence of it.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
 - `movementReasonHint` has no caller in either message file. So do `cod.turnOff`

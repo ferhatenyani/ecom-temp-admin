@@ -57,12 +57,26 @@ test.describe("the dashboard", () => {
     // than one set with holes in it.
     await expect(cards).toHaveCount(7);
 
-    // A dashboard number that cannot be drilled into is decoration.
-    for (const href of await cards.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute("href")),
-    )) {
+    /*
+     * **"Every card" became "every card that has a link", and the guarantee is
+     * the same one correctly scoped.** This asserted an `href` on all seven,
+     * because `DashboardCard.href` was required — a type-level rule enforcing
+     * "a number that cannot be drilled into is decoration". The rule is right
+     * about decoration and wrong as a requirement: it forced `awaiting`, which
+     * counts `pending + processing`, to link `?status=processing` — half its own
+     * number, because `?status=processing,pending` is a measured 400 — and it
+     * forced four of a Support Agent's cards to link to a 403. A figure with no
+     * honest destination now renders unlinked, never as a link to a refusal and
+     * never as a disabled link. What is still forbidden, and is what this checks,
+     * is a link that goes anywhere but into this panel.
+     */
+    const hrefs = await cards.evaluateAll((nodes) => nodes.map((n) => n.getAttribute("href")));
+    for (const href of hrefs.filter((value) => value !== null)) {
       expect(href).toMatch(/^\/fr\//);
     }
+    // And a Super Admin does get links — a scoped assertion that vacuously
+    // passes on a grid of seven plain cards would prove nothing.
+    expect(hrefs.filter((value) => value !== null).length).toBeGreaterThanOrEqual(6);
 
     // And the drill-through actually arrives somewhere that exists.
     await page.getByTestId("card-low_stock").click();
@@ -298,6 +312,11 @@ test.describe("the money gate", () => {
 
     await page.goto("/fr/dashboard");
     await expect(page.getByTestId("card-net")).toBeVisible();
+    // The currency, on the dashboard's own lead card. This is the positive half
+    // of the money-blind test below, which asserts no `DA` anywhere in the body:
+    // without this, that assertion would also pass on a screen that failed to
+    // render a figure at all.
+    await expect(page.getByTestId("card-net")).toContainText("DA");
   });
 
   test("a Support Agent gets a named refusal on the revenue report", async ({ page }) => {
@@ -332,6 +351,29 @@ test.describe("the money gate", () => {
     const body = await page.locator("body").innerText();
     expect(body).not.toMatch(/\bDA\b/);
     expect(body).not.toMatch(/NaN|undefined/);
+
+    /*
+     * **And no link to a refusal, which is the second gate on this screen.**
+     * Measured 2026-08-26 with this credential: 403 on `/orders` and
+     * `/inventory`, 200 on `/customers`. Four of these seven cards lead into
+     * those two collections, so they render with their figure and **no link** —
+     * not a dimmed one, not a disabled one. The figure stays because the reader
+     * is entitled to the number; only the destination is refused.
+     *
+     * Asserted on the rendered element rather than on the count, because a
+     * disabled-looking anchor is still an anchor: the keyboard reaches it, Enter
+     * follows it and the context menu opens it in a tab.
+     */
+    for (const key of ["orders_placed", "completed", "low_stock", "awaiting"]) {
+      const card = page.getByTestId(`card-${key}`);
+      await expect(card).toBeVisible();
+      await expect(card).not.toHaveAttribute("href", /./);
+      expect(await card.evaluate((node) => node.tagName)).not.toBe("A");
+    }
+    // `/customers` is the one this credential is 200 on, and it is still a link
+    // — the negative above would pass just as well on a screen with no links at
+    // all.
+    await expect(page.getByTestId("card-customers")).toHaveAttribute("href", "/fr/customers");
   });
 
   test("a Support Agent still reads every report that is not money", async ({ page }) => {

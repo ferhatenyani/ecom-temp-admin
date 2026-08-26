@@ -24,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import fr from "@/messages/fr.json";
+import { CAPABILITIES } from "@/lib/capabilities";
 import { overviewReport } from "@/lib/api/schemas/analytics";
 import { DashboardScreen } from "@/app/[locale]/(panel)/dashboard/DashboardScreen";
 
@@ -101,7 +102,20 @@ const WITH_MONEY = {
 /** What a caller without `ac_manage_orders` receives: no `revenue` key at all. */
 const WITHOUT_MONEY = BASE;
 
-function mount(report: unknown, canMoney: boolean) {
+/** A Super Admin. */
+const EVERYTHING = CAPABILITIES;
+
+/**
+ * The Support Agent, measured 2026-08-26: no `ac_manage_orders` and no
+ * `ac_manage_inventory`, so 403 on `/orders` and `/inventory` — which is four of
+ * this tier's seven cards, and the reason the moneyless set is rendered here
+ * with its real capability list rather than with all thirteen.
+ */
+const SUPPORT_AGENT = CAPABILITIES.filter(
+  (capability) => capability !== "ac_manage_orders" && capability !== "ac_manage_inventory",
+);
+
+function mount(report: unknown, canMoney: boolean, capabilities: readonly string[]) {
   return render(
     <NextIntlClientProvider locale="fr" messages={fr}>
       <DashboardScreen
@@ -109,7 +123,10 @@ function mount(report: unknown, canMoney: boolean) {
         range={{ preset: "30d", from: "", to: "" }}
         report={overviewReport.parse(report)}
         canMoney={canMoney}
+        capabilities={capabilities}
         generatedAt="2026-08-21T01:09:00+00:00"
+        cacheTtl={60}
+        failure={null}
       />
     </NextIntlClientProvider>,
   );
@@ -120,7 +137,7 @@ const cards = (container: HTMLElement) =>
 
 describe("the dashboard's two card sets", () => {
   it("renders a complete grid with money", () => {
-    const { container } = mount(WITH_MONEY, true);
+    const { container } = mount(WITH_MONEY, true, EVERYTHING);
     const rendered = cards(container);
 
     expect(rendered).toHaveLength(7);
@@ -132,7 +149,7 @@ describe("the dashboard's two card sets", () => {
   });
 
   it("renders a complete grid without money, and no holes where the money was", () => {
-    const { container } = mount(WITHOUT_MONEY, false);
+    const { container } = mount(WITHOUT_MONEY, false, SUPPORT_AGENT);
     const rendered = cards(container);
 
     // Same count as the money set. A grid that drops two cards and leaves the
@@ -145,7 +162,7 @@ describe("the dashboard's two card sets", () => {
   });
 
   it("prints no currency, and no empty currency-shaped hole, without money", () => {
-    const { container } = mount(WITHOUT_MONEY, false);
+    const { container } = mount(WITHOUT_MONEY, false, SUPPORT_AGENT);
     const text = container.textContent ?? "";
 
     // The shop's currency renders as `DA` in French. None of it may appear —
@@ -156,26 +173,58 @@ describe("the dashboard's two card sets", () => {
     expect(text).not.toMatch(/NaN|undefined|null/);
   });
 
-  it("gives every card a destination in both sets", () => {
-    for (const [report, canMoney] of [
-      [WITH_MONEY, true],
-      [WITHOUT_MONEY, false],
+  it("gives every card a destination or an explicit reason it has none", () => {
+    /*
+     * **This used to assert an `href` on every card, and the rule behind it
+     * moved.** "A dashboard number that cannot be drilled into is decoration" is
+     * right about decoration and wrong as a requirement, because the API can put
+     * a card in a state with no honest destination: `awaiting` counts
+     * `pending + processing` and `?status=processing,pending` is a measured 400,
+     * and a Support Agent is 403 on the two collections four of their cards lead
+     * to. The remedy is an unlinked figure, never a link to a refusal and never a
+     * disabled link.
+     *
+     * So the guarantee is scoped rather than dropped: a card that **has** a link
+     * points into the panel, and a card that has none is one `dashboardCards()`
+     * deliberately built that way — either gated on a named capability or the one
+     * figure the API cannot filter for. What is excluded is a card that lost its
+     * link by accident.
+     */
+    for (const [report, canMoney, capabilities] of [
+      [WITH_MONEY, true, EVERYTHING],
+      [WITHOUT_MONEY, false, SUPPORT_AGENT],
     ] as const) {
-      const { container, unmount } = mount(report, canMoney);
+      const { container, unmount } = mount(report, canMoney, capabilities);
+      const linkless: string[] = [];
+
       for (const card of cards(container)) {
-        // A dashboard number that cannot be drilled into is decoration.
-        expect(card.getAttribute("href")).toMatch(/^\/fr\//);
+        const href = card.getAttribute("href");
+        if (href === null) {
+          linkless.push(card.getAttribute("data-testid") ?? "");
+          // And it is not a link at all — not an anchor with a dead href, and
+          // not something a keyboard can still reach and follow.
+          expect(card.tagName).toBe("DIV");
+        } else {
+          expect(href).toMatch(/^\/fr\//);
+        }
       }
+
+      // Every linkless card is one of the two the decision names.
+      expect(linkless.sort()).toEqual(
+        canMoney
+          ? ["card-awaiting"]
+          : ["card-awaiting", "card-completed", "card-low_stock", "card-orders_placed"],
+      );
       unmount();
     }
   });
 
   it("labels and scopes every card in both sets", () => {
-    for (const [report, canMoney] of [
-      [WITH_MONEY, true],
-      [WITHOUT_MONEY, false],
+    for (const [report, canMoney, capabilities] of [
+      [WITH_MONEY, true, EVERYTHING],
+      [WITHOUT_MONEY, false, SUPPORT_AGENT],
     ] as const) {
-      const { container, unmount } = mount(report, canMoney);
+      const { container, unmount } = mount(report, canMoney, capabilities);
       for (const card of cards(container)) {
         const text = card.textContent ?? "";
         // A missing message renders as the key itself, which is how a
@@ -197,7 +246,16 @@ describe("the dashboard's two card sets", () => {
       ...BASE,
       orders: { ...BASE.orders, placed: 0, completed: 0 },
     };
-    const { container } = mount(quiet, false);
+    const { container } = mount(quiet, false, SUPPORT_AGENT);
     expect(container.textContent).toContain("Aucune commande sur cette période");
+
+    /*
+     * And the cards stay underneath it. `inventory.low_stock` is **not**
+     * range-scoped — 3 across a 90× window, measured — so an empty state that
+     * replaced the grid would hide the one figure that still means something in
+     * a quiet window.
+     */
+    expect(cards(container)).toHaveLength(7);
+    expect(container.querySelector("[data-testid='card-low_stock']")?.textContent).toContain("3");
   });
 });

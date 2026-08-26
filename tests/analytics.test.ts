@@ -38,6 +38,7 @@ import {
 import { formatDay } from "@/lib/format/date";
 import { formatCount, formatPercent, formatRate } from "@/lib/format/money";
 import { orderStatuses } from "@/lib/order-status";
+import { CAPABILITIES } from "@/lib/capabilities";
 import { SHIPMENT_STATUSES } from "@/lib/shipment-status";
 
 const RANGE = {
@@ -47,6 +48,26 @@ const RANGE = {
   days: 30,
   timezone: "+00:00",
 };
+
+/**
+ * The same window as the panel's own URL state, which is a different type: the
+ * one above is `data.range` off the response, this one is what a picker holds
+ * and what `dashboardCards` writes into a report link.
+ */
+const WINDOW = { preset: "30d", from: "", to: "" } as const;
+
+/** A Super Admin — every capability the panel knows about. */
+const EVERYTHING = CAPABILITIES;
+
+/**
+ * The Support Agent, measured 2026-08-26: **403 on `/orders` and `/inventory`**,
+ * 200 on `/customers` and on all six analytics reports. The delta from a Super
+ * Admin is exactly the two refusals that were seen and no more — nothing is
+ * inferred from the role's name.
+ */
+const SUPPORT_AGENT = CAPABILITIES.filter(
+  (capability) => capability !== "ac_manage_orders" && capability !== "ac_manage_inventory",
+);
 
 const UNAVAILABLE = {
   shipping_cost:
@@ -383,8 +404,16 @@ describe("the money gate", () => {
      * with holes**. So the two sets are compared as sets rather than the second
      * being checked for absences.
      */
-    const withMoney = dashboardCards(overviewReport.parse(OVERVIEW), true);
-    const without = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), false);
+    const withMoney = dashboardCards(overviewReport.parse(OVERVIEW), {
+      money: true,
+      capabilities: EVERYTHING,
+      range: WINDOW,
+    });
+    const without = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), {
+      money: false,
+      capabilities: SUPPORT_AGENT,
+      range: WINDOW,
+    });
 
     expect(withMoney).toHaveLength(without.length);
     expect(without.some((card) => card.kind === "money")).toBe(false);
@@ -394,16 +423,104 @@ describe("the money gate", () => {
     for (const set of [withMoney, without]) {
       expect(set.filter((card) => card.hero)).toHaveLength(1);
       expect(set[0].hero).toBe(true);
-      // A dashboard number that cannot be drilled into is decoration.
-      for (const card of set) expect(card.href).toMatch(/^\//);
+      /*
+       * A number that cannot be drilled into is decoration — but the remedy for
+       * a figure with no honest destination is to render it **unlinked**, not to
+       * point it somewhere wrong. So the guarantee is scoped: a card that *has*
+       * a link points into the panel.
+       */
+      for (const card of set) {
+        if (card.href !== undefined) expect(card.href).toMatch(/^\//);
+      }
     }
+  });
+
+  it("gives `awaiting` no link, because no filtered list is that number", () => {
+    /*
+     * It counts `pending + processing`; `?status=processing,pending` is a
+     * measured 400 and `?status=processing` is roughly half of it. A card
+     * reading 375 that lands on a list of 177 is worse than a card that does not
+     * claim to lead anywhere.
+     *
+     * It carries no `requires` either, which is what separates it from a card
+     * this reader is merely refused: nothing in the panel could link it.
+     */
+    for (const capabilities of [EVERYTHING, SUPPORT_AGENT]) {
+      const cards = dashboardCards(overviewReport.parse(OVERVIEW), {
+        money: false,
+        capabilities,
+        range: WINDOW,
+      });
+      const awaiting = cards.find((card) => card.key === "awaiting");
+      expect(awaiting?.href).toBeUndefined();
+      expect(awaiting?.requires).toBeUndefined();
+    }
+  });
+
+  it("drops the link on the four lists a Support Agent is refused, and keeps the figure", () => {
+    /*
+     * Measured 2026-08-26 with that credential: **403 on `/orders` and
+     * `/inventory`, 200 on `/customers`.** Four of the seven cards in the
+     * moneyless set lead into those two collections.
+     */
+    const cards = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), {
+      money: false,
+      capabilities: SUPPORT_AGENT,
+      range: WINDOW,
+    });
+
+    expect(cards).toHaveLength(7);
+    const linkless = cards.filter((card) => card.href === undefined).map((card) => card.key);
+    expect(linkless.sort()).toEqual(["awaiting", "completed", "low_stock", "orders_placed"]);
+
+    // The figures are all still there — a refused destination is not a refused
+    // number, and the value is what the reader came for.
+    for (const card of cards) expect(card.value).not.toBe("");
+
+    // `/customers` is the one this credential is 200 on, which is why there is
+    // no gate on it however plausible one would look.
+    expect(cards.find((card) => card.key === "customers")?.href).toBe("/customers");
+  });
+
+  it("carries the window into a report link and never into a list link", () => {
+    /*
+     * `/analytics` reads `range` off its own URL. `/orders`, `/customers` and
+     * `/inventory` have no date parameter at all, so appending one would be the
+     * panel writing a filter the API ignores.
+     */
+    const cards = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), {
+      money: false,
+      capabilities: EVERYTHING,
+      range: { preset: "7d", from: "", to: "" },
+    });
+
+    expect(cards.find((card) => card.key === "cod_confirmation")?.href).toBe(
+      "/analytics?view=cod&range=7d",
+    );
+    expect(cards.find((card) => card.key === "orders_placed")?.href).toBe("/orders");
+
+    // The default preset is omitted, so a link over the default window is
+    // `/analytics?view=cod` rather than `…&range=30d` — the same rule
+    // `rangeToParams` follows everywhere else.
+    const atDefault = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), {
+      money: false,
+      capabilities: EVERYTHING,
+      range: WINDOW,
+    });
+    expect(atDefault.find((card) => card.key === "shipping_delivery")?.href).toBe(
+      "/analytics?view=shipping",
+    );
   });
 
   it("falls to the safe side when the panel and the API disagree", () => {
     // `canSeeMoney()` says yes, the payload carries no `revenue` block. The
     // money cards cannot be built from nothing, so the set without them is what
     // renders — never an `undefined` formatted as a currency.
-    const cards = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), true);
+    const cards = dashboardCards(overviewReport.parse(OVERVIEW_NO_MONEY), {
+      money: true,
+      capabilities: EVERYTHING,
+      range: WINDOW,
+    });
     expect(cards.some((card) => card.kind === "money")).toBe(false);
     expect(cards[0].key).toBe("orders_placed");
   });

@@ -59,7 +59,15 @@ export const NAV: NavGroup[] = [
   {
     key: "insight",
     items: [
-      { key: "dashboard", href: "/dashboard", icon: "dashboard" },
+      /*
+       * **`ac_view_analytics`, and its absence was a live defect.** This entry
+       * carried no capability while `/dashboard` refuses without that one — so a
+       * session lacking it was shown a nav item whose only possible outcome was
+       * the forbidden screen. That is the standing rule this file's own docblock
+       * states, broken by the one route in the group that had no gate written on
+       * it. `/analytics` beside it has held the same capability all along.
+       */
+      { key: "dashboard", href: "/dashboard", icon: "dashboard", capability: "ac_view_analytics" },
       { key: "analytics", href: "/analytics", icon: "dashboard", capability: "ac_view_analytics" },
     ],
   },

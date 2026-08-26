@@ -190,18 +190,52 @@ export function CardSkeleton({
   );
 }
 
-/** A metric tile, for dashboards and analytics headers. */
-export function StatSkeleton({ count = 4, label }: { count?: number; label: string }) {
+/**
+ * A metric tile, for dashboards and analytics headers.
+ *
+ * **This shipped with no consumer and did not match the component it stands in
+ * for**, which is the failure mode §3.6 exists to prevent arriving in the
+ * skeleton itself: `StatGroup`/`Stat` were specified by §3.2 and built on the
+ * dashboard branch, and until then nothing had ever rendered beside this to
+ * compare it against. It was `p-5 gap-3` around `h-3` / `h-7` / `h-3` blocks;
+ * every one of those five numbers was wrong.
+ *
+ * Every measurement is now `Stat`'s own. The card is `p-4 sm:p-5` with a `gap-2`
+ * column — `Card`'s padding, §1.4's density target — and its three lines are the
+ * line boxes their type classes give them: `--text-label` at 1.125rem for the
+ * label, `--text-display` at 2.125rem for the value, `--text-caption` at 1rem for
+ * the scope. The old `h-7` value block was 6px short of the figure that replaces
+ * it and the two `h-3` label blocks 6px and 4px short of theirs, which is 16px of
+ * shift per tile and 112px across the dashboard's seven.
+ *
+ * `wide` draws the first tile double-width, because `Stat`'s lead card spans two
+ * columns and a placeholder that draws seven equal tiles reflows the whole grid
+ * when the real one lands.
+ */
+export function StatSkeleton({
+  count = 4,
+  label,
+  wide = false,
+}: {
+  count?: number;
+  label: string;
+  wide?: boolean;
+}) {
   return (
     <SkeletonRegion
       label={label}
       className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
     >
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="ui-card flex flex-col gap-3 p-5">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-7 w-32" />
-          <Skeleton className="h-3 w-16" />
+        <div
+          key={i}
+          className={`ui-card flex flex-col gap-2 p-4 sm:p-5 ${
+            wide && i === 0 ? "sm:col-span-2" : ""
+          }`}
+        >
+          <Skeleton className="h-4.5 w-24" />
+          <Skeleton className="h-8.5 w-32" />
+          <Skeleton className="h-4 w-28" />
         </div>
       ))}
     </SkeletonRegion>
