@@ -126,6 +126,27 @@ export function DataList({ children }: { children: ReactNode }) {
 export function DataRow({
   label,
   /**
+   * A second line under the label, saying what this figure counts.
+   *
+   * **Added on the payments branch, and it is the slot a scope needs.** The COD
+   * report puts `by_status.confirmed` (84) and `confirmed_orders` (126) in one
+   * payload; both are correct and they answer different questions, so
+   * `lib/cod.ts` makes `CodFigure.scope` non-optional and there has to be
+   * somewhere to render it. `label` is a `string` and cannot hold two lines, and
+   * concatenating the scope into it produces "Actuellement confirmées · état
+   * actuel" — one run of text where the eye wants a label and a qualifier.
+   *
+   * It lives on the `<dt>` rather than beside the value because the scope
+   * qualifies the *question*, not the answer. `items-baseline` aligns the value
+   * with the label's first line, so a row with a hint and a row without still
+   * read down the card as one column of figures.
+   *
+   * Optional, and most rows are right not to pass it: a hint that restates the
+   * label is noise. `analytics/CodView.tsx` renders the same five figures and
+   * inherits this.
+   */
+  hint,
+  /**
    * Label above the value rather than beside it, for prose.
    *
    * A customer note is a sentence and a wilaya name is a word; the same row
@@ -140,6 +161,7 @@ export function DataRow({
   children,
 }: {
   label: string;
+  hint?: string;
   stacked?: boolean;
   children: ReactNode;
 }) {
@@ -149,7 +171,10 @@ export function DataRow({
         stacked ? "flex flex-col gap-1" : "flex flex-wrap items-baseline gap-x-4 gap-y-0.5"
       }`}
     >
-      <dt className="min-w-0 text-ui-label text-ui-muted">{label}</dt>
+      <dt className="min-w-0 text-ui-label text-ui-muted">
+        {label}
+        {hint ? <span className="block text-ui-caption text-ui-subtle">{hint}</span> : null}
+      </dt>
       <dd
         className={`min-w-0 text-ui-compact text-ui-fg ${
           stacked ? "" : "ms-auto text-end break-words"

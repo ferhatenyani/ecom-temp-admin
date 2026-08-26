@@ -48,10 +48,14 @@ import {
 } from "@/lib/shipment-status";
 import { applicableRules, byNarrowestFirst, ruleScope, stripLabelUrls } from "@/lib/shipping";
 import {
+  codStatistics as codStatisticsSchema,
+  payment as paymentSchema,
   paymentMethods,
   payments as paymentsSchema,
   verifyResult,
 } from "@/lib/api/schemas/payment";
+import { PAYMENT_STATUSES } from "@/lib/payment-status";
+import { byStatusSumsToTotal, codByStatus, codFigures, ratePercent, RATE_KEYS } from "@/lib/cod";
 import {
   attributeTerms,
   deleteResult,
@@ -183,6 +187,75 @@ describe("the envelope", () => {
   it("refuses a path outside the base", () => {
     expect(respond("GET", "/wp-json/wp/v2/users").status).toBe(404);
   });
+
+  /**
+   * ── A list has three envelope shapes, and this file used to have one ────────
+   *
+   * Found 2026-08-26 by a request-for-request diff against the live shop. The
+   * mock was manufacturing a full paging envelope for routes that page nothing,
+   * and on wilayas a `page`/`per_page`/`total_pages` triple the shop does not
+   * send at all.
+   *
+   * **Nothing reads `.meta` on these three today** — every caller takes `r.data`,
+   * which was checked — so this cost nothing yet. It would have cost the first
+   * screen that read `meta.total` off wilayas: 58 from the harness, 69 from the
+   * shop, and the harness calling it green. Same class as the `per_page` default
+   * this suite already pins — one shared helper quietly standardising something
+   * the API varies.
+   *
+   * Pinned per shape rather than per route, so a fourth enumeration added later
+   * cannot inherit the wrong one in silence.
+   */
+  it("serves each of the three measured list envelopes with its own shape", () => {
+    const metaOf = (path: string) => (get(path).body as { meta?: unknown }).meta;
+
+    // 1. No `meta` key whatsoever — measured on both.
+    for (const path of ["/payments/methods", "/shipping/providers"]) {
+      expect(metaOf(path), path).toBeUndefined();
+      expect(Object.keys(get(path).body as object), path).toEqual(["success", "data"]);
+      // `unwrap()` reports the absence as null rather than throwing.
+      expect(parse(z.array(z.looseObject({ name: z.string() })), get(path)).meta).toBeNull();
+    }
+
+    // 2. `{total}` alone — measured on wilayas, and the only route with it.
+    expect(metaOf("/locations/wilayas")).toEqual({ total: 58 });
+
+    // 3. The full paging envelope, which every genuinely paginated collection
+    //    carries and which the unmeasured enumerations still borrow.
+    expect(metaOf("/payments")).toEqual({
+      total: 45,
+      page: 1,
+      per_page: 20,
+      total_pages: 3,
+    });
+    expect(Object.keys(metaOf("/orders/1023/notes") as object)).toEqual([
+      "total",
+      "page",
+      "per_page",
+      "total_pages",
+    ]);
+  });
+
+  /**
+   * **An empty `details` is omitted, not sent as `{}`.** Measured on the 403 and
+   * the 404 — the only errors in the mock that carry none. Tidiness rather than a
+   * defect: `ApiError` reaches for `details.params`/`details.fields` and gets
+   * `undefined` from either shape. A refusal that *has* details still sends them.
+   */
+  it("omits an empty details rather than sending an empty object", () => {
+    const errorOf = (response: MockResponse) =>
+      (response.body as { error: Record<string, unknown> }).error;
+
+    expect(errorOf(get("/payments/99999999"))).toEqual({
+      code: "not_found",
+      message: "No payment with that id.",
+    });
+    expect(errorOf(get("/nonsense"))).not.toHaveProperty("details");
+
+    // And the half that must not change: a parameter refusal names its parameter.
+    expect(errorOf(get("/payments", "status=zzz"))).toHaveProperty("details");
+    expect(apiError(get("/payments", "status=zzz")).params?.status).toContain("not one of");
+  });
 });
 
 describe("GET /auth/me", () => {
@@ -196,7 +269,7 @@ describe("GET /auth/me", () => {
 
 describe("GET /locations/wilayas", () => {
   it("parses, and is bilingual on all 58 rows", () => {
-    const { data } = parseList(wilayas, get("/locations/wilayas"));
+    const { data } = parse(wilayas, get("/locations/wilayas"));
     expect(data).toHaveLength(58);
     expect(data.every((row) => row.name !== "" && row.name_ar !== "")).toBe(true);
   });
@@ -321,7 +394,7 @@ describe("the order detail's sub-resources", () => {
     expect(finished[0].is_live).toBe(false);
     // A provider `/shipping/providers` does not list, exactly as shipment 213
     // measured — so a label lookup has to fall back to the raw name.
-    const providers = parseList(shippingProviders, get("/shipping/providers")).data;
+    const providers = parse(shippingProviders, get("/shipping/providers")).data;
     expect(providers.some((p) => p.name === finished[0].provider)).toBe(false);
 
     expect(parseList(shipmentsSchema, get("/orders/1007/shipments")).data).toEqual([]);
@@ -347,16 +420,30 @@ describe("the order detail's sub-resources", () => {
 
 describe("the detail's reference lists", () => {
   it("serves exactly one shipping provider, and it is the default", () => {
-    const { data } = parseList(shippingProviders, get("/shipping/providers"));
+    const { data } = parse(shippingProviders, get("/shipping/providers"));
     expect(data).toHaveLength(1);
     expect(data[0].name).toBe("manual");
     expect(data[0].is_default).toBe(true);
   });
 
-  it("serves the two payment methods, chargily first", () => {
-    const { data } = parseList(paymentMethods, get("/payments/methods"));
+  /**
+   * **The labels are English, and that is the fixture telling the truth rather
+   * than being tidy.** The mock invented `"Paiement à la livraison"` for `cod`
+   * until 2026-08-26, which is the shipping `providerLabel` defect in a second
+   * place: a French label in the fixture renders correctly in the French panel by
+   * accident and in the Arabic one as a bug, and no capture could show either.
+   * `PaymentsScreen` resolves a provider with `methods.find(…)?.label ?? name`
+   * and no message key in front of it, so with the real labels in place the
+   * defect is on a screenshot.
+   */
+  it("serves the two payment methods, chargily first, labelled as the API labels them", () => {
+    const { data } = parse(paymentMethods, get("/payments/methods"));
     expect(data.map((row) => row.name)).toEqual(["chargily", "cod"]);
     expect(data.filter((row) => row.is_default)).toHaveLength(1);
+    expect(data.map((row) => row.label)).toEqual([
+      "Chargily (EDAHABIA / CIB)",
+      "Cash on delivery",
+    ]);
   });
 
   /**
@@ -712,7 +799,7 @@ describe("the shipping rule writes", () => {
 
     // `available` is the same list the picker is built from, so a refusal and
     // the choices on screen cannot disagree about what is registered.
-    const registered = parseList(shippingProviders, get("/shipping/providers")).data;
+    const registered = parse(shippingProviders, get("/shipping/providers")).data;
     expect(
       apiError(write("POST", "/shipping/rules", { amount: "1.00", provider: "zzz" })).details
         .available,
@@ -917,7 +1004,7 @@ describe("GET /shipments", () => {
     // because one of them is not in `/shipping/providers`.
     const providers = new Set(rows.map((row) => row.provider));
     expect([...providers].sort()).toEqual(["acfake", "manual"]);
-    const listed = parseList(shippingProviders, get("/shipping/providers")).data;
+    const listed = parse(shippingProviders, get("/shipping/providers")).data;
     expect(listed).toHaveLength(1);
     expect(listed.some((entry) => entry.name === "acfake")).toBe(false);
 
@@ -1062,6 +1149,542 @@ describe("GET /shipments", () => {
   });
 });
 
+/* ------------------------------------------------------------------ payments --- */
+
+/**
+ * **`GET /payments`, `GET /payments/{id}` and `GET /cod/statistics` were pinned
+ * at 404 in this file as declared `UNCOVERED` gaps until 2026-08-26, and the
+ * declaration had stopped being true of the API long before it stopped being
+ * true of the mock.** All three are allowlisted, all three are what `/payments`
+ * calls on load, and a 404 here is not a neutral absence — it answers
+ * `rest_no_route`, a code `ErrorNormalizer` never emits, so a screen branching on
+ * it would have been built against something the shop cannot send.
+ *
+ * The whole point of this collection is the split between what it honours and
+ * what it accepts and throws away, so both halves are asserted: four filters that
+ * really filter, and eleven parameters that are byte-identical to the bare
+ * listing. Every refusal is checked for its **code** as well as its sentence.
+ */
+const paymentsBody = (query = "") => JSON.stringify(get("/payments", query).body);
+
+describe("GET /payments", () => {
+  it("serves 45 transactions over three pages, newest id first", () => {
+    const { data, meta } = parseList(paymentsSchema, get("/payments"));
+    expect(meta).toEqual({ total: 45, page: 1, per_page: 20, total_pages: 3 });
+    expect(data).toHaveLength(20);
+
+    const all = parseList(paymentsSchema, get("/payments", "per_page=100")).data;
+    expect(all).toHaveLength(45);
+
+    // The resting order, and the two things that make a sort regression visible.
+    expect(all.map((row) => row.id)).toEqual([...all.map((row) => row.id)].sort((a, b) => b - a));
+    expect(new Set(all.map((row) => row.id)).size).toBe(45);
+    expect(new Set(all.map((row) => row.created_at)).size).toBe(45);
+
+    /*
+     * **`id desc` and `created_at desc` are different sequences**, deliberately.
+     * The two pinned rows carry the highest ids and sit in the middle of the date
+     * range, so a `date` sort that started working could actually be seen — where
+     * a fixture whose ids and stamps agree would answer identically either way,
+     * which is precisely how "validated then ignored" got recorded for a working
+     * coupon sort.
+     */
+    const byDate = [...all].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    expect(byDate.map((row) => row.id)).not.toEqual(all.map((row) => row.id));
+
+    // A payment's stamp ends `Z` where a parcel's ends `+00:00`, on all 45.
+    expect(all.every((row) => row.created_at.endsWith("Z"))).toBe(true);
+    // And every row carries its own currency, like an order and unlike a product.
+    expect(all.every((row) => row.currency === "DZD")).toBe(true);
+  });
+
+  /**
+   * **`paid` is empty on purpose and is not a gap.** Measured 2026-08-20 and
+   * again 2026-08-26: nothing in this shop has ever settled, so four of the six
+   * statuses return zero rows. That is the positive control the filter needs —
+   * `?status=zzz` refuses, `?bogus_param=1` is ignored with all 45 — and
+   * inventing a settled shop would hand the panel a state it cannot reach.
+   */
+  it("filters by status, and three of the six answer nothing at all", () => {
+    const count = (query: string) =>
+      parseList(paymentsSchema, get("/payments", `${query}&per_page=100`)).meta.total;
+
+    expect(count("status=pending")).toBe(44);
+    expect(count("status=failed")).toBe(1);
+    for (const status of ["paid", "expired", "cancelled", "refunded"]) {
+      expect(count(`status=${status}`), `${status} must be empty in this shop`).toBe(0);
+    }
+    // The six sum to the collection, so the tabs partition it rather than
+    // overlapping.
+    const summed = PAYMENT_STATUSES.reduce((total, s) => total + count(`status=${s}`), 0);
+    expect(summed).toBe(45);
+  });
+
+  /**
+   * The enum refusal names all six in the **physical** order, ends in a full stop,
+   * and carries `invalid_request` rather than WordPress's own `rest_invalid_param`
+   * — the code half is what DECISIONS.md records fourteen refusals hiding behind.
+   */
+  it("refuses a status outside the six, an empty one, a list and an array", () => {
+    const enumSentence =
+      "status is not one of pending, paid, failed, expired, cancelled, and refunded.";
+
+    for (const query of ["status=zzz", "status=", "status=pending,failed"]) {
+      const error = refusedWith(get("/payments", query), 400, "invalid_request");
+      expect(error.params?.status, query).toBe(enumSentence);
+      expect(error.apiMessage).toBe("Invalid parameter(s): status");
+    }
+
+    /*
+     * **`?status[]=pending` is the *type* family, not the enum one**, and it names
+     * `status` rather than `status[]`: PHP turns the bracketed name into an array
+     * before the router sees it, so what fails is the string check. Reproducing it
+     * takes reading the bracketed key by hand — `URLSearchParams` does no such
+     * folding, so without that the parameter looks absent and the request would
+     * have answered a silent 200 with every row.
+     */
+    const array = refusedWith(get("/payments", "status[]=pending"), 400, "invalid_request");
+    expect(array.params?.status).toBe("status is not of type string.");
+  });
+
+  /**
+   * **`?status=` is a 400 and `?provider=` is a 200 with every row**, and the
+   * asymmetry is measured on the same request pair rather than tidied away. It is
+   * the shape this file already records between `/products?status=` and
+   * `/coupons?status=`: the empty string is a member of one enum and not of the
+   * other, and a parameter that reaches no enum at all cannot refuse anything.
+   */
+  it("honours provider case-insensitively, refuses nothing, and reads an empty one as absence", () => {
+    const count = (query: string) =>
+      parseList(paymentsSchema, get("/payments", `${query}&per_page=100`)).meta.total;
+
+    expect(count("provider=cod")).toBe(43);
+    expect(count("provider=chargily")).toBe(2);
+    // The two providers sum to the collection — nothing is on a third.
+    expect(count("provider=cod") + count("provider=chargily")).toBe(45);
+    expect(count("provider=COD")).toBe(43);
+
+    // A typo is a silent empty list here, where a status typo is a refusal.
+    expect(get("/payments", "provider=zzz").status).toBe(200);
+    expect(count("provider=zzz")).toBe(0);
+    expect(count("provider=")).toBe(45);
+  });
+
+  it("honours order_id, and refuses it in the type family and the range family", () => {
+    const rows = (query: string) => parseList(paymentsSchema, get("/payments", query)).data;
+
+    // The rich order carries two transactions; every other order carries one.
+    expect(rows("order_id=1023").map((row) => row.id)).toEqual([5231, 5230]);
+    expect(rows("order_id=1030")).toHaveLength(1);
+    // A real integer for an order that has no transaction is 0 rows, not a 404.
+    expect(get("/payments", "order_id=99999999").status).toBe(200);
+    expect(rows("order_id=99999999")).toHaveLength(0);
+
+    for (const query of ["order_id=zzz", "order_id="]) {
+      const error = refusedWith(get("/payments", query), 400, "invalid_request");
+      expect(error.params?.order_id, query).toBe("order_id is not of type integer.");
+    }
+    /*
+     * **A range sentence carries no full stop and a type sentence does.** The
+     * inconsistency is WordPress's own and cannot be tidied into a rule, only
+     * copied — a form quoting one back would otherwise render a sentence the shop
+     * never sends.
+     */
+    for (const query of ["order_id=0", "order_id=-1"]) {
+      const error = refusedWith(get("/payments", query), 400, "invalid_request");
+      expect(error.params?.order_id, query).toBe(
+        "order_id must be greater than or equal to 1",
+      );
+      expect(error.params?.order_id.endsWith(".")).toBe(false);
+    }
+  });
+
+  /**
+   * ── The one measurement that needed a fixture built for it ───────────────────
+   *
+   * **The bounds are inclusive at both ends and cut on the UTC day, not on
+   * Africa/Algiers.** Measured, not assumed — and the two readings are
+   * indistinguishable on every row in the shop but one. The fixture pins that row
+   * at `2026-08-16T23:07:22Z`, which is 00:07 on the **17th** in the shop's
+   * timezone, so it is included by `date_to=2026-08-16` and excluded by
+   * `date_from=2026-08-17`. Drop it and both assertions below still pass against a
+   * mock that cut on the wrong zone.
+   */
+  it("cuts date_from and date_to on the UTC day, inclusive at both ends", () => {
+    const rows = (query: string) =>
+      parseList(paymentsSchema, get("/payments", `${query}&per_page=100`)).data;
+
+    const edge = "2026-08-16T23:07:22Z";
+    const all = rows("");
+    expect(all.filter((row) => row.created_at === edge)).toHaveLength(1);
+
+    const from17 = rows("date_from=2026-08-17");
+    const to16 = rows("date_to=2026-08-16");
+    expect(from17).toHaveLength(8);
+    expect(to16).toHaveLength(37);
+    // The discriminating row, on the side the UTC day puts it and not the side
+    // the shop's clock would.
+    expect(to16.some((row) => row.created_at === edge)).toBe(true);
+    expect(from17.some((row) => row.created_at === edge)).toBe(false);
+    // The two halves partition the collection, so neither bound drops a row.
+    expect(from17.length + to16.length).toBe(45);
+
+    /*
+     * Inclusive at both ends: a single day names itself on both sides and comes
+     * back whole. Compared against the day's own bucket rather than a literal, so
+     * the assertion cannot quietly agree with a bound that is inclusive at one end
+     * and exclusive at the other.
+     */
+    const onThe16th = all.filter((row) => row.created_at.slice(0, 10) === "2026-08-16");
+    expect(onThe16th.length).toBeGreaterThan(1);
+    expect(rows("date_from=2026-08-16&date_to=2026-08-16")).toEqual(onThe16th);
+    // Six days of spread, so no single bound can answer the whole collection.
+    expect(new Set(all.map((row) => row.created_at.slice(0, 10))).size).toBe(7);
+    // An inverted range is empty rather than refused or swapped.
+    expect(rows("date_from=2026-08-18&date_to=2026-08-12")).toHaveLength(0);
+  });
+
+  /**
+   * **The fourth refusal family: a pattern sentence.** It ends in a full stop like
+   * the enum and type families, and unlike either it names neither the legal set
+   * nor the offending value — it prints the regex at the person. A date control is
+   * what keeps it unreachable, which is the same argument the shipping provider
+   * picker makes for its own refusal.
+   */
+  it("pattern-validates both date bounds, and serves an impossible date as zero rows", () => {
+    const pattern = "does not match pattern ^\\d{4}-\\d{2}-\\d{2}$.";
+
+    for (const name of ["date_from", "date_to"]) {
+      for (const value of ["", "20-08-2026", "2026-08-20T00:00:00Z", "zzz"]) {
+        const error = refusedWith(
+          get("/payments", `${name}=${encodeURIComponent(value)}`),
+          400,
+          "invalid_request",
+        );
+        expect(error.params?.[name], `${name}=${value}`).toBe(`${name} ${pattern}`);
+      }
+    }
+
+    /*
+     * **`2026-13-45` matches the shape and is not a date**, and answers a 200 with
+     * zero rows. The router validates the pattern and never the calendar, so a
+     * screen cannot tell "nothing in that window" from "that is not a real date"
+     * — because the API cannot either.
+     */
+    expect(get("/payments", "date_from=2026-13-45").status).toBe(200);
+    expect(parseList(paymentsSchema, get("/payments", "date_from=2026-13-45")).meta.total).toBe(
+      0,
+    );
+  });
+
+  /**
+   * **Every sort on this collection is accepted and ignored, and `?orderby=zzz` is
+   * a 200** — it never reaches a validator, so a 400 here would be the mock
+   * claiming the parameter reaches one, and a validator is the first evidence
+   * anyone would take for a sort existing. Eleven values × both directions were
+   * byte-identical to the bare listing and to `?bogus_param=1`, over 45 distinct
+   * ids and 45 distinct stamps, so there is nothing to tie on.
+   */
+  it("accepts every sort and ignores it, and does not validate one either", () => {
+    const bare = paymentsBody("bogus_param=1");
+    expect(paymentsBody("")).toBe(bare);
+
+    const fields = [
+      "id",
+      "date",
+      "created_at",
+      "amount",
+      "status",
+      "order_id",
+      "provider",
+      "reference",
+      "updated_at",
+      "title",
+      "include",
+    ];
+    for (const field of fields) {
+      for (const direction of ["asc", "desc"]) {
+        expect(paymentsBody(`orderby=${field}&order=${direction}`), field).toBe(bare);
+      }
+    }
+
+    // Not validated, at either half of the pair.
+    expect(get("/payments", "orderby=zzz").status).toBe(200);
+    expect(get("/payments", "order=zzz").status).toBe(200);
+    expect(paymentsBody("orderby=zzz")).toBe(bare);
+    expect(paymentsBody("order=zzz")).toBe(bare);
+
+    // And the four other spellings somebody will reach for.
+    for (const query of ["sort=id", "sort_by=id", "order_by=id", "orderby[]=id"]) {
+      expect(paymentsBody(query), query).toBe(bare);
+    }
+  });
+
+  /**
+   * `search` is not a parameter of this route at all — `?search=zzz` returns every
+   * row rather than none, which is the trap worth naming: an empty result would
+   * look like a working search over a shop with nothing matching.
+   */
+  it("ignores search, currency, id, include and exclude", () => {
+    const bare = paymentsBody("bogus_param=1");
+    for (const query of [
+      "search=zzz",
+      "s=zzz",
+      "currency=DZD",
+      "currency=zzz",
+      "id=5230",
+      "include=5230",
+      "exclude=5230",
+    ]) {
+      expect(paymentsBody(query), query).toBe(bare);
+    }
+    expect(parseList(paymentsSchema, get("/payments", "search=zzz&per_page=100")).data).toHaveLength(
+      45,
+    );
+  });
+
+  /**
+   * **`reference` is the odd one: it really is honoured**, and the screen
+   * deliberately does not offer it. Served correctly anyway — a mock that ignored
+   * a working filter is the same class of error as one that honours a dead one,
+   * and it is the direction the coupons branch was burned by.
+   *
+   * **It is an exact match, and reading it as a substring was a real defect in
+   * the first draft of this fixture.** `reference=AC-1 → 42` is satisfied by both
+   * readings; the three prefix requests below are what separate them, and all
+   * three answer zero. The draft's premise was that 42 rows could not share one
+   * value — the whole column holds **two** distinct values across 45 rows, which
+   * is also why no control is built on it.
+   */
+  it("matches reference exactly and case-insensitively, never as a substring", () => {
+    const count = (query: string) =>
+      parseList(paymentsSchema, get("/payments", `${query}&per_page=100`)).meta.total;
+
+    expect(count("reference=AC-1")).toBe(42);
+    expect(count("reference=ac-1")).toBe(42);
+    expect(count("reference=3939")).toBe(3);
+    // The two values partition the collection.
+    expect(count("reference=AC-1") + count("reference=3939")).toBe(45);
+
+    // A prefix, a truncation and an extension are all zero. Any of the three
+    // failing is the mock having become a `LIKE` again.
+    for (const query of ["reference=AC", "reference=AC-", "reference=C-1", "reference=AC-11"]) {
+      expect(count(query), query).toBe(0);
+    }
+    expect(count("reference=zzz")).toBe(0);
+    // Never a refusal, at any of them.
+    expect(get("/payments", "reference=AC").status).toBe(200);
+    // And an empty one is an absence, not a value. See the three-way split below.
+    expect(count("reference=")).toBe(45);
+
+    // The column really is two values wide, which is the fact the screen's
+    // missing control rests on.
+    const all = parseList(paymentsSchema, get("/payments", "per_page=100")).data;
+    expect(new Set(all.map((row) => row.reference))).toEqual(new Set(["AC-1", "3939"]));
+    // The three-row cluster is the two pinned transactions plus the second
+    // chargily row.
+    expect(all.filter((row) => row.reference === "3939").map((row) => row.id).sort()).toEqual(
+      [5224, 5230, 5231],
+    );
+  });
+
+  /**
+   * **What the empty string does, on all six honoured parameters — a three-way
+   * split, not an asymmetry between two.** Measured 2026-08-26. The first reading
+   * of this collection framed it as `status=` against `provider=` and missed the
+   * middle row, which is where four of the six actually sit.
+   *
+   * The rule underneath: `""` is a value rather than an absence **only where it
+   * reaches a validator**. Two of these six reach none, and there it cannot be
+   * told from a parameter nobody sent.
+   */
+  it("splits the empty string three ways across its six honoured parameters", () => {
+    // 1. Refused by an enum it is not a member of.
+    expect(refusedWith(get("/payments", "status="), 400, "invalid_request").params?.status).toBe(
+      "status is not one of pending, paid, failed, expired, cancelled, and refunded.",
+    );
+
+    // 2. Refused by a type or a pattern it cannot satisfy.
+    expect(apiError(get("/payments", "order_id=")).params?.order_id).toBe(
+      "order_id is not of type integer.",
+    );
+    for (const name of ["date_from", "date_to"]) {
+      expect(apiError(get("/payments", `${name}=`)).params?.[name], name).toBe(
+        `${name} does not match pattern ^\\d{4}-\\d{2}-\\d{2}$.`,
+      );
+    }
+
+    // 3. Read as an absence, because neither reaches a validator at all.
+    const bare = paymentsBody("bogus_param=1");
+    for (const query of ["provider=", "reference=", "reference"]) {
+      expect(paymentsBody(query), query).toBe(bare);
+    }
+  });
+
+  it("pages the collection, and past the end answers zero rows with the real total", () => {
+    expect(parseList(paymentsSchema, get("/payments", "page=3")).data).toHaveLength(5);
+
+    const { data, meta } = parseList(paymentsSchema, get("/payments", "page=4"));
+    expect(data).toHaveLength(0);
+    expect(meta).toEqual({ total: 45, page: 4, per_page: 20, total_pages: 3 });
+
+    // The four paging edges come from the shared `paginate()`, so this collection
+    // refuses them the way every other one does.
+    expect(refusedWith(get("/payments", "per_page=0"), 400, "invalid_request").params?.per_page)
+      .toBe("per_page must be between 1 (inclusive) and 100 (inclusive)");
+    expect(get("/payments", "per_page=101").status).toBe(400);
+    expect(refusedWith(get("/payments", "per_page="), 400, "invalid_request").params?.per_page)
+      .toBe("per_page is not of type integer.");
+    expect(refusedWith(get("/payments", "page=0"), 400, "invalid_request").params?.page).toBe(
+      "page must be greater than or equal to 1",
+    );
+    expect(get("/payments", "page=").status).toBe(400);
+  });
+
+  /**
+   * **`GET /payments/{id}` is value-identical to the list row** — all eleven keys,
+   * same values — which is what would make a peek drawer free on this collection
+   * the way it is on parcels and orders.
+   */
+  it("serves a payment by id, value-identical to its list row", () => {
+    const all = parseList(paymentsSchema, get("/payments", "per_page=100")).data;
+    for (const row of [5230, 5231, 5228]) {
+      const detail = parse(paymentSchema, get(`/payments/${row}`));
+      expect(detail.meta, "a detail response carries no meta").toBeNull();
+      expect(detail.data).toEqual(all.find((candidate) => candidate.id === row));
+    }
+    expect(Object.keys(get("/payments/5230").body as { data: object }).length).toBeGreaterThan(0);
+    expect(
+      Object.keys((get("/payments/5230").body as { data: object }).data),
+    ).toHaveLength(11);
+
+    const error = refusedWith(get("/payments/99999999"), 404, "not_found");
+    expect(error.apiMessage).toBe("No payment with that id.");
+    // A routed id that holds nothing, against a path nobody wrote. The
+    // allowlist's pattern is `\d+`, so this second one never reached a handler.
+    expect(apiError(get("/payments/abc")).code).toBe("rest_no_route");
+  });
+
+  /**
+   * **All three measured `metadata` shapes, on rows a screen can actually reach.**
+   * The schema is a free record, so a fixture carrying one shape would let a
+   * drawer index into keys the other two rows do not have. `{error: "conflict"}`
+   * is the only place a failed payment says *why*, which is why the shop's single
+   * failed row has to carry it rather than the `{provider_status}` this file used
+   * to invent for it.
+   */
+  it("carries the three measured metadata shapes", () => {
+    const all = parseList(paymentsSchema, get("/payments", "per_page=100")).data;
+    const by = (id: number) => all.find((row) => row.id === id)!;
+
+    expect(Object.keys(by(5231).metadata).sort()).toEqual([
+      "amount",
+      "collect_on_delivery",
+      "currency",
+    ]);
+    expect(by(5230).metadata).toEqual({ error: "conflict" });
+
+    const chargilyPending = all.find(
+      (row) => row.provider === "chargily" && row.status === "pending",
+    )!;
+    expect(Object.keys(chargilyPending.metadata).sort()).toEqual([
+      "fees",
+      "fees_on_customer",
+      "fees_on_merchant",
+      "livemode",
+      "provider_status",
+    ]);
+  });
+
+  it("answers every payments refusal with a code a client can receive", () => {
+    const refusals: MockResponse[] = [
+      get("/payments", "status=zzz"),
+      get("/payments", "status="),
+      get("/payments", "status[]=pending"),
+      get("/payments", "order_id=zzz"),
+      get("/payments", "order_id=0"),
+      get("/payments", "date_from="),
+      get("/payments", "date_to=zzz"),
+      get("/payments", "per_page=101"),
+      get("/payments", "page=0"),
+      get("/payments/99999999"),
+    ];
+
+    for (const response of refusals) {
+      const error = apiError(response);
+      expect(WIRE_CODES, `${error.status} ${error.code} is not on the wire`).toContain(
+        error.code,
+      );
+      expect(error.apiMessage.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * `GET /cod/statistics`, reproduced verbatim from the live stack. Every one of
+ * the four properties below is load-bearing for the screen, and each is asserted
+ * through the panel's own reader rather than against a literal — a fixture that
+ * satisfied the numbers and broke `codFigures()` would be no fixture at all.
+ */
+describe("GET /cod/statistics", () => {
+  it("keeps the four properties the COD funnel is built on", () => {
+    const { data, meta } = parse(codStatisticsSchema, get("/cod/statistics"));
+    expect(meta, "a report is not a list").toBeNull();
+
+    // 1. `by_status` accounts for every order, which is what makes the breakdown
+    //    explanatory rather than decorative.
+    expect(byStatusSumsToTotal(data)).toBe(true);
+    expect(data.total_orders).toBe(599);
+
+    /*
+     * 2. **Two different "confirmed" counts in one payload, and both are right.**
+     *    `by_status.confirmed` is the shop now; `confirmed_orders` counts every
+     *    order ever confirmed. Put them side by side unlabelled and a reader
+     *    concludes one is broken, which is why `CodFigure.scope` is not optional
+     *    — so the fixture must keep them *different* or nothing exercises it.
+     */
+    expect(data.by_status.confirmed).toBe(84);
+    expect(data.confirmed_orders).toBe(126);
+    expect(data.by_status.confirmed).not.toBe(data.confirmed_orders);
+
+    const figures = codFigures(data);
+    expect(figures.find((f) => f.key === "current_confirmed")).toEqual({
+      key: "current_confirmed",
+      scope: "now",
+      value: 84,
+    });
+    expect(figures.find((f) => f.key === "ever_confirmed")?.value).toBe(126);
+    expect(figures.every((f) => f.scope !== undefined)).toBe(true);
+
+    // 3. The published rate divides the *ever* count by the total, so it cannot
+    //    be re-derived from `by_status`.
+    const confirmation = ratePercent(data.rates.confirmation);
+    expect(confirmation).not.toBeNull();
+    expect(confirmation).toBeCloseTo(data.confirmed_orders / data.total_orders, 4);
+    for (const key of RATE_KEYS) {
+      expect(ratePercent(data.rates[key]), key).not.toBeNull();
+    }
+
+    // 4. `unreachable` is 0, so `codByStatus()` drops a row. A fixture with five
+    //    non-zero counts would never exercise that branch.
+    expect(data.by_status.unreachable).toBe(0);
+    const breakdown = codByStatus(data);
+    expect(breakdown).toHaveLength(4);
+    expect(breakdown.map((row) => row.status)).toEqual([
+      "pending",
+      "confirmed",
+      "rejected",
+      "cancelled",
+    ]);
+  });
+
+  it("serves nothing else under /cod", () => {
+    expect(get("/cod").status).toBe(404);
+    expect(get("/cod/zzz").status).toBe(404);
+    expect(write("POST", "/cod/statistics", {}).status).toBe(404);
+  });
+});
+
 describe("the shipment writes", () => {
   it("moves a live parcel anywhere, and recomputes is_live from the status", () => {
     /*
@@ -1175,7 +1798,7 @@ describe("the shipment writes", () => {
     );
     // The sentence quotes the provider's **label**, not its slug, so it is
     // built from the providers row rather than written out.
-    const provider = parseList(shippingProviders, get("/shipping/providers")).data[0];
+    const provider = parse(shippingProviders, get("/shipping/providers")).data[0];
     expect(error.apiMessage.startsWith(provider.label)).toBe(true);
 
     /*
@@ -1654,6 +2277,63 @@ describe("MOCK_IDENTITY", () => {
       // of the whole page refused rather than of two sections absent.
       expect(data.capabilities).toContain("ac_manage_orders");
       expect(data.capabilities).toHaveLength(11);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * ── The 403, and the one route beside it that is not one ─────────────────────
+   *
+   * Measured 2026-08-26 with a credential holding no `ac_manage_payments`: all
+   * three payments reads answer `403 forbidden` with *"You are not allowed to
+   * perform this action."*, and `/cod/statistics` answers **200** — it is
+   * `ac_view_analytics`, which both tiers hold. That pair is the entire reason
+   * `/payments` is two sections rather than one, and it is the only place in the
+   * panel where a figure renders for a reader who cannot open a single record
+   * behind it.
+   *
+   * **`forbidden` is a wire code DECISIONS.md's "Carried forward" does not
+   * list.** That list is the four codes a *parameter* refusal can carry — which
+   * is what the `sync_unsupported` assertion above already established — so this
+   * is the second domain code found outside it rather than a fifth value the
+   * ledger simply missed. The ledger's sentence needs the distinction, not just
+   * another entry.
+   *
+   * Until this existed the reduced identity was served all 45 transactions, which
+   * is the *more permissive* direction and the one the coupons branch was burned
+   * by: a screen verified against a harness that never refuses is a screen whose
+   * forbidden state nobody has seen.
+   */
+  it("refuses the three payments reads for a credential without the capability", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "reduced");
+    try {
+      const mock = await freshMock();
+      const ask = (path: string) => mock.respond("GET", `${mock.BASE_PATH}${path}`);
+
+      for (const path of ["/payments", "/payments/methods", "/payments/5230"]) {
+        const response = ask(path);
+        expect(response.status, path).toBe(403);
+        try {
+          unwrap(paymentsSchema, response.body, response.status);
+          expect.unreachable("a 403 must throw at the panel's boundary");
+        } catch (error) {
+          expect(error).toBeInstanceOf(ApiError);
+          expect((error as ApiError).code, path).toBe("forbidden");
+          expect((error as ApiError).apiMessage, path).toBe(
+            "You are not allowed to perform this action.",
+          );
+          // The panel branches on the status and never on this code — checked
+          // rather than assumed, the way the fourteen were.
+          expect((error as ApiError).isForbidden, path).toBe(true);
+        }
+      }
+
+      // And the report beside them is a 200 for the same credential.
+      const statistics = ask("/cod/statistics");
+      expect(statistics.status).toBe(200);
+      expect(unwrap(codStatisticsSchema, statistics.body, 200).data.total_orders).toBe(599);
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
@@ -4457,19 +5137,36 @@ const UNCOVERED: Record<string, string> = {
  */
 describe("what the newly-covered modules still do not serve", () => {
   /**
-   * **The shipping half of this block became real coverage on 2026-08-25** —
-   * `/shipping/rules`, `/shipping/rates`, `GET /shipments` and `GET
-   * /shipments/{id}` are all served and all parsed above, so the four
-   * assertions that used to pin them at 404 are gone rather than deleted
-   * quietly. What is left here is what is still genuinely unserved.
+   * **The shipping half of this block became real coverage on 2026-08-25** and
+   * the payments half on 2026-08-26 — `/shipping/rules`, `/shipping/rates`, `GET
+   * /shipments`, `GET /shipments/{id}`, `GET /payments`, `GET /payments/{id}` and
+   * `GET /cod/statistics` are all served and all parsed above, so the seven
+   * assertions that used to pin them at 404 are gone rather than deleted quietly.
+   *
+   * **The three payments pins were a declared gap that had stopped being true.**
+   * Every one of them is allowlisted and every one is called by a screen that
+   * already exists, so the reason recorded beside them — "a transaction is
+   * reached through its order" — described the order detail and never described
+   * the API. A declared gap is only honest while somebody re-reads the
+   * declaration; this is the second time on this branch that one outlived its
+   * measurement, after `GET /shipping/rules/{id}`.
+   *
+   * What is left here is what is still genuinely unserved.
    */
-  it("leaves the payments collection and the analytics report unmocked", () => {
-    // A transaction is reached through its order here, which is the only way
-    // the order detail reaches one.
-    expect(get("/payments").status).toBe(404);
-    expect(get("/payments/5231").status).toBe(404);
-    // `codStatistics` — `/cod/statistics` belongs to the analytics screen.
-    expect(get("/cod/statistics").status).toBe(404);
+  it("leaves the payment mint and the standalone parcel create unmocked", () => {
+    /*
+     * **`POST /orders/{id}/payments` stays a 404 at both spellings**, and it is
+     * the one write on this subject the API really offers: it opens a checkout at
+     * the provider and hands back a real `pay.chargily.dz` link for a *shopper*.
+     * lib/api/allowlist.ts:164-178 refuses it deliberately, so a fixture that
+     * answered it would be an invitation to build the screen that must not exist.
+     */
+    expect(write("POST", "/payments", { provider: "chargily" }).status).toBe(404);
+    expect(write("POST", "/orders/1023/payments", { provider: "chargily" }).status).toBe(404);
+    // And there is no PATCH on a transaction anywhere in the surface, which is
+    // why `lib/payment-status.ts`'s rule that `paid` is not terminal can never
+    // surface as a 409 the panel could render.
+    expect(write("PATCH", "/payments/5231", { status: "paid" }).status).toBe(404);
 
     // There is still no `POST /shipments` — a parcel is created against an
     // order and nowhere else.

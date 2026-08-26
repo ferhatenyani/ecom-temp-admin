@@ -38,6 +38,14 @@ export declare function respond(
  * from the seeded baseline. Runs once at module load; the unit suite calls it
  * between tests so a write in one cannot be read by another.
  *
+ * **Payments are rebuilt but nothing writes them**, and the asymmetry is worth
+ * knowing rather than discovering: the collection is 45 seeded rows, the only
+ * write on it is `POST /payments/{id}/verify`, and verify asks the provider a
+ * question and stores nothing — so a second verify is byte-identical to the
+ * first and this call restores a baseline no test can have moved. That is the
+ * API's own shape and not a shortcut: there is no `PATCH` on a transaction
+ * anywhere in the surface.
+ *
  * Coupons and shipping rules are the two collections where a *create* is undone
  * by this, which is what keeps `nextCouponId` and `nextRuleId` handing out the
  * same ids in every process and a screenshot of a created row byte-stable.

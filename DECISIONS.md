@@ -23,7 +23,7 @@ left looking like an oversight.
 [x]  6. Inventory — list + detail + ledger
 [x]  7. Coupons — list + form
 [x]  8. Shipping — parcels list + rules route
-[ ]  9. Payments
+[x]  9. Payments
 [ ] 10. Dashboard
 [ ] 11. Analytics — revenue / orders / products / customers / shipping / COD
 [ ] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
@@ -39,12 +39,12 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **84
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **82
 files left.**
 
 ---
 
-## Standing rules these six pages established
+## Standing rules these pages established
 
 Apply these to every remaining screen unless something measured says otherwise.
 
@@ -57,6 +57,8 @@ Apply these to every remaining screen unless something measured says otherwise.
 | **No bulk write without a measured endpoint.** | `POST /products/bulk` and `/inventory/bulk` are both refused by the allowlist and asserted refused in tests. |
 | **A control that cannot act is not rendered.** | Same principle the nav uses for capabilities. |
 | **Copy never names a screen or action that does not exist.** | Three such strings were found and fixed; one had just been written. |
+| **A picker over a working filter ships only when the allowlisted enumeration is complete.** Payments yes, shipping no. | Both parameters work and neither is validated — a wrong value is a silent 200 with 0 rows, not a refusal, so the *picker* is the only thing that can keep a typo unreachable. `/payments/methods` lists both values the collection carries, so it can; `/shipping/providers` lists one of two, so it cannot and shipping ships no provider filter. The test is the enumeration, never the parameter. |
+| **A translated word for a shop's own vocabulary, a brand for a brand.** | `providerLabel`'s message key → API `label` → raw name, now in two places. `manual` and `cod` are states of this shop and read in the reader's language; `acfake` and `chargily` keep what their own side of the wire calls them. Nobody translates "Yalidine". |
 
 ---
 
@@ -494,6 +496,153 @@ named "Commune · Alger · 350,00 DA".
 
 ---
 
+## 9. Payments — ledger + COD funnel
+
+**One route, and the two-readership property is why.** The ledger and the funnel
+look like the inventory/shipping split — two datasets on one URL — and they are
+not: that split needs *different data + own filters + own writes*, and
+`GET /cod/statistics` takes no parameters, returns one object and is read-only.
+What it would cost is the thing the page is for. Measured 2026-08-26: a **Manager
+is 403 on `/payments`, `/payments/methods` and `/payments/{id}` and 200 on
+`/cod/statistics`.** They land here, get a forbidden box naming the capability
+where the ledger was, and read the whole report underneath it. `nav-tree.ts`
+keeps its single entry.
+
+Which is also why the funnel is a full-width block **below** the ledger rather
+than a 360px aside: for that reader the report *is* the page, and an aside would
+squeeze it into a third of the screen for the benefit of a table they cannot see.
+Three cards — figures / current breakdown / rates — 1-up at 340, 2-up at `md`,
+3-up at `xl`.
+
+- **`DataTable`/`RecordList` + one `columns.tsx`**: `#id` (the drawer opener),
+  order, method, amount, status, created. Nothing is `optional`. The amount is
+  formatted with the **payment's own `currency`**, never `SHOP_CURRENCY` — a
+  transaction carries one, like an order and unlike a product.
+- **Four filter dimensions in one `FilterRow`, and no drawer.** Products needed
+  one at nine; four fit a row and a drawer would put a modal between a person and
+  a filter that was already on screen. Status is seven tabs, the first sending
+  nothing — and here that is load-bearing rather than tidy, because **`?status=`
+  is a 400 on this collection**, not an absence. `per_page` in the URL on the
+  coupons/customers/shipping shape.
+- **`FilterChips` was built, reviewed and dropped.** Four of them shipped in a
+  first draft — order, method, and the two date bounds — and every one restated a
+  control standing six inches above it. The argument that kept them was the
+  dates: a native date input follows the *browser's* locale and renders
+  `mm/dd/yyyy` in the Arabic panel, so a chip looked like the only place the
+  applied bound was legible. **`echo` had already answered that**, two lines away
+  in the same file, printing each bound in the page's own language directly under
+  its own picker. With that gone the chips were four buttons repeating the four
+  controls above them, and the status filter had already been excluded from the
+  row for precisely that reason — the reason applies to all five. This is
+  shipping's and coupons' rule holding at four dimensions rather than two;
+  products ships chips because its seven live behind a **closed** drawer, where
+  nothing is visible until it is opened. What survived is the one affordance no
+  individual control offers: a single **clear-filters** button, rendered only
+  when something is filtered (§3.3 — a control that cannot act is not rendered),
+  dropping every dimension while keeping `perPage`. It is the same control, the
+  same words and the same handler the no-results empty state offers.
+- **The method picker ships where shipping's provider filter did not**, and the
+  difference is the enumeration rather than the parameter — see the standing rule.
+  `/payments/methods` lists `cod` and `chargily`, which sum to all 45 rows.
+- **Peek drawer, yes.** `GET /payments/{id}` is **value**-identical to the list
+  row — all eleven keys — so it costs no request. It earns its place on
+  `metadata`, which is the record's only surface and arrives in three measured
+  shapes; the failed row's `{"error":"conflict"}` is the only place a failed
+  payment says *why*. Keys are printed as the provider spells them: only the key
+  *sets* are measured, so formatting `fees` as money would be guessing.
+- **Verify lives in the drawer with no `ConfirmDialog`.** It asks the provider a
+  question and records the truthful answer; it cannot make something false true,
+  and `orders/[id]/PaymentsSection.tsx` already offers it bare — two surfaces
+  offering one action must behave the same. Its answer is `{report, transaction}`
+  and `report.amount`/`report.currency` come back **empty**, so the report is
+  never formatted as money and `report.provider_status` is what it shows.
+- **The identifying cell is a real `<button>`**, not `onRowClick` alone and not a
+  stretched overlay: the row also carries an anchor to `/orders/{id}` and two
+  interactive elements must not nest. `returnFocusTo` is **latched** in the
+  drawer, because Radix fires `onCloseAutoFocus` *after* `onOpenChange`. Driven
+  in a real browser: Escape returns to `#payment-opener-5231` from a pointer
+  open at 1440, to `#payment-opener-5230` from a keyboard open, and to
+  `RecordList`'s own overlay button at 340.
+- Stale marker on the ledger (client cache **and** it writes); none on the funnel,
+  which is a Server Component with no writes and says so in its own docblock.
+  `loading.tsx` matches first paint, including the label-over-control geometry of
+  the three pickers.
+
+**Nothing sorts, and no `aria-sort` is claimed.** Eleven `orderby` values × both
+directions were byte-identical to the bare listing and to `?bogus_param=1`;
+`sort`, `sort_by`, `order_by` and `orderby[]` likewise. The strong negative:
+**`?orderby=zzz` is a 200**, so it never reaches a validator. Ties are excluded —
+45 rows, 45 distinct ids, 45 distinct stamps.
+
+**Also not shipped, each measured rather than assumed.** **No search box** —
+`?search=zzz` returns all 45; it is not a parameter of this route. **No
+`reference` filter**, and it *is* honoured (`AC-1`→42, and `AC`/`AC-`/`AC-11`→0,
+so exact and not a prefix): the column holds two distinct values across 45 rows,
+it is an opaque provider string the operator has no source for, and a typo is a
+silent 200. It is shown on the record, where it can be read. **No bulk, no
+export** — payments is not in `EXPORT_SUBJECTS`. **No create**, which is why
+`PageHeader` carries no primary: `POST /orders/{id}/payments` mints a real
+customer checkout link and the allowlist refuses it deliberately.
+
+**The dates cut on the UTC day, not the shop's timezone.** Both bounds are
+inclusive; a row stamped `23:07:26Z` — 00:07 the next day in Africa/Algiers — is
+included by `date_to` of the earlier day. `2026-13-45` matches the pattern and is
+a 200 with 0 rows: the router validates the shape and never the calendar, and the
+panel does not get to be stricter than the API it is a client of.
+
+**Three defects fixed, two of them older than this branch:**
+
+1. **The empty state and the error state printed the same string.** `noPayments`
+   served both a failed request and a shop with nothing in it, so the one case
+   where retrying helps was indistinguishable from the one where it never will.
+   That is the inventory #2 defect recurring; it is now `ErrorState` with the
+   API's own sentence and a retry, against three empty states — past-the-last-page
+   (which offers the way back, the inventory #3 lesson), no-results-for-filters,
+   and no-transactions-at-all, which correctly offers nothing.
+2. **`states.capability.ac_manage_payments` did not exist**, so the one screen in
+   the panel a live tier is genuinely refused on printed the raw slug at them.
+   The same hole the shipping branch found for `ac_manage_shipping`, one branch
+   later. Visible on the `MOCK_IDENTITY=reduced` capture, which now reads
+   "Cette section demande la permission Paiements."
+3. **The provider label was English inside both localised panels**, again. The
+   API's label for `cod` is "Cash on delivery", and the old screen resolved it as
+   `methods.find(…)?.label ?? name` — exactly what `ShipmentRow` used to do — so
+   it rendered on 43 of 45 ledger rows and on every cash transaction of the order
+   detail. `lib/payments.ts` mirrors `lib/shipping.ts:149-158`: message key → API
+   `label` → raw name. Applied at **both** call sites, so the order detail is
+   fixed too. `chargily` has no key on purpose and keeps its brand.
+
+**Two primitives extended rather than forked.** `DataRow` gained `hint`, a second
+line under the label — the COD scope needs a slot and `label` is a `string`;
+concatenating produced "Actuellement confirmées · état actuel", one run of text
+where the eye wants a label and a qualifier. `analytics/CodView.tsx` renders the
+same five figures and inherits it. `FilterRow` gained `align`: every filter row
+before this held only unlabelled controls, and a `Select` and two `DateField`s
+are a label over a box, so centred they put four controls on three baselines.
+
+**i18n**: the `payments`, `cod`, `paymentStatus` and `codStatus` namespaces are
+shared with `orders/[id]/PaymentsSection.tsx`, `CodSection.tsx` and
+`analytics/CodView.tsx`; nothing they read was renamed or removed. Of the eleven
+`payments` keys that had no caller, nine are now wired and **two went**: `back`
+(a list page has no back link) and `verifying` (`Button` holds its label under
+`loading`, so nothing could ever have read it). Added `paymentProvider` with one
+key, `states.capability.ac_manage_payments`, and `a11y.paymentNumber`. Key parity
+verified: 1 831 keys in each file, no orphans in the namespace, no missing keys.
+
+**`e2e/shipping.spec.ts`: 14 tests before, 14 after, titles identical.** One
+assertion changed — `:311`'s `getByRole("heading", { name: "Transactions" })` was
+a `ListGroup`'s `<h2>` and the redesign has no heading over the table, so it is
+`getByTestId("payments-count")`, which is rendered only past the capability gate
+exactly as `parcels-count` is in the test above it. **The four payments tests
+stay in this file rather than moving to `e2e/payments.spec.ts`**, and that is a
+judgement rather than laziness: `:266`'s positive control is `/fr/shipping`'s own
+count, so moving it would take a shipping assertion out of the shipping spec, and
+moving only the other three would split a `describe` whose whole point is a
+Manager reaching one subject and not the other **in one run**. The ten
+shipping-owned tests were not touched.
+
+---
+
 ## Carried forward — teardown owns these
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
@@ -541,6 +690,32 @@ named "Commune · Alger · 350,00 DA".
   no screen branches on it today, which was checked rather than assumed. That
   request-for-request diff is now the thing to run on any collection before
   trusting it — it caught in one pass what three readings of the file had not.
+
+  **Corrected 2026-08-26: those four are what a *parameter refusal* can carry,
+  not the whole wire vocabulary.** `ErrorNormalizer` rewrites WordPress's
+  parameter codes and leaves a controller-raised **domain** code alone, so the
+  two sets are different things. A Manager refused `/payments` answers
+  `forbidden` — the second domain code found outside the four, after
+  `sync_unsupported`. Neither is a hole in the list; the list was about the wrong
+  half of the surface. The count is the trap: "four values" reads like an
+  enumeration of everything and is an enumeration of one family.
+- **The mock's `DEFAULT_PER_PAGE` was 10 and every collection in the API answers
+  20.** Checked on nine of them, 2026-08-26. Quieter than a permissive mock and
+  the same class of defect: a screen that forgot to send `per_page` would have
+  rendered ten rows against the harness and twenty against the shop, so every
+  340px overflow assertion was watching a table half the real width. Fixed on the
+  payments branch.
+- **`list()` gave every collection the full paging envelope; the API has three
+  shapes.** Measured 2026-08-26: none at all on `/payments/methods` and
+  `/shipping/providers`, `{total}` alone on `/locations/wilayas`, paging on the
+  rest. Now `enumeration()`, `counted()` and `list()`, chosen by naming one so a
+  fourth enumeration inherits the right shape rather than the commonest.
+  **Six routes remain on `list()` with their live shape unverified** — the four
+  order sub-resources, `/shipping/rates` and `/attributes` — and they are named
+  in its docblock. They are the next request-for-request diff.
+  Separately, `/locations/wilayas` holds **58 rows in the mock against 69 live**;
+  that is fixture completeness rather than envelope shape, and nothing on any
+  migrated screen reads past the ones it has.
 - **Re-measure every collection's `orderby` before trusting it.** Two of them
   were recorded dead and were not, and in both cases the record outlived a
   backend repair rather than ever having been wrong. `/orders`, `/customers`,
@@ -566,6 +741,13 @@ named "Commune · Alger · 350,00 DA".
   the missing path never cost anything. `DataTable` wants a rule about it: either
   it renders the opener itself from `rowLabel`, or it refuses `onRowClick` without
   one.
+  **Payments is now the second screen to work around it locally**, with the same
+  three moving parts copied across: a `<button>` in the identifying cell, a
+  stable `…OpenerId(id)` shared between the columns and the drawer, and a latched
+  `returnFocusTo` — including the latch, which exists only because Radix fires
+  `onCloseAutoFocus` after `onOpenChange`. Two copies is where a primitive should
+  have absorbed it; a third is the point at which the workaround has become the
+  convention.
 - **`POST /orders/{id}/cod/attempts` is the last create still pinned at 200 and
   never measured.** Three of the four were measured on 2026-08-25 and all three
   answered **201** — `/shipping/rules`, `/coupons`, `/orders/{id}/shipments` — so
@@ -588,4 +770,26 @@ named "Commune · Alger · 350,00 DA".
   hidden one; the analytics branch owns it.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
-- `movementReasonHint` has no caller in either message file.
+- `movementReasonHint` has no caller in either message file. So do `cod.turnOff`
+  and `cod.reasonPlaceholder` — both predate the payments branch (checked against
+  `main`) and both belong to `orders/[id]/CodSection.tsx`, which is unmigrated.
+- **Nothing in the panel meets §5's 44px touch target, and it is the primitives
+  rather than any screen.** Driven at 340 under a coarse pointer, measuring the
+  union of each control's own box and its `::after` — because §5 says the hit
+  area comes from a pseudo-element, so `getBoundingClientRect()` alone measures
+  the wrong thing. Offenders, every one shared: `FilterTabs`'s `ui-tab` at
+  `min-h-10` (40px), `SearchField` at `min-h-9` (36px), `TableFooter`'s per-page
+  `<select>` at `min-h-7` (28px), `AppShell`'s three theme buttons at `size-7`
+  (28px), and the `sr-only` skip link at 24px. The last three fail even the 32px
+  **pointer** floor. Measured identically on `/payments` (13) and `/shipping`
+  (18, the difference being its own extra tabs), so this has been true of every
+  migrated list since orders and no screen introduced it. `.ui-tap` exists and
+  gives icon buttons their 44px; these controls simply never got it.
+- **Two docblocks name a file that no longer exists.** `scripts/mock-api.mjs:3041`
+  and `tests/mock-api.test.ts:435` both explain the English-label defect by
+  pointing at `PaymentsScreen.tsx`, which the payments branch deleted and whose
+  defect it fixed. The prose is now stale in a file the branch was told not to
+  touch — both are done and committed — so it is recorded here rather than
+  edited. The measurement they carry (`cod` → "Cash on delivery") is still right
+  and is still what the fixture asserts; only the sentence about who renders it
+  wrongly has expired. `lib/payments.ts` is the file to name.

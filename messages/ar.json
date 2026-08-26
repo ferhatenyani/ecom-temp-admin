@@ -185,7 +185,8 @@
       "ac_view_analytics": "الإحصاءات",
       "ac_manage_content": "المحتوى",
       "ac_view_audit_logs": "سجل التدقيق",
-      "ac_manage_shipping": "الشحن"
+      "ac_manage_shipping": "الشحن",
+      "ac_manage_payments": "المدفوعات"
     },
     "notFoundTitle": "غير موجود",
     "notFoundBody": "هذا الطلب لم يعد موجودًا.",
@@ -220,7 +221,8 @@
     "customerName": "العميل {name}",
     "couponCode": "رمز الخصم {code}",
     "stockItem": "العنصر {name}",
-    "parcelTracking": "الطرد {tracking}"
+    "parcelTracking": "الطرد {tracking}",
+    "paymentNumber": "المعاملة {number}"
   },
   "statusShort": {
     "pending": "الانتظار",
@@ -840,6 +842,9 @@
   "shippingProvider": {
     "manual": "توصيل داخلي"
   },
+  "paymentProvider": {
+    "cod": "الدفع عند الاستلام"
+  },
   "paymentStatus": {
     "pending": "قيد الانتظار",
     "paid": "مدفوع",
@@ -971,28 +976,54 @@
   },
   "payments": {
     "title": "المدفوعات",
-    "back": "المدفوعات",
+    "loading": "جارٍ التحميل…",
+    "refresh": "تحديث",
     "transactions": "المعاملات",
+    "count": "{count, plural, zero {لا معاملات} one {معاملة واحدة} two {معاملتان} few {# معاملات} many {# معاملة} other {# معاملة}}",
     "noPayments": "لا توجد معاملات.",
-    "noPaymentsFilter": "لا توجد معاملات بهذه الحالة.",
+    "noPaymentsFilter": "لا توجد معاملات لهذه المرشّحات.",
+    "clearFilter": "عرض الكل",
+    "empty": {
+      "pastEnd": "هذه الصفحة فارغة؛ لا شيء بعدها.",
+      "firstPage": "العودة إلى الصفحة الأولى"
+    },
+    "statusLabel": "الحالة",
     "allStatuses": "الكل",
-    "reference": "المرجع",
+    "searchLabel": "البحث برقم الطلب",
+    "searchPlaceholder": "رقم الطلب",
+    "clearSearch": "مسح البحث",
+    "providerAny": "كل الوسائل",
+    "dateFrom": "من",
+    "dateTo": "إلى",
+    "columns": {
+      "id": "المعاملة",
+      "order": "الطلب",
+      "provider": "الوسيلة",
+      "amount": "المبلغ",
+      "status": "الحالة",
+      "created": "أُنشئ"
+    },
+    "transactionNumber": "المعاملة {number}",
+    "order": "الطلب",
+    "orderLink": "الطلب {number}",
     "provider": "وسيلة الدفع",
+    "reference": "المرجع",
     "transactionId": "معرّف المعاملة",
     "amount": "المبلغ",
     "createdAt": "أُنشئ",
-    "orderLink": "الطلب {number}",
+    "updatedAt": "آخر تحديث",
+    "metadata": "بيانات المزوّد",
+    "noMetadata": "لم يُرفق المزوّد أي بيانات.",
+    "metadataNote": "هذه المفاتيح من المزوّد نفسه ولا تُترجم: تختلف من وسيلة دفع إلى أخرى.",
     "verify": "التحقق لدى المزوّد",
-    "verifying": "جارٍ التحقق…",
+    "verifyShort": "تحقّق",
     "verified": "تم التحقق — المزوّد يقول {status}",
     "verifyFailed": "فشل التحقق.",
     "report": "جواب المزوّد",
     "reportStatus": "الحالة المعتمدة",
     "reportProviderStatus": "مصطلح المزوّد",
     "reportNoAmount": "لم يُرجع المزوّد أي مبلغ.",
-    "several": "تعدد المعاملات على الطلب الواحد أمر طبيعي — رابط دفع متروك يترك واحدة خلفه.",
-    "count": "{count, plural, zero {لا معاملات} one {معاملة واحدة} two {معاملتان} few {# معاملات} many {# معاملة} other {# معاملة}}",
-    "verifyShort": "تحقّق"
+    "several": "تعدد المعاملات على الطلب الواحد أمر طبيعي — رابط دفع متروك يترك واحدة خلفه."
   },
   "cod": {
     "title": "الدفع عند الاستلام",

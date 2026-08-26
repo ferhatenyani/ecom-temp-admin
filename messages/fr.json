@@ -185,7 +185,8 @@
       "ac_view_analytics": "Statistiques",
       "ac_manage_content": "Contenu",
       "ac_view_audit_logs": "Journal d’audit",
-      "ac_manage_shipping": "Livraison"
+      "ac_manage_shipping": "Livraison",
+      "ac_manage_payments": "Paiements"
     },
     "notFoundTitle": "Introuvable",
     "notFoundBody": "Cette commande n’existe plus.",
@@ -220,7 +221,8 @@
     "customerName": "Client {name}",
     "couponCode": "Code promo {code}",
     "stockItem": "Article {name}",
-    "parcelTracking": "Colis {tracking}"
+    "parcelTracking": "Colis {tracking}",
+    "paymentNumber": "Transaction {number}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -840,6 +842,9 @@
   "shippingProvider": {
     "manual": "Livraison interne"
   },
+  "paymentProvider": {
+    "cod": "Contre-remboursement"
+  },
   "paymentStatus": {
     "pending": "En attente",
     "paid": "Payé",
@@ -971,28 +976,54 @@
   },
   "payments": {
     "title": "Paiements",
-    "back": "Paiements",
+    "loading": "Chargement…",
+    "refresh": "Actualiser",
     "transactions": "Transactions",
+    "count": "{count, plural, =0 {aucune transaction} one {# transaction} other {# transactions}}",
     "noPayments": "Aucune transaction.",
-    "noPaymentsFilter": "Aucune transaction avec ce statut.",
+    "noPaymentsFilter": "Aucune transaction pour ces filtres.",
+    "clearFilter": "Tout afficher",
+    "empty": {
+      "pastEnd": "Cette page est vide : il n’y a plus rien au-delà.",
+      "firstPage": "Revenir à la première page"
+    },
+    "statusLabel": "Statut",
     "allStatuses": "Tous",
-    "reference": "Référence",
+    "searchLabel": "Rechercher par numéro de commande",
+    "searchPlaceholder": "Numéro de commande",
+    "clearSearch": "Effacer la recherche",
+    "providerAny": "Tous les moyens",
+    "dateFrom": "Du",
+    "dateTo": "Au",
+    "columns": {
+      "id": "Transaction",
+      "order": "Commande",
+      "provider": "Moyen",
+      "amount": "Montant",
+      "status": "Statut",
+      "created": "Créé"
+    },
+    "transactionNumber": "Transaction {number}",
+    "order": "Commande",
+    "orderLink": "Commande {number}",
     "provider": "Moyen de paiement",
+    "reference": "Référence",
     "transactionId": "Identifiant transaction",
     "amount": "Montant",
     "createdAt": "Créé",
-    "orderLink": "Commande {number}",
+    "updatedAt": "Mis à jour",
+    "metadata": "Données du fournisseur",
+    "noMetadata": "Le fournisseur n’a joint aucune donnée.",
+    "metadataNote": "Ces clés sont celles du fournisseur et ne sont pas traduites : elles changent d’un moyen de paiement à l’autre.",
     "verify": "Vérifier auprès du fournisseur",
-    "verifying": "Vérification…",
+    "verifyShort": "Vérifier",
     "verified": "Vérifié — le fournisseur indique {status}",
     "verifyFailed": "La vérification a échoué.",
     "report": "Réponse du fournisseur",
     "reportStatus": "Statut retenu",
     "reportProviderStatus": "Terme du fournisseur",
     "reportNoAmount": "Le fournisseur n’a renvoyé aucun montant.",
-    "several": "Plusieurs transactions par commande sont normales — un lien de paiement abandonné en laisse une derrière lui.",
-    "count": "{count, plural, =0 {aucune transaction} one {# transaction} other {# transactions}}",
-    "verifyShort": "Vérifier"
+    "several": "Plusieurs transactions par commande sont normales — un lien de paiement abandonné en laisse une derrière lui."
   },
   "cod": {
     "title": "Contre-remboursement",

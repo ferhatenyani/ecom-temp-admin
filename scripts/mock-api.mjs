@@ -255,11 +255,66 @@ const ok = (data, meta) => ({
 const created = (data) => ({ status: 201, body: { success: true, data } });
 
 /**
- * A list that is **not** paginated, with the `meta` every list endpoint carries.
+ * ── A list has THREE envelope shapes, and this file used to have one ─────────
  *
- * The panel fetches these with no params at all — the wilaya table, the provider
- * list, an order's notes and its timeline — and a default `per_page` of 10 would
- * silently drop the tail of one with nothing anywhere reporting an error.
+ * Measured 2026-08-26 by a request-for-request diff against the live shop, which
+ * is the check DECISIONS.md says to run on a collection before trusting it:
+ *
+ *   route                 live meta                mock meta, before
+ *   ────────────────────  ───────────────────────  ────────────────────────────
+ *   /payments/methods     **absent**               {total,page,per_page,…}
+ *   /shipping/providers   **absent**               {total,page,per_page,…}
+ *   /locations/wilayas    **{"total":69}** alone   {total,page,per_page,…}
+ *
+ * So the API varies where this file standardised, and `list()` was quietly
+ * manufacturing a paging envelope for routes that page nothing and, on wilayas,
+ * a `page`/`per_page`/`total_pages` triple the shop does not send at all.
+ *
+ * **This is the same class as the `per_page` default this file already found**:
+ * one shared helper flattening something the API varies, invisible because
+ * nothing reads the flattened field. Nothing reads `.meta` on these three today
+ * — every caller takes `r.data`, which was checked — but a screen that started
+ * reading `meta.total` off wilayas would get 58 here and 69 from the shop, and
+ * the harness would call it green. That is the mock being *more capable* than the
+ * API in the quiet direction.
+ *
+ * Three helpers rather than three special cases at three call sites, so a fourth
+ * enumeration added later inherits a shape by **naming** one:
+ *
+ *   enumeration()  no `meta` key at all — measured on the two above
+ *   counted()      `{total}` and nothing else — measured on wilayas
+ *   list()         the full paging envelope, and **now the unmeasured one**
+ *
+ * `/locations/wilayas` also differs in **count** — 58 here against 69 live. That
+ * is fixture completeness rather than envelope shape, it is out of scope for the
+ * payments branch, and it is recorded here so the next person finds it.
+ */
+
+/** Shape 1: no `meta` whatsoever. A bare enumeration the API does not page. */
+const enumeration = (rows) => ok(rows);
+
+/** Shape 2: `{total}` alone — a count, with nothing about pages. */
+const counted = (rows) => ok(rows, { total: rows.length });
+
+/**
+ * Shape 3: the full paging envelope on a route that is **not** paginated.
+ *
+ * **Every remaining caller of this is unmeasured**, and after the diff above that
+ * is a claim rather than a default. These five are what is left, all of them
+ * routes the panel fetches with no params at all:
+ *
+ *   /orders/{id}/notes · /orders/{id}/timeline · /orders/{id}/shipments ·
+ *   /orders/{id}/payments · /shipping/rates · /attributes
+ *
+ * Each is a candidate for `enumeration()` or `counted()` and none has been
+ * diffed. They stay here deliberately: moving them to a *different* guess would
+ * be churn rather than a correction, and this way the file has exactly one place
+ * that emits an unverified envelope. Whoever runs the next request-for-request
+ * diff should take these six first.
+ *
+ * The unpaginated part is still right and still load-bearing: the panel sends no
+ * params to any of them, so a default `per_page` of 10 would silently drop the
+ * tail of a timeline with nothing anywhere reporting an error.
  */
 const list = (rows) =>
   ok(rows, {
@@ -284,10 +339,31 @@ const list = (rows) =>
  * none compared the code. No screen branches on it today — that was checked, not
  * assumed — so this cost nothing yet, and would have cost a screen the first
  * time one did.
+ *
+ * **An empty `details` is omitted rather than sent as `{}`.** Measured
+ * 2026-08-26 alongside the envelope diff, on the two errors in this file that
+ * carry no details at all:
+ *
+ *   live  403  {"code":"forbidden","message":"You are not allowed to …"}
+ *   live  404  {"code":"not_found","message":"No payment with that id."}
+ *
+ * neither with a `details` key. The generalisation from two measurements to the
+ * whole constructor is safe because **every** call site here that passes no
+ * details is one of six 404s or the 403 — codes that carry none under either
+ * reading — so "the API omits an empty details" and "the API omits details on
+ * these codes" produce byte-identical output for this file. Low consequence
+ * either way: `ApiError` reaches for `details.params`/`details.fields` and gets
+ * `undefined` from both shapes.
  */
 const fail = (status, code, message, details = {}) => ({
   status,
-  body: { success: false, error: { code, message, details } },
+  body: {
+    success: false,
+    error:
+      Object.keys(details).length === 0
+        ? { code, message }
+        : { code, message, details },
+  },
 });
 
 /**
@@ -299,6 +375,12 @@ const fail = (status, code, message, details = {}) => ({
  * the product form sends an explicit named subset rather than the GET body minus
  * what it believes is read-only. A mock that emitted `details: {}` here would let
  * a screen read `details.fields` without checking and never find out.
+ *
+ * **`fail()` now produces this same shape when its details are empty**, so this
+ * is no longer the only way to reach it. Kept because its one call site is a 400
+ * that deliberately names nothing, and saying that by name is worth more than
+ * saving a helper — a future `fail(400, …, {})` would read as an oversight where
+ * `bareFail` reads as the measurement it is.
  */
 const bareFail = (status, code, message) => ({
   status,
@@ -307,6 +389,29 @@ const bareFail = (status, code, message) => ({
 
 const notFound = () =>
   fail(404, "rest_no_route", "No route was found matching the URL and request method.");
+
+/**
+ * **A fifth wire error code, and DECISIONS.md's "Carried forward" says there are
+ * four.** That entry — `invalid_request · not_found · conflict ·
+ * unauthenticated` — was written from the fourteen *parameter* refusals a
+ * live-versus-mock diff turned up, and a parameter refusal is the one family that
+ * can never be a 403. Measured 2026-08-26 with a credential holding no
+ * `ac_manage_payments`:
+ *
+ *     403 {"code":"forbidden","message":"You are not allowed to perform this
+ *          action.","details":{}}
+ *
+ * on `/payments`, `/payments/methods` and `/payments/{id}` alike, and a **200**
+ * on `/cod/statistics` beside them — which is the whole reason the payments
+ * screen has two sections rather than one. The ledger needs the correction; this
+ * file cannot make it.
+ *
+ * `errorMessageKey()` branches on the **status** and never on this code, so no
+ * screen reads it today. That was checked rather than assumed, the same way the
+ * fourteen were.
+ */
+const forbidden = () =>
+  fail(403, "forbidden", "You are not allowed to perform this action.");
 
 /* ---------------------------------------------------------------- wilayas --- */
 
@@ -2925,65 +3030,261 @@ function seedShipments() {
 
 /* --------------------------------------------------------------- payments --- */
 
-/** Measured 2026-08-20: `chargily` is the default, and `cod` is the other one. */
+/**
+ * Measured 2026-08-20: `chargily` is the default, and `cod` is the other one.
+ *
+ * **The labels are English, and re-measured 2026-08-26 they still are** —
+ * `"Chargily (EDAHABIA / CIB)"` and `"Cash on delivery"`. This file invented
+ * `"Paiement à la livraison"` for `cod`, which is the shipping `providerLabel`
+ * defect in a second place: an API label written in French here would render as
+ * French in the French panel by accident and as French in the Arabic one as a
+ * bug, and the harness could never see either. `PaymentsScreen.tsx` resolves a
+ * provider the way `ShipmentRow` used to — `methods.find(…)?.label ?? name`, with
+ * no message key in front of it — so with the real labels in place the screen now
+ * prints "Cash on delivery" inside both localised panels and the defect is
+ * visible on a screenshot instead of hidden by the fixture.
+ */
 const PAYMENT_METHODS = [
-  { name: "chargily", label: "Chargily", is_default: true },
-  { name: "cod", label: "Paiement à la livraison", is_default: false },
+  { name: "chargily", label: "Chargily (EDAHABIA / CIB)", is_default: true },
+  { name: "cod", label: "Cash on delivery", is_default: false },
 ];
 
 /**
- * Two transactions on the rich order, and one story: the customer's card attempt
- * failed at the gateway and the order fell back to cash on delivery.
- *
- * 5231 is the `cod` one and is the fixture `POST /payments/{id}/verify` was
- * measured on: a pending cash transaction whose provider has nothing to report
- * yet, so `report.amount` and `report.currency` come back as **empty strings**.
- * The report is therefore not safe to format as money and `transaction` is the
- * authority for every figure on screen — which is invisible on a fixture whose
- * report carries a number.
- *
- * Neither is `paid`, and that is deliberate rather than an oversight: measured
- * 2026-08-20, all 37 payments in this shop are `pending` and nothing has ever
- * settled. `failed` gives the badge a second state to render without inventing a
- * settlement the shop has never had.
- *
- * The amount is read off the order rather than written out, because two figures
- * that drift apart on one screen is a bug report about arithmetic.
+ * Six, in the **physical** order the refusal names them — not alphabetical.
+ * Measured 2026-08-26: `?status=zzz` answers `"status is not one of pending,
+ * paid, failed, expired, cancelled, and refunded."`, which is the same
+ * lib/payment-status.ts records and the same order `SHIPMENT_STATUSES` is in for
+ * the same reason.
  */
+const PAYMENT_STATUSES = ["pending", "paid", "failed", "expired", "cancelled", "refunded"];
+
+/**
+ * ── The transactions collection, and what its shape has to prove ─────────────
+ *
+ * This was **two payments on one order** until 2026-08-26, and DECISIONS.md §8
+ * says exactly why that is not a fixture: a bidi/paging assertion taken on a
+ * one-page collection proves nothing, because the broken rendering and the
+ * correct one are the same string. Two rows on one order could not discriminate
+ * a status tab, a provider filter, an `order_id`, a date bound or a page.
+ *
+ * So the fixture is now the live shop's own shape, measured 2026-08-26:
+ *
+ *   45 rows · 3 pages at the default per_page of 20
+ *   status     44 `pending`, 1 `failed`  — and **`paid` is empty on purpose**
+ *   provider   43 `cod`, 2 `chargily`     (the two sum to the total)
+ *   order_id   44 distinct — one payment per order, except the rich order's two
+ *   created_at 45 distinct, spread over six days, 2026-08-12 → 2026-08-18
+ *   reference  42 of the 45 contain `AC-1`
+ *
+ * **Nothing in this shop has ever settled**, which is why four of the six
+ * statuses return zero rows and `paid` is one of them. That is the shop, not a
+ * gap: measured 2026-08-20 and again on 2026-08-26, every payment but one is
+ * `pending`. Inventing a settled shop here would give a `paid` badge a screenshot
+ * and give the panel a state the shop cannot produce.
+ *
+ * **The resting order is `id` descending, and the dates deliberately do not
+ * follow it.** 5230 and 5231 carry the two highest ids and sit in the *middle* of
+ * the date range, so `id desc` and `created_at desc` are different sequences and
+ * a sort that started working could be seen. The live collection had 45 distinct
+ * ids and 44 distinct `created_at` — one pair tied; all 45 are distinct here,
+ * which is the same property one notch stronger.
+ *
+ * **The 23:07Z row is the whole of the timezone measurement.** Slot 8 is pinned
+ * to `2026-08-16T23:07:22Z`, which is 00:07 on the **17th** in Africa/Algiers.
+ * Measured on the live stack: it is **included** by `date_to=2026-08-16` and
+ * **excluded** by `date_from=2026-08-17`, so the bounds cut on the **UTC** day
+ * and not on the shop's timezone. It is the only row that can tell those two
+ * readings apart — every other row in the fixture answers identically either way
+ * — and without the pin slot 8 would fall at 22:36Z, which is still the 16th in
+ * both zones and proves nothing. The live row measured 23:07:**26**Z; this one is
+ * four seconds earlier because every stamp in this file is derived from `EPOCH`,
+ * and four seconds cannot move a day boundary in either zone.
+ *
+ * **`reference` holds two distinct values across all 45 rows, and the low
+ * cardinality is the fact rather than a shortcut.** Measured 2026-08-26:
+ * `{"AC-1": 42, "3939": 3}`. A first draft of this fixture handed out 42
+ * *distinct* `AC-1nnn` references, which was inferred from `reference=AC-1`
+ * returning 42 and the assumption that 42 rows could not share one value. They
+ * can, and they do — see `paymentsListing` for the four requests that settle it.
+ * That inference made the mock **more permissive than the API**, which is the one
+ * direction this file exists to prevent.
+ *
+ * The three-row cluster is the two pinned transactions plus the second
+ * `chargily` row. On the live shop those three sit on one order; here two of them
+ * do, because putting a third on 1023 would break `GET /orders/1023/payments`,
+ * which is a pinned fixture other tests read.
+ *
+ * This is also why the screen offers no reference control: a filter with two
+ * values in it partitions 45 rows into 42 and 3.
+ *
+ * 5230 and 5231 stay exactly where they were, ids and all: `GET
+ * /orders/1023/payments` and `POST /payments/5231/verify` are pinned fixtures
+ * other tests read, and the story on them is unchanged — the card attempt failed
+ * at the gateway and the order fell back to cash on delivery.
+ *
+ * Every amount is read off the order it belongs to rather than written out,
+ * because two figures that drift apart on one screen is a bug report about
+ * arithmetic.
+ */
+const PAYMENT_ROWS = 43;
+/** Ids run **below** 5230, so the pinned pair stays first in the resting order —
+    which is what puts the shop's only `failed` row on page one of a capture. */
+const PAYMENT_ID_TOP = 5228;
+const PAYMENT_ORDER_BASE = 1030; // clear of every id in the refusal table above
+const PAYMENT_ORDER_STEP = 7;
+const PAYMENT_MINUTES_BASE = 120;
+const PAYMENT_MINUTES_STEP = 197;
+/** The row that separates a UTC-day cut from an Africa/Algiers one. */
+const TIMEZONE_EDGE_SLOT = 8;
+const TIMEZONE_EDGE_MINUTES = 1665; // 2026-08-16T23:07:22Z
+/** The second `chargily` row, and the only pending one. */
+const CHARGILY_SLOT = 4;
+/** The two values the whole collection's `reference` column holds. */
+const BULK_REFERENCE = "AC-1";
+const CLUSTER_REFERENCE = "3939";
+
+/**
+ * The three `metadata` shapes, and all three are measured 2026-08-26. A payment's
+ * metadata is a free record in the schema, so a fixture that carried one shape
+ * would let a screen index into keys the other two rows do not have.
+ *
+ *   cod                {amount, collect_on_delivery, currency}
+ *   chargily pending   {provider_status, livemode, fees, fees_on_merchant,
+ *                       fees_on_customer}
+ *   failed             {error: "conflict"}
+ *
+ * **Only the key sets are measured. Every value below is chosen, on all three.**
+ * Nothing on the screen reads a fee or a `collect_on_delivery` today; a screen
+ * that ever does has to go and measure whether `fees_on_merchant` is a money
+ * string or a boolean before formatting one, and whether a cod row's `amount`
+ * really tracks the order's total the way this fixture assumes. The one value
+ * that is not a guess is `{error: "conflict"}`, which is measured whole.
+ *
+ * `{error: "conflict"}` is the only place a failed payment says *why*, which is
+ * why the failed row must carry it rather than the `{provider_status}` this file
+ * used to invent.
+ */
+const codMetadata = (amount) => ({ amount, collect_on_delivery: true, currency: "DZD" });
+const chargilyMetadata = {
+  provider_status: "pending",
+  livemode: false,
+  fees: "25.00",
+  fees_on_merchant: "25.00",
+  fees_on_customer: "0.00",
+};
+
 function seedPayments() {
-  const order = ORDERS.find((row) => row.id === RICH_ORDER);
-  const common = { order_id: RICH_ORDER, amount: order.total, currency: "DZD" };
-  return new Map([
+  const rich = ORDERS.find((row) => row.id === RICH_ORDER);
+  const seeded = new Map([
     [
       RICH_ORDER,
       [
         {
-          ...common,
           id: 5230,
+          order_id: RICH_ORDER,
           provider: "chargily",
           provider_transaction_id: "ch_test_1023",
-          reference: "AC-PAY-5230",
+          reference: CLUSTER_REFERENCE,
+          amount: rich.total,
+          currency: "DZD",
           status: "failed",
-          metadata: { provider_status: "canceled" },
+          metadata: { error: "conflict" },
           created_at: zulu(2600),
           updated_at: zulu(2400),
         },
         {
-          ...common,
           id: 5231,
+          order_id: RICH_ORDER,
           provider: "cod",
           // Empty until a courier collects — a real value, not a placeholder.
           provider_transaction_id: "",
-          reference: "AC-PAY-5231",
+          reference: CLUSTER_REFERENCE,
+          amount: rich.total,
+          currency: "DZD",
           status: "pending",
-          metadata: { provider_status: "awaiting_delivery" },
+          metadata: codMetadata(rich.total),
           created_at: zulu(2380),
           updated_at: zulu(2380),
         },
       ],
     ],
   ]);
+
+  for (let slot = 0; slot < PAYMENT_ROWS; slot += 1) {
+    const orderId = PAYMENT_ORDER_BASE + slot * PAYMENT_ORDER_STEP;
+    const order = ORDERS.find((row) => row.id === orderId);
+    const id = PAYMENT_ID_TOP - slot;
+    const chargily = slot === CHARGILY_SLOT;
+    const minutes =
+      slot === TIMEZONE_EDGE_SLOT
+        ? TIMEZONE_EDGE_MINUTES
+        : PAYMENT_MINUTES_BASE + slot * PAYMENT_MINUTES_STEP;
+
+    seeded.set(orderId, [
+      {
+        id,
+        order_id: orderId,
+        provider: chargily ? "chargily" : "cod",
+        provider_transaction_id: chargily ? `ch_test_${orderId}` : "",
+        // 42 rows share this **one literal**, which is what `?reference=AC-1`
+        // counted on the live shop. The chargily row joins the two pinned ones on
+        // `3939`, so the column holds two values across 45 rows and the filter has
+        // something to leave out.
+        reference: chargily ? CLUSTER_REFERENCE : BULK_REFERENCE,
+        amount: order.total,
+        currency: "DZD",
+        status: "pending",
+        metadata: chargily ? chargilyMetadata : codMetadata(order.total),
+        created_at: zulu(minutes),
+        updated_at: zulu(minutes),
+      },
+    ]);
+  }
+
+  return seeded;
 }
+
+/**
+ * `GET /cod/statistics`, reproduced **verbatim** from the live stack on
+ * 2026-08-26 rather than computed from this fixture's orders.
+ *
+ * Four properties are load-bearing and every one of them is a thing a screen
+ * renders:
+ *
+ *   1. `by_status` sums **exactly** to `total_orders` — 217+84+42+0+256 = 599 —
+ *      which is what makes the breakdown explanatory rather than decorative, and
+ *      what `byStatusSumsToTotal()` gates the footnote on.
+ *   2. `by_status.confirmed` (84) **differs from** `confirmed_orders` (126), in
+ *      one payload, and both are right: the first is the shop *now*, the second
+ *      counts every order ever confirmed. This is the clearest instance in the
+ *      whole API of two numbers that look like the same number, and it is why
+ *      `CodFigure.scope` is not optional.
+ *   3. `rates.confirmation` is `confirmed_orders / total_orders` — 126/599 =
+ *      0.2104 — so the *ever* count is the numerator and the rate cannot be
+ *      re-derived from `by_status`.
+ *   4. `unreachable` is **0**, so `codByStatus()` drops a row. A fixture with
+ *      five non-zero counts would never exercise that branch.
+ *
+ * **599 is not this fixture's 633 orders and is not meant to be.** The report is
+ * a server-side aggregate over the shop's COD orders and nothing in the panel
+ * cross-checks it against `/orders`; deriving it here would mean inventing an
+ * ever-confirmed count the fixture has no data for and losing the five measured
+ * rate strings, which are the part a screen actually formats.
+ */
+const COD_STATISTICS = {
+  total_orders: 599,
+  by_status: { pending: 217, confirmed: 84, rejected: 42, unreachable: 0, cancelled: 256 },
+  confirmed_orders: 126,
+  delivered_orders: 44,
+  returned_orders: 43,
+  rates: {
+    confirmation: "0.2104",
+    rejection: "0.0701",
+    cancellation: "0.4274",
+    delivery: "0.0735",
+    return: "0.0718",
+  },
+};
 
 /* --------------------------------------------------------------- communes --- */
 
@@ -4103,6 +4404,24 @@ function shippingRates(params) {
 }
 
 /**
+ * A transaction's own 404, and it is **not** `notFound()`.
+ *
+ * `GET /payments/99999999` answers `404 not_found` with `"No payment with that
+ * id."` — measured 2026-08-26 — where an unrouted path answers `rest_no_route`,
+ * a code `ErrorNormalizer` never emits and no client can receive. The same
+ * distinction `/shipments/{id}` and `/inventory/lookup` already make.
+ *
+ * The message is measured on the `GET`. `verifyPayment` reuses it, which is
+ * **not** measured — nothing has verified a payment that does not exist — and it
+ * is the shipping precedent rather than a new decision: answering `rest_no_route`
+ * there would be the mock handing a screen a code the API cannot send.
+ */
+const paymentNotFound = () => fail(404, "not_found", "No payment with that id.");
+
+/** Every transaction in the shop, **newest id first** — the collection's resting order. */
+const allPayments = () => [...state.payments.values()].flat().sort((a, b) => b.id - a.id);
+
+/**
  * `POST /payments/{id}/verify`, which answers something that is **not a payment**:
  * `{report, transaction}`, the provider's own answer beside the stored record.
  *
@@ -4112,24 +4431,191 @@ function shippingRates(params) {
  * therefore not safe to format as money; `transaction` is the authority for every
  * number on screen and `report.provider_status` is what the report is worth.
  *
+ * **`report.provider_status` is not read off the row's `metadata`, and it used to
+ * be.** Measured 2026-08-26, a `cod` row's metadata is `{amount,
+ * collect_on_delivery, currency}` and carries no status at all, while verifying
+ * that same row answers `provider_status: "awaiting_delivery"` — so the report is
+ * computed by the API and not echoed from the record. Only `chargily` stores a
+ * `provider_status`, so that arm reads it and the cash arm states the measured
+ * value. Reading it off metadata is what made this file's `cod` fixture carry an
+ * invented `{provider_status}` shape the shop does not produce.
+ *
  * Nothing is written. The provider's answer is unchanged, so a second verify is
  * the same 200 — which is also what keeps a capture byte-stable.
  */
 function verifyPayment(id) {
   const payment = findById(state.payments, id);
-  if (payment === undefined) return notFound();
+  if (payment === undefined) return paymentNotFound();
 
   const cash = payment.provider === "cod";
   return ok({
     report: {
       status: payment.status,
-      provider_status: String(payment.metadata.provider_status ?? payment.status),
+      provider_status: cash
+        ? payment.status === "pending"
+          ? "awaiting_delivery"
+          : payment.status
+        : String(payment.metadata.provider_status ?? payment.status),
       amount: cash ? "" : payment.amount,
       currency: cash ? "" : payment.currency,
       metadata: payment.metadata,
     },
     transaction: payment,
   });
+}
+
+/**
+ * ── `GET /payments`, and the four dimensions it really honours ───────────────
+ *
+ * Measured 2026-08-26, one parameter at a time against `?bogus_param=1`, over a
+ * collection of 45 carrying 45 distinct ids and 44 distinct `created_at` — so
+ * nothing ties and a sort that worked would have shown.
+ *
+ *   status      honoured, and refused by name outside its six. `?status=` is a
+ *               **400** — the empty string is not a member of this enum — and
+ *               `?status[]=pending` is a 400 in the *type* family, because the
+ *               router receives an array where it wants a string
+ *   provider     honoured and **not validated**: `?provider=zzz` is a 200 with 0
+ *               rows. Case-insensitive — `?provider=COD` returns all 43 — and
+ *               `?provider=` is read as an **absence**, answering all 45
+ *   order_id    honoured, and validated in both the type and the range family
+ *   date_from   honoured, pattern-validated, and **cut on the UTC day**
+ *   date_to     the same
+ *   reference   honoured — **exact match, case-insensitive** — and the screen
+ *               deliberately does not offer it
+ *
+ *   orderby     ACCEPTED AND IGNORED, **and not even validated**: `?orderby=zzz`
+ *               is a 200. Eleven values × both directions were byte-identical to
+ *               the bare listing and to `?bogus_param=1`
+ *   order       the same, `?order=zzz` included
+ *   sort · sort_by · order_by · orderby[]   the same
+ *   search · s  the same — `?search=zzz` returns all 45
+ *   currency · id · include · exclude       the same, all 45
+ *
+ * ── What the empty string does, on all six ───────────────────────────────────
+ *
+ * **It is a three-way split, not an asymmetry between two parameters**, and all
+ * six are measured 2026-08-26. This file's first draft of the paragraph called it
+ * `status=` against `provider=` and missed the middle row entirely:
+ *
+ *   status=                          400  the enum sentence — `""` is not a
+ *                                         member of the six
+ *   order_id=                        400  the type sentence — `""` is not an
+ *                                         integer
+ *   date_from= · date_to=            400  the pattern sentence — `""` does not
+ *                                         match
+ *   provider= · reference=           200  read as an **absence**, all 45 rows
+ *
+ * So "the empty string is a value, not an absence" — the model this file's other
+ * collections were measured against — holds only where the value reaches a
+ * *validator*. Two of these six reach none, and there `""` is indistinguishable
+ * from a parameter nobody sent. `?reference` with no `=` at all answers the same
+ * 45. Reproduced rather than tidied into one rule.
+ *
+ * The `status=` arm is the shape this file already records between
+ * `/products?status=` and `/coupons?status=`: the empty string is a member of one
+ * enum and not of the other.
+ *
+ * **The date bounds are inclusive at both ends and cut on the UTC day, measured
+ * rather than assumed.** The fixture's 23:07:22Z row is 00:07 on the next day in
+ * Africa/Algiers and is the only row that can tell the two readings apart; it is
+ * included by `date_to=2026-08-16` and excluded by `date_from=2026-08-17`. Which
+ * is why the comparison here is a string compare against `created_at`'s own first
+ * ten characters — those are UTC by construction, the stamp ends `Z` — and not a
+ * `Date` parse through the runtime's local zone.
+ *
+ * `?date_from=2026-13-45` **matches the pattern and is not a date**, and answers
+ * a 200 with 0 rows rather than a refusal: the router validates the shape and
+ * never the calendar. An inverted range does the same.
+ *
+ * **Which stamp the bounds read is *unmeasurable on this shop*, which is a
+ * stronger statement than unmeasured — do not file it as a gap somebody can
+ * close with a request.** Checked row by row on 2026-08-26: **zero** of the 45
+ * carry `created_at` and `updated_at` on different UTC days, and only one row
+ * (id 40) has them differing at all — by one second, `05:30:32Z` against
+ * `05:30:33Z`. So no discriminating row exists and none can be obtained without
+ * writing to the shop.
+ *
+ * `created_at` is therefore what this file reads, stated as the assumption it is.
+ * Seeding a straddling row here to "settle" it would be worse than leaving the
+ * question open: it would make the harness assert a behaviour the shop cannot
+ * confirm, which is the same move as inventing a refusal sentence.
+ *
+ * ── `?reference=` is an exact match, and inferring otherwise was a real defect ─
+ *
+ * Measured 2026-08-26, after a first draft of this file read it as a substring:
+ *
+ *   reference=AC-1    42      reference=AC      0
+ *   reference=ac-1    42      reference=AC-     0
+ *   reference=3939     3      reference=C-1     0
+ *                             reference=AC-11   0
+ *
+ * The left column alone is satisfied by both readings; **the right column is what
+ * separates them**, and a strict prefix returning 0 rules out `LIKE` outright.
+ * The draft's reasoning was that 42 rows could not share one reference value —
+ * they can, and the whole column holds two distinct values across 45 rows. A
+ * substring match here would have been the mock answering requests the shop
+ * refuses, which is the direction the coupons branch was burned by.
+ *
+ * **Case-insensitivity is measured on this parameter** (`ac-1` → 42), not
+ * inferred from the collation the way `searchRows` has to infer it.
+ *
+ * `?reference=` is an **absence** — measured, 200 with all 45, as is the bare
+ * `?reference` with no `=`. See the three-way table above: it lands with
+ * `provider` rather than with `status`, because neither of them reaches a
+ * validator that the empty string could fail.
+ */
+function paymentsListing(params) {
+  /*
+   * `?status[]=pending`. PHP turns the bracketed name into an array before the
+   * router sees it, so the refusal is the **type** family and names `status`
+   * rather than `status[]`. `URLSearchParams` does no such thing, which is why
+   * this reads the bracketed key by hand — without it the parameter would look
+   * absent and the request would answer a silent 200 with every row.
+   */
+  if (params.has("status[]")) {
+    return invalidParam("status", "status is not of type string.");
+  }
+
+  const status = params.get("status");
+  if (status !== null && !PAYMENT_STATUSES.includes(status)) {
+    // `""` and `"pending,failed"` both land here, which is measured: this
+    // collection takes exactly one value and neither the empty string nor a
+    // comma list is a member of its enum.
+    return invalidParam("status", notOneOf("status", PAYMENT_STATUSES));
+  }
+
+  const orderIdRead = pagingNumber(params, "order_id", null, (value) =>
+    value >= 1 ? null : "order_id must be greater than or equal to 1",
+  );
+  if (orderIdRead.error) return orderIdRead.error;
+
+  const from = dayParam(params, "date_from");
+  if (from.error) return from.error;
+  const to = dayParam(params, "date_to");
+  if (to.error) return to.error;
+
+  const orderId = orderIdRead.value;
+  const provider = (params.get("provider") ?? "").toLowerCase();
+  // Folded on both sides, and **compared whole**: `AC-` and `AC-11` both answer
+  // zero rows against a column of `AC-1`, so this cannot be a substring. See the
+  // four-request table above.
+  const reference = fold(params.get("reference") ?? "");
+
+  const rows = allPayments().filter((row) => {
+    if (status !== null && row.status !== status) return false;
+    if (provider !== "" && row.provider.toLowerCase() !== provider) return false;
+    if (orderId !== null && row.order_id !== orderId) return false;
+    if (reference !== "" && fold(row.reference) !== reference) return false;
+    const day = row.created_at.slice(0, 10);
+    if (from.value !== null && day < from.value) return false;
+    if (to.value !== null && day > to.value) return false;
+    return true;
+  });
+
+  // `orderby` and `order` are read by nothing on purpose. See the file header.
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
 }
 
 /* ------------------------------------------------------------ query rules --- */
@@ -4182,6 +4668,18 @@ const INTEGER = /^-?\d+$/;
  *
  *   per_page=  400  "per_page is not of type integer."
  *   page=      400  "page is not of type integer."
+ *
+ * **Shared with `/payments?order_id=`, which is not a paging parameter at all**
+ * and refuses in exactly these two families — measured 2026-08-26:
+ *
+ *   order_id=zzz  400  "order_id is not of type integer."
+ *   order_id=     400  the same sentence
+ *   order_id=0    400  "order_id must be greater than or equal to 1"
+ *   order_id=-1   400  the same sentence
+ *
+ * It is called with a `fallback` of `null`, which is what "no filter" means to
+ * that route. Shared rather than copied so a whole-number parameter added later
+ * cannot invent a third way of saying either of these two things.
  */
 function pagingNumber(params, name, fallback, range) {
   const raw = params.get(name);
@@ -4307,23 +4805,57 @@ const oxford = (values) =>
 /**
  * **An enum refusal is a sentence and ends in a full stop. A range refusal does
  * not.** Measured 2026-08-25, across three families that this file used to write
- * as two:
+ * as two — and a **fourth arrived on `/payments` on 2026-08-26**:
  *
- *   enum   "orderby is not one of date, id, code, and usage."   full stop
- *   type   "per_page is not of type integer."                   full stop
- *   range  "per_page must be between 1 (inclusive) and 100 (inclusive)"   none
- *          "page must be greater than or equal to 1"                      none
+ *   enum     "orderby is not one of date, id, code, and usage."   full stop
+ *   type     "per_page is not of type integer."                   full stop
+ *   pattern  "date_from does not match pattern ^\\d{4}-\\d{2}-\\d{2}$."   full stop
+ *   range    "per_page must be between 1 (inclusive) and 100 (inclusive)"   none
+ *            "page must be greater than or equal to 1"                      none
  *
- * The inconsistency is WordPress's own — `rest_not_in_enum` and the type check
- * are written as sentences, the numeric bounds are not — so it cannot be tidied
- * into a rule, only copied. Every enum message in this file dropped the stop; a
- * form quoting one back rendered a sentence the shop never sends.
+ * The inconsistency is WordPress's own — `rest_not_in_enum`, the type check and
+ * `rest_invalid_pattern` are written as sentences, the numeric bounds are not —
+ * so it cannot be tidied into a rule, only copied. Every enum message in this
+ * file dropped the stop; a form quoting one back rendered a sentence the shop
+ * never sends.
  *
- * Written as one helper so the next enum added here cannot drift again. The type
- * family already carries its stop at each site; the range family is two literals
- * in `paginate` and must keep going without one.
+ * **The pattern family prints the regex at the person**, which none of the other
+ * three do: it names neither the legal set nor the offending value, only the
+ * shape, so a screen that renders it verbatim shows `^\d{4}-\d{2}-\d{2}$` to a
+ * shopkeeper. That is the API's, and a date control is what keeps it unreachable
+ * — the same argument the shipping provider picker makes for `unknownOf`.
+ *
+ * Written as helpers so the next enum or pattern added here cannot drift again.
+ * The type family already carries its stop at each site; the range family is two
+ * literals in `paginate` and must keep going without one.
  */
 const notOneOf = (name, values) => `${name} is not one of ${oxford(values)}.`;
+
+const notMatching = (name, pattern) => `${name} does not match pattern ${pattern}.`;
+
+/**
+ * A `Y-m-d` query parameter, and **the pattern is the whole of the validation.**
+ *
+ * Measured 2026-08-26 on `/payments?date_from=`:
+ *
+ *   date_from=                     400  pattern — `""` is a value, not an absence
+ *   date_from=20-08-2026           400  pattern
+ *   date_from=2026-08-20T00:00:00Z 400  pattern — a full ISO stamp is refused
+ *   date_from=2026-13-45           **200** with 0 rows — it matches the shape and
+ *                                  is not a date, and nothing checks the calendar
+ *
+ * The last line is the one worth keeping: a screen cannot tell "no transactions
+ * in that window" from "that is not a real date", because the API cannot either.
+ */
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_PATTERN = "^\\d{4}-\\d{2}-\\d{2}$";
+
+function dayParam(params, name) {
+  const raw = params.get(name);
+  if (raw === null) return { value: null };
+  if (!DAY.test(raw)) return { error: invalidParam(name, notMatching(name, DAY_PATTERN)) };
+  return { value: raw };
+}
 
 /**
  * **The third family, found on shipping 2026-08-25 and written down here because
@@ -7048,22 +7580,81 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     /*
-     * `/payments/{id}/verify` and **nothing else on this collection**. There is
-     * no `GET /payments` here: a transaction is reached through the order it
-     * belongs to, which is the only way the detail screen reaches it.
+     * The transactions collection: the list, the detail, the method reference
+     * list, and the one write.
      *
-     * `POST /payments` is absent for a stronger reason than that, and it is the
-     * one write on this subject the API offers: it opens a checkout at the
-     * provider and hands back a real payment link for a *shopper*.
-     * lib/api/allowlist.ts:164-178 refuses it deliberately, so it must 404 here
-     * too — a fixture that answered would be an invitation to build the screen.
+     * **`GET /payments` and `GET /payments/{id}` are served now, and pinning them
+     * at 404 was wrong.** They were left out on the grounds that a transaction is
+     * reached through its order, which was true of the *order detail* and was
+     * never true of the API: both are allowlisted, both are what `/payments`
+     * calls on load, and an unimplemented route here is not neutral — it answers
+     * `rest_no_route`, a code `ErrorNormalizer` never emits, so a screen
+     * branching on that 404 would be built against something the API cannot send.
+     * The same correction `GET /shipping/rules/{id}` took on 2026-08-25, for the
+     * same two reasons in the same order.
+     *
+     * **`GET /payments/{id}` returns the list row exactly** — measured 2026-08-26,
+     * all eleven keys, same values — which is what would make a peek drawer free
+     * on this collection, the way it is on parcels and orders.
+     *
+     * `POST /payments` stays absent, and for a stronger reason than a 404 of
+     * convenience: it is the one write on this subject the API offers, it opens a
+     * checkout at the provider and hands back a real payment link for a
+     * *shopper*, and lib/api/allowlist.ts:164-178 refuses it deliberately. A
+     * fixture that answered would be an invitation to build the screen.
+     *
+     * **The three reads are `ac_manage_payments` and the capability is enforced
+     * here**, which no other collection in this file does yet. It is enforced
+     * because it was *measured* here — `MOCK_IDENTITY=reduced` is a credential
+     * without it, and until now that identity was served all 45 rows. What is
+     * deliberately **not** gated is `POST /payments/{id}/verify`: nobody has
+     * measured what a Manager gets from it, and inventing a 403 would be the mock
+     * growing an error path the panel has never seen. Written down rather than
+     * swept, because "more permissive than the API" is exactly what the honesty
+     * audit hunts for.
      */
-    case "payments":
-      if (method === "GET" && segments.length === 2 && second === "methods") {
-        return list(PAYMENT_METHODS);
+    case "payments": {
+      const gate = () =>
+        IDENTITY.capabilities.includes("ac_manage_payments") ? null : forbidden();
+
+      if (second === undefined) {
+        if (method !== "GET") return notFound();
+        return gate() ?? paymentsListing(searchParams);
       }
-      return method === "POST" && segments.length === 3 && segments[2] === "verify"
-        ? verifyPayment(numericId(second))
+      if (second === "methods") {
+        if (method !== "GET" || segments.length !== 2) return notFound();
+        return gate() ?? enumeration(PAYMENT_METHODS);
+      }
+      // The allowlist's pattern is `\d+`, so a non-numeric segment is a path
+      // nobody wrote — `rest_no_route`, not this collection's own 404.
+      const id = numericId(second);
+      if (id === null || segments.length > 3) return notFound();
+      if (segments.length === 3) {
+        return method === "POST" && segments[2] === "verify" ? verifyPayment(id) : notFound();
+      }
+      if (method !== "GET") return notFound();
+
+      const denied = gate();
+      if (denied !== null) return denied;
+      const row = findById(state.payments, id);
+      return row === undefined ? paymentNotFound() : ok(row);
+    }
+
+    /*
+     * `GET /cod/statistics`, and it is the **only** route under this collection —
+     * an order's own COD record and its attempts live under `/orders/{id}/cod`,
+     * which is the screen they belong to.
+     *
+     * **It is `ac_view_analytics`, which both identities hold, so there is no
+     * gate here and that is the point of it.** Measured 2026-08-26: a credential
+     * that is 403 on all three payments routes is **200** on this one. It is the
+     * one place in the panel where a figure renders for a reader who cannot open
+     * a single record behind it, and it is why the payments screen is two
+     * sections rather than one.
+     */
+    case "cod":
+      return method === "GET" && segments.length === 2 && second === "statistics"
+        ? ok(COD_STATISTICS)
         : notFound();
 
     /*
@@ -7098,7 +7689,7 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      */
     case "shipping": {
       if (segments.length === 2) {
-        if (method === "GET" && second === "providers") return list(SHIPPING_PROVIDERS);
+        if (method === "GET" && second === "providers") return enumeration(SHIPPING_PROVIDERS);
         if (method === "GET" && second === "rates") return shippingRates(searchParams);
         if (second === "rules") {
           if (method === "POST") return postRule(body);
@@ -7125,11 +7716,23 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
 
     case "locations": {
       if (second !== "wilayas") return notFound();
-      // Reference data, and the one list endpoint that is **not** paginated: the
-      // panel fetches it with no params and needs all 58 to turn a `state` of
-      // "16" into a name. A default `per_page` of 10 here would leave 48 orders
-      // showing a bare code and nothing would report an error.
-      if (segments.length === 2) return list(WILAYAS);
+      /*
+       * Reference data, unpaginated: the panel fetches it with no params and
+       * needs every row to turn a `state` of "16" into a name. A default
+       * `per_page` of 10 here would leave 48 orders showing a bare code and
+       * nothing would report an error.
+       *
+       * **`counted()`, and it is the only route in the file with that shape** —
+       * measured 2026-08-26, live sends `{"total":69}` and no `page`,
+       * `per_page` or `total_pages` beside it. See the three shapes above.
+       *
+       * **69 live against 58 here**, which is a fixture-completeness gap rather
+       * than an envelope one and is deliberately not closed on this branch: 58 is
+       * every wilaya this file has names for, and inventing eleven more would put
+       * eleven unverifiable rows in the one table the panel treats as authority.
+       * Recorded rather than fixed.
+       */
+      if (segments.length === 2) return counted(WILAYAS);
 
       // Four segments, and the reason the depth guard moved again. The commune
       // list *is* paginated, because the panel asks it for `per_page=100`.
@@ -7244,16 +7847,19 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
        */
       if (second !== undefined) return notFound();
 
-      // Unpaginated, like /locations/wilayas: the panel fetches this with no
-      // params at all, and a default `per_page` of 10 would silently drop the
-      // shop's later attributes — and every facet group keyed on them with
-      // nothing reporting an error.
-      return ok(ATTRIBUTES, {
-        total: ATTRIBUTES.length,
-        page: 1,
-        per_page: ATTRIBUTES.length,
-        total_pages: 1,
-      });
+      /*
+       * Unpaginated, like `/locations/wilayas`: the panel fetches this with no
+       * params at all, and a default `per_page` of 10 would silently drop the
+       * shop's later attributes — and every facet group keyed on them with
+       * nothing reporting an error.
+       *
+       * **Its envelope is the unmeasured one, unlike wilayas'.** This used to
+       * hand-roll the same four-key `meta` inline; it goes through `list()` now
+       * so that the file has exactly one place emitting an unverified envelope
+       * and this route is named in that helper's list. Whether the shop sends
+       * `{total}` here, or nothing, is a request nobody has made.
+       */
+      return list(ATTRIBUTES);
     }
 
     case "customers": {

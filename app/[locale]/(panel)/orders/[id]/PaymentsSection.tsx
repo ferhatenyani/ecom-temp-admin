@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { useMutation } from "@tanstack/react-query";
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import { PAYMENT_STATUS_TONE, type PaymentStatus } from "@/lib/payment-status";
+import { providerLabel } from "@/lib/payments";
 import type { Payment, PaymentMethod, VerifyResult } from "@/lib/api/schemas/payment";
 import { formatMoney } from "@/lib/format/money";
 import { formatWhen } from "@/lib/format/date";
@@ -66,6 +67,7 @@ export function PaymentsSection({
 }) {
   const t = useTranslations("payments");
   const tStatus = useTranslations("paymentStatus");
+  const tProvider = useTranslations("paymentProvider");
   const router = useRouter();
   const toast = useToast();
   const { refuse, writesBlocked } = useOrderScreen();
@@ -98,8 +100,20 @@ export function PaymentsSection({
       ),
   });
 
+  /*
+   * **Message key → API `label` → raw name**, and this is a fix rather than a
+   * tidy-up. The API's label for `cod` is "Cash on delivery" — measured
+   * 2026-08-26 and re-measured since — and this line used to be
+   * `methods.find(…)?.label ?? name`, so an English string rendered on every
+   * cash transaction of this card in the French panel *and* in the Arabic one.
+   * It is the same defect the shipping branch fixed in `providerLabel`, in a
+   * second place. `chargily` has no key and keeps its brand. See
+   * `lib/payments.ts`.
+   */
   const methodLabel = (name: string) =>
-    methods.find((method) => method.name === name)?.label ?? name;
+    providerLabel(name, methods, (key) =>
+      tProvider.has(key as "cod") ? tProvider(key as "cod") : null,
+    );
 
   /* The section itself is absent without `ac_manage_payments`, so the only
      reason a rendered Verify button can be unavailable is the connection. */
