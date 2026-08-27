@@ -300,11 +300,17 @@ const counted = (rows) => ok(rows, { total: rows.length });
  * Shape 3: the full paging envelope on a route that is **not** paginated.
  *
  * **Every remaining caller of this is unmeasured**, and after the diff above that
- * is a claim rather than a default. These five are what is left, all of them
+ * is a claim rather than a default. These seven are what is left, all of them
  * routes the panel fetches with no params at all:
  *
  *   /orders/{id}/notes · /orders/{id}/timeline · /orders/{id}/shipments ·
- *   /orders/{id}/payments · /shipping/rates · /attributes
+ *   /orders/{id}/payments · /shipping/rates · /attributes ·
+ *   /cms/faq-categories
+ *
+ * `/cms/faq-categories` joined on the content branch and is the newest of them:
+ * the FAQ screen fetches it with no parameters and reads `data` alone, so
+ * `enumeration()`, `counted()` and this are indistinguishable from the panel's
+ * side and nobody has diffed which the shop sends.
  *
  * Each is a candidate for `enumeration()` or `counted()` and none has been
  * diffed. They stay here deliberately: moving them to a *different* guess would
@@ -538,6 +544,7 @@ const CAPABILITIES = [
  *   node scripts/capture.mjs /orders/1023                        all thirteen
  *   MOCK_IDENTITY=reduced node scripts/capture.mjs /orders/1023  eleven of them
  *   MOCK_IDENTITY=support node scripts/capture.mjs /dashboard    eleven others
+ *   MOCK_IDENTITY=no_content node scripts/capture.mjs /content   twelve
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
@@ -548,6 +555,11 @@ const CAPABILITIES = [
  * `support` is a **different** two off the same list, and it exists because the
  * dashboard's money gate is `ac_manage_orders` — which `reduced` holds. Its own
  * block below says what was measured and what was not.
+ *
+ * `no_content` is **one** capability off, and it exists because all three of the
+ * identities above hold `ac_manage_content` — so the whole Content section and
+ * the media library had no capturable forbidden state at all. Its own block says
+ * what was measured.
  *
  * Read **once, at module load**, so `respond()` stays pure and a capture run is
  * one identity from beginning to end. An unrecognised value throws rather than
@@ -612,6 +624,45 @@ const IDENTITIES = {
     capabilities: CAPABILITIES.filter(
       (capability) => capability !== "ac_manage_orders" && capability !== "ac_manage_inventory",
     ),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The fourth identity, and why none of the three above could be it ───────
+   *
+   * **Every `/cms/` route and `/media` is `ac_manage_content`, and all three
+   * identities above hold it** — `reduced` drops shipping and payments,
+   * `support` drops orders and inventory, and none of them touches content. So
+   * until this existed the Content hub, all six of its screens and the media
+   * library could not be photographed in the forbidden state DESIGN.md §3.7
+   * requires of every screen, and neither could the `MediaPicker` inside the
+   * banner form.
+   *
+   * `reduced` could not be widened into it. Its block above says at length that
+   * it is deliberately **not** "a Manager" and that its delta from `full` is
+   * exactly the two 403s that were seen; adding a third capability to it would
+   * be a claim about the shop's roles nothing here has measured, and it would
+   * change the order-detail capture that identity exists for.
+   *
+   * Measured, and recorded in lib/api/allowlist.ts:222-226 and in
+   * ADMIN_PANEL.md's Media section: a **Manager is 403 on every route in the
+   * `/cms/` block and on `GET /media`**, and **200 on `/notifications`** — which
+   * is `ac_manage_customers` rather than `ac_manage_content`, so those two
+   * fixtures invert.
+   *
+   * **This is a credential with a measured shape, not a claim about what the
+   * shop's Manager role contains.** The two-tier collapse takes more than one
+   * capability off a Manager and nothing here has measured which, so the delta
+   * from `full` is exactly `ac_manage_content` and nothing else, and the name
+   * says what the credential *does* rather than who it is. That is the rule
+   * `reduced` set, `support` followed, and this one inherits.
+   */
+  no_content: {
+    id: 517,
+    username: "harness-no-content",
+    display_name: "Harness No-Content",
+    email: "harness-no-content@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_content"),
     auth_method: "application_password",
   },
 };
@@ -2508,6 +2559,910 @@ function restrictionsFor(coupon) {
     excluded_product_categories: coupon.excluded_product_categories.map(categoryRef),
   };
 }
+
+/* ------------------------------------------------------------------- CMS --- */
+
+/**
+ * ── The one filter family in this panel that inverts, and everything under it ─
+ *
+ * **`?status=` defaults to `publish` on every `/cms/` collection, and `any`
+ * means publish plus draft and never the trash.** Every other list in this file
+ * reads the absence of `?status=` as *everything*: `/coupons` is three-state with
+ * absence meaning both, `/products` and `/orders` filter a value or nothing. Here
+ * the absence means **publish only**, so a screen that sent nothing would open on
+ * a list with every draft silently missing — and a draft is precisely what a
+ * content manager opens these screens to finish.
+ *
+ * Measured, and recorded three times over: ADMIN_PANEL.md §89's correction block
+ * ("the default is `publish`, so §61's read contract and every existing caller
+ * are unchanged, and `any` means publish plus draft and never the trash"),
+ * README's "Every content list asks for `?status=any`, which inverts the panel's
+ * own habit", and `lib/cms.ts`'s `DEFAULT_STATUS_FILTER`.
+ *
+ * **This is the single most important honesty point in this section.** A
+ * forgiving mock that answered drafts on a bare listing would make
+ * `DEFAULT_STATUS_FILTER`, every screen's explicit `?status=any`, and the whole
+ * hub-count inversion look like defensive padding somebody could delete — and it
+ * would delete cleanly, against a green harness, and hide every draft in the shop
+ * the moment it shipped.
+ *
+ * `""` is **not** a value here: it is outside the enum the router validates
+ * against, so it is a 400. That is the reading `/products?status=` gets and the
+ * opposite of `/coupons?status=`, where the empty string really is inside the
+ * enum — the same distinction this file paid for once already.
+ *
+ * ── What `?search=` matches, and what it cannot ──────────────────────────────
+ *
+ * **The title and the body, never the path.** `WP_Query`'s `s` does not search
+ * `post_name` and will not take it in `search_columns`, so on the one resource
+ * whose address *is* its path, a path cannot be searched for. Asserted on the
+ * backend rather than worked around, and the screen says what the field matches —
+ * the treatment `/customers` already gets, and for the same reason: a search that
+ * silently fails to match the thing a person typed reads as broken.
+ *
+ * ── Ordering, and the parameter nobody has measured ──────────────────────────
+ *
+ * **`orderby` on `/cms/*` is recorded neither as working nor as ignored. The
+ * notes are silent, and this file does not fill the silence in either
+ * direction.** What *is* recorded is the resting order, and that is what is
+ * served: `/cms/pages` is ordered **by title on the server** — the one departure
+ * the route makes from `baseArgs()`'s `menu_order` default, because every page in
+ * this shop carries `menu_order` 0 and the default degenerates to newest-first
+ * (`app/[locale]/(panel)/content/pages/query.ts` records the reasoning) — while
+ * banners and FAQs are ordered by their dense `position`.
+ *
+ * So `orderby` and `order` are **accepted and ignored and not validated** here.
+ * Not validated is the deliberate half: refusing an unknown value would be this
+ * file inventing a validator nobody has seen, which is the *stricter* direction
+ * the coupons branch was burned by — a screen built to a 400 the API never sends.
+ * Nobody can verify a sort against this harness in either direction, which is the
+ * honest state of the measurement.
+ *
+ * ── Envelopes, and which of them are guesses ─────────────────────────────────
+ *
+ * `/cms/pages` pages for real: `?page` and `?per_page` are part of the route
+ * `feat/cms-page-index` added, the index screen sends `per_page=50`, and the hub
+ * sends `per_page=1` for the count alone. Its `meta` carries the four paging keys
+ * plus **`excluded_system`**, which is how many functional shop pages the index
+ * left out; `PagesList` renders that count in a footnote.
+ *
+ * **`/cms/banners` and `/cms/faqs` page here and their live envelope is
+ * unverified.** Both go through the shared `paginate()`, so both emit the four
+ * paging keys. The reason is not taste: `app/[locale]/(panel)/content/page.tsx`
+ * fetches each with `?per_page=1&status=any` and reads **`meta.total`** through
+ * `listMeta`, which requires all four keys — so a `counted()` envelope would make
+ * the hub render no count at all, and a screen built for a count that the harness
+ * can never produce is the *less capable* direction. Whether the shop sends
+ * `page`, `per_page` and `total_pages` beside `total` on these two is a request
+ * nobody has made. Flagged rather than presented as measurement.
+ *
+ * `/cms/faq-categories` takes no parameters from any screen and nothing reads its
+ * `meta`, so it goes through `list()` — the file's one place for an unverified
+ * envelope — and is named in that helper's list.
+ *
+ * ── Nothing below calls `rand()` ─────────────────────────────────────────────
+ *
+ * Every value in this section is written out or derived from an id, so inserting
+ * it above the shared warning cannot shift the mulberry32 sequence the 633 orders
+ * and 39 products were verified against.
+ */
+
+/**
+ * WordPress **texturizes what it stores**, so a title never reads back as it was
+ * written: the apostrophe in `Soldes d'été` arrives as character reference 8217.
+ * Measured, and the seed learned it the hard way — it created a duplicate banner
+ * on its second run because it compared what it had sent against what came back.
+ *
+ * `decodeEntities()` on every title is the panel's half, and it needs a fixture
+ * or the whole treatment is untested prose. One page title and one banner title
+ * carry it, which are the two places the panel decodes.
+ */
+const RSQUO = "&#8217;";
+
+/**
+ * The 340px overflow strings for this section, one per shape that can overflow.
+ *
+ * A page's **path** is the unbroken run of characters on the Pages index — it is
+ * an identifier rendered `Ltr` in a row that is otherwise wrappable French — and
+ * an FAQ's **question** is the one on the FAQs list. The FAQ one is Arabic
+ * because that list renders questions `dir="auto"`, so an Arabic string is the
+ * case where an overflow and a direction flip can compound.
+ */
+const LONG_PAGE_PATH = "programme-de-fidelite-et-conditions-de-participation-2026-2027";
+const LONG_FAQ_QUESTION =
+  "هل يمكنني إرجاع منتج تم شراؤه خلال فترة التخفيضات إذا لم يكن مطابقا للمواصفات المعروضة على الموقع وما هي الشروط؟";
+
+/** What a CMS resource's `status` can be. The trash is reached by `DELETE`. */
+const CONTENT_STATUSES = ["publish", "draft"];
+
+/**
+ * What `?status=` accepts, in the order the refusal names them.
+ *
+ * `any` is not a status — nothing is ever stored as `any` — which is why this
+ * list and the one above are different things rather than one with an extra
+ * member.
+ */
+const CONTENT_STATUS_FILTERS = ["publish", "draft", "any"];
+
+/**
+ * A page's `seo` block, **derived**, which is the property the form is built on.
+ *
+ * `overrides` names the keys somebody set by hand; everything else changes when
+ * the title or the excerpt changes, so the form shows the derived values as
+ * placeholders rather than as inputs a person would then be unable to un-type.
+ * One page below carries a real override so that branch has a fixture.
+ */
+const pageSeoOf = (title, excerpt, path, status, overrides = []) => {
+  const plain = excerpt.replace(/<[^>]+>/g, "").trim();
+  return {
+    title: overrides.includes("title") ? `${title} | Atelier` : title,
+    description: plain.slice(0, 155),
+    canonical: `https://boutique.example.dz/${path}`,
+    robots: {
+      index: status === "publish",
+      follow: true,
+      directive: status === "publish" ? "index, follow" : "noindex, follow",
+    },
+    og: { title, description: plain.slice(0, 155), type: "website", image: null },
+    image: null,
+    structured_data: { "@context": "https://schema.org", "@type": "WebPage", name: title },
+    overrides,
+  };
+};
+
+/**
+ * One page, in the two shapes the API publishes for it.
+ *
+ * The index row is deliberately **less** than the document — no `content`, no
+ * `seo`, no `excerpt` — because the first is a whole page body per row and the
+ * second is a `SeoResolver` pass per row. The backend asserts the omission so it
+ * cannot drift back, and `pageRowOf()` below is what reproduces it: one object
+ * here, two projections, so a key added to the document cannot leak into the
+ * index by being forgotten.
+ *
+ * `content` and `excerpt` are stored **rendered** (`<p>…</p>\n`) rather than as
+ * what was sent, and PATCHing that rendered form back does not accumulate another
+ * wrapper — verified over three round trips on the live shop, and reproduced in
+ * `applyPageWrites()`.
+ */
+function seedPage({
+  id,
+  path,
+  status = "publish",
+  title,
+  body,
+  excerpt = "",
+  menuOrder = 0,
+  minutes,
+  overrides = [],
+  /** The WordPress or WooCommerce option that points at this page, if any. */
+  option = null,
+  /** True for a page whose body the shop generates — omitted from the index. */
+  functional = false,
+}) {
+  const cut = path.lastIndexOf("/");
+  return {
+    id,
+    path,
+    slug: cut === -1 ? path : path.slice(cut + 1),
+    parent_path: cut === -1 ? "" : path.slice(0, cut),
+    status,
+    title,
+    content: `<p>${body}</p>\n`,
+    excerpt: excerpt === "" ? "" : `<p>${excerpt}</p>\n`,
+    parent_id: 0,
+    menu_order: menuOrder,
+    image: null,
+    seo: pageSeoOf(title, excerpt, path, status, overrides),
+    date_created: iso(minutes + 4000),
+    date_modified: iso(minutes),
+    option,
+    functional,
+  };
+}
+
+/**
+ * ── Which page produces which answer ─────────────────────────────────────────
+ *
+ * The fifth table in this file, on the same rule as the other four: a screen
+ * cannot be verified against a state it can never reach, and every path below is
+ * written out because a literal that stops matching fails a test while a `find()`
+ * moves quietly and takes the table's meaning with it.
+ *
+ *   path                    request                       answer
+ *   ──────────────────────  ────────────────────────────  ──────────────────────
+ *   privacy-policy          GET                           **404** — it is a
+ *                                                         draft and the default
+ *                                                         filter is `publish`
+ *   privacy-policy          GET ?status=any               200, `status:"draft"`
+ *   privacy-policy          DELETE                        409 details.**option**
+ *   privacy-policy          DELETE ?force=true            the **same 409** —
+ *                                                         force does not override
+ *                                                         an option reference
+ *   legal                   DELETE                        409 details.**children**
+ *                                                         and `child_ids`
+ *   legal                   DELETE ?force=true            200, and the two
+ *                                                         children reparent to
+ *                                                         the root
+ *   refund_returns          DELETE                        200 — prose referenced
+ *                                                         by nothing
+ *   cart                    GET ?status=any               200, and it appears in
+ *                                                         **no listing**
+ *   ac-unpublished          GET ?status=any               200 — **one of two**
+ *                                                         rows carrying that path
+ *   ancienne-page           GET ?status=any               404 — trashed, and the
+ *                                                         trash is reachable
+ *                                                         through no filter
+ *   —                       PATCH {parent_path:"nulle"}   400 fields{parent_path}
+ *   —                       PATCH {slug:"x"}              200 with
+ *                                                         meta.path_changed
+ *
+ * **`privacy-policy` is the measurement the whole Pages index exists for.**
+ * WordPress creates it as a draft; `?status=` *filters* a single read rather than
+ * widening it; and a draft and a path that does not exist answer the **same 404
+ * with the same message**, `"No page at that path."` So the shop answered "no
+ * such page" about a page sitting right there, and the index is the only place
+ * the two facts separate.
+ *
+ * **The two `ac-unpublished` rows are the collision fixture.**
+ * `wp_unique_post_slug()` does not run for a draft, so nothing stops two pages
+ * sharing one path — measured before the seed cleaned this shop, 53 rows answered
+ * to `ac-unpublished` and 27 to `conditions`, and `get_page_by_path()` resolves
+ * exactly one of each while the other 78 could not be read, written or deleted
+ * through `/cms/pages/{path}` at all. Two rows is the smallest fixture that makes
+ * `collidingPaths()` non-empty and the index's non-linkable row reachable; the
+ * *count* is this file's and the *shape* is the shop's.
+ */
+const NAMED_PAGES = [
+  seedPage({
+    id: 2,
+    path: "privacy-policy",
+    status: "draft",
+    title: "Politique de confidentialité",
+    body: "Les données que nous collectons, la durée de conservation et vos droits.",
+    excerpt: "Ce que nous collectons et ce que nous en faisons.",
+    minutes: 40_320,
+    option: "wp_page_for_privacy_policy",
+  }),
+  seedPage({
+    id: 3,
+    path: "refund_returns",
+    title: "Politique de remboursement et de retour",
+    body: "Un article peut être retourné sous quatorze jours, dans son emballage d’origine.",
+    excerpt: "Quatorze jours pour changer d’avis.",
+    minutes: 40_200,
+  }),
+  // The four whose body the shop generates: a block or a shortcode, or nothing at
+  // all. Omitted from the index and still addressable by path, which is what
+  // `meta.excluded_system` reports rather than hides.
+  seedPage({
+    id: 5,
+    path: "shop",
+    title: "Boutique",
+    body: "",
+    minutes: 40_100,
+    option: "woocommerce_shop_page_id",
+    functional: true,
+  }),
+  seedPage({
+    id: 6,
+    path: "cart",
+    title: "Panier",
+    body: "[woocommerce_cart]",
+    minutes: 40_090,
+    option: "woocommerce_cart_page_id",
+    functional: true,
+  }),
+  seedPage({
+    id: 7,
+    path: "checkout",
+    title: "Commande",
+    body: "[woocommerce_checkout]",
+    minutes: 40_080,
+    option: "woocommerce_checkout_page_id",
+    functional: true,
+  }),
+  seedPage({
+    id: 8,
+    path: "my-account",
+    title: "Mon compte",
+    body: "[woocommerce_my_account]",
+    minutes: 40_070,
+    option: "woocommerce_myaccount_page_id",
+    functional: true,
+  }),
+  seedPage({
+    id: 11,
+    path: "legal",
+    title: "Informations légales",
+    body: "Les mentions, les conditions et la politique de retour de l’atelier.",
+    excerpt: "Tout ce que la loi nous demande de publier.",
+    minutes: 21_600,
+  }),
+  seedPage({
+    id: 12,
+    path: "legal/conditions-generales",
+    title: "Conditions générales de vente",
+    body: "Commande, paiement à la livraison, délais et litiges.",
+    excerpt: "Le contrat entre l’atelier et vous.",
+    minutes: 21_500,
+    overrides: ["title"],
+  }),
+  seedPage({
+    id: 13,
+    path: "legal/mentions-legales",
+    status: "draft",
+    title: "Mentions légales",
+    body: "Éditeur, hébergeur et registre du commerce.",
+    minutes: 21_400,
+  }),
+  seedPage({
+    id: 14,
+    path: "a-propos",
+    title: "À propos de l’atelier",
+    body: "Trente artisanes, six wilayas, et un carnet de commandes tenu à la main.",
+    excerpt: "Qui fabrique ce que vous achetez.",
+    minutes: 18_000,
+  }),
+  seedPage({
+    id: 15,
+    path: "contact",
+    title: "Nous contacter",
+    body: "Par téléphone du dimanche au jeudi, ou par le formulaire ci-dessous.",
+    minutes: 17_000,
+  }),
+  seedPage({
+    id: 16,
+    path: "livraison",
+    title: "Livraison et délais",
+    body: "Domicile ou bureau, dans les 58 wilayas, sous trois à sept jours.",
+    excerpt: "Où nous livrons, et en combien de temps.",
+    minutes: 16_000,
+  }),
+  // The texturization fixture. Written `Soldes d'été`, stored — and therefore
+  // read back — with the apostrophe as character reference 8217.
+  seedPage({
+    id: 17,
+    path: "soldes-d-ete",
+    title: `Soldes d${RSQUO}été`,
+    body: `Jusqu${RSQUO}au 31 août, sur une sélection de tapis et de poteries.`,
+    excerpt: `Les dates et les conditions des soldes d${RSQUO}été.`,
+    minutes: 900,
+  }),
+  // The 340px fixture: a 62-character path with no break opportunity, on a draft
+  // so it is only reachable through `?status=any` or `?status=draft`.
+  seedPage({
+    id: 18,
+    path: LONG_PAGE_PATH,
+    status: "draft",
+    title: "Programme de fidélité",
+    body: "Un point par cent dinars, et une remise au bout de trente points.",
+    minutes: 600,
+  }),
+  // The collision. Two drafts, one path, and `get_page_by_path()` resolves the
+  // lower id — so row 20 cannot be read, written or deleted at all.
+  seedPage({
+    id: 19,
+    path: "ac-unpublished",
+    status: "draft",
+    title: "Brouillon sans titre",
+    body: "Page créée automatiquement et jamais publiée.",
+    minutes: 500,
+  }),
+  seedPage({
+    id: 20,
+    path: "ac-unpublished",
+    status: "draft",
+    title: "Brouillon dupliqué",
+    body: "Deuxième page portant la même adresse que la précédente.",
+    minutes: 480,
+  }),
+  // Trashed. In no listing, under no filter — `any` is publish plus draft, and
+  // that is the whole reason it is not a synonym for "everything".
+  seedPage({
+    id: 21,
+    path: "ancienne-page",
+    status: "trash",
+    title: "Ancienne page retirée",
+    body: "Retirée du site en 2025.",
+    minutes: 45_000,
+  }),
+];
+
+/**
+ * Fifty more, so the pager is genuinely exercised rather than merely rendered.
+ *
+ * `PER_PAGE` on the index is **50** and the seed used to be under it, so the
+ * second page had never been requested by anything — the pager was two disabled
+ * buttons and a "1 / 1" in every capture ever taken. Sixty-two listed rows put
+ * twelve on page two under `?status=any` and two on page two under the API's own
+ * `publish` default, so both readings page.
+ *
+ * Two forms per topic rather than fifty free-standing titles, and that is what
+ * makes the **title order** observable: all twenty-five "Entretien" rows sort
+ * ahead of all twenty-five "Guide" rows, so a listing that had quietly kept its
+ * insertion order would be visibly wrong rather than plausibly different.
+ */
+const PAGE_TOPICS = [
+  ["tapis-berberes", "les tapis berbères"],
+  ["poterie-de-maghnia", "la poterie de Maghnia"],
+  ["cuivre-martele", "le cuivre martelé"],
+  ["laine-des-aures", "la laine des Aurès"],
+  ["dattes-de-tolga", "les dattes de Tolga"],
+  ["huile-d-argan", "l’huile d’argan"],
+  ["savon-d-alep", "le savon d’Alep"],
+  ["miel-de-jujubier", "le miel de jujubier"],
+  ["bijoux-en-argent", "les bijoux en argent"],
+  ["vannerie-du-sud", "la vannerie du Sud"],
+  ["chech-en-coton", "le chèche en coton"],
+  ["caftan-brode", "le caftan brodé"],
+  ["theiere-en-cuivre", "la théière en cuivre"],
+  ["bois-d-olivier", "le bois d’olivier"],
+  ["ceramique-de-tenes", "la céramique de Ténès"],
+  ["burnous-en-laine", "le burnous en laine"],
+  ["cuir-de-tlemcen", "le cuir de Tlemcen"],
+  ["epices-du-hoggar", "les épices du Hoggar"],
+  ["verre-souffle", "le verre soufflé"],
+  ["dinanderie", "la dinanderie"],
+  ["broderie-de-constantine", "la broderie de Constantine"],
+  ["nattes-d-alfa", "les nattes d’alfa"],
+  ["tapis-de-ghardaia", "le tapis de Ghardaïa"],
+  ["parfums-de-blida", "les parfums de Blida"],
+  ["couffins-tresses", "les couffins tressés"],
+];
+
+const FILLER_PAGES = PAGE_TOPICS.flatMap(([slug, topic], index) => [
+  seedPage({
+    id: 3000 + index * 2,
+    path: `entretien-${slug}`,
+    // Every fifth pair carries a draft, so `?status=draft` has ten rows rather
+    // than the five the named pages alone would give it.
+    status: index % 5 === 0 ? "draft" : "publish",
+    title: `Entretien : ${topic}`,
+    body: `Comment nettoyer et conserver ${topic} sans les abîmer.`,
+    excerpt: `L’entretien courant, pas à pas.`,
+    menuOrder: 0,
+    minutes: 30_000 - index * 40,
+  }),
+  seedPage({
+    id: 3001 + index * 2,
+    path: `guide-${slug}`,
+    title: `Guide d’achat : ${topic}`,
+    body: `Ce qu’il faut regarder avant d’acheter ${topic}.`,
+    excerpt: `Choisir sans se tromper.`,
+    menuOrder: 0,
+    minutes: 29_980 - index * 40,
+  }),
+]);
+
+/**
+ * Every page this process can see, with `parent_id` resolved.
+ *
+ * A second pass rather than a field on the seed: `parent_id` is the *shop's*
+ * answer to a `parent_path`, and deriving it from the path map is what keeps the
+ * two consistent when a `PATCH` moves a page. A path naming nothing resolves to
+ * 0, which is a root page — and is exactly why the API refuses an unresolvable
+ * `parent_path` with a 400 rather than creating an orphan.
+ */
+const PAGE_SEED = (() => {
+  const rows = [...NAMED_PAGES, ...FILLER_PAGES];
+  const byPath = new Map(rows.map((row) => [row.path, row.id]));
+  return rows.map((row) => ({
+    ...row,
+    parent_id: row.parent_path === "" ? 0 : (byPath.get(row.parent_path) ?? 0),
+  }));
+})();
+
+/* --------------------------------------------------------------- homepage --- */
+
+/**
+ * ── The stored document, and the report that comes out of reading it ─────────
+ *
+ * **The drop report cannot be provoked through the API**, because the only route
+ * that writes this document is the one that refuses to write a bad one:
+ * `GET /cms/homepage` drops a malformed section and reports it in `meta.problems`
+ * while `PUT` answers a 400. `scripts/seed-cms.mjs` writes the option underneath
+ * the API with `wp eval` for exactly that reason, and this array is that option.
+ *
+ * **Twelve stored entries, three of them malformed, at 1-based positions 2, 4 and
+ * 6 — interleaved rather than appended.** That is the whole point of the fixture:
+ * the positions in `meta.problems` are 1-based over the **stored** document and
+ * not over the sections that survived, so "Section 6" is not the sixth row on
+ * screen. With the bad ones appended, every assertion about that distinction
+ * would pass vacuously and an off-by-one in the panel would be invisible.
+ *
+ *   stored  1  hero                     survives, screen row 1
+ *   stored  2  a bare string            dropped — "Section 2 is not an object."
+ *   stored  3  featured_products        survives, screen row 2
+ *   stored  4  type "carousel"          dropped — unknown type
+ *   stored  5  categories               survives, screen row 3
+ *   stored  6  promotion, data a string dropped — bad data
+ *   stored  7-12                        survive, screen rows 4-9
+ *
+ * Nine survive and three are reported, so no position in the report equals its
+ * row on screen.
+ */
+const HOMEPAGE_STORED = [
+  { type: "hero", data: { heading: `Soldes d${RSQUO}été`, image_id: null, cta: "/soldes-d-ete" } },
+  "une section écrite à la main",
+  { type: "featured_products", data: { product_ids: [101, 104, 201], limit: 3 } },
+  { type: "carousel", data: { slides: 4 } },
+  { type: "categories", data: { category_ids: [12, 13, 14], columns: 3 } },
+  { type: "promotion", data: "livraison offerte" },
+  { type: "banner", data: { banner_id: 7301 } },
+  { type: "text", data: { html: "<p>Fabriqué en Algérie, expédié depuis Alger.</p>" } },
+  { type: "image", data: { image_id: null, alt: "Atelier de tissage" } },
+  { type: "faq", data: { category: "livraison", limit: 5 } },
+  { type: "testimonials", data: { limit: 3 } },
+  { type: "newsletter", data: { heading: "Recevoir les nouveautés" } },
+];
+
+/**
+ * The eleven section types, and **the only way anybody discovered them**.
+ *
+ * There is no endpoint that publishes this vocabulary. It was read out of a 400 —
+ * `PUT /cms/homepage` with `{"type":"not_a_real_type"}` — and `lib/cms.ts` holds
+ * the panel's copy of it with no contract keeping the two in step. `SECTION_LIST`
+ * below is the sentence that 400 prints, reproduced verbatim rather than joined
+ * from the array with a guessed separator.
+ */
+const SECTION_TYPES = [
+  "hero",
+  "featured_products",
+  "categories",
+  "promotion",
+  "banner",
+  "text",
+  "image",
+  "faq",
+  "testimonials",
+  "newsletter",
+  "custom",
+];
+
+/**
+ * Measured: a 51st section is a **400 on `sections`**, not on `sections[50]`.
+ *
+ *     {"sections": "A homepage carries at most 50 sections; this one has 51."}
+ *
+ * Two error paths from one endpoint and only one of them is positional. A form
+ * that bound every homepage error to a section index would drop this one on the
+ * floor, which is why the fixture has to be able to produce both.
+ */
+const MAX_SECTIONS = 50;
+
+/**
+ * The twelfth type, and why it is behind a switch rather than in the fixture.
+ *
+ * `unknownSectionTypes()` in `lib/cms.ts` exists because the panel's list of
+ * eleven is a *copy* of a constant on the other side of the wire: if the backend
+ * gains a twelfth type, the reader returns it and a panel that had not asked
+ * would render a blank row. Nothing measured can produce that state — the reader
+ * measured on 2026-08-21 **drops** a type it does not know and reports it, so an
+ * unknown type arriving intact is a hypothesis about a backend that has moved,
+ * not an observation.
+ *
+ * So it is not the default document. `MOCK_HOMEPAGE=future` serves one section of
+ * type `countdown` intact, which is the only way that branch of the editor can be
+ * photographed, and the label says plainly what it is. Putting it in the default
+ * fixture would have taught the next reader that this API passes unknown types
+ * through, which is the opposite of what was measured.
+ */
+const HOMEPAGE_VARIANTS = {
+  /** The seeded document above, malformed sections and all. */
+  report: HOMEPAGE_STORED,
+  /**
+   * `{"sections": []}` — what `GET /cms/homepage` answered on this shop before
+   * `scripts/seed-cms.mjs` existed, which is why the homepage editor and its drop
+   * report were built against a document with nothing in it. A real measured
+   * state, and the one the empty-state capture needs.
+   */
+  empty: [],
+  /** The hypothesis. See above; not a measurement, and never the default. */
+  future: [
+    HOMEPAGE_STORED[0],
+    { type: "countdown", data: { ends_at: "2026-09-01T00:00:00+00:00" } },
+    HOMEPAGE_STORED[2],
+  ],
+};
+
+const REQUESTED_HOMEPAGE = process.env.MOCK_HOMEPAGE ?? "report";
+if (!(REQUESTED_HOMEPAGE in HOMEPAGE_VARIANTS)) {
+  throw new Error(
+    `MOCK_HOMEPAGE must be one of ${Object.keys(HOMEPAGE_VARIANTS).join(", ")} — got "${REQUESTED_HOMEPAGE}".`,
+  );
+}
+
+/**
+ * Read once at module load, like `MOCK_IDENTITY`, so `respond()` stays pure and a
+ * capture run is one document from beginning to end.
+ */
+const HOMEPAGE_SEED = HOMEPAGE_VARIANTS[REQUESTED_HOMEPAGE];
+
+/* ---------------------------------------------------------------- banners --- */
+
+/**
+ * `position` is **dense** — 0, 1, 2 across the collection, not sparse and not
+ * per-placement — so a reorder swaps two adjacent values rather than rewriting a
+ * fractional index, and a new banner appended at `n` is correct.
+ *
+ * There is **no bulk endpoint**, so a reorder is one `PATCH` per row that
+ * actually moved; `positionWrites()` in `lib/cms.ts` is the panel's half of that
+ * and the reason both halves of its condition are load-bearing.
+ *
+ * `placement` is a free key rather than an enum on the API's side, deliberately:
+ * where a shop puts a banner is a shop's decision and the plugin is cloned per
+ * client. So there is no validation on it here either, and the screen offers the
+ * placements it finds in the data plus a free field.
+ *
+ * **`image` is null on every seeded row**, which is the measured state of this
+ * shop and is the common case rather than an empty fixture: a banner without a
+ * picture is a banner. The embedded-image shape is reachable through a write —
+ * `PATCH {image_id: 5001}` resolves a media row into it — which is the honest way
+ * to give `embeddedImage` a fixture without inventing a seeded one.
+ */
+const BANNER_SEED = [
+  {
+    id: 7301,
+    title: `Soldes d${RSQUO}été`,
+    caption: "Jusqu’à −40 % sur les tapis",
+    link: "/soldes-d-ete",
+    placement: "home_hero",
+    status: "publish",
+    position: 0,
+    image: null,
+    date_modified: iso(900),
+  },
+  {
+    id: 7302,
+    title: "Nouvelle collection",
+    caption: "Céramique de Ténès",
+    link: "/categorie/poterie",
+    placement: "home_hero",
+    status: "draft",
+    position: 1,
+    image: null,
+    date_modified: iso(2_400),
+  },
+  {
+    id: 7303,
+    title: "Livraison offerte dès 8 000 DA",
+    caption: "",
+    link: "/livraison",
+    placement: "home_secondary",
+    status: "publish",
+    position: 2,
+    image: null,
+    date_modified: iso(6_000),
+  },
+  {
+    id: 7304,
+    title: "Artisanat des Aurès",
+    caption: "Laine filée et tissée à la main",
+    link: "/categorie/textile",
+    placement: "category_top",
+    status: "publish",
+    position: 3,
+    image: null,
+    date_modified: iso(9_000),
+  },
+  {
+    id: 7305,
+    title: "Paiement à la livraison",
+    caption: "Dans les 58 wilayas",
+    link: "/livraison",
+    placement: "category_top",
+    status: "draft",
+    position: 4,
+    image: null,
+    date_modified: iso(12_000),
+  },
+];
+
+/* ------------------------------------------------------------------- FAQs --- */
+
+/**
+ * **`count` is present on `/cms/faq-categories` and absent on the category
+ * embedded inside an FAQ**, which is one shape published two ways and is why
+ * `faqCategory.count` is optional rather than nullable in the panel's schema.
+ *
+ * A screen that read `category.count` off an FAQ's own categories would get
+ * `undefined` and render nothing, silently, on the half of the surface that has
+ * the most category objects in it. So the two projections are built from one
+ * seed here — `faqCategoryRow()` adds the count, `faqCategoryRef()` does not —
+ * rather than written out twice.
+ */
+const FAQ_CATEGORY_SEED = [
+  { id: 8201, slug: "livraison", name: "Livraison", description: "Délais, wilayas et suivi." },
+  { id: 8202, slug: "paiement", name: "Paiement", description: "Paiement à la livraison et en ligne." },
+  { id: 8203, slug: "retours", name: "Retours", description: "" },
+  // No FAQ sits in this one, so its count is 0 — the state a category manager
+  // needs in order to see that deleting it is safe.
+  { id: 8204, slug: "grossistes", name: "Grossistes", description: "" },
+];
+
+/**
+ * Five FAQs, dense positions, and three states nothing else in this section has:
+ * an FAQ in **two** categories, an FAQ in **none**, and a draft.
+ *
+ * The Arabic question is the 340px fixture for this list. An FAQ may sit in
+ * several categories, which is exactly what the singular `category` field is
+ * refused by name for — "Use \"categories\" — an FAQ may sit in more than one."
+ * — so the multi-category row is what makes that refusal mean something.
+ */
+const FAQ_SEED = [
+  {
+    id: 8101,
+    question: "Livrez-vous dans toutes les wilayas ?",
+    answer: "<p>Oui, dans les 58 wilayas, à domicile ou au bureau du transporteur.</p>\n",
+    categorySlugs: ["livraison"],
+    status: "publish",
+    position: 0,
+    date_modified: iso(1_200),
+  },
+  {
+    id: 8102,
+    question: "Puis-je payer à la livraison ?",
+    answer: "<p>Oui. Le paiement à la livraison est disponible partout et sans supplément.</p>\n",
+    // Two categories: the fixture the plural field exists for.
+    categorySlugs: ["paiement", "livraison"],
+    status: "publish",
+    position: 1,
+    date_modified: iso(2_000),
+  },
+  {
+    id: 8103,
+    question: LONG_FAQ_QUESTION,
+    answer: "<p>نعم، خلال أربعة عشر يوما، شرط أن يكون المنتج في عبوته الأصلية.</p>\n",
+    categorySlugs: ["retours"],
+    status: "publish",
+    position: 2,
+    date_modified: iso(3_000),
+  },
+  {
+    // No category at all, which is a legal FAQ and the empty branch of the list.
+    id: 8104,
+    question: "Proposez-vous des emballages cadeaux ?",
+    answer: "<p>Sur demande, à la commande, sans supplément.</p>\n",
+    categorySlugs: [],
+    status: "publish",
+    position: 3,
+    date_modified: iso(5_000),
+  },
+  {
+    id: 8105,
+    question: "Reprenez-vous un article soldé ?",
+    answer: "<p>Un article soldé est repris dans les mêmes conditions qu’un article au prix courant.</p>\n",
+    categorySlugs: ["retours"],
+    status: "draft",
+    position: 4,
+    date_modified: iso(8_000),
+  },
+];
+
+/* ------------------------------------------------------------------ menus --- */
+
+/**
+ * ── Two vocabularies for one thing, and the reader publishes the other one ────
+ *
+ * `CmsPresenter::menu()` has published **WordPress's** shape since §61: `type` is
+ * `post_type`/`taxonomy`/`custom` with the real kind under `object`, and the
+ * label is `title` rather than `label`. §89 specified the *writer* in the shop's
+ * own vocabulary — `type: "page"`, `label` — and `MenuInput` normalises both,
+ * because "GET the menu, drag one item, PUT it back" is the only interaction a
+ * menu screen has and changing the read shape would break every existing caller.
+ *
+ * So this seed is in WordPress's vocabulary and `readMenuItems()` accepts either,
+ * which is what makes the round trip hold.
+ *
+ * The last root item is a `post_type`/`post` — a WordPress item this API has no
+ * type for — because `kindOf()` in the editor has a fallback branch for exactly
+ * that and it would otherwise never run.
+ */
+const menuItem = (id, title, url, type, object, objectId, position, children = []) => ({
+  id,
+  title,
+  url,
+  target: "",
+  type,
+  object,
+  object_id: objectId,
+  position,
+  classes: [],
+  children,
+});
+
+const PRIMARY_MENU_ITEMS = [
+  menuItem(4180, "Accueil", "https://boutique.example.dz/", "custom", "custom", 0, 0),
+  menuItem(4181, "Tapis", "https://boutique.example.dz/categorie/tapis", "taxonomy", "product_cat", 13, 1, [
+    menuItem(4182, "Tapis kilim", "https://boutique.example.dz/produit/tapis-kilim", "post_type", "product", 210, 0),
+    menuItem(4183, "Tapis de Ghardaïa", "https://boutique.example.dz/guide-tapis-de-ghardaia", "post_type", "page", 3045, 1),
+  ]),
+  menuItem(4184, `Soldes d${RSQUO}été`, "https://boutique.example.dz/soldes-d-ete", "post_type", "page", 17, 2),
+  menuItem(4185, "Conditions générales", "https://boutique.example.dz/legal/conditions-generales", "post_type", "page", 12, 3),
+  menuItem(4186, "Instagram", "https://instagram.com/atelier", "custom", "custom", 0, 4),
+  menuItem(4187, "Journal de l’atelier", "https://boutique.example.dz/2026/07/atelier", "post_type", "post", 992, 5),
+];
+
+/**
+ * **`primary` is assigned and `footer` is not**, and the asymmetry is the whole
+ * fixture.
+ *
+ * Measured: `get_nav_menu_locations()` on this install returned `primary` and no
+ * `footer`, so `GET /cms/menus/footer` is a **404 with its own message** — "No
+ * menu is assigned to that location." — which is a different fact from a location
+ * that was never registered, and the screen says which. `PUT` on it then
+ * **creates and assigns** the menu, naming it "Footer navigation", so an
+ * unassigned location is an empty state with a working action behind it rather
+ * than a dead end.
+ */
+const MENU_SEED = {
+  primary: {
+    location: "primary",
+    id: 4100,
+    name: "Navigation principale",
+    slug: "navigation-principale",
+    items: PRIMARY_MENU_ITEMS,
+  },
+};
+
+/** Two levels, fifty items. Both are refused above. */
+const MAX_MENU_DEPTH = 2;
+const MAX_MENU_ITEMS = 50;
+
+/* ------------------------------------------------------------------ media --- */
+
+/**
+ * The library, 41 items — the count `GET /media` answered when this was measured.
+ *
+ * **`sizes` is empty on every row and that is not a shortcut.** The fixtures in
+ * this shop are 30×20 pixels, below every threshold at which WordPress generates
+ * a thumbnail, so a client that indexed into `sizes[0]` for a list thumbnail
+ * would work in production and fail on every test fixture. `url` is the one size
+ * that always exists.
+ *
+ * **`filename` is generated server-side and is a collision suffix, not a
+ * rewrite**: `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg` and
+ * `real-2.jpg`, and the extension comes from the *sniffed* type rather than from
+ * the name. Rows 0-2 below reproduce that trio so the "show the returned name"
+ * rule has something to be right about.
+ */
+const MEDIA_TYPES = [
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+];
+
+const MEDIA_SEED = Array.from({ length: 41 }, (_, index) => {
+  const [mime, extension] = MEDIA_TYPES[index % 3];
+  // The measured collision trio, then one file per subject.
+  const base = index < 3 ? "real" : `${PAGE_TOPICS[index % PAGE_TOPICS.length][0]}`;
+  const suffix = index < 3 ? (index === 0 ? "" : `-${index}`) : "";
+  const filename = `${base}${suffix}.${extension}`;
+
+  return {
+    id: 5001 + index,
+    title: index < 3 ? "Photo d’atelier" : `Photo — ${PAGE_TOPICS[index % PAGE_TOPICS.length][1]}`,
+    slug: `${base}${suffix}`,
+    // One row with no alt text at all, because that is a real attachment and the
+    // grid has to say so rather than render an empty caption.
+    alt: index === 7 ? "" : `Gros plan sur ${PAGE_TOPICS[index % PAGE_TOPICS.length][1]}`,
+    caption: index % 4 === 0 ? "" : "Atelier de Tizi Ouzou, 2026",
+    mime_type: mime,
+    url: `https://boutique.example.dz/wp-content/uploads/2026/08/${filename}`,
+    filename,
+    filesize: 1024 + index * 37,
+    // 30×20, which is why `sizes` is empty on all 41.
+    width: 30,
+    height: 20,
+    sizes: [],
+    // One row whose uploader WordPress no longer knows, because the schema allows
+    // it and there is no route that turns the number into a name either way.
+    uploaded_by: index === 12 ? null : 514,
+    date_created: iso(20_000 - index * 120),
+    date_modified: iso(20_000 - index * 120),
+  };
+});
 
 /* ------------------------------------------ the order detail's sub-resources --- */
 
@@ -4661,6 +5616,45 @@ const state = {
    */
   couponsGone: new Set(),
   nextCouponId: 0,
+  /**
+   * Page id → the whole row as it reads now, holding both the seeded pages a
+   * `PATCH` or a `DELETE` has rewritten **and** the pages `POST /cms/pages`
+   * created, so one lookup answers for either — the shape coupons already use.
+   */
+  pages: new Map(),
+  /** Ids created in this process, oldest first. The title sort places them. */
+  createdPages: [],
+  nextPageId: 0,
+  /**
+   * The homepage **document**, not a diff: `PUT` replaces it whole, because
+   * there is no section-level route and §89 argues why — sections are ordered,
+   * and an API that let two clients insert at index 2 concurrently would have
+   * invented a merge problem the shop does not have.
+   */
+  homepage: [],
+  banners: new Map(),
+  createdBanners: [],
+  bannersGone: new Set(),
+  nextBannerId: 0,
+  faqs: new Map(),
+  createdFaqs: [],
+  faqsGone: new Set(),
+  nextFaqId: 0,
+  faqCategories: new Map(),
+  createdFaqCategories: [],
+  faqCategoriesGone: new Set(),
+  nextFaqCategoryId: 0,
+  /**
+   * Location → the whole menu as it reads now. **Keyed by location rather than
+   * by id**, because that is the only address `/cms/menus/{location}` has and
+   * because a `PUT` to an unassigned location *creates* one — so the absence of
+   * a key here is the 404 the footer fixture exists for.
+   */
+  menus: new Map(),
+  nextMenuId: 0,
+  nextMenuItemId: 0,
+  /** Media id → the row as it reads now. `PATCH` writes alt, title and caption. */
+  media: new Map(),
 };
 
 export function resetState() {
@@ -4689,6 +5683,40 @@ export function resetState() {
   // Above the six seeded ids and far enough from them to read as new — the same
   // rule `nextShipmentId` follows, and the same figure in every process.
   state.nextCouponId = 320;
+  state.pages = new Map();
+  state.createdPages = [];
+  // Clear of every seeded page id — the named ones run to 21 and the fifty
+  // filler pages occupy 3000-3049 — and the same figure in every process, which
+  // is what keeps a screenshot of a created page byte-stable.
+  state.nextPageId = 4200;
+  // A copy, so a `PUT` cannot rewrite the seed the next `resetState()` restores.
+  state.homepage = [...HOMEPAGE_SEED];
+  state.banners = new Map();
+  state.createdBanners = [];
+  state.bannersGone = new Set();
+  state.nextBannerId = 7320;
+  state.faqs = new Map();
+  state.createdFaqs = [];
+  state.faqsGone = new Set();
+  state.nextFaqId = 8120;
+  state.faqCategories = new Map();
+  state.createdFaqCategories = [];
+  state.faqCategoriesGone = new Set();
+  state.nextFaqCategoryId = 8220;
+  // Structured-cloned rather than shared: the seed holds nested `children`, and
+  // a `PUT` that rewrote a nested array in place would leak into the baseline
+  // this call exists to restore.
+  state.menus = new Map(
+    Object.entries(MENU_SEED).map(([location, menu]) => [
+      location,
+      { ...menu, items: JSON.parse(JSON.stringify(menu.items)) },
+    ]),
+  );
+  // Above the seeded menu and its items, and fixed rather than derived so the
+  // menu a `PUT` creates carries the same ids in every process.
+  state.nextMenuId = 4300;
+  state.nextMenuItemId = 4400;
+  state.media = new Map();
 }
 
 resetState();
@@ -8638,6 +9666,1419 @@ function deleteCoupon(current, params) {
   return ok({ id: current.id, deleted: true });
 }
 
+/* ------------------------------------------------------- the CMS queries --- */
+
+/**
+ * `?status=`, and **the default is `publish`**.
+ *
+ * The one filter in this panel that inverts, reproduced in one place so no
+ * collection under `/cms/` can drift out of step with the others. See the CMS
+ * fixture header for why a forgiving reading here would be the most destructive
+ * single divergence available on this branch.
+ *
+ * `""` and `trash` both land in the enum refusal: the first because the empty
+ * string is not a member here the way it is on `/coupons`, the second because
+ * the trash is reached by `DELETE` and is readable through no filter at all.
+ * `notOneOf` writes the three with the Oxford comma WordPress uses — *"status is
+ * not one of publish, draft, and any."* — and the full stop that every enum
+ * refusal in this file carries.
+ */
+function readContentStatus(params) {
+  const raw = params.get("status");
+  if (raw === null) return { value: "publish" };
+  if (!CONTENT_STATUS_FILTERS.includes(raw)) {
+    return { error: invalidParam("status", notOneOf("status", CONTENT_STATUS_FILTERS)) };
+  }
+  return { value: raw };
+}
+
+/**
+ * `any` is publish **plus draft** and never the trash, which is the half a
+ * "return everything" implementation would get wrong while looking correct on
+ * every screen that has no trashed row in front of it.
+ */
+const matchesContentStatus = (row, filter) =>
+  filter === "any" ? CONTENT_STATUSES.includes(row.status) : row.status === filter;
+
+/* ------------------------------------------------------------------ pages --- */
+
+/**
+ * The index row: **less than a page, deliberately**.
+ *
+ * No `content`, no `seo`, no `excerpt` — the first is a whole page body per row
+ * and the second a `SeoResolver` pass per row, so an index carrying them would
+ * cost what opening every page at once costs. The backend asserts the omission
+ * so it cannot drift back, and projecting it here from the one stored object is
+ * what stops a key added to the document leaking into the index by being
+ * forgotten.
+ *
+ * `option` and `functional` are this file's bookkeeping and are on neither
+ * projection: the API expresses them as a `DELETE` refusal and as
+ * `meta.excluded_system`, never as fields on a row.
+ */
+const pageRowOf = (page) => ({
+  id: page.id,
+  path: page.path,
+  slug: page.slug,
+  parent_path: page.parent_path,
+  status: page.status,
+  title: page.title,
+  menu_order: page.menu_order,
+  date_created: page.date_created,
+  date_modified: page.date_modified,
+});
+
+/**
+ * The whole document, which is what `GET /cms/pages/{path}` answers.
+ *
+ * `option` and `functional` are dropped rather than destructured away, because a
+ * rest-destructure would leave two bound-and-unused names and the lint baseline
+ * is what tells this repo that a warning is new.
+ */
+const pageDocumentOf = (page) => {
+  const document = { ...page };
+  delete document.option;
+  delete document.functional;
+  return document;
+};
+
+/** Every page this process can see, seeded and created, through the write state. */
+const allPages = () => [
+  ...PAGE_SEED.map((row) => state.pages.get(row.id) ?? row),
+  ...state.createdPages.map((id) => state.pages.get(id)),
+];
+
+/**
+ * **Ordered by title on the server**, which is the one departure this route
+ * makes from `baseArgs()`'s `menu_order` default.
+ *
+ * Every page in this shop carries `menu_order` 0, so the default degenerates to
+ * newest-first — an index in which the page somebody is looking for moves every
+ * time another page is added. `app/[locale]/(panel)/content/pages/query.ts`
+ * records the reasoning and is why there is no `orderby` control on that screen.
+ *
+ * Folded, like every other comparison in this file, so a collation that depends
+ * on the runtime's ICU build cannot make a screenshot differ between machines.
+ * The id is the tie-break and it matters: the two colliding `ac-unpublished`
+ * rows must land in the same order in every process or the collision capture is
+ * not byte-stable.
+ */
+const byPageTitle = (a, b) => {
+  const left = fold(a.title);
+  const right = fold(b.title);
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return a.id - b.id;
+};
+
+/**
+ * `GET /cms/pages` — the route `feat/cms-page-index` added to the backend
+ * because this screen was not buildable without it.
+ *
+ * **`meta.excluded_system` is the count of functional pages this listing left
+ * out**, and the footnote on the index renders it: the shop's own `shop`,
+ * `cart`, `checkout` and `my-account` have a block or a shortcode for a body, so
+ * the count here is short of what wp-admin reports and saying so is cheaper than
+ * the bug report. That those four are omitted is measured; that the count is
+ * computed **against this listing's status filter** rather than over the whole
+ * shop is this file's reading — all four are published, so the two agree
+ * everywhere except `?status=draft`, where this answers 0.
+ */
+function pagesListing(params) {
+  const filter = readContentStatus(params);
+  if (filter.error) return filter.error;
+
+  const matching = allPages().filter((row) => matchesContentStatus(row, filter.value));
+  const excluded = matching.filter((row) => row.functional);
+
+  // Title and body, **never the path** — `WP_Query`'s `s` does not search
+  // `post_name`, so on the one resource whose address is its path a path cannot
+  // be searched for. `path` is deliberately absent from this list.
+  const searched = searchRows(
+    matching.filter((row) => !row.functional),
+    params,
+    (row) => [row.title, row.content],
+  );
+
+  const page = paginate([...searched].sort(byPageTitle), params);
+  if (page.error) return page.error;
+  return ok(page.rows.map(pageRowOf), { ...page.meta, excluded_system: excluded.length });
+}
+
+/**
+ * `get_page_by_path()`, reproduced — **it resolves exactly one row and there may
+ * be more than one.**
+ *
+ * `wp_unique_post_slug()` does not run for a draft, so nothing stops two pages
+ * sharing a path: measured before the seed cleaned this shop, 53 rows answered to
+ * `ac-unpublished` and 27 to `conditions`, and the other 78 could not be read,
+ * written or deleted through this route at all. The panel cannot tell which row
+ * it would reach, which is why the index refuses to link a colliding one.
+ *
+ * **That exactly one resolves is the shop's; that it is the lowest id is this
+ * file's.** Nothing published which of a colliding pair `get_page_by_path()`
+ * returns. Lowest id is stable, is what an unordered `WP_Query` over `posts`
+ * tends to give, and — more to the point — is a *choice written down* rather
+ * than an accident of array order that would move the first time the seed grew.
+ *
+ * The status filter runs **before** the resolution, which is the measurement the
+ * whole Pages index exists for: `?status=` filters a single read rather than
+ * widening it, so `GET /cms/pages/privacy-policy` at the default `publish` is a
+ * 404 about a draft that is sitting right there — with the same message a path
+ * that does not exist gets.
+ */
+function resolvePage(path, filter) {
+  const matches = allPages().filter(
+    (row) => row.path === path && matchesContentStatus(row, filter),
+  );
+  return matches.sort((a, b) => a.id - b.id)[0];
+}
+
+const pageNotFound = () => fail(404, "not_found", "No page at that path.");
+
+/* ------------------------------------------------------------ page writes --- */
+
+/**
+ * **Read-only and dropped in silence**, the rule products and coupons already
+ * share: a client has to be able to PATCH a GET body back without diffing it
+ * first, and `content` and `excerpt` reading back as rendered HTML is what makes
+ * that the form's actual behaviour here rather than a nicety.
+ *
+ * `path` is on this list rather than in the rules below because it is *derived*
+ * — `parent_path` plus `slug` — so accepting it would give a client two ways to
+ * say one thing and a way to make them disagree. `slug` renames and
+ * `parent_path` moves; that pair is the whole address API, and §88's
+ * `pinRouteParams()` is why the route's own capture is `{path}` and not `{slug}`.
+ */
+const PAGE_READ_ONLY = ["id", "path", "parent_id", "image", "date_created", "date_modified"];
+
+/**
+ * The `seo` block's own rules, applied **key by key with dotted field names**,
+ * because that is what the form binds to: `PageForm` reads
+ * `fieldErrors["seo.title"]` and `fieldErrors["seo.canonical"]`. §89 says SEO
+ * errors land in the same `details.fields` list as the rest of the write, and a
+ * single `seo: "Invalid."` would be a message no control on that screen could
+ * render.
+ *
+ * Everything the resolver derives — `og`, `structured_data`, `image`,
+ * `overrides` — is dropped rather than refused, on the read-only rule above.
+ */
+const PAGE_SEO_RULES = {
+  title: mustBeText,
+  description: mustBeText,
+  canonical: mustBeText,
+  robots: (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? null
+      : "Must be an object.",
+};
+
+const mustBeWholeNumber = (value) =>
+  typeof value === "number" && Number.isInteger(value) ? null : "Must be a whole number.";
+
+/**
+ * `image_id`, and null is how a featured image is removed.
+ *
+ * **Nothing in the panel sends this on a page** — ADMIN_PANEL.md's Content
+ * section records that a page's featured image is accepted here and that the
+ * panel does not offer the control, because no read anywhere renders one back,
+ * so it would be a control whose effect is invisible. The rule is here because
+ * the field is, and because a media id that names nothing has to be refused
+ * rather than stored blind: that is the defect `{"product_ids":[999999]}` was on
+ * coupons, one collection over.
+ */
+const mustBeMediaId = (value) => {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value)) return "Must be a whole number.";
+  return mediaRows().some((row) => row.id === value) ? null : `No attachment with id ${value}.`;
+};
+
+const PAGE_FIELD_RULES = {
+  title: mustBeText,
+  slug: mustBeText,
+  parent_path: mustBeText,
+  status: mustBeOneOf(CONTENT_STATUSES),
+  content: mustBeText,
+  excerpt: mustBeText,
+  menu_order: mustBeWholeNumber,
+  image_id: mustBeMediaId,
+};
+
+/**
+ * Read a page write body, validating as it goes.
+ *
+ * The gates run in the order the API applies them, so the reason on screen is
+ * the reason the server would have given:
+ *
+ *   1. every bad field at once   400 `details.fields`, unknown keys and invalid
+ *                                values together, because the form renders one
+ *                                message per control. Read-only keys never reach
+ *                                this pass
+ *   2. `parent_path` resolution  the same pass — **a path naming nothing is a
+ *                                400 on that field**, measured, rather than an
+ *                                orphan created quietly. `parentPathOf()` in
+ *                                lib/cms.ts exists for display and for
+ *                                pre-filling a form, and explicitly not for
+ *                                deciding whether a move is legal, because this
+ *                                is where that is decided
+ *   3. `title` and `slug` on a   both required on a create; neither is required
+ *      create                    on a PATCH
+ *
+ * **The generic sentence is this file's, patterned on the one that was
+ * measured.** `PATCH /coupons/{id} {"code":""}` answers *"The coupon is
+ * invalid."* with the per-field detail beside it; nothing published the page
+ * route's own wording. The *shape* is measured — `invalid_request` with
+ * `details.fields`, which is what `PageForm` binds to — and the sentence is not.
+ * A screen that quoted it back would be quoting this file.
+ */
+function readPageBody(body, creating) {
+  const source = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (PAGE_READ_ONLY.includes(key)) continue;
+
+    if (key === "seo") {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        fields.seo = "Must be an object.";
+        continue;
+      }
+      const seo = {};
+      for (const [seoKey, seoValue] of Object.entries(value)) {
+        const seoRule = PAGE_SEO_RULES[seoKey];
+        // Everything the resolver derives is dropped rather than refused: the
+        // form sends back the block it was given, `og` and all.
+        if (seoRule === undefined) continue;
+        const seoProblem = seoRule(seoValue);
+        if (seoProblem === null) seo[seoKey] = seoValue;
+        else fields[`seo.${seoKey}`] = seoProblem;
+      }
+      writes.seo = seo;
+      continue;
+    }
+
+    const rule = PAGE_FIELD_RULES[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem === null) writes[key] = value;
+    else fields[key] = problem;
+  }
+
+  /*
+   * **A `parent_path` naming nothing is a 400 on that field** — measured, and
+   * the reason `PageForm` assembles the next address only to *warn* with it. An
+   * empty string is the root and is always legal.
+   *
+   * The sentence quotes the offending value back and names no legal set, which
+   * is the fourth refusal family in this file (`unknownOf`): the set here is
+   * every path in the shop and could not be printed.
+   */
+  if (typeof writes.parent_path === "string" && writes.parent_path !== "") {
+    const parent = allPages().find((row) => row.path === writes.parent_path);
+    if (parent === undefined) {
+      fields.parent_path = `No page at path "${writes.parent_path}".`;
+    }
+  }
+
+  if (creating) {
+    if (!("title" in writes) && fields.title === undefined) fields.title = "Required.";
+    if (!("slug" in writes) && fields.slug === undefined) fields.slug = "Required.";
+    if (writes.slug === "") fields.slug = "Required.";
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return { error: invalidBody("The page is invalid.", fields) };
+  }
+  return { writes };
+}
+
+/**
+ * The stored row after a write, and the two normalisations that make a read
+ * differ from what was sent.
+ *
+ *   `content`/`excerpt`  stored **rendered** — `<p>…</p>\n` — and PATCHing that
+ *                        rendered form back does not accumulate another wrapper.
+ *                        Verified over three round trips on the live shop, and
+ *                        it is what makes binding a form straight to the
+ *                        response safe here where a coupon's `date_expires` made
+ *                        it unsafe there. So a body that already looks like
+ *                        markup is stored as it stands.
+ *   `path`               derived from `parent_path` and `slug`, never sent.
+ *                        `slug` renames and `parent_path` moves, and the address
+ *                        is the two of them joined.
+ *
+ * `seo` is re-derived rather than merged, because every value in it except the
+ * overrides is a function of the title and the excerpt — which is exactly what
+ * the form's placeholder treatment is built on.
+ *
+ * No clock: `date_modified` keeps its seeded value through a write, the way a
+ * product's and a coupon's do, because a screenshot has to be byte-stable.
+ */
+const renderedHtml = (value) => (/^\s*<[a-z]/i.test(value) || value === "" ? value : `<p>${value}</p>\n`);
+
+function applyPageWrites(current, writes) {
+  const next = { ...current };
+
+  for (const [key, value] of Object.entries(writes)) {
+    switch (key) {
+      case "content":
+      case "excerpt":
+        next[key] = renderedHtml(String(value));
+        break;
+      case "seo":
+        /*
+         * `overrides` names the keys somebody set **by hand**, and it is written
+         * from the body rather than merged: a field sent with a value is an
+         * override, a field sent empty is a person clearing one, and a field not
+         * sent at all leaves the list as it was. That is exactly what the form's
+         * placeholder treatment depends on — an underived field starts empty
+         * with the derived value behind it, and typing into it is what promotes
+         * the key.
+         */
+        next.seoOverrides = ["title", "description"].filter((field) =>
+          field in value
+            ? typeof value[field] === "string" && value[field] !== ""
+            : current.seo.overrides.includes(field),
+        );
+        next.seoRobots = value.robots ?? current.seo.robots;
+        break;
+      case "image_id":
+        next.image = value === null ? null : embeddedImageOf(value);
+        break;
+      default:
+        next[key] = value;
+    }
+  }
+
+  next.path = [next.parent_path, next.slug].filter((part) => part !== "").join("/");
+  next.parent_id =
+    next.parent_path === ""
+      ? 0
+      : (allPages().find((row) => row.path === next.parent_path)?.id ?? 0);
+  next.seo = pageSeoOf(
+    next.title,
+    next.excerpt,
+    next.path,
+    next.status,
+    next.seoOverrides ?? current.seo.overrides,
+  );
+  if (next.seoRobots !== undefined) next.seo.robots = next.seoRobots;
+  delete next.seoOverrides;
+  delete next.seoRobots;
+
+  return next;
+}
+
+/**
+ * `POST /cms/pages`.
+ *
+ * **201**, which ADMIN_PANEL.md states outright in §89's correction block — the
+ * sentence about `status` argues that without drafts, `POST /cms/pages` "answers
+ * 201 for a resource whose `GET` is a 404". So the status is on the record even
+ * though nobody wrote the request down, and it agrees with the three creates
+ * that *were* measured on 2026-08-25.
+ *
+ * `status` defaults to **`draft`**, unlike a coupon's `publish`: §89 added
+ * drafts to this surface precisely so a page could be staged, and the create
+ * form's own default is `draft`.
+ */
+const blankPage = (id) => ({
+  id,
+  path: "",
+  slug: "",
+  parent_path: "",
+  status: "draft",
+  title: "",
+  content: "",
+  excerpt: "",
+  parent_id: 0,
+  menu_order: 0,
+  image: null,
+  seo: pageSeoOf("", "", "", "draft"),
+  date_created: iso(0),
+  date_modified: iso(0),
+  option: null,
+  functional: false,
+});
+
+function createPage(body) {
+  const parsed = readPageBody(body, true);
+  if (parsed.error) return parsed.error;
+
+  const id = state.nextPageId++;
+  const page = applyPageWrites(blankPage(id), parsed.writes);
+  state.pages.set(id, page);
+  state.createdPages = [...state.createdPages, id];
+  return created(pageDocumentOf(page));
+}
+
+/**
+ * `PATCH /cms/pages/{path}`, and **`meta.path_changed`**.
+ *
+ * A rename leaves nothing behind at the old address — WordPress writes no
+ * redirect — so every storefront link built on it becomes a 404 the moment the
+ * save lands. The API reports the move *afterwards* in `meta`, which is too late
+ * to be a decision, and that is why `PageForm` raises its own confirmation
+ * before it sends rather than reading this. It is emitted anyway because it is
+ * part of the response.
+ */
+function patchPage(current, body) {
+  const parsed = readPageBody(body, false);
+  if (parsed.error) return parsed.error;
+
+  const next = applyPageWrites(current, parsed.writes);
+  state.pages.set(current.id, next);
+
+  return next.path === current.path
+    ? ok(pageDocumentOf(next))
+    : ok(pageDocumentOf(next), { path_changed: true });
+}
+
+/**
+ * `DELETE /cms/pages/{path}`, and **`?force=true` does not mean here what it
+ * means anywhere else in this file.**
+ *
+ * On a product and on a coupon, `force` is *permanence*: it turns a trash into a
+ * removal. Here it overrides **one specific guard and not the other**, and the
+ * asymmetry is measured and deliberate:
+ *
+ *   children      409 `details.children` and `details.child_ids`. WordPress
+ *                 would promote them to the root, changing every one of their
+ *                 paths and reporting nothing. **`?force=true` means it** and
+ *                 reparents them — recoverable, so overridable.
+ *   an option     409 `details.option`. **`?force=true` does not override it**,
+ *                 because leaving `woocommerce_checkout_page_id` pointing at
+ *                 nothing makes WooCommerce report a missing page rather than a
+ *                 broken setting, and the fix is to clear the setting — which is
+ *                 the decision actually being made.
+ *
+ * The option guard is checked first, so a page that is both option-referenced
+ * and a parent reports the refusal force cannot lift. Which the shop reports
+ * first is unmeasured; reporting the unliftable one is the reading that cannot
+ * send somebody round a loop.
+ *
+ * The two 409 sentences are this file's. `PageForm` renders neither — it
+ * branches on `details.option` and `details.children` and writes its own copy,
+ * which is what §3's rule about naming the count is for — so the wording here is
+ * diagnostic rather than something a screen quotes back.
+ */
+function deletePage(current, params) {
+  if (current.option !== null) {
+    return conflict("That page is referenced by a shop setting.", { option: current.option });
+  }
+
+  const children = allPages().filter(
+    (row) => row.parent_path === current.path && row.status !== "trash",
+  );
+  const force = BOOLEANS.get(params.get("force") ?? "") === true;
+
+  if (children.length > 0 && !force) {
+    return conflict("That page has child pages.", {
+      children: children.length,
+      child_ids: children.map((row) => row.id),
+    });
+  }
+
+  for (const child of children) {
+    const moved = applyPageWrites(child, { parent_path: "" });
+    state.pages.set(child.id, moved);
+  }
+
+  // Trashed rather than removed: the trash is what `?status=any` deliberately
+  // does not reach, so the row leaves every listing and every path lookup at
+  // once. Whether this route also offers a permanent delete is unmeasured — the
+  // panel never asks for one, and `force` already means something else here.
+  state.pages.set(current.id, { ...current, status: "trash" });
+  return ok({ id: current.id, deleted: true });
+}
+
+/* --------------------------------------------------------------- homepage --- */
+
+/**
+ * The vocabulary **this process's shop** knows, which is eleven unless something
+ * has asked for the twelfth.
+ *
+ * Split from `SECTION_TYPES` rather than merged into it so the measured list
+ * stays a measurement: the eleven came out of a 400 on 2026-08-21 and nothing
+ * has moved them. `MOCK_HOMEPAGE=future` models a backend that has gained a
+ * type — the scenario `unknownSectionTypes()` in lib/cms.ts exists for — and
+ * models it *consistently*: the reader passes `countdown` through and the
+ * writer's own 400 names it, because a server that dropped a type it accepted
+ * would be a shape nothing has ever seen.
+ */
+const SERVER_SECTION_TYPES =
+  REQUESTED_HOMEPAGE === "future" ? [...SECTION_TYPES, "countdown"] : SECTION_TYPES;
+
+/** The 400's sentence, in the API's own words. `oneOf` is the body-field family. */
+const unknownSection = (value) =>
+  `Unknown section type "${value}". One of: ${SERVER_SECTION_TYPES.join(", ")}.`;
+
+const isSectionObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * `GET /cms/homepage` — the read that **drops** what it cannot parse and reports
+ * it, against the `PUT` that **refuses** the same thing.
+ *
+ * §89 states the asymmetry deliberately: an option edited by hand must degrade,
+ * and a form filled in by a person must not lose their work quietly. It has two
+ * consequences this reader has to get exactly right:
+ *
+ * **`meta` is absent entirely when there is nothing to report.** Not an empty
+ * array — measured — so code that destructured `meta.problems` would throw on
+ * the healthy document and work on the broken one, which is the wrong way round
+ * for a failure mode. `homepage/page.tsx` reads `result.meta?.problems` for that
+ * reason and this is the fixture that makes the guard mean something: a
+ * successful `PUT` leaves a clean document behind, so the very next `GET` in the
+ * same process takes the no-`meta` path.
+ *
+ * **The positions are 1-based over the stored document.** The counter runs over
+ * every entry including the dropped ones, so "Section 6" is the sixth thing in
+ * the option and the fourth thing on screen. The seed interleaves its malformed
+ * sections at 2, 4 and 6 precisely so that an off-by-one anywhere in the chain
+ * is visible rather than vacuously correct.
+ *
+ * The three sentences are quoted from lib/cms.ts, which recorded them verbatim
+ * from the shop — including the parenthesised type in the third, which is the
+ * only one of the three that names anything about the section it dropped.
+ */
+function readHomepage() {
+  const sections = [];
+  const problems = [];
+
+  state.homepage.forEach((entry, index) => {
+    const at = index + 1;
+    if (!isSectionObject(entry)) {
+      problems.push(`Section ${at} is not an object.`);
+      return;
+    }
+    if (!SERVER_SECTION_TYPES.includes(entry.type)) {
+      problems.push(`Section ${at} has an unknown type "${entry.type}".`);
+      return;
+    }
+    if (!isSectionObject(entry.data)) {
+      problems.push(`Section ${at} ("${entry.type}") has a "data" that is not an object.`);
+      return;
+    }
+    sections.push({ type: entry.type, data: entry.data });
+  });
+
+  return problems.length === 0 ? ok({ sections }) : ok({ sections }, { problems });
+}
+
+/**
+ * `PUT /cms/homepage` — **one endpoint, two error shapes, and only one of them
+ * is positional.**
+ *
+ *   a bad section   `sections[2].type` — measured, and the sentence names all
+ *                   eleven types, which is the only place that vocabulary is
+ *                   published at all
+ *   more than 50    a flat **`sections`** — measured:
+ *                   *"A homepage carries at most 50 sections; this one has 51."*
+ *
+ * A form that bound every homepage error to a row index would drop the second on
+ * the floor, which is why `HomepageEditor` keeps `rowErrors` and `listError`
+ * apart and why this has to be able to produce both.
+ *
+ * The cap is checked **first and answers alone**. Which the shop reports first
+ * when a 51-section document also contains a bad one is unmeasured; the measured
+ * body for the cap holds `sections` and nothing else, so answering it alone is
+ * the shape that was actually seen.
+ *
+ * `PUT` replaces the document — there is no section-level route, because
+ * sections are ordered and an API that let two clients insert at index 2
+ * concurrently would have invented a merge problem the shop does not have. So a
+ * successful write **repairs** the document by discarding whatever the read had
+ * dropped, which is why the editor gates its save behind a confirmation naming
+ * the count.
+ */
+function putHomepage(body) {
+  const source = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  if (!Array.isArray(source.sections)) {
+    return invalidBody("The homepage is invalid.", { sections: "Must be an array." });
+  }
+
+  if (source.sections.length > MAX_SECTIONS) {
+    return invalidBody("The homepage is invalid.", {
+      sections: `A homepage carries at most ${MAX_SECTIONS} sections; this one has ${source.sections.length}.`,
+    });
+  }
+
+  const fields = {};
+  source.sections.forEach((entry, index) => {
+    if (!isSectionObject(entry)) {
+      fields[`sections[${index}]`] = "Must be an object.";
+      return;
+    }
+    if (!SERVER_SECTION_TYPES.includes(entry.type)) {
+      fields[`sections[${index}].type`] = unknownSection(entry.type);
+      return;
+    }
+    if (!isSectionObject(entry.data)) {
+      fields[`sections[${index}].data`] = "Must be an object.";
+    }
+  });
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The homepage is invalid.", fields);
+  }
+
+  state.homepage = source.sections.map((entry) => ({ type: entry.type, data: entry.data }));
+  // The write refused what the read would have dropped, so there is nothing to
+  // report and `meta` is absent — the same shape a healthy document reads back
+  // with, which is what makes the round trip whole.
+  return readHomepage();
+}
+
+/* ---------------------------------------------------------------- banners --- */
+
+/**
+ * The embedded image, `MediaPresenter::image()`.
+ *
+ * Null on every seeded row in this shop and null is the common case — a banner
+ * without a picture is a banner — so this exists only to answer a write:
+ * `PATCH /cms/banners/{id} {"image_id": 5001}` is the one path through which the
+ * object shape is reachable at all, and without it `embeddedImage` in the
+ * panel's schema would have no fixture anywhere.
+ */
+function embeddedImageOf(id) {
+  const item = mediaRows().find((row) => row.id === id);
+  if (item === undefined) return null;
+  return { id: item.id, url: item.url, alt: item.alt, width: item.width, height: item.height };
+}
+
+/** Every banner this process can see, in dense `position` order. */
+const bannerRows = () =>
+  [
+    ...BANNER_SEED.map((row) => state.banners.get(row.id) ?? row),
+    ...state.createdBanners.map((id) => state.banners.get(id)),
+  ]
+    .filter((row) => !state.bannersGone.has(row.id))
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+
+/**
+ * `image_url` is refused **by name**, and that is how the field was found rather
+ * than guessed: the sentence names the two-step replacement.
+ *
+ * Everything else a banner takes is free-form. `placement` in particular is not
+ * an enum on the API's side and is deliberately not validated here — where a
+ * shop puts a banner is a shop's decision and the plugin is cloned per client,
+ * so the screen offers the placements it finds in the data plus a free field and
+ * a mock that refused an unseen one would make that field look broken.
+ */
+const BANNER_FIELD_RULES = {
+  title: mustBeText,
+  caption: mustBeText,
+  link: mustBeText,
+  placement: mustBeText,
+  status: mustBeOneOf(CONTENT_STATUSES),
+  position: mustBeWholeNumber,
+  image_id: mustBeMediaId,
+};
+
+const BANNER_READ_ONLY = ["id", "image", "date_modified"];
+
+const BANNER_NAMED_REFUSALS = {
+  image_url: "Upload through POST /media and send the attachment id as image_id.",
+};
+
+/**
+ * One reader for banners, FAQs and FAQ categories, because the three differ only
+ * in their tables.
+ *
+ * `named` is the refusal that says *which field to use instead*, and it is the
+ * reason those fields were discovered at all: a generic "Unknown field." tells a
+ * client that `category` is wrong and not that `categories` is right. The FAQ
+ * writer carries four of them.
+ */
+function readContentBody(body, { rules, readOnly, named = {}, message }) {
+  const source = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (readOnly.includes(key)) continue;
+    if (named[key] !== undefined) {
+      fields[key] = named[key];
+      continue;
+    }
+    const rule = rules[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem === null) writes[key] = value;
+    else fields[key] = problem;
+  }
+
+  return Object.keys(fields).length > 0
+    ? { error: invalidBody(message, fields) }
+    : { writes };
+}
+
+function bannersListing(params) {
+  const filter = readContentStatus(params);
+  if (filter.error) return filter.error;
+
+  const rows = bannerRows().filter((row) => matchesContentStatus(row, filter.value));
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+const applyBannerWrites = (current, writes) => {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(writes)) {
+    if (key === "image_id") next.image = value === null ? null : embeddedImageOf(value);
+    else next[key] = value;
+  }
+  return next;
+};
+
+const blankBanner = (id) => ({
+  id,
+  title: "",
+  caption: "",
+  link: "",
+  placement: "",
+  status: "draft",
+  // Appended at the end of the dense run, which is what the sheet sends anyway.
+  position: bannerRows().length,
+  image: null,
+  date_modified: iso(0),
+});
+
+function createBanner(body) {
+  const parsed = readContentBody(body, {
+    rules: BANNER_FIELD_RULES,
+    readOnly: BANNER_READ_ONLY,
+    named: BANNER_NAMED_REFUSALS,
+    message: "The banner is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const id = state.nextBannerId++;
+  const banner = applyBannerWrites(blankBanner(id), parsed.writes);
+  state.banners.set(id, banner);
+  state.createdBanners = [...state.createdBanners, id];
+  return created(banner);
+}
+
+function patchBanner(current, body) {
+  const parsed = readContentBody(body, {
+    rules: BANNER_FIELD_RULES,
+    readOnly: BANNER_READ_ONLY,
+    named: BANNER_NAMED_REFUSALS,
+    message: "The banner is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const next = applyBannerWrites(current, parsed.writes);
+  state.banners.set(current.id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /cms/banners/{id}`, and `?force=true` changes **nothing** here.
+ *
+ * The banners screen always sends it, so the unforced path is never taken by the
+ * panel and nobody has measured what it does. WordPress would ordinarily trash a
+ * custom post type without it — but "ordinarily" is not a measurement, and
+ * inventing a trash arm would grow a state no screen can reach and no request has
+ * seen. So both spellings remove the row, and this comment is the record of the
+ * gap rather than a silent guess in either direction. The same holds for FAQs.
+ */
+function deleteBanner(current) {
+  state.banners.delete(current.id);
+  state.createdBanners = state.createdBanners.filter((id) => id !== current.id);
+  state.bannersGone.add(current.id);
+  return ok({ id: current.id, deleted: true });
+}
+
+/* ------------------------------------------------------------------- FAQs --- */
+
+/** Every category this process can see. */
+const faqCategoryRows = () =>
+  [
+    ...FAQ_CATEGORY_SEED.map((row) => state.faqCategories.get(row.id) ?? row),
+    ...state.createdFaqCategories.map((id) => state.faqCategories.get(id)),
+  ].filter((row) => !state.faqCategoriesGone.has(row.id));
+
+/** Every FAQ this process can see, in dense `position` order. */
+const faqRows = () =>
+  [
+    ...FAQ_SEED.map((row) => state.faqs.get(row.id) ?? row),
+    ...state.createdFaqs.map((id) => state.faqs.get(id)),
+  ]
+    .filter((row) => !state.faqsGone.has(row.id))
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+
+/**
+ * **`count` is on `/cms/faq-categories` and absent on the category embedded
+ * inside an FAQ**, which is one seed published two ways.
+ *
+ * A screen that read `category.count` off an FAQ's own categories would get
+ * `undefined` and render nothing — silently, on the half of the surface with the
+ * most category objects in it — which is why the panel's schema marks it
+ * optional and why the two projections are built here rather than written twice.
+ */
+const faqCategoryRef = ({ id, slug, name }) => ({ id, slug, name });
+
+const faqCategoryRow = (category) => ({
+  ...faqCategoryRef(category),
+  ...(category.description === "" ? {} : { description: category.description }),
+  count: faqRows().filter((faq) => faq.categorySlugs.includes(category.slug)).length,
+});
+
+/** The FAQ as the API publishes it: `categorySlugs` is this file's key, not the wire's. */
+const faqOf = ({ categorySlugs, ...faq }) => ({
+  ...faq,
+  categories: categorySlugs
+    .map((slug) => faqCategoryRows().find((category) => category.slug === slug))
+    .filter((category) => category !== undefined)
+    .map(faqCategoryRef),
+});
+
+function faqsListing(params) {
+  const filter = readContentStatus(params);
+  if (filter.error) return filter.error;
+
+  const rows = faqRows().filter((row) => matchesContentStatus(row, filter.value));
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows.map(faqOf), page.meta);
+}
+
+/**
+ * `categories` takes the `{id, slug, name}` objects the read emits **or** a bare
+ * list of slugs or ids, which is what lets a read body PATCH back unchanged.
+ *
+ * An unknown category is refused rather than dropped — §89's build note records
+ * the first version creating an FAQ and *then* refusing it for an unknown
+ * category, which is the same defect as a menu emptied before its tree was
+ * validated. Resolve every reference before the first write.
+ */
+const mustBeFaqCategories = (value) => {
+  if (!Array.isArray(value)) return "Must be an array.";
+  const known = faqCategoryRows();
+  const unknown = value.filter((entry) => {
+    const slug = typeof entry === "object" && entry !== null ? entry.slug : entry;
+    return !known.some((category) => category.slug === slug || category.id === slug);
+  });
+  if (unknown.length === 0) return null;
+  const names = unknown.map((entry) =>
+    typeof entry === "object" && entry !== null ? String(entry.slug) : String(entry),
+  );
+  return `No FAQ category ${names.map((name) => `"${name}"`).join(", ")}.`;
+};
+
+const FAQ_FIELD_RULES = {
+  question: mustBeText,
+  answer: mustBeText,
+  status: mustBeOneOf(CONTENT_STATUSES),
+  position: mustBeWholeNumber,
+  categories: mustBeFaqCategories,
+};
+
+const FAQ_READ_ONLY = ["id", "date_modified"];
+
+/**
+ * **Four fields refused by name, and only the first sentence is measured.**
+ *
+ * `lib/api/schemas/cms.ts` quotes the `category` one verbatim — *"Use
+ * \"categories\" — an FAQ may sit in more than one."* — and records that "three
+ * more are refused the same way: `title` (use `question`), `content` (use
+ * `answer`) and `menu_order` (use `position`)". So *that* they are refused by
+ * name and *which* field each names are on the record; the wording of the other
+ * three is not, and is written here to the measured one's shape.
+ *
+ * The load-bearing half is the replacement, not the prose: a client that sent
+ * `title` learns to send `question`, which a generic "Unknown field." could
+ * never teach it. Flagged rather than presented as measurement, because a
+ * fabricated message is as dishonest as a fabricated status code and harder to
+ * notice — the coupons branch shipped a screen quoting one back.
+ */
+const FAQ_NAMED_REFUSALS = {
+  category: 'Use "categories" — an FAQ may sit in more than one.',
+  title: 'Use "question" — an FAQ has a question rather than a title.',
+  content: 'Use "answer" — an FAQ has an answer rather than content.',
+  menu_order: 'Use "position" — an FAQ is ordered by position.',
+};
+
+const applyFaqWrites = (current, writes) => {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(writes)) {
+    if (key === "categories") {
+      next.categorySlugs = value.map((entry) => {
+        const slug = typeof entry === "object" && entry !== null ? entry.slug : entry;
+        return faqCategoryRows().find(
+          (category) => category.slug === slug || category.id === slug,
+        ).slug;
+      });
+    } else if (key === "answer") {
+      next.answer = renderedHtml(String(value));
+    } else {
+      next[key] = value;
+    }
+  }
+  return next;
+};
+
+const blankFaq = (id) => ({
+  id,
+  question: "",
+  answer: "",
+  categorySlugs: [],
+  status: "draft",
+  position: faqRows().length,
+  date_modified: iso(0),
+});
+
+function createFaq(body) {
+  const parsed = readContentBody(body, {
+    rules: FAQ_FIELD_RULES,
+    readOnly: FAQ_READ_ONLY,
+    named: FAQ_NAMED_REFUSALS,
+    message: "The FAQ is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const id = state.nextFaqId++;
+  const faq = applyFaqWrites(blankFaq(id), parsed.writes);
+  state.faqs.set(id, faq);
+  state.createdFaqs = [...state.createdFaqs, id];
+  return created(faqOf(faq));
+}
+
+function patchFaq(current, body) {
+  const parsed = readContentBody(body, {
+    rules: FAQ_FIELD_RULES,
+    readOnly: FAQ_READ_ONLY,
+    named: FAQ_NAMED_REFUSALS,
+    message: "The FAQ is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const next = applyFaqWrites(current, parsed.writes);
+  state.faqs.set(current.id, next);
+  return ok(faqOf(next));
+}
+
+function deleteFaq(current) {
+  state.faqs.delete(current.id);
+  state.createdFaqs = state.createdFaqs.filter((id) => id !== current.id);
+  state.faqsGone.add(current.id);
+  return ok({ id: current.id, deleted: true });
+}
+
+/* ------------------------------------------------------- FAQ categories --- */
+
+/**
+ * `GET /cms/faq-categories` exists only because §89's own table forgot it:
+ * `POST` was listed and `GET` was not, so a panel could create a category it had
+ * no way to list — and `FaqInput` refuses a category that does not exist, so it
+ * could not even use one it had just made.
+ *
+ * `list()` rather than `paginate()`: no screen sends this route a parameter and
+ * nothing reads its `meta`, so its envelope is **unverified** and `list()` is
+ * this file's one place for that. See the helper's own list.
+ */
+const FAQ_CATEGORY_FIELD_RULES = {
+  name: (value) => {
+    if (typeof value !== "string") return "Must be a string.";
+    return value.trim() === "" ? "A category needs a name." : null;
+  },
+  slug: mustBeText,
+  description: mustBeText,
+};
+
+const FAQ_CATEGORY_READ_ONLY = ["id", "count"];
+
+function createFaqCategory(body) {
+  const parsed = readContentBody(body, {
+    rules: FAQ_CATEGORY_FIELD_RULES,
+    readOnly: FAQ_CATEGORY_READ_ONLY,
+    message: "The category is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+  if (!("name" in parsed.writes)) {
+    return invalidBody("The category is invalid.", { name: "A category needs a name." });
+  }
+
+  const id = state.nextFaqCategoryId++;
+  const name = parsed.writes.name.trim();
+  const category = {
+    id,
+    // The slug is derived from the name and is not what the caller sent, which
+    // is `sanitize_title()`'s own behaviour and the reason the FAQ writer takes
+    // slugs at all: they are the half that survives a backend re-seed.
+    slug: parsed.writes.slug ?? slugify(name),
+    name,
+    description: parsed.writes.description ?? "",
+  };
+  state.faqCategories.set(id, category);
+  state.createdFaqCategories = [...state.createdFaqCategories, id];
+  return created(faqCategoryRow(category));
+}
+
+function patchFaqCategory(current, body) {
+  const parsed = readContentBody(body, {
+    rules: FAQ_CATEGORY_FIELD_RULES,
+    readOnly: FAQ_CATEGORY_READ_ONLY,
+    message: "The category is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const next = { ...current, ...parsed.writes };
+  state.faqCategories.set(current.id, next);
+  return ok(faqCategoryRow(next));
+}
+
+/**
+ * **Deleting a category the FAQs are in is a 409 naming the count**, and
+ * `?force=true` **detaches** them rather than deleting them.
+ *
+ * Two different outcomes, so the screen gives them two different confirmations —
+ * and `details.faqs` is what it counts, which is why the number is in the
+ * details rather than only in the sentence.
+ */
+function deleteFaqCategory(current, params) {
+  const attached = faqRows().filter((faq) => faq.categorySlugs.includes(current.slug));
+  const force = BOOLEANS.get(params.get("force") ?? "") === true;
+
+  if (attached.length > 0 && !force) {
+    return conflict("That category still has FAQs in it.", { faqs: attached.length });
+  }
+
+  for (const faq of attached) {
+    state.faqs.set(faq.id, {
+      ...faq,
+      categorySlugs: faq.categorySlugs.filter((slug) => slug !== current.slug),
+    });
+  }
+
+  state.faqCategories.delete(current.id);
+  state.createdFaqCategories = state.createdFaqCategories.filter((id) => id !== current.id);
+  state.faqCategoriesGone.add(current.id);
+  return ok({ id: current.id, deleted: true });
+}
+
+/* ------------------------------------------------------------------ menus --- */
+
+const menuNotFound = () => fail(404, "not_found", "No menu is assigned to that location.");
+
+/** The writer's four types, against the reader's WordPress vocabulary. */
+const MENU_ITEM_TYPES = ["page", "category", "product", "url"];
+
+/**
+ * WordPress's vocabulary → the writer's, so a read body PUTs back unchanged.
+ *
+ * `MenuInput` normalises both shapes on the way in and this is that: `type:
+ * "post_type"` with `object: "page"` is a page, `taxonomy`/`product_cat` is a
+ * category, and `custom` is a url. An item this API has no type for keeps its
+ * destination as a url rather than being dropped, which is the same choice
+ * `kindOf()` makes in the editor.
+ */
+function normaliseMenuType(item) {
+  if (MENU_ITEM_TYPES.includes(item.type)) return item.type;
+  if (item.type === "custom") return "url";
+  if (item.type === "post_type" && item.object === "page") return "page";
+  if (item.type === "post_type" && item.object === "product") return "product";
+  if (item.type === "taxonomy" && item.object === "product_cat") return "category";
+
+  /*
+   * **An item in the reader's shape always normalises to something, and an item
+   * in the writer's shape does not.** `object` is the tell: `CmsPresenter` puts
+   * it on every item it publishes and no writer payload carries one.
+   *
+   * That asymmetry is what keeps the round trip whole. The seeded menu holds a
+   * `post_type`/`post` item — a WordPress item this API has no type for — and
+   * refusing it here would mean `GET` then `PUT` of an untouched menu answered
+   * 400, which is precisely the promise `docs/API.md` makes and §89 went out of
+   * its way to keep. So a foreign reader item becomes a `url` and keeps its
+   * destination, which is exactly what `kindOf()` does on the panel's side; a
+   * writer sending `{"type":"machin"}` still gets the enum refusal, because that
+   * is a client naming a type rather than a shop publishing one.
+   *
+   * The cost is named: the round trip **preserves the item and changes its
+   * type**, so a `post` item that goes back comes back as a link. Nothing
+   * measured says what the shop does with one; both halves of the panel agree on
+   * this reading, which is the most that can be said for it.
+   */
+  return typeof item.object === "string" ? "url" : null;
+}
+
+/**
+ * The tree, validated **positionally and to the leaf** — `items[1].url`,
+ * `items[1].children[0].object_id`.
+ *
+ * `MenuEditor` surfaces these whole rather than binding them to a control,
+ * because the control an error belongs to may be two levels down inside a sheet
+ * that is not open — so the field name is the only thing that says where the
+ * problem is, and a flattened one would lose the row.
+ *
+ * **Every reference is resolved before anything is written.** §89's build note
+ * records the first version emptying the menu and *then* resolving each page
+ * path as it wrote, so a payload naming one missing page destroyed a shop's
+ * navigation and answered 400. That is why this returns a whole tree or an error
+ * and never half of one.
+ *
+ * Two refusals here and neither sentence is measured. The *facts* are: two
+ * levels and fifty items are the limits (§89), and `javascript:` and `//host`
+ * are refused on `items[n].url` (lib/cms.ts, measured — `javascript:` is a valid
+ * URL, which is exactly where that matters). The wording is this file's.
+ */
+function readMenuItems(raw, prefix, depth, seen) {
+  const fields = {};
+  const items = [];
+
+  if (!Array.isArray(raw)) {
+    fields[prefix === "" ? "items" : `${prefix}.children`] = "Must be an array.";
+    return { fields, items };
+  }
+
+  raw.forEach((entry, index) => {
+    const at = prefix === "" ? `items[${index}]` : `${prefix}.children[${index}]`;
+
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      fields[at] = "Must be an object.";
+      return;
+    }
+
+    // Both vocabularies: `label` is the writer's, `title` is what the reader
+    // publishes, and the round trip only holds because either is accepted.
+    const label = typeof entry.label === "string" ? entry.label : entry.title;
+    if (typeof label !== "string" || label.trim() === "") {
+      fields[`${at}.label`] = "A menu item needs a label.";
+    }
+
+    const type = normaliseMenuType(entry);
+    if (type === null) {
+      fields[`${at}.type`] = oneOf(MENU_ITEM_TYPES);
+      return;
+    }
+
+    let url = typeof entry.url === "string" ? entry.url : "";
+    let objectId = typeof entry.object_id === "number" ? entry.object_id : 0;
+
+    if (type === "url") {
+      const trimmed = url.trim();
+      const allowed =
+        trimmed !== "" &&
+        !trimmed.startsWith("//") &&
+        (trimmed.startsWith("/") || /^https?:\/\//i.test(trimmed));
+      if (!allowed) {
+        fields[`${at}.url`] =
+          "A menu URL must be http, https, or a path beginning with a single slash.";
+      }
+    } else if (type === "page") {
+      // `path` wins when it is non-empty and `object_id` is used and validated
+      // otherwise, which is `menuTarget()`'s measured rule and is what lets an
+      // untouched item go back carrying only the id it arrived with.
+      const path = typeof entry.path === "string" ? entry.path.trim() : "";
+      if (path !== "") {
+        const target = allPages().find(
+          (row) => row.path === path && row.status !== "trash",
+        );
+        if (target === undefined) fields[`${at}.path`] = `No page at path "${path}".`;
+        else {
+          objectId = target.id;
+          url = `https://boutique.example.dz/${target.path}`;
+        }
+      } else if (!allPages().some((row) => row.id === objectId && row.status !== "trash")) {
+        fields[`${at}.object_id`] = `No page with id ${objectId}.`;
+      }
+    } else if (type === "category") {
+      if (!CATEGORIES.some((category) => category.id === objectId)) {
+        fields[`${at}.object_id`] = `No product category with id ${objectId}.`;
+      }
+    } else if (!listed().some((product) => product.id === objectId)) {
+      fields[`${at}.object_id`] = `No product with id ${objectId}.`;
+    }
+
+    seen.count += 1;
+
+    let children = [];
+    if (Array.isArray(entry.children) && entry.children.length > 0) {
+      if (depth + 1 >= MAX_MENU_DEPTH) {
+        // The offending node is the grandchild, so the field names the level
+        // that cannot exist rather than the parent that carries it.
+        fields[`${at}.children`] = `A menu is ${MAX_MENU_DEPTH} levels deep at most.`;
+      } else {
+        const nested = readMenuItems(entry.children, at, depth + 1, seen);
+        Object.assign(fields, nested.fields);
+        children = nested.items;
+      }
+    }
+
+    items.push({ label: typeof label === "string" ? label : "", type, url, objectId, children });
+  });
+
+  return { fields, items };
+}
+
+/** The writer's tree → WordPress's vocabulary, which is what the reader publishes. */
+function publishMenuItems(items, position = 0) {
+  return items.map((item, index) => {
+    const id = state.nextMenuItemId++;
+    const [type, object] =
+      item.type === "url"
+        ? ["custom", "custom"]
+        : item.type === "category"
+          ? ["taxonomy", "product_cat"]
+          : ["post_type", item.type];
+
+    return {
+      id,
+      title: item.label,
+      url: item.url,
+      target: "",
+      type,
+      object,
+      object_id: item.type === "url" ? 0 : item.objectId,
+      position: index + position,
+      classes: [],
+      children: publishMenuItems(item.children),
+    };
+  });
+}
+
+/**
+ * `PUT /cms/menus/{location}` — **and a location with nothing assigned is
+ * created here rather than refused.**
+ *
+ * Measured: `get_nav_menu_locations()` on this install returned `primary` and no
+ * `footer`, so `GET /cms/menus/footer` is a 404 with its own message and the
+ * `PUT` answered **200 having created "Footer navigation"**. A route that 404ed
+ * until somebody opened Appearance → Menus would be useless for the one case it
+ * exists for, so the empty state on that screen carries a working action.
+ *
+ * **The 50-item cap is flat on `items`, and that is a departure worth naming.**
+ * Nothing published its shape. The one cap in this subject that *was* measured —
+ * the homepage's fifty sections — is flat on `sections` precisely so that a form
+ * cannot bind it to a row index, and `lib/cms.ts` calls that the trap. Making
+ * this one positional would teach the opposite lesson from the only measurement
+ * available, so it is flat, and this comment is the record that it is a choice.
+ */
+function putMenu(location, body) {
+  const source = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+  const seen = { count: 0 };
+  const { fields, items } = readMenuItems(source.items ?? [], "", 0, seen);
+
+  if (seen.count > MAX_MENU_ITEMS) {
+    fields.items = `A menu carries at most ${MAX_MENU_ITEMS} items; this one has ${seen.count}.`;
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The menu is invalid.", fields);
+  }
+
+  const existing = state.menus.get(location);
+  const menu = {
+    location,
+    id: existing?.id ?? state.nextMenuId++,
+    // "Footer navigation" is the name the measured `PUT` created. The primary
+    // one keeps whatever it already had.
+    name: existing?.name ?? (location === "footer" ? "Footer navigation" : "Primary navigation"),
+    slug: existing?.slug ?? (location === "footer" ? "footer-navigation" : "primary-navigation"),
+    items: publishMenuItems(items),
+  };
+  state.menus.set(location, menu);
+  return ok(menu);
+}
+
+/* ------------------------------------------------------------------ media --- */
+
+/** Every attachment this process can see. Nothing creates or removes one here. */
+const mediaRows = () => MEDIA_SEED.map((row) => state.media.get(row.id) ?? row);
+
+/**
+ * ── What of `/media`'s contract is verified, and what is not ─────────────────
+ *
+ * **This screen is checklist item 13 and is not being redesigned on this
+ * branch.** It is served because the Content hub renders a media count and
+ * `MediaPicker` reads the collection from inside the banner form, so leaving it
+ * a 404 would photograph two Content screens in an error state. What follows is
+ * the boundary between what was measured and what this file assumed, so that
+ * item 13 does not inherit a guess as a measurement:
+ *
+ *   **measured**   41 items on `GET /media`; `sizes` empty on every one of them,
+ *                  because the fixtures are 30×20 and below every thumbnail
+ *                  threshold; `filename` generated server-side as a collision
+ *                  suffix (`real.jpg`, `real-1.jpg`, `real-2.jpg`) with the
+ *                  extension from the *sniffed* type; `ac_manage_content` guards
+ *                  the **reads** as well as the writes, so a Manager is 403 on
+ *                  `GET /media`; `DELETE /media/{id}` exists at the API and is
+ *                  deliberately off the panel's allowlist.
+ *
+ *   **unverified** the list **envelope** — this pages through the shared
+ *                  `paginate()` because both callers send `per_page` and `page`
+ *                  and both read `total`, and no request-for-request diff has
+ *                  been taken; whether `GET /media` takes `?search=` or any
+ *                  filter at all, so none is served; what `PATCH /media/{id}`
+ *                  accepts beyond `alt`, `title` and `caption`, which are the
+ *                  three the panel sends; the **statuses** of that PATCH's
+ *                  refusals; and the resting order, which is newest first here
+ *                  and is an assumption.
+ *
+ *   **not served** `POST /media`. It is allowlisted and it is the only
+ *                  `multipart/form-data` request the panel makes — this server
+ *                  parses JSON and hands `respond()` a `null` body for anything
+ *                  else, so every upload would arrive indistinguishable from an
+ *                  empty one and all five of its measured failure shapes
+ *                  (400 `invalid_upload`, 413 `file_too_large`, and three
+ *                  different 415s separated only by `details`) would be
+ *                  unreachable. Item 13 owns the upload screen and owns
+ *                  modelling it; a fixture that answered 201 to anything would
+ *                  be an invitation to build that screen against a fiction.
+ *                  This is the *less capable* direction and it is named rather
+ *                  than left to be discovered.
+ */
+const MEDIA_FIELD_RULES = {
+  alt: mustBeText,
+  title: mustBeText,
+  caption: mustBeText,
+};
+
+const MEDIA_READ_ONLY = [
+  "id",
+  "slug",
+  "mime_type",
+  "url",
+  "filename",
+  "filesize",
+  "width",
+  "height",
+  "sizes",
+  "uploaded_by",
+  "date_created",
+  "date_modified",
+];
+
+function mediaListing(params) {
+  const page = paginate(mediaRows(), params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+function patchMedia(current, body) {
+  const parsed = readContentBody(body, {
+    rules: MEDIA_FIELD_RULES,
+    readOnly: MEDIA_READ_ONLY,
+    message: "The attachment is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  const next = { ...current, ...parsed.writes };
+  state.media.set(current.id, next);
+  return ok(next);
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -8679,6 +11120,14 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     // `providers` and `rates` are reads and stay reads, and the case below
     // refuses a verb on either rather than letting this list decide it.
     "shipping",
+    // Content is the first collection whose *every* member writes, and the only
+    // one carrying a `PUT`: the homepage and a menu are both documents replaced
+    // whole rather than collections of addressable rows.
+    "cms",
+    // `PATCH /media/{id}` is the alt-text edit. `POST /media` is the upload and
+    // stays unserved — it is `multipart/form-data` and this shell parses JSON,
+    // so the case below refuses it by name rather than letting this list decide.
+    "media",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -8702,7 +11151,21 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
    * a third segment for all the flat ones at once, so raising this number can
    * never widen them.
    */
-  if (segments.length === 0 || segments.length > 4) return notFound();
+  /*
+   * **`/cms/pages/{path}` is the one route in this API with no fixed depth**, so
+   * the ceiling above cannot apply to it. A page is addressed by its *full path*
+   * — `legal/conditions-generales` is four segments and one resource, and a page
+   * filed one level deeper is five — which is why lib/api/allowlist.ts:244 is
+   * `/cms/pages/.+`, deliberately greedy, with the traversal guard in
+   * `checkAllowed()` running first to make that safe.
+   *
+   * Lifting it for this collection alone rather than raising the number: at `> 5`
+   * every *other* collection would gain a segment nobody wrote, which is the
+   * mistake the comment above records `/orders/1000/notes` making when the guard
+   * moved by one. `case "cms"` states its own depth per route underneath.
+   */
+  if (segments.length === 0) return notFound();
+  if (segments.length > 4 && collection !== "cms") return notFound();
 
   /** The list/detail pair every collection below shares. Read-only, all of them. */
   const collectionOf = (rows, { search, status, detail }) => {
@@ -9358,6 +11821,188 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         default:
           return notFound();
       }
+    }
+
+    /*
+     * ── Content: five collections, two documents, and one capability ─────────
+     *
+     * **Every route here is `ac_manage_content` and the gate is enforced**, which
+     * makes this the fourth gated collection in the file after `/payments`,
+     * `/orders` and `/inventory` — and the first whose gate a *whole section* of
+     * the panel hangs on. Measured, and recorded in lib/api/allowlist.ts:222-226:
+     * a Manager is **403 on every route in this block**, and 200 on
+     * `/notifications` beside it, which is `ac_manage_customers`. The two fixtures
+     * invert, and `MOCK_IDENTITY=no_content` is the credential that reaches this
+     * arm — without it the refusal would be a path nothing could take.
+     *
+     * The depth guard above is lifted for this collection alone, because
+     * `/cms/pages/{path}` takes a **full path**: `legal/conditions-generales` is
+     * four segments and one page. Every other route here states its own length,
+     * so nothing else under `/cms/` gains a segment from that.
+     *
+     * **`PUT` lives here and nowhere else in the file.** The homepage and a menu
+     * are documents replaced whole rather than collections of addressable rows —
+     * §89 argues it for the homepage (sections are ordered, and an API letting
+     * two clients insert at index 2 concurrently has invented a merge problem the
+     * shop does not have) and the menus route inherits the same shape.
+     */
+    case "cms": {
+      const refused = gatedOn("ac_manage_content");
+      if (refused !== null) return refused;
+      if (second === undefined) return notFound();
+
+      if (second === "pages") {
+        if (segments.length === 2) {
+          if (method === "POST") return createPage(body);
+          return method === "GET" ? pagesListing(searchParams) : notFound();
+        }
+
+        /*
+         * The path is every segment after `/cms/pages`, rejoined. The catch-all
+         * in the panel does the same thing on its own side — `path.join("/")` in
+         * `content/pages/[...path]/page.tsx` — so what arrives here is exactly
+         * what the screen asked for.
+         */
+        const path = segments.slice(2).join("/");
+        const filter = readContentStatus(searchParams);
+        if (filter.error) return filter.error;
+
+        const page = resolvePage(path, filter.value);
+        // **The 404 a draft gets and the 404 a missing path gets are the same
+        // 404 with the same sentence**, which is the measurement the whole index
+        // exists for: on a single-resource route the two facts are
+        // indistinguishable, and only a listing separates them.
+        if (page === undefined) return pageNotFound();
+
+        switch (method) {
+          case "GET":
+            return ok(pageDocumentOf(page));
+          case "PATCH":
+            return patchPage(page, body);
+          case "DELETE":
+            return deletePage(page, searchParams);
+          default:
+            return notFound();
+        }
+      }
+
+      if (second === "homepage") {
+        if (segments.length !== 2) return notFound();
+        if (method === "PUT") return putHomepage(body);
+        return method === "GET" ? readHomepage() : notFound();
+      }
+
+      if (second === "banners") {
+        if (segments.length === 2) {
+          if (method === "POST") return createBanner(body);
+          return method === "GET" ? bannersListing(searchParams) : notFound();
+        }
+        if (segments.length !== 3) return notFound();
+        // The allowlist's pattern is `\d+`, so a non-numeric segment is a path
+        // nobody wrote — `rest_no_route`, not this collection's own 404.
+        const id = numericId(segments[2]);
+        const banner = id === null ? undefined : bannerRows().find((row) => row.id === id);
+        if (banner === undefined) return notFound();
+        if (method === "PATCH") return patchBanner(banner, body);
+        // **`GET /cms/banners/{id}` is a 404 on purpose.**
+        // lib/api/allowlist.ts:247 is `rule("/cms/banners/\\d+", "PATCH",
+        // "DELETE")` and carries no `GET`, so the panel's own proxy refuses a
+        // single banner — the position `POST /products` and `/product-categories/
+        // {id}` are in, and held to the same rule: a fixture that answered would
+        // let a screen render green here and 404 at the proxy in production.
+        return method === "DELETE" ? deleteBanner(banner) : notFound();
+      }
+
+      if (second === "faqs") {
+        if (segments.length === 2) {
+          if (method === "POST") return createFaq(body);
+          return method === "GET" ? faqsListing(searchParams) : notFound();
+        }
+        if (segments.length !== 3) return notFound();
+        const id = numericId(segments[2]);
+        const faq = id === null ? undefined : faqRows().find((row) => row.id === id);
+        if (faq === undefined) return notFound();
+        if (method === "PATCH") return patchFaq(faq, body);
+        // No `GET` here either, for the reason the banners branch gives.
+        return method === "DELETE" ? deleteFaq(faq) : notFound();
+      }
+
+      if (second === "faq-categories") {
+        if (segments.length === 2) {
+          if (method === "POST") return createFaqCategory(body);
+          // `list()`, not `paginate()`: no screen sends this route a parameter
+          // and nothing reads its `meta`, so its envelope is unverified and this
+          // is the file's one place for that.
+          return method === "GET" ? list(faqCategoryRows().map(faqCategoryRow)) : notFound();
+        }
+        if (segments.length !== 3) return notFound();
+        const id = numericId(segments[2]);
+        const category = id === null ? undefined : faqCategoryRows().find((row) => row.id === id);
+        if (category === undefined) return notFound();
+        if (method === "PATCH") return patchFaqCategory(category, body);
+        return method === "DELETE" ? deleteFaqCategory(category, searchParams) : notFound();
+      }
+
+      if (second === "menus") {
+        /*
+         * **`{location}` is `primary` or `footer` and nothing else.** Pinned to
+         * the two rather than left permissive, because `PUT` to an unregistered
+         * location *creates and assigns a menu there* — so a guessed URL would
+         * invent navigation the theme has no slot for. lib/api/allowlist.ts:260
+         * pins the same pair for the same reason.
+         */
+        if (segments.length !== 3) return notFound();
+        const location = segments[2];
+        if (location !== "primary" && location !== "footer") return notFound();
+
+        if (method === "PUT") return putMenu(location, body);
+        if (method !== "GET") return notFound();
+        const menu = state.menus.get(location);
+        // Its **own** 404 with its own sentence, which is a different fact from
+        // a location that was never registered — and the screen says which,
+        // because a `PUT` on this one will create the menu.
+        return menu === undefined ? menuNotFound() : ok(menu);
+      }
+
+      return notFound();
+    }
+
+    /*
+     * The media library. `ac_manage_content` guards the **reads** as well as the
+     * writes — measured, a Manager is 403 on `GET /media` — which is the gap
+     * ADMIN_PANEL.md's Media section documents rather than a bug: the "select an
+     * image that already exists" path it describes as a Product Manager's is not
+     * reachable either.
+     *
+     * **This screen is checklist item 13 and is served rather than redesigned.**
+     * The Content hub renders a media count and `MediaPicker` reads the
+     * collection from inside the banner form, so a 404 here would photograph two
+     * Content screens in their error state. `mediaRows()`' own docblock draws the
+     * line between what was measured and what this file assumed, so item 13 does
+     * not inherit a guess as a measurement.
+     *
+     * **`POST /media` is allowlisted and deliberately unserved**, and **`DELETE
+     * /media/{id}` is deliberately not allowlisted.** The first is the only
+     * `multipart/form-data` request the panel makes and this shell parses JSON —
+     * every upload would arrive indistinguishable from an empty one, and all five
+     * of its measured failure shapes would be unreachable. The second exists at
+     * the API and is off the proxy's list with a unit test saying so: nothing
+     * here tells a client what an attachment is *used by*, so the library cannot
+     * answer "what would this break?".
+     */
+    case "media": {
+      const denied = gatedOn("ac_manage_content");
+      if (denied !== null) return denied;
+
+      if (second === undefined) {
+        return method === "GET" ? mediaListing(searchParams) : notFound();
+      }
+      if (segments.length !== 2) return notFound();
+      const id = numericId(second);
+      const item = id === null ? undefined : mediaRows().find((row) => row.id === id);
+      if (item === undefined) return notFound();
+      if (method === "GET") return ok(item);
+      return method === "PATCH" ? patchMedia(item, body) : notFound();
     }
 
     default:

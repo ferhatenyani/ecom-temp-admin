@@ -130,6 +130,45 @@ import {
   threshold,
   usage,
 } from "@/lib/coupons";
+import {
+  banner,
+  bannerList,
+  embeddedImage,
+  faq,
+  faqCategory,
+  faqCategoryList,
+  faqList,
+  homepage,
+  homepageProblems,
+  homepageSection,
+  menu,
+  menuItem,
+  page as pageSchema,
+  pageList,
+  pageSeo,
+} from "@/lib/api/schemas/cms";
+import { mediaItem, mediaList, mediaSize } from "@/lib/api/schemas/media";
+import {
+  CONTENT_STATUSES,
+  DEFAULT_STATUS_FILTER,
+  MAX_MENU_DEPTH,
+  MAX_MENU_ITEMS,
+  MAX_SECTIONS,
+  MENU_ITEM_TYPES,
+  MENU_LOCATIONS,
+  SECTION_TYPES,
+  STATUS_FILTERS,
+  classifyProblem,
+  collidingPaths,
+  isAllowedMenuUrl,
+  isContentStatus,
+  isSectionType,
+  isStatusFilter,
+  pageDepth,
+  parentPathOf,
+  positionWrites,
+  unknownSectionTypes,
+} from "@/lib/cms";
 
 function get(path: string, query = ""): MockResponse {
   return respond("GET", `${BASE_PATH}${path}`, new URLSearchParams(query));
@@ -3451,6 +3490,78 @@ describe("MOCK_IDENTITY", () => {
   });
 
   /**
+   * ── The fourth identity, and the section none of the other three can refuse ──
+   *
+   * **Every route under `/cms/` and `/media` is `ac_manage_content`, and all
+   * three identities above hold it** — `reduced` drops shipping and payments,
+   * `support` drops orders and inventory, and neither touches content. So the
+   * Content hub, its six screens and the media library had no capturable
+   * forbidden state at all, and neither did the `MediaPicker` inside the banner
+   * form.
+   *
+   * `reduced` could not be widened into it: its own block says its delta from
+   * `full` is exactly the two 403s that were seen, and adding a third capability
+   * would be a claim about the shop's roles nothing has measured.
+   *
+   * Measured, and recorded in `lib/api/allowlist.ts` and in ADMIN_PANEL.md's
+   * Media section: a Manager is **403 on every route in the `/cms/` block and on
+   * `GET /media`**, and **200 on `/notifications`** — which is
+   * `ac_manage_customers`, so those two fixtures invert. That inversion is
+   * asserted here because it is the whole reason notifications is a separate
+   * branch rather than part of this one.
+   */
+  it("refuses every content route for a credential without ac_manage_content", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_content");
+    try {
+      const mock = await freshMock();
+      const ask = (path: string) => mock.respond("GET", `${mock.BASE_PATH}${path}`);
+
+      const { data } = unwrap(identity, ask("/auth/me").body, 200);
+      // Exactly one capability off `full`, and it is the one the name says.
+      expect(data.capabilities).toHaveLength(12);
+      expect(data.capabilities).not.toContain("ac_manage_content");
+
+      for (const path of [
+        "/cms/pages",
+        "/cms/pages/legal/conditions-generales",
+        "/cms/homepage",
+        "/cms/banners",
+        "/cms/faqs",
+        "/cms/faq-categories",
+        "/cms/menus/primary",
+        "/media",
+        "/media/5001",
+      ]) {
+        const response = ask(path);
+        expect(response.status, path).toBe(403);
+        try {
+          unwrap(pageList, response.body, response.status);
+          expect.unreachable("a 403 must throw at the panel's boundary");
+        } catch (error) {
+          expect(error).toBeInstanceOf(ApiError);
+          expect((error as ApiError).code, path).toBe("forbidden");
+          expect((error as ApiError).isForbidden, path).toBe(true);
+        }
+      }
+
+      // A write is refused by the gate too, before it can reach a validator.
+      expect(
+        mock.respond("PUT", `${mock.BASE_PATH}/cms/homepage`, new URLSearchParams(), {
+          sections: [],
+        }).status,
+      ).toBe(403);
+
+      // **And the two fixtures invert here.** `/notifications` is
+      // `ac_manage_customers`, which this credential keeps.
+      expect(ask("/notifications").status).toBe(200);
+      expect(ask("/orders").status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
    * A value nobody recognises throws at load rather than falling back. A run that
    * quietly served the Super Admin after being asked for the reduced identity
    * would produce a green forbidden-state capture that is nothing of the kind.
@@ -6189,6 +6300,1045 @@ describe("query parameters", () => {
 });
 
 /**
+ * ── Content, and the one filter in this panel that inverts ───────────────────
+ *
+ * `?status=` on every `/cms/` collection **defaults to `publish`**, and `any`
+ * means publish plus draft and never the trash. Everywhere else in this panel
+ * the absence of the parameter means everything, so this is the one family where
+ * a screen that sends nothing gets *less* than it asked for — and a mock that
+ * answered drafts on a bare listing would make `DEFAULT_STATUS_FILTER`, every
+ * screen's explicit `?status=any` and the whole hub-count inversion look like
+ * padding somebody could delete. It would delete cleanly, against a green
+ * harness, and hide every draft in the shop the first time it shipped.
+ *
+ * So the inversion is asserted from both ends: the default really is narrower
+ * than `any`, and `any` really does exclude the trash.
+ */
+describe("GET /cms/pages", () => {
+  it("parses the index and reports more rows under ?status=any than under the default", () => {
+    const bare = parseList(pageList, get("/cms/pages", "per_page=100"));
+    const any = parseList(pageList, get("/cms/pages", "per_page=100&status=any"));
+
+    // 62 listed pages, of which 52 are published and 10 are drafts. The counts
+    // are written out because the whole point of the fixture is that the two
+    // readings differ — equal numbers would let a mock that ignored the
+    // parameter pass this test.
+    expect(any.meta.total).toBe(62);
+    expect(bare.meta.total).toBe(52);
+    expect(any.meta.total).toBeGreaterThan(bare.meta.total);
+
+    expect(new Set(bare.data.map((row) => row.status))).toEqual(new Set(["publish"]));
+    expect(new Set(any.data.map((row) => row.status))).toEqual(new Set(["publish", "draft"]));
+
+    // And the screen's own default is the wider one, which is the inversion.
+    expect(DEFAULT_STATUS_FILTER).toBe("any");
+  });
+
+  it("never returns the trash, under any filter", () => {
+    for (const filter of STATUS_FILTERS) {
+      const { data } = parseList(pageList, get("/cms/pages", `per_page=100&status=${filter}`));
+      expect(data.some((row) => row.path === "ancienne-page"), filter).toBe(false);
+      for (const row of data) expect(isContentStatus(row.status), filter).toBe(true);
+    }
+    // The trashed page is not reachable by path either — `any` is publish plus
+    // draft, which is exactly why it is not a synonym for "everything".
+    expect(get("/cms/pages/ancienne-page", "status=any").status).toBe(404);
+  });
+
+  it("refuses an empty ?status= and a trash filter with the enum sentence", () => {
+    for (const value of ["", "trash", "pending"]) {
+      const error = apiError(get("/cms/pages", `status=${value}`));
+      expect(error.status, value).toBe(400);
+      // `invalid_request`, never WordPress's `rest_invalid_param` — the code
+      // `ErrorNormalizer` maps it to on the way out.
+      expect(error.code, value).toBe("invalid_request");
+      expect(error.params?.status, value).toBe(
+        "status is not one of publish, draft, and any.",
+      );
+    }
+    // Every filter the panel offers is accepted, which is the other half: a mock
+    // that refused one of the three would hide a working control.
+    for (const filter of STATUS_FILTERS) {
+      expect(get("/cms/pages", `status=${filter}`).status, filter).toBe(200);
+      expect(isStatusFilter(filter)).toBe(true);
+    }
+  });
+
+  it("matches ?search= against the title and the body and never against the path", () => {
+    /*
+     * `Mentions` catches two rows and each one proves a different half: it is in
+     * the *title* of `legal/mentions-legales` and in the *body* of `legal`,
+     * whose prose lists what the section holds. Both, in one query.
+     */
+    const both = parseList(pageList, get("/cms/pages", "per_page=100&status=any&search=Mentions"));
+    expect(both.data.map((row) => row.path).sort()).toEqual(["legal", "legal/mentions-legales"]);
+    expect(both.data.find((row) => row.path === "legal")?.title).not.toContain("Mentions");
+
+    // A second body-only match, on a word no title carries at all.
+    const byBody = parseList(pageList, get("/cms/pages", "per_page=100&status=any&search=wilayas"));
+    expect(byBody.data.some((row) => row.path === "livraison")).toBe(true);
+    expect(byBody.data.every((row) => !row.title.includes("wilaya"))).toBe(true);
+
+    /*
+     * **And never the path.** `WP_Query`'s `s` does not search `post_name`, so
+     * on the one resource whose address *is* its path, typing a path finds
+     * nothing — which is why the screen renders a footnote saying what the field
+     * matches. The control is that the page really is there and really is
+     * findable by its title.
+     */
+    const byPath = parseList(
+      pageList,
+      get("/cms/pages", "per_page=100&status=any&search=legal/conditions-generales"),
+    );
+    expect(byPath.meta.total).toBe(0);
+    expect(get("/cms/pages/legal/conditions-generales", "status=any").status).toBe(200);
+  });
+
+  it("pages for real, and refuses the four paging edges", () => {
+    // `PER_PAGE` on the index is 50, and the seed is deliberately over it: the
+    // second page had never been requested by anything before this branch.
+    const first = parseList(pageList, get("/cms/pages", "per_page=50&page=1&status=any"));
+    expect(first.data).toHaveLength(50);
+    expect(first.meta.total_pages).toBe(2);
+
+    const second = parseList(pageList, get("/cms/pages", "per_page=50&page=2&status=any"));
+    expect(second.data).toHaveLength(12);
+    // Disjoint, which is what proves the slice rather than the count.
+    const ids = new Set(first.data.map((row) => row.id));
+    expect(second.data.some((row) => ids.has(row.id))).toBe(false);
+
+    // Past the last page: a 200 with nothing on it, which is the state the
+    // pager's dead "next" button is for.
+    expect(parseList(pageList, get("/cms/pages", "per_page=50&page=3&status=any")).data).toEqual([]);
+
+    for (const query of ["per_page=abc", "per_page=0", "per_page=101", "page=0", "page=-3", "page="]) {
+      expect(get("/cms/pages", query).status, query).toBe(400);
+    }
+  });
+
+  it("reports the functional pages it left out in meta.excluded_system", () => {
+    const response = get("/cms/pages", "per_page=100&status=any");
+    const { meta } = parse(pageList, response);
+    // `shop`, `cart`, `checkout` and `my-account` — a block, a shortcode or no
+    // body at all — so the count here is short of what wp-admin reports and the
+    // footnote on the index says by how many.
+    expect(meta?.excluded_system).toBe(4);
+
+    const { data } = parseList(pageList, response);
+    for (const path of ["shop", "cart", "checkout", "my-account"]) {
+      expect(data.some((row) => row.path === path), path).toBe(false);
+      // Omitted from the *index* and still addressable, which is the whole
+      // distinction `SystemPages` draws.
+      expect(get(`/cms/pages/${path}`, "status=any").status, path).toBe(200);
+    }
+  });
+
+  it("carries two pages on one path, so the index has a row it cannot link", () => {
+    const { data } = parseList(pageList, get("/cms/pages", "per_page=100&status=any"));
+    const collisions = collidingPaths(data.map((row) => row.path));
+
+    // Non-empty is the point: until this fixture existed, `collidingPaths()`
+    // could only ever return an empty set and the non-linkable row was
+    // unreachable.
+    expect([...collisions]).toEqual(["ac-unpublished"]);
+    expect(data.filter((row) => row.path === "ac-unpublished")).toHaveLength(2);
+
+    // `get_page_by_path()` resolves exactly one of them, which is why the panel
+    // refuses to link either: following one would be a coin flip that ends in
+    // editing somebody else's page.
+    const { data: resolved } = parse(pageSchema, get("/cms/pages/ac-unpublished", "status=any"));
+    expect(resolved.id).toBe(19);
+  });
+
+  it("is ordered by title, which is the one thing the route does instead of a sort", () => {
+    const { data } = parseList(pageList, get("/cms/pages", "per_page=100&status=any"));
+    const titles = data.map((row) => row.title);
+    const sorted = [...titles].sort((a, b) =>
+      a.localeCompare(b, "fr", { sensitivity: "base" }),
+    );
+    // Not a strict equality against `localeCompare` — the mock folds rather than
+    // collating — but the first row must not be the newest one, which is what
+    // `menu_order`'s degenerate default would give.
+    expect(titles[0]).toBe(sorted[0]);
+    expect(data[0].date_created).not.toBe(
+      [...data].sort((a, b) => b.date_created.localeCompare(a.date_created))[0].date_created,
+    );
+  });
+
+  /**
+   * **`orderby` on this collection is recorded neither as working nor as
+   * ignored**, so the mock neither sorts on it nor refuses it — and this test
+   * pins the *absence* of a decision rather than a behaviour.
+   *
+   * Refusing an unknown value would be inventing a validator nobody has seen,
+   * which is the direction the coupons branch was burned by: a screen built to a
+   * 400 the API never sends. Sorting on it would be worse, because somebody
+   * would then ship the control.
+   */
+  it("neither honours nor refuses ?orderby=, because nobody has measured it", () => {
+    const base = parseList(pageList, get("/cms/pages", "per_page=100&status=any"));
+    for (const query of ["orderby=title&order=desc", "orderby=zzz", "orderby="]) {
+      const other = parseList(pageList, get("/cms/pages", `per_page=100&status=any&${query}`));
+      expect(other.data.map((row) => row.id), query).toEqual(base.data.map((row) => row.id));
+    }
+  });
+});
+
+describe("GET /cms/pages/{path}", () => {
+  it("parses a whole page, including the SEO block the form binds to", () => {
+    const { data } = parse(pageSchema, get("/cms/pages/legal/conditions-generales", "status=any"));
+
+    // A multi-segment path is one resource, which is what the catch-all route
+    // and the greedy allowlist rule exist for.
+    expect(data.path).toBe("legal/conditions-generales");
+    expect(data.slug).toBe("conditions-generales");
+    expect(data.parent_path).toBe("legal");
+    expect(parentPathOf(data.path)).toBe(data.parent_path);
+    expect(pageDepth(data.path)).toBe(1);
+
+    // Rendered HTML, not what was sent — the property that makes binding the
+    // form straight to the response safe here.
+    expect(data.content.startsWith("<p>")).toBe(true);
+    pageSeo.parse(data.seo);
+    // The one page with a hand-set SEO title, so the form's overridden branch
+    // has a fixture and does not always render the derived placeholder.
+    expect(data.seo.overrides).toContain("title");
+    expect(data.image).toBeNull();
+  });
+
+  /**
+   * **The measurement the whole Pages index exists for.** `?status=` *filters* a
+   * single read rather than widening it, so a draft asked for at the default is
+   * a 404 — with the **same sentence** a path that does not exist gets. On a
+   * single-resource route the two facts are indistinguishable, and WordPress
+   * creates `privacy-policy` as a draft, so the shop said "no such page" about a
+   * page sitting right there.
+   */
+  it("answers a draft and a missing path with the same 404 and the same sentence", () => {
+    const draft = apiError(get("/cms/pages/privacy-policy"));
+    const missing = apiError(get("/cms/pages/nulle-part", "status=any"));
+
+    expect(draft.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(draft.code).toBe("not_found");
+    expect(draft.apiMessage).toBe("No page at that path.");
+    expect(missing.apiMessage).toBe(draft.apiMessage);
+
+    // And the index is where they separate, which is the argument for it over a
+    // path box: the same page is in the listing with `status: "draft"`.
+    const { data } = parse(pageSchema, get("/cms/pages/privacy-policy", "status=any"));
+    expect(data.status).toBe("draft");
+  });
+});
+
+describe("the page writes", () => {
+  const body = (extra: Record<string, unknown> = {}) => ({
+    title: "Page d’essai",
+    slug: "page-d-essai",
+    parent_path: "",
+    status: "draft",
+    content: "Bonjour",
+    excerpt: "",
+    menu_order: 0,
+    ...extra,
+  });
+
+  it("creates a page with 201 and the whole document back", () => {
+    const response = write("POST", "/cms/pages", body());
+    expect(response.status).toBe(201);
+    const { data } = parse(pageSchema, response);
+    expect(data.path).toBe("page-d-essai");
+    expect(data.content).toBe("<p>Bonjour</p>\n");
+    // And it is readable at its own address immediately, which is the failure
+    // §89's correction block describes when there were no drafts: a 201 for a
+    // resource whose GET is a 404.
+    expect(parse(pageSchema, get("/cms/pages/page-d-essai", "status=any")).data.id).toBe(data.id);
+  });
+
+  /**
+   * **A `parent_path` naming nothing is a 400 on that field** — measured, rather
+   * than an orphan created quietly. `parentPathOf()` in `lib/cms.ts` says
+   * explicitly that it is for display and for pre-filling a form and never for
+   * deciding whether a move is legal, and this is why: the API decides.
+   */
+  it("refuses a parent_path that names nothing, on that field", () => {
+    const error = apiError(write("PATCH", "/cms/pages/contact", { parent_path: "nulle-part" }));
+    expect(error.status).toBe(400);
+    expect(error.code).toBe("invalid_request");
+    expect(error.fields?.parent_path).toBe('No page at path "nulle-part".');
+
+    // A real one moves the page, and the empty string is the root.
+    const moved = parse(pageSchema, write("PATCH", "/cms/pages/contact", { parent_path: "legal" }));
+    expect(moved.data.path).toBe("legal/contact");
+  });
+
+  it("renames with slug and reports the move in meta", () => {
+    const response = write("PATCH", "/cms/pages/contact", { slug: "nous-contacter" });
+    const { data, meta } = parse(pageSchema, response);
+    expect(data.path).toBe("nous-contacter");
+    expect(meta?.path_changed).toBe(true);
+    // WordPress leaves nothing behind at the old address.
+    expect(get("/cms/pages/contact", "status=any").status).toBe(404);
+
+    // A write that does not move the page carries no such key.
+    const still = parse(pageSchema, write("PATCH", "/cms/pages/nous-contacter", { title: "X" }));
+    expect(still.meta?.path_changed).toBeUndefined();
+  });
+
+  it("refuses an unknown field by name and a bad status with the body enum", () => {
+    expect(apiError(write("PATCH", "/cms/pages/contact", { nonsense: 1 })).fields?.nonsense).toBe(
+      "Unknown field.",
+    );
+    // Family 2: a body field, colon, no Oxford comma — against the query
+    // parameter's "is not one of a, b, and c."
+    expect(apiError(write("PATCH", "/cms/pages/contact", { status: "trash" })).fields?.status).toBe(
+      "Must be one of: publish, draft.",
+    );
+    expect(CONTENT_STATUSES).toEqual(["publish", "draft"]);
+    // Read-only keys leave in silence rather than being refused, which is what
+    // lets a GET body PATCH back whole.
+    const { data } = parse(pageSchema, get("/cms/pages/contact", "status=any"));
+    expect(write("PATCH", "/cms/pages/contact", data).status).toBe(200);
+  });
+
+  it("lands an SEO error on its own dotted field, where the form binds it", () => {
+    const error = apiError(
+      write("PATCH", "/cms/pages/contact", { seo: { title: "T", canonical: 5 } }),
+    );
+    expect(error.fields?.["seo.canonical"]).toBe("Must be a string.");
+    // There is no SEO endpoint and §89 does not add one, so this is the page's
+    // own PATCH and its errors arrive in the same `details.fields` list.
+    expect(error.fields?.seo).toBeUndefined();
+  });
+
+  /**
+   * **`?force=true` means something different here from everywhere else in this
+   * API**, and the two 409s are the reason.
+   *
+   * On a product and on a coupon, force is *permanence*. Here it overrides the
+   * children guard — reparenting is recoverable — and explicitly does **not**
+   * override an option reference, because leaving `woocommerce_checkout_page_id`
+   * pointing at nothing makes WooCommerce report a missing page rather than a
+   * broken setting.
+   */
+  it("refuses a parent with a children 409 that force overrides", () => {
+    const refused = apiError(write("DELETE", "/cms/pages/legal"));
+    expect(refused.status).toBe(409);
+    expect(refused.code).toBe("conflict");
+    expect(refused.details.children).toBe(2);
+    expect(refused.details.child_ids).toEqual([12, 13]);
+
+    expect(write("DELETE", "/cms/pages/legal", undefined, "force=true").status).toBe(200);
+    // The children reparented to the root rather than disappearing with it.
+    expect(get("/cms/pages/legal/conditions-generales", "status=any").status).toBe(404);
+    const { data } = parse(pageSchema, get("/cms/pages/conditions-generales", "status=any"));
+    expect(data.id).toBe(12);
+    expect(data.parent_path).toBe("");
+  });
+
+  it("refuses an option-referenced page with a 409 that force does not override", () => {
+    for (const query of ["status=any", "status=any&force=true"]) {
+      const refused = apiError(write("DELETE", "/cms/pages/privacy-policy", undefined, query));
+      expect(refused.status, query).toBe(409);
+      expect(refused.details.option, query).toBe("wp_page_for_privacy_policy");
+      expect(refused.details.children, query).toBeUndefined();
+    }
+    // And it is still there afterwards, which is the half a 409 alone does not
+    // prove.
+    expect(get("/cms/pages/privacy-policy", "status=any").status).toBe(200);
+  });
+
+  it("trashes a page nothing references, and the trash is reachable through no filter", () => {
+    expect(write("DELETE", "/cms/pages/refund_returns").status).toBe(200);
+    for (const filter of STATUS_FILTERS) {
+      expect(get("/cms/pages/refund_returns", `status=${filter}`).status, filter).toBe(404);
+    }
+  });
+});
+
+/**
+ * ── The homepage: one document, two error shapes, and a report about neither ──
+ *
+ * `GET` **drops** a malformed section and reports it in `meta.problems`; `PUT`
+ * **refuses** one with a 400. §89 states that asymmetry deliberately — an option
+ * edited by hand must degrade, a form filled in by a person must not lose their
+ * work quietly — and the drop report therefore cannot be provoked through the
+ * API at all, which is why `scripts/seed-cms.mjs` writes the option underneath
+ * it with `wp eval` and why the mock seeds it here.
+ */
+describe("GET /cms/homepage", () => {
+  it("drops what it cannot parse and reports it at 1-based positions over the stored document", () => {
+    const response = get("/cms/homepage");
+    const { data, meta } = parse(homepage, response);
+
+    // Twelve stored, three malformed, nine on screen.
+    expect(data.sections).toHaveLength(9);
+    const problems = homepageProblems.parse(meta?.problems);
+    expect(problems).toHaveLength(3);
+
+    const classified = problems.map(classifyProblem);
+    expect(classified.map((problem) => problem.kind)).toEqual([
+      "not_an_object",
+      "unknown_type",
+      "bad_data",
+    ]);
+    // **Interleaved, not appended.** The positions are over the *stored*
+    // document, so none of them is its own row on screen — an assertion that
+    // could pass with the malformed sections at the end would prove nothing.
+    expect(classified.map((problem) => problem.position)).toEqual([2, 4, 6]);
+    for (const problem of classified) {
+      expect(data.sections[(problem.position ?? 1) - 1]?.type).not.toBe(problem.detail);
+    }
+    // "Section 6" is the fourth thing on screen, which is the sentence the panel
+    // has to state in the reader's own language rather than render verbatim.
+    expect(classified[2].detail).toBe('Section 6 ("promotion") has a "data" that is not an object.');
+  });
+
+  it("serves only types this build has a name for, on the default document", () => {
+    const { data } = parse(homepage, get("/cms/homepage"));
+    for (const section of data.sections) {
+      expect(isSectionType(section.type), section.type).toBe(true);
+      homepageSection.parse(section);
+    }
+    expect(unknownSectionTypes(data.sections.map((section) => section.type))).toEqual([]);
+  });
+
+  /**
+   * **`meta` is absent entirely when there is nothing to report** — not an empty
+   * array, measured. Code that destructured `meta.problems` would throw on the
+   * healthy document and work on the broken one, which is the wrong way round
+   * for a failure mode, and `homepage/page.tsx` reads `result.meta?.problems`
+   * for exactly that reason.
+   *
+   * The healthy document is reachable because a successful `PUT` **repairs** it
+   * by discarding what the read had dropped — which is also why the editor gates
+   * its save behind a confirmation naming the count.
+   */
+  it("carries no meta at all once the document is clean", () => {
+    const saved = write("PUT", "/cms/homepage", {
+      sections: [{ type: "hero", data: { heading: "Bonjour" } }],
+    });
+    expect(saved.status).toBe(200);
+
+    const response = get("/cms/homepage");
+    expect(Object.keys(response.body as object)).toEqual(["success", "data"]);
+    expect(parse(homepage, response).meta).toBeNull();
+  });
+});
+
+describe("PUT /cms/homepage", () => {
+  const sections = (count: number) =>
+    Array.from({ length: count }, () => ({ type: "hero", data: {} }));
+
+  it("refuses a bad section positionally, naming every type it knows", () => {
+    const error = apiError(
+      write("PUT", "/cms/homepage", {
+        sections: [...sections(2), { type: "not_a_real_type", data: {} }],
+      }),
+    );
+    expect(error.status).toBe(400);
+    expect(error.fields?.["sections[2].type"]).toBe(
+      'Unknown section type "not_a_real_type". One of: hero, featured_products, categories, promotion, banner, text, image, faq, testimonials, newsletter, custom.',
+    );
+    // The 400 is the only place the vocabulary is published at all — there is no
+    // endpoint for it — so the sentence and `SECTION_TYPES` must not drift.
+    expect(SECTION_TYPES.join(", ")).toBe(
+      "hero, featured_products, categories, promotion, banner, text, image, faq, testimonials, newsletter, custom",
+    );
+    expect(SECTION_TYPES).toHaveLength(11);
+  });
+
+  /**
+   * **The second shape, and it is not positional.** A form binding every
+   * homepage error to a row index drops this one on the floor, which is why
+   * `HomepageEditor` keeps `rowErrors` and `listError` apart.
+   */
+  it("refuses a 51st section on `sections` rather than on `sections[50]`", () => {
+    const error = apiError(write("PUT", "/cms/homepage", { sections: sections(MAX_SECTIONS + 1) }));
+    expect(error.status).toBe(400);
+    expect(error.fields?.sections).toBe(
+      "A homepage carries at most 50 sections; this one has 51.",
+    );
+    expect(error.fields?.["sections[50]"]).toBeUndefined();
+    // Exactly fifty is fine, which is what makes the bound a bound.
+    expect(write("PUT", "/cms/homepage", { sections: sections(MAX_SECTIONS) }).status).toBe(200);
+  });
+
+  it("refuses a section whose data is not an object, positionally", () => {
+    const error = apiError(
+      write("PUT", "/cms/homepage", { sections: [...sections(2), { type: "faq", data: "x" }] }),
+    );
+    expect(error.fields?.["sections[2].data"]).toBe("Must be an object.");
+  });
+
+  it("replaces the document and hands the stored one back", () => {
+    const payload = {
+      sections: [
+        { type: "hero", data: { heading: "A" } },
+        { type: "newsletter", data: {} },
+      ],
+    };
+    const { data } = parse(homepage, write("PUT", "/cms/homepage", payload));
+    expect(data.sections.map((section) => section.type)).toEqual(["hero", "newsletter"]);
+    expect(parse(homepage, get("/cms/homepage")).data).toEqual(data);
+  });
+});
+
+/**
+ * ── The two homepage documents that are not the default ─────────────────────
+ *
+ * `MOCK_HOMEPAGE` is the second harness switch after `MOCK_IDENTITY`, and it
+ * exists because the three states this screen has are properties of the stored
+ * *document* rather than of the reader or the URL: `/content/homepage` takes no
+ * parameters and the panel's server component forwards none, so neither an
+ * identity nor a query string can reach them.
+ */
+describe("MOCK_HOMEPAGE", () => {
+  const freshMock = async () => {
+    vi.resetModules();
+    return import("@/scripts/mock-api.mjs");
+  };
+
+  const withHomepage = async (value: string, run: (body: unknown) => void) => {
+    vi.stubEnv("MOCK_HOMEPAGE", value);
+    try {
+      const mock = await freshMock();
+      run(mock.respond("GET", `${mock.BASE_PATH}/cms/homepage`).body);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  };
+
+  it("serves the empty document this shop answered before the seed existed", async () => {
+    await withHomepage("empty", (body) => {
+      const { data, meta } = unwrap(homepage, body, 200);
+      expect(data.sections).toEqual([]);
+      // Empty is not broken: there is nothing to report, so there is no `meta`.
+      expect(meta).toBeNull();
+    });
+  });
+
+  /**
+   * **A hypothesis, not a measurement, and it is behind a switch for that
+   * reason.** The reader measured on 2026-08-21 *drops* a type it does not know
+   * and reports it, so an unknown type arriving intact says the backend has
+   * gained one — which is precisely the scenario `unknownSectionTypes()` exists
+   * for and the only way its non-empty branch can be reached at all.
+   */
+  it("passes a twelfth type through when asked to model a backend that moved", async () => {
+    await withHomepage("future", (body) => {
+      const { data, meta } = unwrap(homepage, body, 200);
+      const types = data.sections.map((section) => section.type);
+      expect(types).toContain("countdown");
+      // Not reported as a problem: the shop knows it, this build does not.
+      expect(meta).toBeNull();
+      expect(unknownSectionTypes(types)).toEqual(["countdown"]);
+      expect(isSectionType("countdown")).toBe(false);
+    });
+  });
+
+  it("refuses a document name it does not recognise, rather than falling back", async () => {
+    vi.stubEnv("MOCK_HOMEPAGE", "reportt");
+    try {
+      await expect(freshMock()).rejects.toThrow(/MOCK_HOMEPAGE/);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
+describe("GET /cms/banners", () => {
+  it("parses the collection and carries a dense position across it", () => {
+    const { data, meta } = parseList(bannerList, get("/cms/banners", "per_page=100&status=any"));
+    expect(meta.total).toBe(5);
+    // **Dense**, 0..n-1 across the whole collection rather than per placement,
+    // which is what lets a reorder swap two adjacent values.
+    expect(data.map((row) => row.position)).toEqual([0, 1, 2, 3, 4]);
+    // And `positionWrites()` therefore says nothing needs writing.
+    expect(positionWrites(data, data)).toEqual([]);
+    // Moving one row is one PATCH per row that actually moved, because there is
+    // no bulk endpoint on this collection.
+    const moved = [data[1], data[0], ...data.slice(2)];
+    expect(positionWrites(data, moved)).toEqual([
+      { id: data[1].id, position: 0 },
+      { id: data[0].id, position: 1 },
+    ]);
+  });
+
+  it("carries a texturized title and a null image on every row", () => {
+    const { data } = parseList(bannerList, get("/cms/banners", "per_page=100&status=any"));
+    const soldes = data.find((row) => row.id === 7301);
+    // WordPress texturizes what it stores, so a title never reads back as it was
+    // written — and a screen that skipped `decodeEntities` prints the six
+    // literal characters of the entity.
+    expect(soldes?.title).toBe("Soldes d&#8217;été");
+    expect(decodeEntities(soldes?.title ?? "")).toBe("Soldes d’été");
+    // Null on every seeded row, which is the measured state of this shop: a
+    // banner without a picture is a banner.
+    for (const row of data) expect(row.image, String(row.id)).toBeNull();
+  });
+
+  it("defaults to publish here as everywhere else under /cms/", () => {
+    const bare = parseList(bannerList, get("/cms/banners", "per_page=100"));
+    const any = parseList(bannerList, get("/cms/banners", "per_page=100&status=any"));
+    expect(bare.meta.total).toBe(3);
+    expect(any.meta.total).toBe(5);
+    expect(apiError(get("/cms/banners", "status=")).params?.status).toBe(
+      "status is not one of publish, draft, and any.",
+    );
+  });
+
+  /**
+   * **The hub reads `meta.total` off this route and off `/cms/faqs`**, with
+   * `?per_page=1&status=any` — one row for the count alone — through `listMeta`,
+   * which requires all four paging keys. So the envelope is the full one here,
+   * and whether the shop sends `page`, `per_page` and `total_pages` beside
+   * `total` is **unverified**: no request-for-request diff has been taken. The
+   * assertion pins what the panel depends on, not what was measured.
+   */
+  it("carries the four-key envelope the Content hub's count is read through", () => {
+    for (const path of ["/cms/pages", "/cms/banners", "/cms/faqs"]) {
+      const response = get(path, "per_page=1&status=any");
+      const { meta } = parse(z.array(z.unknown()), response);
+      expect(listMeta.safeParse(meta).success, path).toBe(true);
+      expect(listMeta.parse(meta).per_page, path).toBe(1);
+    }
+    // `/media` is the hub's fourth count and takes no `?status=`.
+    expect(listMeta.safeParse(parse(mediaList, get("/media", "per_page=1")).meta).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("the banner writes", () => {
+  it("refuses image_url by name, telling the client which field to send", () => {
+    const error = apiError(write("PATCH", "/cms/banners/7301", { image_url: "https://x/y.jpg" }));
+    expect(error.status).toBe(400);
+    expect(error.fields?.image_url).toBe(
+      "Upload through POST /media and send the attachment id as image_id.",
+    );
+  });
+
+  it("resolves image_id into the embedded image, which is the only fixture for that shape", () => {
+    const { data } = parse(banner, write("PATCH", "/cms/banners/7301", { image_id: 5001 }));
+    expect(data.image).not.toBeNull();
+    embeddedImage.parse(data.image);
+    expect(data.image?.id).toBe(5001);
+    // And an id naming nothing is refused rather than stored blind — the defect
+    // `{"product_ids":[999999]}` was on coupons, one collection over.
+    expect(apiError(write("PATCH", "/cms/banners/7301", { image_id: 9999 })).fields?.image_id).toBe(
+      "No attachment with id 9999.",
+    );
+  });
+
+  it("creates with 201 and removes on delete", () => {
+    const response = write("POST", "/cms/banners", {
+      title: "Ramadan",
+      caption: "",
+      link: "/x",
+      placement: "home_hero",
+      status: "draft",
+      position: 5,
+      image_id: null,
+    });
+    expect(response.status).toBe(201);
+    const { data } = parse(banner, response);
+    expect(data.id).toBe(7320);
+
+    expect(write("DELETE", `/cms/banners/${data.id}`, undefined, "force=true").status).toBe(200);
+    const after = parseList(bannerList, get("/cms/banners", "per_page=100&status=any"));
+    expect(after.data.some((row) => row.id === data.id)).toBe(false);
+  });
+
+  /**
+   * `GET /cms/banners/{id}` is a 404 on purpose: `lib/api/allowlist.ts` carries
+   * `PATCH` and `DELETE` on that pattern and no `GET`, so the panel's own proxy
+   * refuses a single banner. A fixture that answered would let a screen render
+   * green here and 404 at the proxy in production — the position `POST
+   * /products` and `/product-categories/{id}` are held to.
+   */
+  it("leaves the single-banner and single-FAQ reads unreachable, as the allowlist does", () => {
+    expect(get("/cms/banners/7301").status).toBe(404);
+    expect(get("/cms/faqs/8101").status).toBe(404);
+    expect(get("/cms/faq-categories/8201").status).toBe(404);
+  });
+});
+
+describe("GET /cms/faqs and /cms/faq-categories", () => {
+  it("parses both, and count is on the collection and absent on the embedded form", () => {
+    const { data: faqs } = parseList(faqList, get("/cms/faqs", "per_page=100&status=any"));
+    const { data: categories } = parse(faqCategoryList, get("/cms/faq-categories"));
+
+    // Present here…
+    for (const category of categories) expect(typeof category.count, category.slug).toBe("number");
+    expect(categories.find((row) => row.slug === "livraison")?.count).toBe(2);
+    // …and absent on the category embedded inside an FAQ, which is one shape
+    // published two ways and the reason the panel's schema marks it optional.
+    for (const faq of faqs) {
+      for (const category of faq.categories) {
+        expect(category.count, `${faq.id}/${category.slug}`).toBeUndefined();
+        faqCategory.parse(category);
+      }
+    }
+    // A category nothing is in, so the safe delete has a fixture.
+    expect(categories.find((row) => row.slug === "grossistes")?.count).toBe(0);
+  });
+
+  it("puts one FAQ in two categories and one in none", () => {
+    const { data } = parseList(faqList, get("/cms/faqs", "per_page=100&status=any"));
+    expect(data.find((row) => row.id === 8102)?.categories.map((c) => c.slug)).toEqual([
+      "paiement",
+      "livraison",
+    ]);
+    expect(data.find((row) => row.id === 8104)?.categories).toEqual([]);
+    // Dense positions here too, and no bulk endpoint.
+    expect(data.map((row) => row.position)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("carries the long Arabic question the 340px assertion needs", () => {
+    const { data } = parseList(faqList, get("/cms/faqs", "per_page=100&status=any"));
+    const arabic = data.find((row) => row.id === 8103);
+    expect(arabic?.question.length).toBeGreaterThan(100);
+    expect(/[؀-ۿ]/.test(arabic?.question ?? "")).toBe(true);
+  });
+});
+
+describe("the FAQ writes", () => {
+  /**
+   * **Four fields refused by name, and that is how they were found rather than
+   * guessed.** Only the `category` sentence is measured — `lib/api/schemas/cms.ts`
+   * quotes it verbatim — and the other three are the mock's, written to the same
+   * shape. What each one *names* is on the record either way, and the
+   * replacement is the load-bearing half: a generic "Unknown field." tells a
+   * client that `title` is wrong and not that `question` is right.
+   */
+  it("refuses category, title, content and menu_order by name, in one 400", () => {
+    const error = apiError(
+      write("PATCH", "/cms/faqs/8101", {
+        category: "livraison",
+        title: "x",
+        content: "y",
+        menu_order: 2,
+      }),
+    );
+    expect(error.status).toBe(400);
+    expect(error.fields?.category).toBe('Use "categories" — an FAQ may sit in more than one.');
+    for (const [wrong, right] of [
+      ["title", "question"],
+      ["content", "answer"],
+      ["menu_order", "position"],
+    ]) {
+      expect(error.fields?.[wrong], wrong).toContain(`"${right}"`);
+    }
+  });
+
+  it("refuses an unknown category rather than creating the FAQ and then complaining", () => {
+    const before = parseList(faqList, get("/cms/faqs", "per_page=100&status=any")).meta.total;
+    const error = apiError(
+      write("POST", "/cms/faqs", { question: "Q", answer: "A", categories: ["inexistante"] }),
+    );
+    expect(error.fields?.categories).toBe('No FAQ category "inexistante".');
+    // **Resolve every reference before the first write** — §89's own rule, from
+    // the build that created an FAQ and *then* refused it.
+    expect(parseList(faqList, get("/cms/faqs", "per_page=100&status=any")).meta.total).toBe(before);
+  });
+
+  it("takes slugs on write and reads objects back", () => {
+    const { data } = parse(
+      faq,
+      write("PATCH", "/cms/faqs/8101", { categories: ["livraison", "paiement"] }),
+    );
+    expect(data.categories.map((category) => category.slug)).toEqual(["livraison", "paiement"]);
+    // And the read body PATCHes back unchanged, which is what the object form is
+    // accepted for.
+    expect(write("PATCH", "/cms/faqs/8101", data).status).toBe(200);
+  });
+
+  it("refuses a category delete with a 409 naming the count, and force detaches", () => {
+    const refused = apiError(write("DELETE", "/cms/faq-categories/8203"));
+    expect(refused.status).toBe(409);
+    expect(refused.details.faqs).toBe(2);
+
+    expect(write("DELETE", "/cms/faq-categories/8203", undefined, "force=true").status).toBe(200);
+    // Detached, not deleted: the FAQs are still there with one fewer category.
+    const { data } = parseList(faqList, get("/cms/faqs", "per_page=100&status=any"));
+    expect(data.some((row) => row.id === 8103)).toBe(true);
+    expect(data.find((row) => row.id === 8103)?.categories).toEqual([]);
+  });
+
+  it("creates a category from a name and refuses an empty one", () => {
+    expect(apiError(write("POST", "/cms/faq-categories", { name: "   " })).fields?.name).toBe(
+      "A category needs a name.",
+    );
+    const { data } = parse(faqCategory, write("POST", "/cms/faq-categories", { name: "Grossistes et revendeurs" }));
+    expect(data.slug).toBe("grossistes-et-revendeurs");
+    expect(data.count).toBe(0);
+  });
+});
+
+describe("/cms/menus", () => {
+  it("publishes WordPress's vocabulary, which is not the writer's", () => {
+    const { data } = parse(menu, get("/cms/menus/primary"));
+    expect(data.location).toBe("primary");
+
+    const [, tapis] = data.items;
+    // `type` is `taxonomy` with the real kind under `object`, and the label is
+    // `title` rather than `label` — `CmsPresenter::menu()` has published this
+    // since §61 and changing it would break every existing caller.
+    expect(tapis.type).toBe("taxonomy");
+    expect(tapis.object).toBe("product_cat");
+    expect(tapis.title).toBe("Tapis");
+    expect(tapis).not.toHaveProperty("label");
+    // Two levels, and the second one has something in it.
+    expect(tapis.children).toHaveLength(2);
+    expect(tapis.children[0].children).toEqual([]);
+    for (const item of data.items) menuItem.parse(item);
+  });
+
+  /**
+   * **`GET /cms/menus/footer` is a 404 with its own sentence**, which is a
+   * different fact from a location that was never registered — and a `PUT` there
+   * **creates and assigns** the menu. So an unassigned location is an empty state
+   * with a working action behind it rather than a dead end, and it is the only
+   * 404 in the panel that is a state.
+   */
+  it("answers an unassigned location with its own 404, and creates one on PUT", () => {
+    const refused = apiError(get("/cms/menus/footer"));
+    expect(refused.status).toBe(404);
+    expect(refused.code).toBe("not_found");
+    expect(refused.apiMessage).toBe("No menu is assigned to that location.");
+    // Not the generic `rest_no_route` a path nobody wrote gets.
+    expect(get("/cms/menus/sidebar").status).toBe(404);
+    expect(apiError(get("/cms/menus/sidebar")).code).toBe("rest_no_route");
+
+    const created = parse(
+      menu,
+      write("PUT", "/cms/menus/footer", {
+        items: [{ label: "Conditions", type: "page", path: "legal/conditions-generales", children: [] }],
+      }),
+    );
+    expect(created.data.name).toBe("Footer navigation");
+    expect(created.data.location).toBe("footer");
+    // Assigned, so the 404 is gone.
+    expect(parse(menu, get("/cms/menus/footer")).data.id).toBe(created.data.id);
+    expect(MENU_LOCATIONS).toEqual(["primary", "footer"]);
+  });
+
+  it("accepts the reader's own body back unchanged, which is the round trip", () => {
+    const { data } = parse(menu, get("/cms/menus/primary"));
+    const saved = parse(menu, write("PUT", "/cms/menus/primary", { items: data.items }));
+    expect(saved.data.items.map((item) => item.title)).toEqual(
+      data.items.map((item) => item.title),
+    );
+    expect(saved.data.items[1].children.map((item) => item.object_id)).toEqual(
+      data.items[1].children.map((item) => item.object_id),
+    );
+  });
+
+  it("refuses through the tree, positionally", () => {
+    const error = apiError(
+      write("PUT", "/cms/menus/primary", {
+        items: [
+          { label: "A", type: "url", url: "/soldes", children: [] },
+          {
+            label: "B",
+            type: "category",
+            object_id: 13,
+            children: [{ label: "C", type: "product", object_id: 999999, children: [] }],
+          },
+        ],
+      }),
+    );
+    expect(error.status).toBe(400);
+    expect(error.fields?.["items[1].children[0].object_id"]).toBe("No product with id 999999.");
+  });
+
+  /**
+   * `javascript:` **is a valid URL**, which is exactly where that matters, and
+   * `//host` is not a path — it is a protocol-relative URL to somewhere else.
+   * The panel refuses both before sending so the person is told by the field
+   * rather than by a round trip, and `isAllowedMenuUrl()` is that half; this is
+   * the API's.
+   */
+  it("refuses javascript: and //host on the item's own url", () => {
+    for (const url of ["javascript:alert(1)", "//evil.example", ""]) {
+      const error = apiError(
+        write("PUT", "/cms/menus/primary", {
+          items: [{ label: "A", type: "url", url, children: [] }],
+        }),
+      );
+      expect(error.fields?.["items[0].url"], url).toBeDefined();
+      expect(isAllowedMenuUrl(url), url).toBe(false);
+    }
+    // And the three shapes that are allowed really are.
+    for (const url of ["/soldes", "https://instagram.com/x", "http://example.dz"]) {
+      expect(isAllowedMenuUrl(url), url).toBe(true);
+      expect(
+        write("PUT", "/cms/menus/primary", {
+          items: [{ label: "A", type: "url", url, children: [] }],
+        }).status,
+        url,
+      ).toBe(200);
+    }
+  });
+
+  it("refuses a third level positionally and a 51st item flatly", () => {
+    const deep = apiError(
+      write("PUT", "/cms/menus/primary", {
+        items: [
+          {
+            label: "A",
+            type: "category",
+            object_id: 13,
+            children: [
+              {
+                label: "B",
+                type: "page",
+                path: "contact",
+                children: [{ label: "C", type: "url", url: "/x", children: [] }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(deep.fields?.["items[0].children[0].children"]).toBe("A menu is 2 levels deep at most.");
+    expect(MAX_MENU_DEPTH).toBe(2);
+
+    const item = (index: number) => ({
+      label: `I${index}`,
+      type: "url" as const,
+      url: "/x",
+      children: [],
+    });
+    const many = apiError(
+      write("PUT", "/cms/menus/primary", {
+        items: Array.from({ length: MAX_MENU_ITEMS + 1 }, (_, index) => item(index)),
+      }),
+    );
+    /*
+     * **Flat on `items`, and that is a departure this file records rather than
+     * hides.** Nothing published the shape of this cap. The one cap in this
+     * subject that *was* measured — the homepage's fifty sections — is flat, on
+     * `sections`, precisely so a form cannot bind it to a row index; making this
+     * one positional would teach the opposite lesson from the only measurement
+     * available.
+     */
+    expect(many.fields?.items).toBe("A menu carries at most 50 items; this one has 51.");
+    expect(many.fields?.["items[50]"]).toBeUndefined();
+    expect(
+      write("PUT", "/cms/menus/primary", {
+        items: Array.from({ length: MAX_MENU_ITEMS }, (_, index) => item(index)),
+      }).status,
+    ).toBe(200);
+  });
+
+  it("refuses a page path naming nothing, and a type the writer does not have", () => {
+    expect(
+      apiError(
+        write("PUT", "/cms/menus/primary", {
+          items: [{ label: "A", type: "page", path: "nulle-part", children: [] }],
+        }),
+      ).fields?.["items[0].path"],
+    ).toBe('No page at path "nulle-part".');
+
+    expect(
+      apiError(
+        write("PUT", "/cms/menus/primary", {
+          items: [{ label: "A", type: "machin", children: [] }],
+        }),
+      ).fields?.["items[0].type"],
+    ).toBe("Must be one of: page, category, product, url.");
+    expect(MENU_ITEM_TYPES).toEqual(["page", "category", "product", "url"]);
+  });
+});
+
+/**
+ * ── `/media`, which is checklist item 13 and is served rather than redesigned ─
+ *
+ * The Content hub renders a media count and `MediaPicker` reads the collection
+ * from inside the banner form, so leaving it a 404 would photograph two Content
+ * screens in their error state. What is measured and what is assumed is drawn
+ * out in the mock's own docblock; these assertions pin only the measured half
+ * plus the shape the two callers depend on.
+ */
+describe("GET /media", () => {
+  it("parses the library, with sizes empty on every row", () => {
+    const { data, meta } = parseList(mediaList, get("/media", "per_page=100"));
+    expect(meta.total).toBe(41);
+    for (const item of data) {
+      mediaItem.parse(item);
+      // 30×20 fixtures, below every threshold at which WordPress generates a
+      // thumbnail — so a client indexing into `sizes[0]` works in production and
+      // fails on every test fixture. `url` is the size that always exists.
+      expect(item.sizes, String(item.id)).toEqual([]);
+      expect(item.url).not.toBe("");
+    }
+    // Which is why `mediaSize` has no fixture anywhere, and saying so is the
+    // point of naming it.
+    expect(mediaSize.safeParse({ name: "thumbnail", url: "u", width: 1, height: 1 }).success).toBe(
+      true,
+    );
+  });
+
+  it("generates the filename as a collision suffix rather than a rewrite", () => {
+    const { data } = parseList(mediaList, get("/media", "per_page=3"));
+    // `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg` and
+    // `real-2.jpg`, and the extension comes from the *sniffed* type. Show the
+    // returned name, never the one the person picked.
+    expect(data.map((item) => item.filename)).toEqual(["real.jpg", "real-1.png", "real-2.webp"]);
+  });
+
+  it("pages the way both of its callers ask it to", () => {
+    const first = parseList(mediaList, get("/media", "per_page=30&page=1"));
+    const second = parseList(mediaList, get("/media", "per_page=30&page=2"));
+    expect(first.data).toHaveLength(30);
+    expect(second.data).toHaveLength(11);
+    expect(first.meta.total_pages).toBe(2);
+    expect(get("/media", "per_page=101").status).toBe(400);
+  });
+
+  it("writes alt, title and caption, and drops the rest in silence", () => {
+    const { data } = parse(
+      mediaItem,
+      write("PATCH", "/media/5001", { alt: "Nouvelle description", title: "T", caption: "C" }),
+    );
+    expect(data.alt).toBe("Nouvelle description");
+    // A read-only key leaves in silence; an unknown one is a 400. The rule
+    // products and coupons already share.
+    expect(write("PATCH", "/media/5001", { filename: "autre.jpg" }).status).toBe(200);
+    expect(parse(mediaItem, get("/media/5001")).data.filename).toBe("real.jpg");
+    expect(apiError(write("PATCH", "/media/5001", { nope: 1 })).fields?.nope).toBe("Unknown field.");
+  });
+
+  /**
+   * **`POST /media` is allowlisted and unserved; `DELETE /media/{id}` is neither
+   * allowlisted nor served.** Two different absences and both are deliberate.
+   *
+   * The upload is the only `multipart/form-data` request the panel makes and the
+   * mock's server parses JSON, so every upload would arrive indistinguishable
+   * from an empty one and all five of its measured failure shapes would be
+   * unreachable. Item 13 owns the upload screen and owns modelling it — a
+   * fixture answering 201 to anything would be an invitation to build that
+   * screen against a fiction.
+   *
+   * The delete exists at the API and `ac_manage_content` allows it. Nothing here
+   * tells a client what an attachment is *used by* — a banner's `image`, a page
+   * thumbnail and a homepage section all reference one with no back-reference
+   * anywhere — so the library cannot answer "what would this break?", and an
+   * irreversible action a screen cannot explain is worse than one it does not
+   * offer.
+   */
+  it("leaves the upload and the delete unreachable, for two different reasons", () => {
+    expect(write("POST", "/media", { file: "x" }).status).toBe(404);
+    expect(write("DELETE", "/media/5001").status).toBe(404);
+    expect(write("PUT", "/media/5001", { alt: "x" }).status).toBe(404);
+  });
+});
+
+/**
  * The mock grows one collection per redesign branch, and the promise this suite
  * makes — every schema the mock serves is validated against it — only stays true
  * if a new schema file cannot arrive unnoticed. So the directory is enumerated
@@ -6239,13 +7389,34 @@ const COVERED = [
    * and `analyticsRange` in all seven.
    */
   "analytics",
+  /*
+   * **Covered by every schema in the module**, which is the standard `analytics`
+   * set and the one this branch had to meet: `pageRow`/`pageList` on the index,
+   * `page` and `pageSeo` on the document, `banner`/`bannerList`,
+   * `faqCategory`/`faqCategoryList`, `faq`/`faqList`, `menuItem`/`menu`,
+   * `homepageSection`/`homepage` and `homepageProblems` on the drop report, and
+   * `embeddedImage` through the one write that can produce it — a banner's
+   * `image_id`, since `image` is null on every seeded row in this shop.
+   *
+   * What the module cannot express is named below rather than left implied.
+   */
+  "cms",
+  /*
+   * **`media` is covered because two Content screens read it, not because item
+   * 13 is done.** The hub renders a media count and `MediaPicker` reads the
+   * collection from inside the banner form, so a 404 here would have photographed
+   * two Content screens in their error state.
+   *
+   * `mediaItem` and `mediaList` are exercised; `mediaSize` has no fixture and
+   * cannot have one — `sizes` is empty on all 41 rows because the images are
+   * 30×20. The upload and the delete are named below.
+   */
+  "media",
 ];
 
 const UNCOVERED: Record<string, string> = {
   audit: "/audit is not mocked yet",
   campaign: "/campaigns is not mocked yet",
-  cms: "/cms/* is not mocked yet",
-  media: "/media is not mocked yet",
   settings: "/settings is not mocked yet",
   staff: "/users and /roles are not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",

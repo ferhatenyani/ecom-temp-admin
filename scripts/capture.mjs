@@ -23,6 +23,32 @@
  * `ac_manage_orders`, deliberately, because that is what keeps `/orders/1023`
  * a screen rather than a refusal.
  *
+ * **`no_content` is the fourth and it drops exactly one** — `ac_manage_content`,
+ * which every route under `/cms/` and `/media` is gated on and which all three of
+ * the identities above hold. So it is the only way to photograph the Content
+ * section refused, and the whole section refuses at once:
+ *
+ *     MOCK_IDENTITY=no_content node scripts/capture.mjs --all
+ *
+ * **A second harness switch arrived with it, and it is not an identity.**
+ * `MOCK_HOMEPAGE` chooses which stored homepage document the mock serves,
+ * because the three states that screen has are properties of the *document*
+ * rather than of the reader or the URL — `/content/homepage` takes no parameters
+ * and the panel's server component forwards none:
+ *
+ *     node scripts/capture.mjs /content/homepage                  the drop report
+ *     MOCK_HOMEPAGE=empty node scripts/capture.mjs /content/homepage    empty
+ *     MOCK_HOMEPAGE=future node scripts/capture.mjs /content/homepage   a type
+ *         this build has no name for — `unknownSectionTypes()`'s only fixture,
+ *         and a hypothesis rather than a measurement. The mock's own block says
+ *         so at length; it is behind a switch precisely so nobody reads it as one
+ *
+ * It is read at module load like `MOCK_IDENTITY`, so it is a whole run rather
+ * than a per-capture switch. Unlike the identity it writes **no suffix** on the
+ * filenames — the three homepage documents are three states of one screen, not
+ * one screen under three credentials — so capture them one at a time and move
+ * the output if you want to hold them side by side.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale
@@ -313,6 +339,156 @@ const DEFAULT_ROUTES = [
    *         branch: a plain list of counts where the ranked window draws bars
    */
   "/analytics",
+  /*
+   * ── Content: seven screens, and none of them had ever been photographed ─────
+   *
+   * Not an oversight in this list. `/cms/*` and `/media` were **completely
+   * unmocked** until this branch — `tests/mock-api.test.ts` declared both
+   * `UNCOVERED` — so a capture of any Content route would have been a photograph
+   * of its error state with an `h1` on top, which is exactly the failure the
+   * request-count assertion at the end of this file exists to catch and exactly
+   * the failure it *cannot* catch, because the panel really does talk to the mock
+   * and the mock really does answer 404.
+   *
+   * The hub is listed rather than the section's landing screen by convention: it
+   * is the one screen that reads **four collections at once** — pages, banners,
+   * FAQs and media, each with `?per_page=1&status=any` for the count alone — so
+   * it is where an envelope that stopped carrying `meta.total` would show up
+   * first, as four missing numbers rather than as an error.
+   */
+  "/content",
+  /*
+   * The index, and the fixture is built so the default view is the interesting
+   * one: 62 listed pages under `?status=any`, which is what the screen sends, so
+   * the pager runs rather than rendering two disabled buttons and a "1 / 1". It
+   * had never run against this harness at all — the seed used to be under
+   * `PER_PAGE = 50`.
+   *
+   * **Three states of this route are reachable only by naming a URL**, and each
+   * is a state rather than a screen:
+   *
+   *     node scripts/capture.mjs "/content/pages?page=2"
+   *         the second page — twelve rows, a live "previous" and a dead "next",
+   *         which is the half of the pager the first page cannot show
+   *     node scripts/capture.mjs "/content/pages?status=draft"
+   *         ten rows, and **both `ac-unpublished` rows are on it** — the two
+   *         pages sharing one path, which is the only place `collidingPaths()`
+   *         has anything to mark and the only place the index renders a row it
+   *         refuses to link. The 62-character path on `programme-de-fidelite-…`
+   *         is on this view too, which is what the 340px assertion bites on
+   *     node scripts/capture.mjs "/content/pages?search=zzz"
+   *         the filtered empty state, which is a different screen from the
+   *         unfiltered one: it offers "clear the filters" and says what
+   *         `?search=` matches, and the unfiltered one cannot be reached at all
+   *         while the shop has 62 pages in it
+   */
+  "/content/pages",
+  /*
+   * The page form. `legal/conditions-generales` rather than a root page, and the
+   * path is the point: it is **two segments**, so it exercises the catch-all
+   * route and the greedy `/cms/pages/.+` allowlist rule that makes it reachable.
+   * It is also the one page in the fixture with a real `seo.overrides` entry, so
+   * the SEO block renders its *overridden* branch — every other page shows the
+   * derived placeholders and would leave that path unphotographed.
+   *
+   * **The two delete refusals are overlays on this route rather than routes**, so
+   * they are not capturable here, and the fixture puts each on its own page so
+   * that a person driving the panel by hand can reach both:
+   *
+   *     /content/pages/legal            409 `children` — two child pages, and
+   *                                     `?force=true` reparents them
+   *     /content/pages/privacy-policy   409 `option` — and **force does not
+   *                                     override it**, which is the asymmetry
+   *                                     `PageForm` renders two different banners
+   *                                     for
+   *
+   * `privacy-policy` is worth capturing by name for a second reason: it is a
+   * **draft**, and it is the measurement the whole Pages index exists for — the
+   * page that answered "No page at that path." about itself.
+   */
+  "/content/pages/legal/conditions-generales",
+  /*
+   * The same form against an empty page, and a **different screen** rather than a
+   * state of the one above — the precedent `/coupons/new` set. No path, no id, a
+   * create button where the delete section is, and the rename warning that cannot
+   * fire because there is nothing to rename.
+   */
+  "/content/pages/new",
+  /*
+   * The homepage editor, and the default document is the **drop report**: twelve
+   * stored sections of which three are malformed, so nine survive on screen and
+   * `meta.problems` carries three sentences whose positions are 1-based over the
+   * *stored* document. They are interleaved at 2, 4 and 6, so "Section 6" is the
+   * fourth thing on screen — an off-by-one anywhere in that chain is visible in
+   * the capture rather than plausibly correct.
+   *
+   * The other two documents are `MOCK_HOMEPAGE`'s, and the header at the top of
+   * this file says which is which. The empty one matters most: it is what this
+   * shop actually answered before `scripts/seed-cms.mjs` existed, and it is the
+   * screen's empty state.
+   */
+  "/content/homepage",
+  /*
+   * Banners, grouped by placement and ordered by a dense `position` inside each
+   * group — five rows over three placements, so every group has something in it
+   * and one has a single row, which is where a "move up"/"move down" pair has to
+   * render both controls disabled.
+   *
+   * The 340px risk on this screen is the **texturized title**: `Soldes d’été`
+   * comes back with its apostrophe as character reference 8217, so a capture is
+   * also the check that `decodeEntities` ran — the six literal characters of the
+   * entity are visible in a screenshot in a way they are not in an assertion.
+   */
+  "/content/banners",
+  /*
+   * FAQs, plus the category manager inside them. Five FAQs over four categories,
+   * one FAQ in **two** categories and one in none, and a category with a count of
+   * zero — which is the row whose delete is safe, against the three that answer a
+   * 409 naming how many FAQs would be detached.
+   *
+   * The overflow fixture here is Arabic: a 110-character question rendered
+   * `dir="auto"`, so the 340px capture is the one place an overflow and a
+   * direction flip can compound and be seen doing it.
+   */
+  "/content/faqs",
+  /*
+   * The category manager, which is a **route** rather than the sheet the
+   * pre-redesign screen kept it in — so it is a screen of its own and gets its
+   * own capture.
+   *
+   * The fixture is built for the one decision this screen makes: three of the
+   * four categories have FAQs in them and one does not, so the row whose delete
+   * is safe sits beside three whose delete answers a 409 naming how many FAQs
+   * `?force=true` would detach. A manager where every row behaved the same way
+   * would photograph the same button four times.
+   */
+  "/content/faqs/categories",
+  /*
+   * Menus. The bare path is `primary`, which is the assigned location: six root
+   * items, one of them carrying two children, so the two-level tree renders at
+   * full depth.
+   *
+   * **The unassigned location is the state worth having and it needs its own
+   * URL**, because the location is a query parameter this screen owns:
+   *
+   *     node scripts/capture.mjs "/content/menus?location=footer"
+   *
+   * `GET /cms/menus/footer` is a 404 with its own sentence — "No menu is assigned
+   * to that location." — which is a different fact from a location that was never
+   * registered, and a `PUT` there **creates and assigns** the menu. So that
+   * capture is an empty state with a working action behind it rather than an
+   * error, and it is the only screen in the panel whose 404 is a state.
+   */
+  "/content/menus",
+  /*
+   * **`/media` is deliberately not on this list.** It is checklist item 13, it
+   * has not been migrated, and a capture of it would photograph its unmigrated
+   * self and land in the same folder as twelve screens that have been — which is
+   * how a review report comes to say a screen is done. The mock serves the
+   * collection because the hub counts it and `MediaPicker` reads it from inside
+   * the banner form; that is the whole reason it is served, and it is not a
+   * reason to photograph it.
+   */
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
