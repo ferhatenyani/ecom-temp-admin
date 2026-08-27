@@ -965,6 +965,80 @@ export function Select<T extends string = string>({
 }
 
 /**
+ * A file to upload — a real `<input type="file">` in the frame every other
+ * control here wears.
+ *
+ * **In this layer rather than in the one screen that has it**, and that is
+ * §3's rule rather than an ambition: everything that makes a field a field in
+ * this panel — `FieldFrame`'s label-over-control column, the `describedBy`
+ * wiring, `.ui-field`'s 36/44px geometry, `borderFor`, and the pre-hydration
+ * guard — is private to this module. A page that wanted a labelled file input
+ * would have had to re-implement all five, which is precisely the drift a
+ * primitive exists to stop. One caller today; the shape is the layer's.
+ *
+ * No `value`, because a file input has no settable one — assigning to
+ * `input.value` is refused by every browser for anything but the empty string.
+ * A caller that needs to clear it remounts this with a `key`, which is one line
+ * at the call site and needs no ref crossing the boundary.
+ *
+ * `accept` is **advisory in both directions**: the operating system's picker
+ * treats it as a filter a person can override, and the server is the authority
+ * on what it will take. `lib/media.ts` argues that at length.
+ */
+export function FileField({
+  id: givenId,
+  label,
+  accept,
+  hint,
+  error,
+  onChange,
+  disabled = false,
+}: {
+  id?: string;
+  label: string;
+  /** The `accept` attribute. A hint to the OS picker, never a guarantee. */
+  accept?: string;
+  hint?: string;
+  error?: string;
+  onChange: (file: File | null) => void;
+  disabled?: boolean;
+}) {
+  const auto = useId();
+  const id = givenId ?? auto;
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+  const hydrated = useHydrated();
+
+  return (
+    <FieldFrame
+      id={id}
+      label={label}
+      hint={hint}
+      hintId={hintId}
+      error={error}
+      errorId={errorId}
+    >
+      <input
+        id={id}
+        type="file"
+        accept={accept}
+        disabled={disabled || !hydrated}
+        aria-busy={!hydrated || undefined}
+        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(hint, hintId, error, errorId)}
+        /* The UA button inside is styled rather than hidden: replacing it with
+           our own means a `<label>` driving a hidden input, which loses the
+           control's own keyboard behaviour on two engines. */
+        className={`${CONTROL} cursor-pointer file:me-3 file:cursor-pointer file:rounded-ui-md file:border-0 file:bg-ui-surface-3 file:px-2 file:py-1 file:text-ui-label file:text-ui-fg ${borderFor(
+          Boolean(error),
+        )}`}
+      />
+    </FieldFrame>
+  );
+}
+
+/**
  * A boolean, as a real `<input type="checkbox" role="switch">`.
  *
  * `role="switch"` rather than a bare checkbox because the two announce

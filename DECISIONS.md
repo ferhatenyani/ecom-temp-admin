@@ -27,7 +27,7 @@ left looking like an oversight.
 [x] 10. Dashboard
 [x] 11. Analytics — revenue / orders / products / customers / shipping / COD
 [x] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
-[ ] 13. Media
+[x] 13. Media
 [ ] 14. Marketing — campaigns, composer, segments, config, templates
 [ ] 15. Notifications — list + detail
 [ ] 16. Staff — list, detail, new
@@ -39,13 +39,13 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **53
-files left**, down from 69 after the content branch. Read it as an **upper
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **50
+files left**, down from 53 after the content branch. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
-primitive contains no `ui-` string of its own. Content added none this time —
-all nineteen of its files carry one — but `CustomersView.tsx` and `CodView.tsx`
-still do not.
+primitive contains no `ui-` string of its own. Content added none, and neither
+did media — its four files all carry one, and `UploadSheet.tsx` was deleted
+rather than migrated — but `CustomersView.tsx` and `CodView.tsx` still do not.
 
 ---
 
@@ -1399,7 +1399,296 @@ is phone-sized and the anchor lives only in the `md`+ table.
 
 ---
 
+## 14. Media — the screen with no table
+
+Checklist item **13**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+**The absence of a `DataTable` is the decision, not a gap.** §3.2's table
+contract is rows of fields, and for a picture the picture *is* the identifying
+cell — a 44px thumbnail beside a generated filename is a worse way to find an
+image than four columns of images. So the record's fields live in the peek and
+the grid holds an image plus one line. DESIGN.md §3.2 gained `MediaGrid` as a
+contract, because a rule that a page must not fork a primitive only helps if the
+primitive exists.
+
+- **Extended, not forked.** `components/ui/MediaPicker.tsx` already drew the
+  grid, the pager and four of the five states for one caller. The tiles and the
+  pager moved to `components/ui/MediaGrid.tsx`; the picker kept its request, its
+  states and `onPick`, and came out behaviourally unchanged for
+  `BannerDrawer.tsx` — driven in Chromium: 20 tiles, `media.pickTitle` intact,
+  pick returns to the form with the thumbnail attached, no console error. Its
+  docblock claimed an **`onCancel` prop that has never existed**; corrected.
+- **`PER_PAGE` 30 → 20**, in `lib/media.ts` and shared by both readers. 20 is the
+  API's measured default across nine collections and what every migrated list
+  opens at. 41 rows is three pages, so this screen's pager has a fixture for the
+  first time.
+- **Tiles are real `<button>`s on `rowOpenerId`'s id shape**, scoped `media` and
+  `media-pick`. `alt` is *not* the label: one fixture carries `alt: ""` and a
+  label built on it would leave a tile unnamed. `title` falls back to `filename`,
+  which is `Ltr`-wrapped only in that branch — a title is prose, a filename is an
+  identifier. The `<img>` is `alt=""`, because the text inside the button is
+  already the control's accessible name.
+- **The columns are a named variant rather than a viewport query**, and that is
+  forced: Tailwind's breakpoints are the viewport's and the picker renders inside
+  a 520px `Drawer`, where the page's `xl:grid-cols-6` would draw 78px tiles.
+- **A placeholder sits behind the picture.** A slow image and a broken one are
+  indistinguishable before `onerror` and unrecoverable after it, so both read as
+  "no picture" rather than as a torn box.
+
+### The peek, and the defect it uncovered
+
+`MediaPresenter::toArrayList` is `array_map(toArray)`, so `GET /media/{id}` is
+the list row exactly and the drawer is free by the standing rule.
+
+**Resolving it only from the page in memory made the URL a dead link, and the
+harness's own capture target proved it.** The collection rests **newest first**,
+so `?peek=5001` — the oldest attachment, and the id the brief pinned into
+`capture.mjs` — sits on page **three**: the first capture rendered a library with
+no drawer and nothing said so. `?peek=` is shareable and bookmarkable or it is
+nothing, so a miss now falls through to `GET /media/{id}`, `retry: false`, and an
+id naming no attachment opens nothing at all — the library behind it is intact
+and there is no error state to put on a screen that is working.
+
+**`/orders` and `/products` carry the same shape** (`OrdersList.tsx:162`,
+`ProductsList.tsx:244`) and are latent for the same reason: on those screens the
+id got into the URL by somebody clicking a visible row, so only a shared or
+bookmarked link reaches it. Not fixed here — this branch does not own them.
+
+`useLatchedOpener` throughout, and the `?peek=` shape is the one that needs it
+most: closing clears the parameter and re-renders with a null record *before*
+Radix fires `onCloseAutoFocus`. Measured on both paths rather than reasoned
+about, because the pointer path is the one that matters — it passes every
+keyboard assertion even when broken.
+
+### The drawer's edit, which is measured rather than assumed
+
+`~/projects/ecom-temp/**/tests/Api/media.php:387-435` positively controls it and
+asserts the edit reads back. Re-measured against the harness in a browser:
+
+```
+  save disabled at open      true, titled "Aucune modification à enregistrer."
+  dirty → enabled            true;  reverted → disabled again
+  PATCH one moved field      {"alt":"Tapis berbère"}      → reads back
+  PATCH an emptied field     {"caption":null}             → reads back ""
+```
+
+- **A save that changes nothing is a refusal, not a no-op** — `{}` is a 400
+  `invalid_request` — so only the fields that moved are sent and the control is
+  disabled with the reason on it. Disabled rather than absent: a Save button that
+  appeared and vanished under the cursor while somebody typed is worse than one
+  that waits, and §3.3 removes a control that *cannot* act, which this one can as
+  soon as a character changes.
+- **An emptied field sends `null`, never `""`.** `null` is the documented clear.
+- **`file` is not rendered as a control at all.** Its refusal names the remedy —
+  "The stored file cannot be replaced; upload a new one." — so a disabled field
+  beside the editable three would stand exactly where the one thing somebody
+  might come here to do is impossible.
+- The drawer's title is the **panel's** name and not the record's, which inverts
+  every other peek in this run. The record's title is an editable control in this
+  body, so a header built from it would draw a second, stale copy of a field's
+  value directly above the field, disagreeing with what somebody is typing.
+- **No client-side length rule.** `MediaInput::MAX_LENGTH` is 500 and was read
+  out of the backend, not measured over the wire; the 400 binds to its own field
+  and says the limit in the API's own words.
+- `date_modified` is **not** rendered: it equals `date_created` on all 41
+  fixtures and is moved only by this drawer's own write. `uploaded_by` is not
+  either — there is no route that turns the staff id into a name, and printing a
+  primary key at a shopkeeper is the shipping-rule argument again.
+
+### Upload, as a `Modal`
+
+§3.1: a task that must be finished or abandoned, with nothing behind it being
+read from. Success is 201, and any 2xx **carrying a row** is accepted — a client
+that refused a 200 would invent a failure out of a success. What it no longer
+does is call an empty 2xx a win: the screen this replaces returned silently when
+`data` was missing, leaving the modal open with no progress, no error and nothing
+to press.
+
+- **`precheck` warns and no longer blocks.** The old sheet disabled the button on
+  any local verdict, which makes the browser the authority — and `lib/media.ts`
+  argues at length that it is not: the cap is raisable with `AC_MEDIA_MAX_BYTES`
+  and PHP's own limit can be lower than either, so a client trusting its own
+  arithmetic is wrong in both directions. A local verdict is a `warning` and the
+  server's is a `danger`, and the two titles say which is which. Driven: a `.gif`
+  raises the advisory, the button stays live, the send answers 415 and the notice
+  becomes the refusal.
+- **`UploadSheet.tsx:178` returned `value.message` — raw API English — as its
+  default**, the class of defect this run has now fixed five times. The *kind* is
+  said in the reader's language and the API's sentence sits under it as
+  `dir="ltr"` detail: the untranslated half is evidence, not copy.
+- `FileField` is new in `components/ui/Form.tsx` rather than in the page.
+  `FieldFrame`, `describedBy`, `borderFor`, `.ui-field`'s geometry and the
+  pre-hydration guard are all private to that module, so a page wanting a
+  labelled file input would have re-implemented five things. One caller today;
+  the shape is the layer's.
+
+### Not shipped, each absence recorded
+
+- **No delete.** The route exists and the capability allows it;
+  `lib/api/allowlist.ts:266-273` refuses it and `tests/boundary.test.ts:487` pins
+  it shut, because an attachment has no back-reference anywhere in this API and
+  the panel cannot say what a delete would break. Not rendered, not disabled.
+- **No sorting, no `aria-sort` anywhere.** The only control taken on `orderby` is
+  negative (`rand` → 400) and `date desc` is the resting order, so the standing
+  rule's positive control does not exist.
+- **No `type` filter**, though the parameter works. No allowlisted enumeration of
+  what a library can *hold* exists — `ACCEPTED_MIME` is what the panel can
+  upload, definitionally a subset — and all 41 rows are `image/*`, so the control
+  has one non-empty value. A control that can only answer "all of them" cannot
+  act.
+- **No search box.** `search` is honoured in backend code and has no control at
+  all, here or in the backend suite. Unmeasured is treated as broken.
+- **No bulk, no export** — media is not in `EXPORT_SUBJECTS`.
+- **One empty state, and the missing half has no producer.** With no filter, no
+  search, no sort and a bounded pager, there is no control a reader can operate
+  that returns nothing. DESIGN.md §3.7 carries the amendment.
+
+### Two boundary defects the harness audit surfaced, both `MediaPresenter`
+
+1. **`sizes` was declared an array of `{name, url, width, height}`;
+   `MediaPresenter::sizes()` returns a map keyed by size name of
+   `{width, height, mime_type}`.** No `url`, no `name`, and not an array. It
+   parsed only because an empty PHP map serialises as `[]` and every attachment
+   in this shop is 30×20 — below every thumbnail threshold. The day one sub-size
+   existed, **every media response in the panel would have thrown at the
+   boundary**: the library, the picker, and the banner strip behind it. Both
+   serialisations now parse and normalise to the map; a *populated* array is
+   refused rather than tolerated, because it is not something PHP can emit here
+   and accepting it is the permissive direction. Asserted directly, since the
+   fixture cannot exist.
+2. **`embeddedImage` required `url` and `MediaPresenter::image()` has never sent
+   one** — it sends `{id, src, thumbnail, alt}`. A banner with a picture threw,
+   latent only because `image` is null on every seeded row. **The two sources
+   disagree and neither is measured over the wire**: the presenter says `src`,
+   the harness resolves `{id, url, alt, width, height}`, which is this schema's
+   own old guess handed back at it. So `id` is the only required key, every
+   carrier of the picture is optional, and `embeddedImageSrc` in `lib/cms.ts` is
+   the one place that decides which wins — structurally typed, so that file keeps
+   its no-Zod-in-the-browser property. A request-for-request diff on
+   `/cms/banners` is what would settle it, and the harness owns its half.
+
+### Verified in a browser, not reported
+
+```
+  focus after Escape, POINTER open    1440/390 × fr/ar -> BUTTON#media-opener-5041
+  focus after Escape, keyboard open   1440/390 × fr/ar -> the same tile
+  drawer box                          1440: x=920 w=520 right=1440 · 340: full bleed
+  tile hit area, 340 coarse                            -> 148 × 172
+  pager button (box ∪ ::after), coarse                 -> 28px box, 44px ::after
+  340 page 2, the 80-char unbreakable title            -> 507px of text in a
+                                                          148px box, clipped;
+                                                          scrollWidth 340 = client
+```
+
+36 captures clean across `/media`, `/media?peek=5001` and the `no_content` run,
+at 340/768/1440 × light/dark × fr/ar, plus `MOCK_MEDIA=empty`.
+
+**i18n**: **1 870 keys in each file, exact parity.** Seven added
+(`noChanges`, `chosenFile`, `percent`, `field.dimensionsValue`, `field.url`,
+`refusal.title`, `refusal.advisoryTitle`), three removed for losing their last
+caller (`cancel`, `previousPage`, `nextPage` — the pager borrows `ui.table`'s,
+being the same control doing the same job). `media.pickTitle` untouched: its live
+reader is `BannerDrawer.tsx:168`. The four non-message strings the old screen
+rendered — `{page} / {pageCount}`, `{width} × {height}`, `{n} %` and the raw API
+default — are all gone.
+
+**`e2e/content.spec.ts`: 24 test declarations before, 24 after**, titles
+byte-identical. Selectors only: `ul button` → `ul li button`, and the count moved
+to the header's subtitle under the same testid. It stays in this file because
+`/media` is inside the Manager forbidden loop over eight paths and cannot move —
+the payments judgement (§9) for the same reason.
+
+**Where the brief was wrong.** `/media?peek=5001` was pinned into `capture.mjs`
+without checking which page that id lands on; it is the oldest row against a
+newest-first collection, so it is on page three. The capture is now honest
+because the screen fetches the record, but **5022** or higher would exercise the
+in-memory path instead, and only the harness's owner can change that. Everything
+else in the brief held.
+
+### Re-verified independently, and one harness defect that fell out of it
+
+Every claim above was re-driven from a scratch script outside the repo. All held.
+Three things the screens agent could not have seen:
+
+1. **`capture.mjs` photographed the peek drawer mid-slide, and the PNG read as a
+   clipped drawer.** The 400ms after `networkidle` is sized for a font swap, not
+   for *hydrate → fetch the record → mount an overlay → slide it in*; and
+   `networkidle` cannot cover that chain, because the query fires after hydration
+   once the network has already gone quiet. `/media?peek=5001` is the run's first
+   capture of an overlay opened from a URL parameter, so nothing had exposed it.
+   Driven with a 900ms settle the same drawer measures `x=920 w=520 right=1440`,
+   zero overflow — **the screen was right and the harness was early.** Fixed with
+   `animations: "disabled"` on the screenshot, which pins every running transition
+   to its end state; raising the timeout would trade a wrong frame for a slower
+   run and still race whatever is slowest on the day. Every future overlay capture
+   inherits it.
+2. **The Arabic count line renders `41 من 20–1` and that is correct**, which is
+   worth writing down because it looks exactly like the `pageOf` defect shipping
+   fixed and the next reader will flag it. Read the way an Arabic reader reads it —
+   right to left — it is `1`, `–`, `20`, `من`, `41`. The two are different cases:
+   `pageOf` is a bare pair of figures round a slash with no word to anchor the
+   run, so a visual `7 / 1` genuinely reads as page 7 of 1; `range` carries `من`,
+   which makes it an Arabic sentence and bidi handling it is bidi working. Wrapping
+   it in `Ltr` would be the bug — it would force the Arabic preposition into an
+   LTR run. Measured on `/media`, `/shipping` and `/products`: all three identical.
+3. **A capture of this screen cannot catch a per-tile `src` bug, and the fixture
+   is right anyway.** All 41 tiles photograph as the same red rectangle, so a
+   screen that rendered `rows[0].url` forty-one times would look identical to a
+   correct one. The instinct to vary the fixture colours is wrong: the colour is
+   the *backend's* — `tests/Api/media.php`'s `ac_jpeg_bytes()` fills 30×20 with
+   rgb(190,40,40) — so varying them would have the mock showing a library the shop
+   does not have. Closed by measurement instead of by fixture: driven in Chromium,
+   **20 tiles, 20 distinct `src`, 0 broken**. The blind spot stays; it is the
+   honest cost of a faithful fixture, and this is the check that covers it.
+
+**One residual, recorded with its uncertainty rather than a guess.** The native
+`<input type="file">` renders its own button and status text — "Choose File" / "No
+file chosen" — in the *browser's* language, not the page's, and `FileField` keeps
+the UA control deliberately (a `<label>` driving a hidden input loses the
+control's keyboard behaviour on two engines). The panel's answer is the one
+`DateField` already established: an **echo**, so a chosen file is named in the
+reader's language under the control. What remains English is the empty state.
+Whether a real French Chrome renders it in French is **not settled here** — this
+Playwright build ships English-only resources and shows English even under
+`--lang=fr-FR`, which is a property of the harness's browser and not evidence
+either way.
+
+---
+
 ## Carried forward — teardown owns these
+
+- **Every French timestamp in the panel reads "6:32 AM", and it is one line in
+  `lib/format/date.ts`.** Found on the media drawer's `Téléversé` row and then
+  measured properly: `DATE_LOCALE.fr` is **`fr-DZ`**, and CLDR's `fr-DZ` resolves
+  to `hourCycle: h12` with the English `AM`/`PM` day-period names. `fr` and
+  `fr-FR` are both `h23`. Arabic is **correct** and must not be touched — `ar-DZ`
+  is h12 with `ص`/`م`, which is right for Arabic.
+
+  ```
+  fr      h23  4 août 2026, 06:32     ← what French should render
+  fr-DZ   h12  4 août 2026, 6:32 AM   ← what the panel renders
+  ar-DZ   h12  04‏/08‏/2026، 6:32 ص     ← correct, leave alone
+  ```
+
+  Driven in the built panel: the page's own `Intl` with `document.documentElement.lang`
+  gives `06:32` while the panel prints `6:32 AM`, so it is the locale string and
+  nothing else. `fr-DZ` is deliberate and right for **money** (`26 350,00 DA`) —
+  `lib/format/money.ts:19` argues it — and `date.ts` mirrored the choice without
+  the hour cycle being part of what it was choosing. Nothing pins `AM` in any test.
+
+  **Not fixed here, and the reason is scope rather than doubt**: 139 `formatDate`
+  /`formatWhen` call sites, so it re-captures the whole panel, and fixing it only
+  on this screen would make media the one French screen that disagreed with the
+  other eight. The remedy is `fr: "fr-DZ-u-hc-h23"` plus an A/B of the French
+  captures — the shape the content branch used for `min-h-8`. Media ships
+  consistent with the panel it is joining.
+- **`?peek=` resolves only from the page in memory on `/orders` and `/products`**
+  (`OrdersList.tsx:162`, `ProductsList.tsx:244`) — the defect §14 fixed on media,
+  latent on both. A peeked id that is not on the current page opens nothing, so a
+  shared or bookmarked peek link is dead; reaching it by clicking a visible row
+  always works, which is why nobody has seen it. The fix is media's: fall through
+  to `GET /{id}` on a miss. Not touched — this branch does not own those screens.
 
 - ~~**`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
   off the bottom to clear a tab bar that no longer exists.~~ **Closed on the
@@ -1594,11 +1883,18 @@ is phone-sized and the anchor lives only in the `md`+ table.
   The general lesson is worth more than the entry: **a "this route is broken"
   note needs a date and a re-check, exactly as a "this parameter is ignored" note
   does.** Absence of capability is not more durable than presence of it.
-- **`POST /media` is a 404 in the mock, named rather than hidden.** It is
+- ~~**`POST /media` is a 404 in the mock, named rather than hidden.** It is
   `multipart/form-data` and the mock's shell parses JSON, so all five measured
   failure shapes would be unreachable behind a handler that pretended. Item 13
   owns it, along with `mediaSize`, which has no fixture because `sizes` is empty
-  on all 41 attachments — measured.
+  on all 41 attachments — measured.~~ **Both closed — see §14.** The upload
+  landed in the harness commit; the schema half was worse than "no fixture" and
+  the entry understated it in the way this file's own lesson predicts. `sizes`
+  was not merely unexercised, it was declared as **the wrong shape** — an array
+  of `{name, url, width, height}` against `MediaPresenter::sizes()`'s map keyed
+  by size name of `{width, height, mime_type}` — and it parsed only because an
+  empty PHP map serialises as `[]`. A missing fixture and a field nobody has to
+  be right about are not the same thing.
 - **Six refusal sentences in the CMS mock are the mock's own words**, patterned on
   the one measured `"The coupon is invalid."` and flagged at each site. The
   coupons branch is why that matters: a screen was built to a `"Read-only."`

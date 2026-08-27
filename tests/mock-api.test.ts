@@ -155,7 +155,7 @@ import {
   pageList,
   pageSeo,
 } from "@/lib/api/schemas/cms";
-import { mediaItem, mediaList, mediaSize } from "@/lib/api/schemas/media";
+import { mediaItem, mediaList, mediaSizes } from "@/lib/api/schemas/media";
 import {
   ACCEPTED_MIME,
   MAX_BYTES,
@@ -7376,14 +7376,44 @@ describe("GET /media", () => {
       // 30×20 fixtures, below every threshold at which WordPress generates a
       // thumbnail — so a client indexing into `sizes[0]` works in production and
       // fails on every test fixture. `url` is the size that always exists.
-      expect(item.sizes, String(item.id)).toEqual([]);
+      //
+      // `{}` and not `[]`: the mock emits PHP's serialisation of an empty map,
+      // and the schema normalises it to the map it means. See `mediaSizes`.
+      expect(item.sizes, String(item.id)).toEqual({});
       expect(item.url).not.toBe("");
     }
-    // Which is why `mediaSize` has no fixture anywhere, and saying so is the
-    // point of naming it.
-    expect(mediaSize.safeParse({ name: "thumbnail", url: "u", width: 1, height: 1 }).success).toBe(
-      true,
-    );
+  });
+
+  /**
+   * **The populated shape has no fixture and cannot have one, so it is asserted
+   * directly.**
+   *
+   * `sizes` is empty on all 41 rows and on every upload through this mock, which
+   * is a *consequence* of the 30×20 fixtures rather than a shortcut — see the
+   * seed. That left the field with no exercise at all, and it was wrong:
+   * `MediaPresenter::sizes()` returns `array<string, array{width, height,
+   * mime_type}>`, a map keyed by size name, and this schema declared an **array
+   * of `{name, url, width, height}`**. It parsed only because an empty PHP map
+   * serialises as `[]`; the day one sub-size existed, every media response in
+   * the panel would have thrown at the boundary.
+   *
+   * So: both serialisations in, the map out, and the retired shape refused
+   * rather than tolerated — a populated array is not something PHP can emit for
+   * this field, and accepting one would be the permissive direction.
+   */
+  it("accepts both serialisations of sizes and refuses the shape that never existed", () => {
+    expect(mediaSizes.parse([])).toEqual({});
+    expect(
+      mediaSizes.parse({
+        thumbnail: { width: 150, height: 150, mime_type: "image/jpeg" },
+        medium: { width: 300, height: 200, mime_type: "image/jpeg" },
+      }).thumbnail.width,
+    ).toBe(150);
+
+    expect(
+      mediaSizes.safeParse([{ name: "thumbnail", url: "u", width: 1, height: 1 }]).success,
+    ).toBe(false);
+    expect(mediaSizes.safeParse({ thumbnail: { width: 150 } }).success).toBe(false);
   });
 
   /**
@@ -7729,7 +7759,8 @@ describe("POST /media", () => {
     // Read from the image header, the way `getimagesize()` does.
     expect([data.width, data.height]).toEqual([30, 20]);
     expect(data.filesize).toBe(REAL_JPEG.length);
-    expect(data.sizes).toEqual([]);
+    // The empty map, normalised from PHP's `[]` — see `mediaSizes`.
+    expect(data.sizes).toEqual({});
 
     // And it is in the library immediately, at the top of the resting order.
     const listed = parseList(mediaList, get("/media", "per_page=100"));
@@ -8092,15 +8123,19 @@ const COVERED = [
    * parameters, every PATCH case in the backend's own suite and the upload — the
    * media branch owns this collection and covers it.
    *
-   * **`mediaSize` has no fixture and that is correct, not a gap.** `sizes` is
+   * **`mediaSizes` has no fixture and that is correct, not a gap.** `sizes` is
    * empty on all 41 rows because the images are 30×20, below every threshold at
    * which WordPress generates a thumbnail, and an upload through this mock
    * produces none either. Inventing one would mean inventing WordPress's
-   * thresholds *and* a shape — this schema declares `sizes` an array of
-   * `{name,url,width,height}` where `MediaPresenter::sizes()` returns an object
-   * keyed by size name of `{width,height,mime_type}`, so a fixture would be
-   * wrong twice over. The schema is exercised structurally in the listing test
-   * and named here so its emptiness stays a stated fact.
+   * thresholds.
+   *
+   * **What it did hide, until the media branch, was a wrong shape.** The schema
+   * declared an array of `{name, url, width, height}` where
+   * `MediaPresenter::sizes()` returns a map keyed by size name of
+   * `{width, height, mime_type}` — two objects with nothing in common, parsing
+   * only because an empty PHP map serialises as `[]`. A missing fixture is not
+   * the same as a field nobody has to be right about, so the corrected schema is
+   * asserted directly beside the listing rather than left to a future upload.
    */
   "media",
 ];

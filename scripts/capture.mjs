@@ -711,7 +711,26 @@ async function capture(browser, cookie, route, width, theme, locale) {
     const dir = resolve(OUT, slugOf(route));
     mkdirSync(dir, { recursive: true });
     const file = resolve(dir, `${width}-${theme}-${locale}${SUFFIX}.png`);
-    await page.screenshot({ path: file, fullPage: true });
+    /*
+     * **`animations: "disabled"`, and it is a bug fix rather than a tidy-up.**
+     *
+     * The 400ms above is sized for a font swap. It is not sized for *hydrate →
+     * fetch a record → mount an overlay → slide it in*, and `networkidle` does
+     * not cover that chain because the query fires after hydration, once the
+     * network has already gone quiet. `/media?peek=5001` is the run's first
+     * capture of an overlay opened from a URL parameter, and it photographed the
+     * drawer **mid-slide** — content laid out for a 520px panel with only ~320px
+     * of it on screen, which reads in the PNG as a clipped drawer rather than as
+     * a moving one. Driven in a browser with a 900ms settle, the same drawer
+     * measures x=920 w=520 right=1440 with zero overflow: the screen was right
+     * and the harness was early.
+     *
+     * Playwright finishes every running CSS transition and animation and pins it
+     * to its end state, which is exactly the frame this harness wants. Raising
+     * the timeout instead would trade a wrong frame for a slower run and still
+     * race whatever is slowest on the day.
+     */
+    await page.screenshot({ path: file, fullPage: true, animations: "disabled" });
 
     const measured = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,

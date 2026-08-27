@@ -426,6 +426,22 @@ test.describe("menus", () => {
   });
 });
 
+/**
+ * The media library stays in this file rather than moving to `e2e/media.spec.ts`.
+ *
+ * `/media` is one of the eight paths the Manager describe below loops over — it
+ * shares `ac_manage_content` with the seven `/cms/*` screens and that loop is the
+ * whole point of the fixture — so it cannot move without either duplicating the
+ * sign-in or asserting the refusal twice. Splitting two of four tests out of a
+ * suite whose other half has to stay is the payments judgement (DECISIONS.md §9)
+ * for the same reason.
+ *
+ * **What each test checks is unchanged; only the selectors and the structure
+ * are.** The grid is `components/ui/MediaGrid.tsx` now and a tile is a real
+ * `<button>` carrying the record's name, so `ul button` became `ul li button`
+ * and the count moved from the body to the header's subtitle — the testid is the
+ * same one.
+ */
 test.describe("the media library", () => {
   test("renders a grid with a count", async ({ page }) => {
     await signIn(page, "fr");
@@ -433,7 +449,9 @@ test.describe("the media library", () => {
     await page.waitForSelector('[data-testid="media-count"]');
 
     await expect(page.getByTestId("media-count")).not.toContainText("Aucun");
-    await expect(page.locator("img").first()).toBeVisible();
+    // A tile is a picture and one line of text, and the picture has to be real:
+    // `url` pointed at a host that does not resolve until the media branch.
+    await expect(page.locator("ul li button img").first()).toBeVisible();
   });
 
   test("shows the stored filename rather than the chosen one", async ({ page }) => {
@@ -441,7 +459,7 @@ test.describe("the media library", () => {
     await page.goto("/fr/media");
     await page.waitForSelector('[data-testid="media-count"]');
 
-    await page.locator("ul button").first().click();
+    await page.locator("ul li button").first().click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
     await expect(page.getByText("Nom du fichier")).toBeVisible();
     await expect(

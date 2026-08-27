@@ -30,6 +30,20 @@
  * than to pick a different one.
  */
 
+/**
+ * One page of the library, and it is the API's own figure rather than a taste.
+ *
+ * Measured across nine collections on 2026-08-26: every one of them answers 20
+ * without a `per_page`, and every migrated list in this panel opens at 20. The
+ * library and the picker both hardcoded **30**, which is the same defect the
+ * pages branch fixed at 50 — a number that is neither the API's nor the panel's.
+ *
+ * Shared by both readers on purpose, so the picker inherits the figure instead
+ * of carrying a second copy of it. 41 attachments at 20 a page is three pages,
+ * which is the first fixture this screen has ever had for its own pager.
+ */
+export const MEDIA_PER_PAGE = 20;
+
 /** `ACCEPTED_TYPES` on the API, which is narrower than the extensions it takes. */
 export const ACCEPTED_MIME = ["image/jpeg", "image/png", "image/webp"] as const;
 

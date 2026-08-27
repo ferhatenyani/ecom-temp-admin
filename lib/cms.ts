@@ -356,3 +356,21 @@ export function parentPathOf(path: string): string {
 export function pageDepth(path: string): number {
   return path === "" ? 0 : path.split("/").length - 1;
 }
+
+/**
+ * The URL of an embedded image — the one place that knows the key is disputed.
+ *
+ * `MediaPresenter::image()` sends `src`; the harness sends `url`, which is the
+ * panel's own old guess handed back to it. Neither has been measured over the
+ * wire, so `lib/api/schemas/cms.ts` accepts both and this decides which wins —
+ * the presenter's, because it is the router rather than a fixture.
+ *
+ * Structurally typed rather than importing `EmbeddedImage`, so this file keeps
+ * the property its docblock opens with: no dependency on the schema layer, and
+ * therefore no Zod in the browser for a component that only wants a `src`.
+ */
+export function embeddedImageSrc(
+  image: { src?: string; url?: string } | null | undefined,
+): string | null {
+  return image?.src ?? image?.url ?? null;
+}

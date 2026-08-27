@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { useMutation } from "@tanstack/react-query";
 import type { Banner } from "@/lib/api/schemas/cms";
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
-import { CONTENT_STATUSES, type ContentStatus } from "@/lib/cms";
+import { CONTENT_STATUSES, embeddedImageSrc, type ContentStatus } from "@/lib/cms";
 import { decodeEntities } from "@/lib/format/html";
 import { Drawer } from "@/components/ui/Overlay";
 import { Button } from "@/components/ui/Button";
@@ -89,7 +89,10 @@ export function BannerDrawer({
   );
   const [status, setStatus] = useState<ContentStatus>(banner?.status ?? "draft");
   const [imageId, setImageId] = useState<number | null>(banner?.image?.id ?? null);
-  const [imageUrl, setImageUrl] = useState<string | null>(banner?.image?.url ?? null);
+  /* `embeddedImageSrc`, not `image.url`: `MediaPresenter::image()` sends `src`
+     and the harness sends `url`, and one place decides. A banner that had a
+     picture used to throw at the schema boundary before it reached this line. */
+  const [imageUrl, setImageUrl] = useState<string | null>(embeddedImageSrc(banner?.image));
   const [fields, setFields] = useState<Record<string, string>>({});
 
   const save = useMutation({

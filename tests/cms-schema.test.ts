@@ -220,14 +220,20 @@ describe("media", () => {
     expect(rows[0].filename).toMatch(/\.(jpe?g|png|webp)$/i);
   });
 
-  it("tolerates an empty `sizes`, which is every fixture in this shop", () => {
+  it("normalises an empty `sizes` to the map PHP meant by it", () => {
     /*
      * The images are 30×20, below every threshold at which WordPress generates
      * a thumbnail. A client indexing into `sizes[0]` works in production and
      * fails on every test fixture — `url` is the one that always exists.
+     *
+     * `{}` and not `[]`: `MediaPresenter::sizes()` returns a **map keyed by
+     * size name**, and PHP serialises the empty one as `[]`. The schema
+     * declared an array of `{name, url, width, height}` — a shape the presenter
+     * has never emitted — and parsed only because of that serialisation. See
+     * `mediaSizes`.
      */
     const rows = mediaList.parse(envelope(fixtures.media));
-    expect(rows[0].sizes).toEqual([]);
+    expect(rows[0].sizes).toEqual({});
     expect(rows[0].url).not.toBe("");
   });
 
