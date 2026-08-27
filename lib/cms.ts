@@ -268,6 +268,73 @@ export function positionWrites<T extends { id: number; position: number }>(
 }
 
 /**
+ * The one page a banner or FAQ list ever asks for. 100 is the API's ceiling on
+ * `per_page` — `?per_page=101` is a 400 — so this is not a tuning knob.
+ */
+export const CMS_LIST_PER_PAGE = 100;
+
+/**
+ * Why a reorder control may not be rendered, or `null` when it may.
+ *
+ * `positionWrites()` above renumbers **the array it is given** to `0..n-1`. That
+ * is correct exactly when the array is the whole collection, and it is a
+ * data-corruption bug when it is not — so the question of completeness has to be
+ * answered before the control is ever drawn, not inside the write.
+ *
+ * There are two ways to be handed a partial array here, and they are different
+ * facts with different remedies, so they are reported separately rather than
+ * collapsed into one "cannot reorder" message. That is the inventory branch's
+ * second defect — one `SectionError` serving both "request failed" and "nothing
+ * has moved" — and it is the reason this returns a reason rather than a boolean.
+ *
+ * **`truncated`** — the list asked for `per_page=100` and `meta.total` says
+ * there are more. Both screens shipped sending `per_page=100&status=any` and
+ * **never reading `meta.total`**, so a 101st row was silently invisible; worse,
+ * a move then renumbered the visible hundred to `0..99` while the rows nobody
+ * fetched kept their stored positions, leaving two disjoint sets claiming one
+ * dense sequence. Hiding rows is recoverable by scrolling. That is not.
+ * Paging is not the remedy either: there is no bulk endpoint and no "move to
+ * position n" route — a reorder is one `PATCH` per moved row computed from the
+ * array in hand — so a row cannot cross a page boundary at all, and a second
+ * page would offer a control that works within itself and lies about the whole.
+ *
+ * **`filtered`** — `?status=publish` or `?status=draft` is applied. The rows
+ * that come back carry the collection's positions with the other status's
+ * numbers *missing from the sequence*: publish-only might be `0, 2, 3`. Feeding
+ * that to `positionWrites()` writes `1` and `2` onto rows that never moved, over
+ * the top of the draft sitting at `1`. This one is a screen decision rather than
+ * an API limit — the tab is one click away — so it is recoverable and the line
+ * that reports it says which tab restores the control.
+ *
+ * Truncation wins when both are true: clearing the filter would not give the
+ * control back, and saying otherwise would send somebody round a loop.
+ *
+ * `total` is `0` when the envelope carried no `meta.total` — `acRead` defaults
+ * it — and that must not read as "every row is missing". The refusal fires on
+ * positive evidence only, so an absent `meta` keeps the control.
+ *
+ * Nothing here touches create, edit or delete: each addresses one row by id and
+ * none of them depends on the list being complete.
+ */
+export type ReorderBlock = "truncated" | "filtered";
+
+export function reorderBlock({
+  status,
+  fetched,
+  total,
+}: {
+  status: StatusFilter;
+  /** Rows in hand. */
+  fetched: number;
+  /** `meta.total` for the same request. */
+  total: number;
+}): ReorderBlock | null {
+  if (total > fetched) return "truncated";
+  if (status !== "any") return "filtered";
+  return null;
+}
+
+/**
  * The parent path of a page path, or `""` for a root page.
  *
  * `legal/terms` → `legal`. The API resolves `parent_path` itself and answers a

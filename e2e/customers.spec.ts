@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * The customer list and detail.
@@ -41,20 +41,45 @@ async function openCustomers(page: Page, locale: string, query = "") {
 }
 
 /**
+ * One customer row, in whichever presentation the running viewport paints.
+ *
+ * **The same helper the coupons suite uses, deliberately copied rather than
+ * re-invented.** `DataTable` renders both presentations and hides one per
+ * breakpoint: the `<table>` is `hidden md:block` and below `md` a `RecordList`
+ * card navigates through a stretched overlay button. Four of the five Playwright
+ * projects here are phone-sized, so `a[href*="/customers/"]` resolved to a node
+ * that is in the DOM and never painted — and `toBeVisible()` on it failed before
+ * either test below reached its own subject. It has never surfaced only because
+ * the suite is env-gated on live credentials nobody has here.
+ *
+ * `<tr>` and `<li class="ui-card">` rather than the anchor and the overlay
+ * button, because a row is read as well as clicked. Both containers are
+ * clickable: `CustomersList` passes `onRowClick` exactly as `CouponsList` does,
+ * and the card's overlay covers it edge to edge.
+ *
+ * The `toHaveCount` assertions below still count `a[href*="/customers/"]` and
+ * are **not** a second instance of this bug: a count is taken from the DOM and
+ * never asks whether a node is painted, and the anchor lives only in the table
+ * presentation, so 16 is 16 at every width. Switching them to rows would change
+ * what they measure without fixing anything.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
+/**
  * The detail URL for an email, resolved through the list rather than guessed.
  *
- * **The row's identifying cell is a real `<a href>`**, which is what this walks.
  * There is no peek drawer on this screen — `lib/api/schemas/customer.ts:7-13`
  * measures that the detail is the row *plus* `statistics`, so a preview would
  * cost a request to show the one thing the row already implies — so the row
- * navigates, and the anchor is what gives that a keyboard path and a middle
- * click. The anchor lives only in the table presentation: both the table and the
- * record list are in the DOM at every width, and a link in each would double
- * every count below.
+ * navigates, and the identifying cell's anchor is what gives that a keyboard
+ * path and a middle click. Walking the row rather than that anchor is what makes
+ * this work at a phone width, where the anchor is not the thing on screen.
  */
 async function openByEmail(page: Page, locale: string, email: string) {
   await openCustomers(page, locale, `?search=${encodeURIComponent(email)}`);
-  const row = page.locator('a[href*="/customers/"]').first();
+  const row = rows(page).first();
   await expect(row).toBeVisible();
   await row.click();
   await page.waitForURL(/\/customers\/\d+/);
@@ -112,7 +137,11 @@ test.describe("the customer list", () => {
     await signIn(page, "fr");
     await openCustomers(page, "fr", "?search=ac_usr_shopper");
 
-    const row = page.locator('a[href*="/customers/"]').first();
+    /* The painted row, not the hidden table's anchor. `toContainText` reads
+       `textContent` and so never failed on visibility the way `openByEmail` did
+       — but on a phone project it was asserting about a node nobody sees, which
+       is not what this test's title claims. */
+    const row = rows(page).first();
     await expect(row).toContainText("ac_usr_shopper");
   });
 });

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * The CMS: pages, the homepage document, banners, FAQs, menus, and media.
@@ -32,14 +32,59 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
 }
 
 /**
- * The segmented control's `<input type="radio">` is `sr-only`, so a pointer
- * reaches it through its `<label>` and Playwright must do the same — an
- * actionability check on a visually hidden input never passes, and clicking the
- * role directly reports the label span "intercepts pointer events". The
- * customers and inventory suites document the same thing.
+ * Pick a value from a `FilterTabs` strip.
+ *
+ * **The name is kept and the implementation is entirely new.** It used to reach
+ * `primitives/Segmented`, whose `<input type="radio">` is `sr-only` — so a
+ * pointer went through the `<label>` and Playwright had to as well, since an
+ * actionability check on a visually hidden input never passes. `Segmented` is
+ * DESIGN.md §0-retired and `components/ui/FilterBar.tsx` draws a real `<button>`
+ * per value inside a named `<nav>`, so the label indirection is gone.
+ *
+ * `exact`, because the status values overlap the badges on the rows underneath —
+ * a page's "Brouillon" badge would otherwise match the "Brouillon" tab.
  */
 async function selectSegment(page: Page, label: string) {
-  await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
+  await page.getByRole("button", { name: label, exact: true }).click();
+}
+
+/**
+ * The rows of whichever presentation is painted.
+ *
+ * **The list is a `DataTable` now, and that introduces the trap
+ * `e2e/coupons.spec.ts` documents.** The table — the only place a page's
+ * `<a href>` exists — is `hidden md:block`, and below `md` a `RecordList` card
+ * navigates through a stretched overlay button instead, so a row is one anchor
+ * and not two. Every Playwright project here is phone-sized bar the desktop one,
+ * so a bare `getByRole("link", …)` resolves to a node that is in the DOM and
+ * never painted: `toBeVisible()` fails before a test reaches its own assertion.
+ *
+ * `<tr>` and `<li class="ui-card">` rather than the link and the overlay button,
+ * because a row is read as well as clicked — "the row says Brouillon" is an
+ * assertion about the row's text, and the overlay button has none. Both
+ * containers are clickable: `<tr>` carries `onRowClick`, and the card's overlay
+ * covers it edge to edge.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
+/** One row, by the text that identifies it. */
+function row(page: Page, name: RegExp): Locator {
+  return rows(page).filter({ hasText: name });
+}
+
+/**
+ * Reveal the navigation tree, at whichever width this project runs.
+ *
+ * `AppShell` paints the same tree twice: a persistent sidebar from `lg` up and a
+ * `Drawer` below it, opened from the top bar's menu button. Only one is ever
+ * painted, so the drawer trigger's visibility *is* the breakpoint test — no
+ * viewport arithmetic in the spec.
+ */
+async function openNav(page: Page) {
+  const trigger = page.getByRole("button", { name: "Navigation principale" });
+  if (await trigger.isVisible()) await trigger.click();
 }
 
 async function openPages(page: Page, locale: string, query = "") {
@@ -57,9 +102,23 @@ test.describe("the content hub", () => {
     }
   });
 
-  test("is reachable from More, which used to render it as unbuilt", async ({ page }) => {
+  /*
+   * **This used to open `/fr/more`, and that surface is gone.** `patterns/TabBar`
+   * held five slots and pushed everything else behind a `More` screen; DESIGN.md
+   * §0 retires the tab bar by name and `AppShell` renders `nav-tree.ts` instead —
+   * a persistent sidebar at `lg`+ and the identical tree in a `Drawer` below. The
+   * `/more` route still resolves, and nothing in the panel links to it any more,
+   * so a test asserting "Content is reachable from the navigation" through it was
+   * asserting against a screen no reader arrives at.
+   *
+   * What the test checks is unchanged: the panel's navigation offers Content, and
+   * following it lands on the hub. Only the surface moved.
+   */
+  test("is reachable from the panel navigation", async ({ page }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/more");
+    await page.goto("/fr/orders");
+
+    await openNav(page);
 
     // `exact`, because the skip link "Aller au contenu" matches a bare "Contenu".
     const link = page.getByRole("link", { name: "Contenu", exact: true });
@@ -78,10 +137,8 @@ test.describe("the pages index", () => {
     await signIn(page, "fr");
     await openPages(page, "fr");
 
-    await expect(page.getByRole("link", { name: /Livraison et délais/ })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /Conditions générales de vente/ }),
-    ).toBeVisible();
+    await expect(row(page, /Livraison et délais/)).toBeVisible();
+    await expect(row(page, /Conditions générales de vente/)).toBeVisible();
   });
 
   /*
@@ -98,15 +155,15 @@ test.describe("the pages index", () => {
     await signIn(page, "fr");
     await openPages(page, "fr");
 
-    const draft = page.getByRole("link", { name: /Retours et remboursements/ });
+    const draft = row(page, /Retours et remboursements/);
     await expect(draft).toBeVisible();
     await expect(draft.getByText("Brouillon")).toBeVisible();
 
     await selectSegment(page, "Publié");
     await page.waitForURL(/status=publish/);
-    await expect(page.getByRole("link", { name: /Retours et remboursements/ })).toHaveCount(0);
+    await expect(row(page, /Retours et remboursements/)).toHaveCount(0);
     // The positive control: filtering did not simply empty the list.
-    await expect(page.getByRole("link", { name: /Livraison et délais/ })).toBeVisible();
+    await expect(row(page, /Livraison et délais/)).toBeVisible();
   });
 
   test("says what the search matches, because it does not match the path", async ({ page }) => {
@@ -119,7 +176,7 @@ test.describe("the pages index", () => {
     await page.getByRole("searchbox").fill("Livraison");
     await page.getByRole("searchbox").press("Enter");
     await page.waitForURL(/search=Livraison/);
-    await expect(page.getByRole("link", { name: /Livraison et délais/ })).toBeVisible();
+    await expect(row(page, /Livraison et délais/)).toBeVisible();
   });
 
   test("explains the pages it leaves out", async ({ page }) => {
@@ -135,7 +192,7 @@ test.describe("the pages index", () => {
     await signIn(page, "fr");
     await openPages(page, "fr");
 
-    await page.getByRole("link", { name: /Conditions générales de vente/ }).click();
+    await row(page, /Conditions générales de vente/).click();
     await page.waitForURL(/\/content\/pages\/legal\/conditions-generales$/);
     await expect(
       page.getByRole("textbox", { name: "Titre", exact: true }),
@@ -160,8 +217,11 @@ test.describe("the page form", () => {
     await expect(page.getByText(/Changer l’adresse casse tous les liens/)).toBeVisible();
     await expect(page.getByText("/livraison-express")).toBeVisible();
 
-    // Not saved: the form is left dirty and abandoned.
-    await page.getByRole("button", { name: "Rétablir" }).click();
+    /* Not saved: the form is left dirty and abandoned. The discard control is
+       `SaveBar`'s now, so it carries the shared `ui.form.discard` wording rather
+       than the screen's own "Rétablir" — the same button doing the same job under
+       the primitive's label. */
+    await page.getByRole("button", { name: "Annuler les modifications" }).click();
     await expect(slug).toHaveValue("livraison");
   });
 
@@ -175,8 +235,13 @@ test.describe("the page form", () => {
     await signIn(page, "fr");
     await page.goto("/fr/content/pages/privacy-policy");
 
+    /* Delete lives in the header `Menu` now rather than in a "danger" group at
+       the foot of the form — DESIGN.md §2.4 puts a detail screen's record-state
+       action in the header, and §3.2 makes it one menu rather than a loose
+       destructive button. Two steps to reach it, then the `ConfirmDialog`. */
+    await page.getByRole("button", { name: "Actions" }).click();
+    await page.getByRole("menuitem", { name: "Supprimer cette page" }).click();
     await page.getByRole("button", { name: "Supprimer cette page" }).click();
-    await page.getByRole("button", { name: "Supprimer cette page" }).last().click();
 
     await expect(page.getByText(/wp_page_for_privacy_policy/)).toBeVisible();
     // Still there.
@@ -208,6 +273,8 @@ test.describe("the homepage document", () => {
     // The seed stores eight sections, three of them malformed, so five survive.
     await expect(page.getByTestId("sections-count")).toContainText("5");
 
+    // The drop report is a `Notice` now rather than a grouped list, and its
+    // heading is still the block's own title.
     await expect(page.getByText("Sections illisibles")).toBeVisible();
 
     /*
@@ -232,6 +299,10 @@ test.describe("the homepage document", () => {
      */
     // Lower-case `section`, because the three problem shapes have three
     // different French openings — this one is "Le contenu de la section 6 …".
+    //
+    // "du document stocké" is load-bearing and not padding: the section cards
+    // are now headed "6. Promotion", numbered over the *surviving* list, so the
+    // page carries both numbering schemes and only this phrase separates them.
     await expect(page.getByText(/section 6 du document stocké/)).toBeVisible();
   });
 
@@ -245,13 +316,29 @@ test.describe("the homepage document", () => {
     await expect(moveDown).toBeEnabled();
     await moveDown.click();
 
-    await page.getByRole("button", { name: "Enregistrer" }).click();
+    /*
+     * The save is a `SaveBar` that appears only when the form is dirty, so the
+     * click is scoped to it — `data-testid="save-bar"` is the primitive's own
+     * handle, the same one the products form asserts on.
+     */
+    const bar = page.getByTestId("save-bar");
+    await expect(bar).toBeVisible();
+    await bar.getByRole("button", { name: "Enregistrer", exact: true }).click();
+
     await expect(
       page.getByText(/Enregistrer et supprimer les sections illisibles/),
     ).toBeVisible();
 
-    // Declined — nothing is written.
-    await page.getByRole("button", { name: "Annuler" }).click();
+    /*
+     * Declined — nothing is written. Scoped to the dialog and `exact`, because
+     * the save bar behind it now offers "Annuler les modifications": an
+     * unqualified "Annuler" matches both and fails strict mode before it reaches
+     * the assertion.
+     */
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Annuler", exact: true })
+      .click();
   });
 
   test("reorders with buttons, because a drag has no touch or keyboard path", async ({
@@ -277,9 +364,17 @@ test.describe("banners and FAQs", () => {
     await page.goto("/fr/content/banners");
     await page.waitForSelector('[data-testid="banners-count"]');
 
+    /*
+     * One card per placement, headed by the theme's own raw key. There is no
+     * placement *filter*: the key is a free string on the API's side, so the
+     * allowlisted enumeration can never be complete and DECISIONS.md's picker
+     * rule refuses one. This grouping is the presentation of the rows already in
+     * hand that stands in for it.
+     */
     await expect(page.getByText("home_hero")).toBeVisible();
-    // Anchored: the row also has "Monter Soldes d’été", "Descendre …" and
-    // "Supprimer …", because a reorder control names what it moves.
+    // Anchored, because every control in the row names what it acts on:
+    // "Monter Soldes d’été", "Descendre …" and "Actions sur …" all contain the
+    // title. This one is the identifying cell, which is the row's opener.
     await expect(page.getByRole("button", { name: /^Soldes d’été/ })).toBeVisible();
     await expect(page.getByText("Brouillon").first()).toBeVisible();
   });
@@ -302,6 +397,11 @@ test.describe("menus", () => {
     await page.goto("/fr/content/menus");
     await page.waitForSelector('[data-testid="menu-count"]');
 
+    /*
+     * `menu-count` is rendered by the draft component alone, so waiting on it
+     * also waits past the loading and error branches — where the location strip
+     * is live and the count is not.
+     */
     await expect(page.getByTestId("menu-count")).not.toContainText("Aucun");
   });
 
@@ -317,6 +417,8 @@ test.describe("menus", () => {
      * an error.
      */
     await signIn(page, "fr");
+    // The location is a `FilterTabs` strip now rather than a `Segmented`, but it
+    // still reads its value from `?location=`, so the URL is still the way in.
     await page.goto("/fr/content/menus?location=footer");
     await page.waitForSelector('[data-testid="menu-count"]');
 
@@ -357,6 +459,14 @@ test.describe("Arabic", () => {
     // A missing translation renders as its own key. None may reach the screen.
     await expect(page.locator("body")).not.toContainText("content.");
     await expect(page.locator("body")).not.toContainText("media.");
+    /*
+     * `ui.reorder` and not a bare `ui.`, which this branch's move of the reorder
+     * labels out of the `content` namespace would otherwise have needed. A bare
+     * prefix is unusable: French writes "aujourd’hui." and the assertion would
+     * fail on a correctly translated screen. The narrow form catches the keys
+     * that actually moved.
+     */
+    await expect(page.locator("body")).not.toContainText("ui.reorder");
   });
 
   test("the drop report is Arabic prose with the API's English as detail", async ({ page }) => {
@@ -364,12 +474,15 @@ test.describe("Arabic", () => {
     await page.goto("/ar/content/homepage");
     await page.waitForSelector('[data-testid="sections-count"]');
 
+    // The `Notice`'s title, which is what the grouped list's heading became.
     await expect(page.getByText("أقسام غير مقروءة")).toBeVisible();
     /*
      * The English sentence is still present and still English — it names the
      * offending type verbatim — but it sits under a localised line rather than
      * standing in for one, and it is `dir="ltr"` so it does not reorder inside
-     * the Arabic column.
+     * the Arabic column. It carries no opacity either: the notice's `-fg` on its
+     * own `-bg` measures 5.72:1 and dimming the detail would drop the pair under
+     * 4.5, so the demotion is size and direction rather than transparency.
      */
     await expect(page.getByText(/unknown type "carousel"/)).toBeVisible();
   });
@@ -398,6 +511,10 @@ test.describe("what a Manager may not reach", () => {
     "/content/homepage",
     "/content/banners",
     "/content/faqs",
+    /* The route this branch added, so its forbidden state is covered like the
+       six that predate it. The nested categories `Sheet` it replaced could not
+       be refused on its own — it had no URL. */
+    "/content/faqs/categories",
     "/content/menus",
     "/media",
   ]) {
@@ -414,8 +531,12 @@ test.describe("what a Manager may not reach", () => {
   test("still sees the sections they do hold", async ({ page }) => {
     // The floor: a Manager refused everything would satisfy every assertion
     // above while describing a broken session rather than a working gate.
+    // Read off `AppShell`'s tree rather than the retired `/more` screen — see
+    // the hub describe above.
     await signIn(page, "fr", MANAGER_USER!, MANAGER_PASS!);
-    await page.goto("/fr/more");
+    await page.goto("/fr/orders");
+
+    await openNav(page);
 
     await expect(page.getByRole("link", { name: "Livraison" })).toBeVisible();
     // And Content is not offered at all — a destination they cannot use is left

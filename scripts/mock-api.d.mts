@@ -34,9 +34,20 @@ export declare function respond(
 /**
  * Rebuild every mutable thing — order statuses, COD records, parcels, payments,
  * the products a PATCH or a DELETE has rewritten, the coupons a POST, a PATCH or
- * either delete has, and the shipping rules a POST, a PATCH or a DELETE has —
- * from the seeded baseline. Runs once at module load; the unit suite calls it
- * between tests so a write in one cannot be read by another.
+ * either delete has, the shipping rules a POST, a PATCH or a DELETE has, and the
+ * content a write has touched: pages, the homepage document, banners, FAQs, FAQ
+ * categories and the two menus — from the seeded baseline. Runs once at module
+ * load; the unit suite calls it between tests so a write in one cannot be read by
+ * another.
+ *
+ * **Content is where this matters most on the read side, not the write side.**
+ * `GET /cms/homepage` carries `meta.problems` only while the stored document
+ * still holds the three malformed sections the seed put there — and a successful
+ * `PUT` *repairs* the document by discarding them, which is the whole reason the
+ * editor gates its save behind a confirmation. So the first test to save the
+ * homepage would otherwise leave every later one reading a healthy document with
+ * no `meta` at all, and the drop report would be untestable after the first
+ * assertion that touched it.
  *
  * **Payments are rebuilt but nothing writes them**, and the asymmetry is worth
  * knowing rather than discovering: the collection is 45 seeded rows, the only

@@ -1,259 +1,507 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Banner } from "@/lib/api/schemas/cms";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
-import { positionWrites } from "@/lib/cms";
+import {
+  CMS_LIST_PER_PAGE,
+  DEFAULT_STATUS_FILTER,
+  isStatusFilter,
+  positionWrites,
+  reorderBlock,
+  type StatusFilter,
+} from "@/lib/cms";
 import { decodeEntities } from "@/lib/format/html";
 import { formatWhen } from "@/lib/format/date";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState } from "@/components/patterns/States";
-import { MoveControls, moveItem } from "@/components/patterns/MoveControls";
-import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
-import { ActionSheet } from "@/components/primitives/ActionSheet";
+import { useOnline } from "@/lib/use-online";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { FilterTabs } from "@/components/ui/FilterBar";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Menu } from "@/components/ui/Menu";
+import { Reorder, moveItem } from "@/components/ui/Reorder";
+import { ConfirmDialog, useConfirm } from "@/components/ui/Confirm";
+import { useLatchedOpener } from "@/components/ui/Overlay";
+import { EmptyState, ErrorState, Notice, StaleBanner } from "@/components/ui/States";
 import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
+import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
-import { RowSkeleton } from "../../inventory/RowSkeleton";
-import { BannerSheet } from "./BannerSheet";
+import { BannerRowsSkeleton } from "./skeleton";
+import { BannerDrawer } from "./BannerDrawer";
 
 /**
  * The banner strip.
  *
- * Grouped by `placement` and ordered by `position` within each group, because
- * that is what a banner *is*: `home_hero` is a carousel and the order is the
- * content. Two groups on this shop, and `placement` is a free key on the API's
- * side, so the grouping comes from the data rather than from a list here.
+ * ## Grouped by placement, and the grouping is not a filter
  *
- * **Reordering writes immediately, one PATCH per moved banner.** `position` is
- * dense — measured `0,1,2` across the collection, not sparse — so a swap is two
- * writes and nothing has to renumber the rest. There is no bulk endpoint and no
- * save bar: a list with a pending order is a list showing something that is not
- * true, and the write is small enough not to need batching.
+ * `placement` is a **free string** on the API's side by design — where a shop
+ * puts a banner is the shop's decision and the plugin is cloned per client — so
+ * the allowlisted enumeration of placements can never be complete, and
+ * DECISIONS.md's picker rule refuses a picker over a working filter unless the
+ * enumeration is. There is therefore **no placement filter**, and what survives
+ * is the grouping: a presentation of the rows already in hand rather than a
+ * request. The footnote under the list says so, because an absence left unstated
+ * reads as an unfinished control.
+ *
+ * ## Status is three tabs and `any` is the default, which inverts every other list
+ *
+ * On `/cms/*` the absence of `?status=` means **publish only**. So `any` is
+ * first, `any` is the default, and — following the panel-wide rule that the
+ * default is the value omitted from the URL — `any` is the one tab that sends no
+ * parameter *to the URL* while still sending `?status=any` to the API.
+ *
+ * ## Reordering writes immediately, and only from the complete list
+ *
+ * `position` is dense across the collection, measured `0,1,2`, and there is no
+ * bulk endpoint — so a move is one `PATCH` per row that actually moved and there
+ * is no save bar. A list with a pending order is a list showing something that
+ * is not true.
+ *
+ * Both halves of "the complete list" are load-bearing and neither was checked
+ * before this branch:
+ *
+ *   **The fetch must have reached the end.** `per_page=100` with `meta.total`
+ *   ignored meant a 101st row was invisible *and* a move renumbered the visible
+ *   hundred over the top of rows nobody fetched.
+ *
+ *   **No status filter may be applied.** The rows `?status=publish` returns
+ *   carry the collection's own positions with the drafts missing from the middle
+ *   — `0, 2, 3` — so `positionWrites()` reports writes for rows nobody touched
+ *   and lands them on the draft's slot. This one is not in the ledger's own list
+ *   of things to fix; it is what decision 2 and decision 9 produce together.
+ *
+ * `reorderBlock()` in `lib/cms.ts` answers both, and `tests/cms-reorder.test.ts`
+ * reproduces each corruption rather than asserting it would happen.
+ *
+ * ## The move is computed over the collection, never over the group
+ *
+ * A group is a *subset* of a dense collection-wide sequence, so writing
+ * "index within the group" would give two placements a row at position 0 each.
+ * `reorderWrites()` below keeps the global slots the group occupies and
+ * reassigns them in the new intra-group order, so the other placements' rows are
+ * untouched and `positionWrites()` still sees the whole array.
  */
+const TABS: readonly StatusFilter[] = ["any", "publish", "draft"] as const;
+
+const rowOpenerId = (id: number) => `banner-opener-${id}`;
+const rowMenuId = (id: number) => `banner-menu-${id}`;
+
 export function BannersList({
   locale,
+  initialStatus,
   initialBanners,
+  initialTotal,
 }: {
   locale: string;
+  initialStatus: StatusFilter;
   initialBanners: Banner[] | null;
+  initialTotal: number | null;
 }) {
   const t = useTranslations("content");
+  const tA11y = useTranslations("a11y");
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [editing, setEditing] = useState<Banner | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [removing, setRemoving] = useState<Banner | null>(null);
-  const [busy, setBusy] = useState(false);
+  const requested = searchParams.get("status") ?? "";
+  const status: StatusFilter = isStatusFilter(requested) ? requested : DEFAULT_STATUS_FILTER;
 
-  const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: ["cms", "banners"],
+  const [editing, setEditing] = useState<Banner | "new" | null>(null);
+  const confirm = useConfirm<Banner>();
+
+  /* The browser is trusted in one direction only — it reports the interface
+     rather than reachability — so the refresh control stays enabled. */
+  const online = useOnline();
+
+  const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
+    queryKey: ["cms", "banners", status],
     queryFn: async () => {
-      const { data: banners } = await acRead<Banner[]>(
-        "/cms/banners?per_page=100&status=any",
+      const { data: banners, total } = await acRead<Banner[]>(
+        `/cms/banners?per_page=${CMS_LIST_PER_PAGE}&status=${status}`,
       );
-      return banners;
+      return { banners, total };
     },
-    initialData: initialBanners ?? undefined,
+    initialData:
+      initialBanners !== null && status === initialStatus
+        ? { banners: initialBanners, total: initialTotal ?? initialBanners.length }
+        : undefined,
+    /* Changing tab keeps the previous rows on screen instead of flashing a
+       skeleton over content that is still readable — §3.6's third mechanism. */
+    placeholderData: keepPreviousData,
   });
 
-  const banners = data ?? [];
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["cms", "banners"] });
+  /** The whole fetched collection in stored order. Positions are dense over *this*. */
+  const ordered = useMemo(
+    () => [...(data?.banners ?? [])].sort((a, b) => a.position - b.position),
+    [data],
+  );
+
+  const fetched = ordered.length;
+  /* `meta.total` where the envelope carried one; the row count is the floor, so
+     a missing `meta` never reports fewer banners than are on screen. */
+  const total = Math.max(data?.total ?? 0, fetched);
+  const blocked = reorderBlock({ status, fetched, total: data?.total ?? 0 });
 
   /** Placements in the order they first appear, so the grouping is stable. */
-  const placements = [...new Set(banners.map((banner) => banner.placement))];
+  const placements = useMemo(
+    () => [...new Set(ordered.map((banner) => banner.placement))],
+    [ordered],
+  );
 
-  async function reorder(group: Banner[], from: number, to: number) {
-    setBusy(true);
-    const next = moveItem(group, from, to);
+  const invalidate = () =>
+    void queryClient.invalidateQueries({ queryKey: ["cms", "banners"] });
 
-    try {
-      /*
-       * Only the rows whose position actually changed. A move within a group of
-       * three is two writes, not three — and sending an unchanged position back
-       * would be a write that says nothing and still counts against the
-       * 120/minute cap. `positionWrites()` carries the rule and is unit-tested,
-       * because "which rows moved" is arithmetic rather than interaction.
-       */
+  const failed = (caught: unknown) => {
+    if (caught instanceof BrowserApiError || caught instanceof Error) {
+      toast.show(caught.message, "danger");
+      return;
+    }
+    throw caught;
+  };
+
+  /**
+   * Which rows a move inside one placement writes, expressed over the whole
+   * collection. See the docblock: a group is a subset of one dense sequence.
+   */
+  function reorderWrites(placement: string, from: number, to: number) {
+    const slots = ordered.flatMap((banner, index) =>
+      banner.placement === placement ? [index] : [],
+    );
+    const moved = moveItem(
+      slots.map((slot) => ordered[slot]),
+      from,
+      to,
+    );
+
+    const next = [...ordered];
+    slots.forEach((slot, index) => {
+      next[slot] = moved[index];
+    });
+
+    return positionWrites(ordered, next);
+  }
+
+  const move = useMutation({
+    mutationFn: async (writes: { id: number; position: number }[]) => {
       await Promise.all(
-        positionWrites(group, next).map(({ id, position }) =>
+        writes.map(({ id, position }) =>
           acWrite("PATCH", `/cms/banners/${id}`, { position }),
         ),
       );
-      invalidate();
-    } catch (caught) {
-      if (caught instanceof BrowserApiError) toast.show(caught.message, "danger");
-      else throw caught;
-    } finally {
-      setBusy(false);
-    }
-  }
+    },
+    onSuccess: invalidate,
+    onError: failed,
+  });
 
-  async function remove(banner: Banner) {
-    setBusy(true);
-    try {
-      await acWrite("DELETE", `/cms/banners/${banner.id}?force=true`);
+  const remove = useMutation({
+    mutationFn: (banner: Banner) =>
+      acWrite("DELETE", `/cms/banners/${banner.id}?force=true`),
+    onSuccess: () => {
+      confirm.close();
       toast.show(t("banners.deleted"));
       invalidate();
-    } catch (caught) {
-      if (caught instanceof BrowserApiError) toast.show(caught.message, "danger");
-      else throw caught;
-    } finally {
-      setBusy(false);
-      setRemoving(null);
-    }
-  }
+    },
+    onError: (caught: unknown) => {
+      confirm.close();
+      failed(caught);
+    },
+  });
+
+  const busy = move.isPending || remove.isPending;
+
+  /* Latched: `useConfirm` clears its target on close and Radix fires
+     `onCloseAutoFocus` *after* `onOpenChange`, so an id derived from the target
+     is already `undefined` when the overlay reads it. */
+  const confirmOpener = useLatchedOpener(confirm.target && rowMenuId(confirm.target.id));
+  const drawerOpener = useLatchedOpener(
+    editing !== null && editing !== "new" ? rowOpenerId(editing.id) : null,
+  );
+
+  const commitStatus = (next: StatusFilter) =>
+    router.push(
+      `/${locale}/content/banners${next === DEFAULT_STATUS_FILTER ? "" : `?status=${next}`}`,
+      { scroll: false },
+    );
 
   return (
-    <Scaffold
-      title={t("section.banners")}
-      back={{ href: `/${locale}/content`, label: t("title") }}
-      trailing={
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          aria-label={t("banners.create")}
-          className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-        >
-          <Icon name="plus" className="size-5" />
-        </button>
-      }
-    >
-      <div className="mx-auto max-w-3xl px-4">
-        <p aria-live="polite" className="mb-2 px-1 text-footnote text-label-secondary" data-testid="banners-count">
-          <Isolate numeric>{t("banners.count", { total: banners.length })}</Isolate>
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("section.banners")}
+        subtitle={
+          <span data-testid="banners-count">
+            <Isolate>{t("banners.count", { total })}</Isolate>
+          </span>
+        }
+        back={{ href: `/${locale}/content`, label: t("title") }}
+        actions={
+          <>
+            <IconButton
+              label={t("refresh")}
+              icon="refresh"
+              variant="secondary"
+              onClick={() => void refetch()}
+              loading={isFetching}
+            />
+            <Button icon="plus" onClick={() => setEditing("new")}>
+              {t("banners.create")}
+            </Button>
+          </>
+        }
+        toolbar={
+          <FilterTabs<StatusFilter>
+            tabs={TABS.map((value) => ({ value, label: t(`statusFilter.${value}`) }))}
+            value={status}
+            onChange={commitStatus}
+            label={t("statusLabel")}
+          />
+        }
+      />
+
+      <PageBody width="detail">
+        {!online && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        ) : null}
+
+        <p aria-live="polite" className="sr-only" data-testid="banners-live">
+          {tA11y("listUpdated", { total })}
         </p>
 
-        {isPending && banners.length === 0 ? (
-          <RowSkeleton rows={4} />
+        {isPending && fetched === 0 ? (
+          <BannerRowsSkeleton label={t("loading")} />
         ) : isError ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
-        ) : banners.length === 0 ? (
+        ) : fetched === 0 ? (
+          /* No banners at all offers the create action; no banners *for this
+             status* offers the tab that has them. Collapsing the two is how an
+             empty state ends up saying nothing useful. */
           <EmptyState
-            message={t("banners.empty")}
-            action={{ label: t("banners.create"), onClick: () => setCreating(true) }}
+            icon={status === DEFAULT_STATUS_FILTER ? "image" : "search"}
+            message={
+              status === DEFAULT_STATUS_FILTER
+                ? t("banners.empty")
+                : t("banners.emptyFiltered")
+            }
+            action={
+              status === DEFAULT_STATUS_FILTER
+                ? { label: t("banners.create"), onClick: () => setEditing("new") }
+                : {
+                    label: t("empty.clear"),
+                    onClick: () => commitStatus(DEFAULT_STATUS_FILTER),
+                  }
+            }
           />
         ) : (
-          placements.map((placement) => {
-            const group = banners
-              .filter((banner) => banner.placement === placement)
-              .sort((a, b) => a.position - b.position);
+          <div className="flex flex-col gap-4">
+            {/*
+              Truncation is a warning rather than a footnote: rows are missing
+              from the screen, not merely a control. It names both consequences,
+              because a reader who only learns the second would go looking for
+              the rest of their banners.
+            */}
+            {blocked === "truncated" ? (
+              <Notice tone="warning" title={t("banners.truncatedTitle")}>
+                <p className="text-ui-label">
+                  <Isolate>{t("banners.truncatedBody", { shown: fetched, total })}</Isolate>
+                </p>
+              </Notice>
+            ) : null}
 
-            return (
-              <ListGroup
-                key={placement}
-                title={<Ltr numeric={false}>{placement}</Ltr>}
-                footnote={t("banners.placementNote")}
-              >
-                {group.map((banner, index) => (
-                  <ListRow key={banner.id} className="items-start">
-                    {banner.image ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={banner.image.url}
-                          alt={banner.image.alt ?? ""}
-                          loading="lazy"
-                          className="size-11 shrink-0 rounded-md bg-surface-2 object-cover"
-                        />
-                      </>
-                    ) : (
-                      <span className="flex size-11 shrink-0 items-center justify-center rounded-md bg-surface-2">
-                        <Icon name="image" className="size-4 text-label-tertiary" />
-                      </span>
-                    )}
+            {placements.map((placement) => {
+              const group = ordered.filter((banner) => banner.placement === placement);
 
-                    <button
-                      type="button"
-                      onClick={() => setEditing(banner)}
-                      className="flex min-h-11 min-w-0 flex-1 flex-col justify-center gap-1 text-start"
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-body text-label" dir="auto">
-                          {decodeEntities(banner.title)}
-                        </span>
-                        {banner.status === "draft" ? (
-                          <StatusBadge tone="warning">{t("status.draft")}</StatusBadge>
-                        ) : null}
-                      </span>
-                      <span className="flex items-center gap-2 text-footnote text-label-secondary">
-                        {banner.link !== "" ? (
-                          <Ltr numeric={false} className="min-w-0 truncate">
-                            {banner.link}
-                          </Ltr>
+              return (
+                <Card
+                  key={placement}
+                  /*
+                    The heading is the theme's raw key — `home_hero` — and it is
+                    **not** `Ltr`-wrapped, because `Card.title` is a `string` and
+                    cannot carry a wrapper. It is safe as it stands rather than by
+                    luck: a placement is an ASCII identifier, and a pure L run
+                    inside an RTL paragraph keeps its own order. A key that began
+                    or ended with digits would want the wrap, which is a limit of
+                    the primitive rather than of this screen.
+                  */
+                  title={placement}
+                >
+                  <ul className="flex flex-col">
+                    {group.map((banner, index) => (
+                      <li key={banner.id} className="ui-row flex min-w-0 items-center gap-3 py-2">
+                        {banner.image ? (
+                          /* A plain `<img>`, not `next/image`: the URL is on the
+                             WordPress origin, the optimiser would need it in
+                             `remotePatterns`, and routing a staff-only thumbnail
+                             through a CDN buys nothing on a list of four. */
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={banner.image.url}
+                            /* Decorative here, so `alt=""` rather than
+                               `image.alt`: the banner's title is the next
+                               element in the same row and is the row's
+                               accessible name, so announcing the picture's own
+                               description would read the row twice. The alt text
+                               belongs on the storefront, where the image is the
+                               content. */
+                            alt=""
+                            loading="lazy"
+                            className="size-10 shrink-0 rounded-ui-md border border-ui-line bg-ui-surface-2 object-cover"
+                          />
                         ) : (
-                          <span className="truncate">{t("banners.noLink")}</span>
+                          <span className="flex size-10 shrink-0 items-center justify-center rounded-ui-md border border-ui-line bg-ui-surface-2">
+                            <Icon name="image" className="size-4 text-ui-subtle" />
+                          </span>
                         )}
-                        <Isolate className="ms-auto shrink-0">
-                          {formatWhen(banner.date_modified, locale)}
-                        </Isolate>
-                      </span>
-                    </button>
 
-                    <MoveControls
-                      index={index}
-                      count={group.length}
-                      onMove={(from, to) => void reorder(group, from, to)}
-                      label={decodeEntities(banner.title)}
-                      disabled={busy}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setRemoving(banner)}
-                      disabled={busy}
-                      aria-label={t("banners.delete", { label: decodeEntities(banner.title) })}
-                      className="press flex size-11 shrink-0 items-center justify-center rounded-md text-label-secondary disabled:opacity-30"
-                    >
-                      <Icon name="trash" className="size-5" />
-                    </button>
-                  </ListRow>
-                ))}
-              </ListGroup>
-            );
-          })
+                        {/*
+                          The identifying cell is a real `<button>` with a stable
+                          id — the keyboard path to the drawer, and the target its
+                          `returnFocusTo` names. A stretched overlay would cover
+                          the reorder pair beside it.
+                        */}
+                        <button
+                          id={rowOpenerId(banner.id)}
+                          type="button"
+                          onClick={() => setEditing(banner)}
+                          className="ui-ring ui-interactive flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 rounded-ui-md text-start"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              dir="auto"
+                              className="min-w-0 truncate text-ui-subheading text-ui-fg"
+                            >
+                              {decodeEntities(banner.title)}
+                            </span>
+                            {banner.status === "draft" ? (
+                              <Badge tone="warning">{t("status.draft")}</Badge>
+                            ) : null}
+                          </span>
+                          <span className="flex min-w-0 items-center gap-2 text-ui-label text-ui-muted">
+                            {banner.link !== "" ? (
+                              <Ltr numeric={false} className="min-w-0 truncate">
+                                {banner.link}
+                              </Ltr>
+                            ) : (
+                              <span className="truncate">{t("banners.noLink")}</span>
+                            )}
+                            <Isolate className="ms-auto shrink-0">
+                              {formatWhen(banner.date_modified, locale)}
+                            </Isolate>
+                          </span>
+                        </button>
+
+                        {/* Not rendered when the list in hand is not the whole
+                            collection — §3.3, and see `reorderBlock()`. */}
+                        {blocked === null ? (
+                          <Reorder
+                            index={index}
+                            count={group.length}
+                            onMove={(from, to) =>
+                              move.mutate(reorderWrites(placement, from, to))
+                            }
+                            label={decodeEntities(banner.title)}
+                            disabled={busy}
+                          />
+                        ) : null}
+
+                        <Menu
+                          label={t("banners.rowActions", {
+                            label: decodeEntities(banner.title),
+                          })}
+                          actions={[
+                            {
+                              key: "delete",
+                              label: t("banners.deleteAction"),
+                              icon: "trash",
+                              destructive: true,
+                              disabled: busy,
+                              onSelect: () => confirm.ask(banner),
+                            },
+                          ]}
+                          trigger={
+                            <IconButton
+                              id={rowMenuId(banner.id)}
+                              label={t("banners.rowActions", {
+                                label: decodeEntities(banner.title),
+                              })}
+                              icon="more"
+                              variant="ghost"
+                              size="sm"
+                              className="shrink-0"
+                            />
+                          }
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              );
+            })}
+
+            <div className="flex flex-col gap-1 text-ui-label text-ui-subtle">
+              <p>{t("banners.listNote")}</p>
+              {/* A filtered tab is recoverable in one click, so it is a line
+                  rather than a warning — and the line names the tab. */}
+              {blocked === "filtered" ? <p>{t("banners.reorderFiltered")}</p> : null}
+            </div>
+          </div>
         )}
-      </div>
+      </PageBody>
 
-      {creating ? (
-        <BannerSheet
-          open
-          onOpenChange={(open) => !open && setCreating(false)}
-          banner={null}
-          placements={placements}
-          nextPosition={banners.length}
-          onSaved={invalidate}
-        />
-      ) : null}
-
-      {editing ? (
-        <BannerSheet
-          open
-          onOpenChange={(open) => !open && setEditing(null)}
-          banner={editing}
-          placements={placements}
-          nextPosition={banners.length}
-          onSaved={invalidate}
-        />
-      ) : null}
-
-      <ActionSheet
-        open={removing !== null}
-        onOpenChange={(open) => !open && setRemoving(null)}
-        title={t("banners.deleteTitle")}
-        description={t("banners.deleteBody")}
-        actions={[
-          {
-            label: t("banners.deleteAction"),
-            tone: "destructive",
-            onSelect: () => removing && void remove(removing),
-          },
-        ]}
-        cancelLabel={t("cancel")}
+      <BannerDrawer
+        /* The remount that replaces an effect: opening a different banner gives
+           the form a different key, so its state initialisers run again. */
+        key={editing === "new" ? "new" : (editing?.id ?? "closed")}
+        open={editing !== null}
+        banner={editing === "new" ? null : editing}
+        placements={placements}
+        /* A new banner appends to the **collection**, not to the page in hand:
+           at `total` rather than at `fetched`, so a truncated list does not
+           create a row on top of one it never saw. */
+        nextPosition={total}
+        returnFocusTo={drawerOpener}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          invalidate();
+        }}
       />
-    </Scaffold>
+
+      <ConfirmDialog
+        open={confirm.open}
+        onOpenChange={confirm.onOpenChange}
+        returnFocusTo={confirmOpener}
+        tone="destructive"
+        loading={remove.isPending}
+        title={t("banners.deleteTitle")}
+        /*
+         * **No `requireTyped`, and the reason is measured rather than a
+         * preference.** §3.1 asks an irreversible act to be confirmed by typing
+         * the record's identifier, and it was written for a SKU, an order number
+         * and a coupon code — short strings a person reads off the screen and
+         * types back. A banner's only identifier is its title, and
+         * `lib/api/schemas/cms.ts` records that WordPress **texturizes** it: an
+         * apostrophe comes back as U+2019, so "Soldes d’été" cannot be typed on
+         * the keyboard of the person reading it. A guard nobody can satisfy is
+         * not a guard, it is a dead end with a text box. The dialog names the
+         * banner instead, which is the shipping branch's amendment.
+         */
+        body={
+          <>
+            <p className="text-ui-subheading text-ui-fg" dir="auto">
+              {confirm.target ? decodeEntities(confirm.target.title) : ""}
+            </p>
+            <p className="mt-1.5">{t("banners.deleteBody")}</p>
+          </>
+        }
+        confirmLabel={t("banners.deleteAction")}
+        onConfirm={() => {
+          if (confirm.target) remove.mutate(confirm.target);
+        }}
+      />
+    </div>
   );
 }

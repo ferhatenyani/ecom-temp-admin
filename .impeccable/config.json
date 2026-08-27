@@ -11,6 +11,15 @@
         ],
         "createdAt": "2026-08-21T08:00:15.869Z",
         "reason": "Claude: src={imageUrl} is a dynamic non-empty URL from the media API, guarded by an imageUrl truthy check; the detector cannot resolve it statically"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "app/[locale]/(panel)/content/banners/BannersList.tsx"
+        ],
+        "createdAt": "2026-08-27T12:51:42.999Z",
+        "reason": "false positive: src is a runtime URL from the CMS API (banner.image.url), guarded by banner.image; alt is intentionally empty because the banner title is the row's accessible name"
       }
     ]
   }

@@ -26,7 +26,7 @@ left looking like an oversight.
 [x]  9. Payments
 [x] 10. Dashboard
 [x] 11. Analytics — revenue / orders / products / customers / shipping / COD
-[ ] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
+[x] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
 [ ] 13. Media
 [ ] 14. Marketing — campaigns, composer, segments, config, templates
 [ ] 15. Notifications — list + detail
@@ -39,8 +39,13 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **79
-files left.**
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **53
+files left**, down from 69 after the content branch. Read it as an **upper
+bound**: the heuristic starts producing false positives exactly as the migration
+succeeds, because a fully migrated screen whose every class comes from a
+primitive contains no `ui-` string of its own. Content added none this time —
+all nineteen of its files carry one — but `CustomersView.tsx` and `CodView.tsx`
+still do not.
 
 ---
 
@@ -1152,14 +1157,281 @@ one. The four dashboard tests were not touched.
 
 ---
 
+## 13. Content — three kinds of work under one capability
+
+Checklist item **12**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+**The item was framed as one screen and is three.** The scout said so before any
+code was written and was right: the seven routes share a capability and a URL
+prefix and **nothing else** — no query contract, no envelope, no row shape.
+`content/page.tsx`'s own docblock had been arguing it since it was written. What
+they actually are: **pages**, a real paged list plus a real form (the `coupons`
+shape); **banners and FAQs**, small unpaged collections reordered in place with
+no save bar; **homepage and menus**, whole-document `PUT` editors with a dirty
+save bar, positional errors and caps. They ship as eight routes, not one with a
+`?view=` — this is the shipping/inventory case rather than the analytics one,
+because analytics' six reports share a **window** and these six share nothing a
+control could sit above.
+
+**The index survives, and its old justification did not.** It defended itself
+against a `Segmented` control, which §0 retires, so that argument expired with
+the control. What replaces it: `/inventory` and `/shipping` reach their second
+route from the first's header, which is right for two and is chrome at six; and
+six destinations sharing a prefix are not a sidebar group, because `AppShell`'s
+tree is by domain. What earns the navigation is the **count** — "Bannières 5"
+tells somebody whether to go in. New `NavList`/`NavRow` in `Card.tsx`: a real
+`<ul>` of real anchors. Not `Stat`, because a count here is a hint on a
+destination rather than a metric, and at `--text-display` it would claim to be
+the reason the screen exists. `hubNote` lost its first sentence, which listed the
+six rows sitting directly under it.
+
+**`/media` is on the index and in the sidebar, and both are honest.**
+`nav-tree.ts` files it under *catalog* because most of that library is product
+photographs; the index files it under *content* because it is also where a
+banner's picture comes from. Two front doors to one screen is what
+`/inventory/movements` already has. Recorded rather than "fixed" — removing
+either takes a true statement off a screen.
+
+### Pages
+
+- `DataTable`/`RecordList` + one `columns.tsx`: title (a real anchor), path,
+  modified, and `id` behind the picker. Status is a **badge on the title, not a
+  column** — the coupons argument, and stronger here, because this list opens at
+  `?status=any` so drafts sit among published pages and `publish` is most of the
+  shop.
+- **The status tabs are inverted and that is the screen's one real trap.** On
+  `/cms/*` the absence of `?status=` means **publish only**, so "all" is an
+  explicit `?status=any` and it is `publish` that is the filter. The tab omitted
+  from the URL is therefore `any`, which is the opposite of every other list.
+- **`PER_PAGE` 50 → 20.** 50 was neither the API's figure (measured at 20 across
+  nine collections) nor the panel's (every migrated list opens at 20), and it had
+  a quiet cost: this shop sits under it, so **the pager had never once been
+  exercised** — a rendered control with no fixture behind it. The mock now seeds
+  62 pages and both readings page.
+- **No sorting, and the reason changed from "none" to "unmeasured".** `query.ts`
+  said "There is no `orderby`. The index is ordered by title on the server",
+  which is a statement about the route's *default* and was being read as a
+  measurement of the *parameter*. Nothing in this repo records `orderby` on any
+  `/cms/` collection either way. The difference is load-bearing: "ignored" closes
+  the question, "unmeasured" leaves it open, and this run has twice found a
+  control recorded dead that the backend had since repaired. `query.ts` now names
+  the measurement to take.
+- **A colliding row is inert, and `DataTable` grew `rowClickable` to make it so.**
+  Two pages can share a `path` — `wp_unique_post_slug()` does not run for a draft
+  — so `get_page_by_path()` resolves one and the panel cannot tell which;
+  following any of them is a coin flip that ends in editing somebody else's page.
+  The alternative was a table-level `onRowClick` that silently no-ops on some
+  rows, which is a dead control wearing a live one's hover fill and pointer
+  cursor. The opt-out is honoured in **all three** places the affordance lives:
+  the `<tr>` and its hover state, the identifying cell's opener button, and
+  `RecordList`'s stretched overlay. **`useOpenerAssertion` had to learn about it
+  too** — it reads the *first* row, so a correct collision row in first position
+  would `console.error` about a row doing exactly the right thing, and the
+  capture harness fails on a console error. This is the run's first fixture for
+  that branch at all: the seed had deleted the 78 colliding pages, so the code
+  path had been rendering to nobody since it was written.
+- No peek (`GET /{id}` carries `content`, `excerpt` and the whole resolved `seo`
+  block — the index is deliberately less than a page and the backend asserts the
+  omission), no bulk, no export (`content` is not in `EXPORT_SUBJECTS`).
+
+### The page form
+
+- `PageBody width="form"`, `Card` sections, `SaveBar` when dirty, `ErrorSummary`
+  with orphan failures as text. Delete moved from a "danger" group at the foot of
+  the form into the header `Menu` → `ConfirmDialog`.
+- **No type-to-confirm, and the first draft had it.** §3.1 asks for the record's
+  identifier on an **irreversible** act; `DELETE /cms/pages/{path}` is the
+  *trash*, and `deleteConfirmBody` says so in as many words. A typed path against
+  copy promising recoverability is a guard arguing with its own dialog, and it is
+  how typing becomes something people do without reading. The dialog names the
+  record instead — §3.1 as amended on shipping. **Agent E reached the same
+  conclusion from a different direction and it is the stronger one:**
+  WordPress texturizes these strings, so a banner called "Soldes d'été" carries
+  U+2019 and **cannot be typed from the screen at all**. A guard nobody can
+  satisfy is a dead end with a text box in it.
+- The rename confirmation is `tone="primary"`, not destructive: a rename is undone
+  by renaming back. What it costs is every existing link, which is why it is
+  confirmed at all, and the body names both paths.
+
+### Banners, FAQs, and the nested sheet
+
+- List + reorder + a `Drawer` per record. **FAQ categories became their own
+  route**, `/content/faqs/categories`: they were a `Sheet` nested inside another
+  `Sheet`, and §3.1 rules on it directly — *"Never nested. A modal that needs a
+  second modal is a modal that needs steps."* A route is the honest version of
+  "steps" here, and it is the one screen on this branch whose forbidden state
+  could not previously exist, because it had no URL to be refused at.
+- **The image picker is a step inside the banner drawer, not a second overlay.**
+  `patterns/MediaPicker` wrapped itself in a `Sheet` and its only caller opened it
+  from inside another one. Promoted to `components/ui/MediaPicker.tsx` as a
+  **panel with no chrome**, so the drawer body swaps to it and back — and so item
+  13's full-page media screen can render the identical grid with no overlay.
+- **No `placement` filter, ever.** `placement` is a free string on the API's side
+  by design, so the allowlisted enumeration is *definitionally* incomplete and
+  DECISIONS' picker rule refuses it. The client-side grouping stays and the
+  footnote says why. No `?category=` filter on FAQs — never measured.
+
+### The two document editors
+
+- `PageBody width="detail"` (768). Not `form` (640): a JSON textarea and a
+  two-level tree are not a column of labelled fields.
+- The homepage's drop report is a `Notice` — the *kind* of each problem in the
+  reader's language, the API's English beside it as `dir="ltr"` detail, and the
+  position stated as **1-based over the stored document**, which the copy says
+  out loud because "Section 6" is not the sixth row on screen. Both error shapes
+  still land: the flat `sections` cap through `ErrorSummary`, the positional
+  `sections[n].type` bound to its row. Save stays gated behind a `ConfirmDialog`
+  naming the count that saving destroys.
+- **`dataHint` was printed nine times and is now printed once.** Every section
+  carries the identical sentence — the API defines no schema per type — so
+  binding it to the control put nine copies of one fact down a nine-card
+  document. It sits once, above the list, where it is read before the first
+  textarea rather than beside the ninth. Restraint applies to words.
+- Menus: the location is a `FilterTabs` in the **`tabs` variant**, because the
+  panel-wide rule is that a full-bleed underlined strip under the header always
+  means *which view*. `key={location}` kept, `isAllowedMenuUrl` kept, and an
+  unassigned location is still an `EmptyState` with a working action — `PUT`
+  creates and assigns.
+
+### Five defects the build found, none of them in the brief
+
+1. **The status filter corrupts `position` exactly as truncation does.** This is
+   the one the orchestrator missed outright. `?status=publish` returns the
+   collection's positions with the drafts **missing from the middle** (`0, 2, 3`),
+   so `positionWrites()` reports writes for rows nobody moved and lands them on a
+   draft's slot. The predicate is `reorderBlock()` returning
+   `"truncated" | "filtered" | null` — two facts, two remedies, two sentences —
+   and truncation wins when both hold, because clearing the filter would not give
+   the control back. `tests/cms-reorder.test.ts` reproduces both corruptions
+   rather than asserting the fix.
+2. **Banner reorder wrote group-local indices onto a collection-wide dense
+   sequence**, so two placements would each get a row at `position: 0`.
+3. **"Rétablir" on menus was inert.** It called `refetch()`, but `MenuDraft` seeds
+   state at mount and its `key` is the location, so the same location never
+   remounts and the initialiser never re-ran.
+4. **The homepage type `Select` coerced an unknown type to `SECTION_TYPES[0]`** —
+   a section stored as `carousel` displayed as "Bandeau principal".
+5. **A FAQ category with no FAQs was deleted with no confirmation at all.** The
+   dialog only appeared on the 409, so the one silent irreversible path was the
+   unguarded one.
+
+### The harness, which is most of the branch
+
+`/cms/*` and `/media` were **entirely unmocked** — both listed `UNCOVERED` — so
+every Content screen photographed as its error state and none of the five states
+existed for any of the seven. Precedent held: the mock landed before the screens,
+as it did on shipping, payments and analytics.
+
+- **A fourth identity, `no_content`**, exactly `full` minus `ac_manage_content`.
+  All three existing identities held it, so the branch's *defining* fixture — the
+  Manager refused on all eight screens — was unreachable. `reduced` was
+  deliberately not repurposed: its docblock argues at length that it is not "a
+  Manager" and that its delta is exactly the two 403s that were seen.
+- **`MOCK_HOMEPAGE` (`report` | `empty` | `future`)**, because the empty document
+  and the twelfth section type are reachable by neither a route nor an identity —
+  the screen takes no parameters and its server component forwards none.
+- Fixtures the code paths had been waiting for: the `ac-unpublished` collision
+  pair, 62 pages so the pager runs, drops interleaved at stored positions **2, 4,
+  6** so an off-by-one is visible, an FAQ category at `count: 0`, a 110-character
+  Arabic question, entity 8217 on two titles, a 62-character path.
+- **The twelfth section type is a hypothesis and is labelled one.** The measured
+  reader *drops* an unknown type and reports it; serving one intact by default
+  would be the mock passing what the shop discards. It is behind
+  `MOCK_HOMEPAGE=future`, modelled consistently on both sides of the wire.
+- **The honesty audit found the brief wrong in both directions.** More permissive
+  than the record: `GET /cms/pages/{shop,cart,checkout,my-account}` answers 200
+  (only the *index* omission is measured, not addressability); `meta.excluded_system`
+  is computed against the status filter; `embeddedImage` is reachable only through
+  a write nobody measured resolving. Stricter than the record: id refusals on
+  `image_id`, menu `object_id` and FAQ `categories` — the shape is measured on
+  coupons, not here. Six refusal sentences are the mock's own invention, patterned
+  on the one measured `"The coupon is invalid."`, and each is flagged at its site;
+  the drop-report sentences, the eleven-name enum, both 404s and every
+  `notOneOf()` enum are verbatim from the record.
+
+### Verified rather than reported
+
+Every visual and structural claim on this branch arrived **unverified** — the
+screens agent wrote them without a harness and said so. Driven in Chromium
+afterwards, at 1440 and at 340:
+
+```
+  focus after Escape, POINTER open   banners  -> BUTTON#banner-opener-7301
+                                     faqs     -> BUTTON#faq-opener-8101
+  focus after Escape, keyboard open  both     -> the same opener
+  Reorder hit area (box ∪ ::after)            -> 44 × 44
+  TableFooter select                          -> 58 × 32
+  TableFooter pager buttons                   -> 28 × 28 box, 32px ::after
+  scrollWidth at 340, 9 routes, fr + ar       -> 340 vs 340, no overflow
+```
+
+The pointer path is the one that matters: it passes every keyboard assertion even
+when broken, which is how the shipping branch shipped a drawer nobody could
+escape from. 168 captures clean across nine routes plus two controls, at
+340/768/1440 × light/dark × fr/ar, plus the `no_content` run.
+
+**One defect the captures found and the code review would not have.** The three
+Pages forbidden states rendered a **back link to `/content`** — a route gated on
+the same capability the reader had just been refused for, so the link could only
+ever reach another "Accès refusé". A link to a 403 is a control that cannot act.
+Agent E's five screens had it right; the orchestrator's three did not.
+
+**i18n**: **1 866 keys in each file, at exact parity, and zero orphans in the
+`content` namespace** — checked by a scan that resolves dynamic lookups, because
+19 of its keys have no literal caller and are all `t(\`homepage.problem${…}\`)`
+templates. `content.moveUp`/`moveDown` were **not** removed: their last caller is
+`components/patterns/MoveControls.tsx`, which teardown owns. `states.offlineWrites`
+gained its first caller. `a11y.pageName` and `ui.reorder.{up,down}` are new.
+
+**`e2e/content.spec.ts`: 24 test declarations before, 24 after** (31 at runtime —
+the Manager describe loops eight paths now, having gained the categories route,
+which is a *new screen* rather than a new assertion about an old one). One title
+changed and it is recorded rather than quiet: `"is reachable from More, which
+used to render it as unbuilt"` became `"is reachable from the panel
+navigation"` — `/more` still resolves and **nothing in the panel links to it**,
+so the test was asserting "Content is reachable from the navigation" through a
+screen no reader arrives at. `selectSegment()` kept its name and lost its body:
+`Segmented`'s `sr-only` radio needed a `<label>` click, and `FilterTabs` draws a
+real `<button>`. The suite gained the `tbody tr, li.ui-card` row helper, because
+moving Pages to `DataTable` introduced the coupons trap — every project bar one
+is phone-sized and the anchor lives only in the `md`+ table.
+
+---
+
 ## Carried forward — teardown owns these
 
-- **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
-  off the bottom to clear a tab bar that no longer exists. Panel-wide.
+- ~~**`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
+  off the bottom to clear a tab bar that no longer exists.~~ **Closed on the
+  content branch, and the 68px was the least of it.** Measured rather than
+  assumed: the old anchor dropped to `1.5rem` at `md`, so the tab-bar clearance
+  was **phone-only** and 1440 was already correct. What was wrong at *every*
+  width is what nobody had written down — it was centred everywhere (§3.1 wants
+  inline-end at `sm`+), translucent `color(srgb 1 1 1 / .88)` with
+  `box-shadow: none`, and **errors expired at 4.3s against §3.1's 6s**. Now
+  `bg-ui-surface` + border + `shadow-ui-sm`, tone in the icon only, 4s/6s.
+  Public props unchanged across **33 importers**; none was touched. The lesson is
+  the ledger's own: a carried entry describes what somebody noticed, not what is
+  wrong, and it goes stale in the direction of *understating*.
 - **`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
   they are `fixed` with no block-end, so deleting the rule would unstick their
   bars rather than remove them.
 - **`RowSkeleton.tsx` stays** — **seven** unmigrated screens import it.
+- **Three files in `primitives/` and `patterns/` now have no importer at all, and
+  they are the first genuinely dead ones rather than under-defended ones.**
+  `components/patterns/MoveControls.tsx` and `components/patterns/MediaPicker.tsx`
+  joined `primitives/Bar.tsx` on the content branch: the first was promoted to
+  `components/ui/Reorder.tsx` with both of its measurements intact, the second to
+  `components/ui/MediaPicker.tsx` as a panel. **Their message keys go with them
+  and are deliberately still in the files**: `content.moveUp`/`moveDown` have
+  exactly one caller left — `MoveControls.tsx` — so removing the keys would leave
+  a source file reading a key that does not exist. Teardown deletes the three
+  files and those two keys in one edit. `patterns/TabBar.tsx` has had none since
+  the shell landed, and it is the only thing that still links `/more`, which two
+  `e2e/content.spec.ts` tests were asserting against until this branch.
+  **`tests/cms.test.ts` was importing `moveItem` from the retired copy**, so the
+  five reorder assertions were covering dead code while `ui/Reorder`'s own
+  implementation had none; repointed, 787 still pass.
 - **`components/primitives/Bar.tsx` now has no importer at all.** The analytics
   branch was its only caller and `components/ui/Bar.tsx` replaced it. It is left
   in place under the rule that teardown owns `primitives/`, but unlike
@@ -1168,10 +1440,14 @@ one. The four dashboard tests were not touched.
   retuned to the `ui` tokens under their own names. It is the first genuinely
   dead file in that directory rather than an under-defended one, and it should be
   the first thing teardown deletes.
-- **`e2e/customers.spec.ts:57,115` has the coupons row-helper bug**, unfixed: it
-  asserts `toBeVisible()` on an anchor that only the `md`+ table renders, on a
-  phone project. It has never surfaced because the suite is env-gated and has
-  never run here. The fix is the `tbody tr, li.ui-card` helper coupons now uses.
+- ~~**`e2e/customers.spec.ts:57,115` has the coupons row-helper bug**, unfixed.~~
+  **Closed on the content branch, and the entry was half right.** `:58` was
+  genuinely broken. `:116` is `toContainText`, which reads `textContent` and never
+  checked visibility — it *passed*, while asserting about a node nobody on a phone
+  project can see, which is the quieter half of the same defect. Both converted to
+  coupons' `rows()` helper; the three `toHaveCount` assertions were left alone,
+  because a count is DOM-based and 16 is 16 at every width. 14 tests before, 14
+  after, titles byte-identical.
 - **A sort can outlive the column that shows it.** `id` on coupons is
   `optional: true`, so sorting by it and then hiding the column leaves the list
   ordered by something no header claims. Weaker than §2's products defect — there
@@ -1246,8 +1522,10 @@ one. The four dashboard tests were not touched.
   the second focus prop this entry asked for, and the fix was driven in Chromium
   from a `Menu` item rather than reasoned about.
 
-  **It surfaced a second, narrower defect that is still open: Escape from the
-  shipping rule-delete dialog drops focus to `<body>`.** Measured on both a
+  **It surfaced a second, narrower defect — and the *symptom* recorded here was
+  wrong.** Closed on the content branch. The entry read:
+
+  > Escape from the shipping rule-delete dialog drops focus to `<body>`. Measured on both a
   patched and an unpatched build, so it predates the focus fix and is not a
   regression from it. The cause is §10's latch, unapplied at one call site:
   `RulesScreen.tsx:404` derives `returnFocusTo` from `confirm.target`, and Radix
@@ -1256,8 +1534,27 @@ one. The four dashboard tests were not touched.
   one-line fix and it already exists. **It is the only caller with this shape** —
   the other ten `returnFocusTo` call sites were surveyed and each passes either a
   stable id (`triggerId`, `menuTriggerId`, `fieldId(picker)`) or an already-latched
-  one. Left for whoever owns `/shipping/rules`, because it is a shipped screen
-  outside this branch.
+  one. **The diagnosis was right and the consequence was not.** Driven on
+  isolated builds at 390/1440 × fr/ar × mouse/keyboard, with `getElementById` and
+  `HTMLElement.focus` hooked: `returnFocusTo` really is `undefined` at close —
+  `getElementById` is never called — but focus lands on `#rule-menu-164` in
+  **16 of 16 cells, never `<body>`**. Radix's `DropdownMenu` restores focus to its
+  *trigger* before the dialog records its opener, so `useOpenerFocus`'s recorded
+  fallback catches it; §10's "a menu item does not survive" does not apply,
+  because the recorded node is the trigger and not the item. `useLatchedOpener`
+  was applied anyway — a named path that is dead code reads as a live one — and
+  all **eleven** call sites were re-surveyed rather than trusted (the entry said
+  ten): four already latched, four on a stable `useId()`, one fixed, and the one
+  with the same derivation shape (`CouponForm` → `RestrictionPicker`) was driven
+  in a browser and works, because the whole subtree unmounts instead of
+  re-rendering with `undefined`, so React hands the unmount handler the last
+  committed props.
+
+  **The reusable part is the failure mode**: a defect was carried for two branches
+  on a symptom nobody had reproduced. The diagnosis was sound and the sentence
+  attached to it was invented, which is the same class as the "provider label"
+  and "route is broken" entries — a note that reads like a property of the system
+  and is really a dated guess.
 - The sticky first column has no divider at its frozen edge.
 - ~~**`DataTable.onRowClick` still hands its caller a `<tr>` and no keyboard
   path.**~~ **Closed — see §10**, which also corrects this entry's claim that
@@ -1297,6 +1594,22 @@ one. The four dashboard tests were not touched.
   The general lesson is worth more than the entry: **a "this route is broken"
   note needs a date and a re-check, exactly as a "this parameter is ignored" note
   does.** Absence of capability is not more durable than presence of it.
+- **`POST /media` is a 404 in the mock, named rather than hidden.** It is
+  `multipart/form-data` and the mock's shell parses JSON, so all five measured
+  failure shapes would be unreachable behind a handler that pretended. Item 13
+  owns it, along with `mediaSize`, which has no fixture because `sizes` is empty
+  on all 41 attachments — measured.
+- **Six refusal sentences in the CMS mock are the mock's own words**, patterned on
+  the one measured `"The coupon is invalid."` and flagged at each site. The
+  coupons branch is why that matters: a screen was built to a `"Read-only."`
+  refusal the API never sends. The request-for-request diff against the live
+  router is what would settle them, and it has not been run on this subject.
+- **`states.capability.ac_manage_marketing` did not exist** — the third instance
+  of that hole after `ac_manage_shipping` and `ac_manage_payments`, so the
+  Marketing section's forbidden state printed the raw slug at the reader.
+  **Closed on the content branch**; all 13 slugs in `lib/capabilities.ts` are now
+  covered and none exists without a slug. Three branches found it three times,
+  which suggests the check belongs in `check-design.sh` rather than in a person.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
 - ~~`movementReasonHint` has no caller in either message file. So do
@@ -1314,8 +1627,25 @@ one. The four dashboard tests were not touched.
   one — so closing it means growing the control, which grows the footer row on all
   seven shipped list screens. The remedy is `min-h-8` on the select plus a
   re-capture of every list; it is a one-line change with a seven-screen blast
-  radius, which is why it is here rather than in §12. The original entry follows,
-  because its *method* is the reusable part:
+  radius, which is why it is here rather than in §12. **Closed on the content
+  branch**: `min-h-8`, proved by an A/B of **84 byte-compared captures** from two
+  trees differing only in those six files — all 84 differ, 64 grew exactly 4px,
+  and a pixel diff of the 20 that kept their dimensions confines every changed
+  pixel to a 46–48px band, the footer strip. Two corrections to this entry while
+  it was being closed: it is **8** shipped screens, not seven (`/inventory/movements`
+  was missed), and the footer row **does** grow — 49 → 53px — because the pager's
+  `IconButton size="sm"` is 28px, so the select was never the tall control.
+
+  **The residual it leaves is a 4px *drawn* difference, not a §5 failure**, and
+  the distinction is this file's oldest method. A 32px select now sits beside
+  28px pagination buttons; measured in Chromium, those buttons carry a **32px
+  `::after`**, so their hit area meets §5's pointer floor exactly as §5
+  prescribes — *"a 20px icon gets a 44px hit area from a pseudo-element, never by
+  growing the icon"*. An agent reported them as a new violation having measured
+  `getBoundingClientRect()` alone, which is the error §12's own table warns
+  against two paragraphs above. Growing them would ripple `IconButton` panel-wide
+  to fix an appearance. The original entry follows, because its *method* is the
+  reusable part:
 
   **Nothing in the panel meets §5's 44px touch target, and it is the primitives
   rather than any screen.** Driven at 340 under a coarse pointer, measuring the

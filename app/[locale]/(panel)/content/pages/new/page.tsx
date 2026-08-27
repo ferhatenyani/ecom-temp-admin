@@ -1,8 +1,8 @@
 import { getTranslations } from "next-intl/server";
 import { requireSession } from "@/lib/session/read";
 import { has } from "@/lib/capabilities";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState } from "@/components/patterns/States";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { PageForm } from "../[...path]/PageForm";
 
 /**
@@ -26,11 +26,14 @@ export default async function NewContentPage({
   if (!has(me, "ac_manage_content")) {
     const t = await getTranslations("content");
     return (
-      <Scaffold title={t("pages.newTitle")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No `back`: `/content/pages` is the same capability, so the link could
+            only reach another refusal. See `content/pages/page.tsx`. */}
+        <PageHeader title={t("pages.newTitle")} divided={false} />
+        <PageBody width="form">
           <ForbiddenState capability="ac_manage_content" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

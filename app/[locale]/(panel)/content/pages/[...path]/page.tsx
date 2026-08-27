@@ -5,8 +5,8 @@ import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { has } from "@/lib/capabilities";
 import { page as pageSchema } from "@/lib/api/schemas/cms";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState } from "@/components/patterns/States";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { PageForm } from "./PageForm";
 
 /**
@@ -34,11 +34,14 @@ export default async function ContentPageDetail({
   if (!has(me, "ac_manage_content")) {
     const t = await getTranslations("content");
     return (
-      <Scaffold title={t("section.pages")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No `back`: `/content/pages` is the same capability, so the link could
+            only reach another refusal. See `content/pages/page.tsx`. */}
+        <PageHeader title={t("section.pages")} divided={false} />
+        <PageBody width="form">
           <ForbiddenState capability="ac_manage_content" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -55,5 +58,19 @@ export default async function ContentPageDetail({
 
   if (result === null) notFound();
 
-  return <PageForm locale={locale} page={result.data} mode="edit" />;
+  /**
+   * When this render happened, for §3.7's stale marker on the client form.
+   *
+   * The same reasoning the coupon, product and order details record:
+   * `react-hooks/purity` flags reading the clock in a component body and is right
+   * about the client case it is written for; an async Server Component runs once
+   * per request and never re-renders, so this is part of the fetch rather than
+   * part of the render. Recording it in a mount effect instead gives an age that
+   * stops moving after `router.refresh()`, which re-renders the server tree
+   * without remounting the client one.
+   */
+  // eslint-disable-next-line react-hooks/purity -- see above: a Server Component renders once per request.
+  const fetchedAt = Date.now();
+
+  return <PageForm locale={locale} page={result.data} fetchedAt={fetchedAt} mode="edit" />;
 }

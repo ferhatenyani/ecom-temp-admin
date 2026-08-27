@@ -2,8 +2,8 @@ import { getTranslations } from "next-intl/server";
 import { requireSession } from "@/lib/session/read";
 import { has } from "@/lib/capabilities";
 import { MENU_LOCATIONS, type MenuLocation } from "@/lib/cms";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState } from "@/components/patterns/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { ForbiddenState } from "@/components/ui/States";
 import { MenuEditor } from "./MenuEditor";
 
 /**
@@ -29,11 +29,13 @@ export default async function MenusPage({
 
   if (!has(me, "ac_manage_content")) {
     return (
-      <Scaffold title={t("section.menus")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No back link: `/content` is behind the same capability. */}
+        <PageHeader title={t("section.menus")} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_content" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

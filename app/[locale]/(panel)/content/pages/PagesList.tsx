@@ -1,25 +1,23 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { PageRow as PageRowData } from "@/lib/api/schemas/cms";
+import type { PageRow } from "@/lib/api/schemas/cms";
 import { acRead } from "@/lib/api/browser";
 import { collidingPaths, STATUS_FILTERS, type StatusFilter } from "@/lib/cms";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
-import { ListGroup, ListLinkRow, ListRow } from "@/components/primitives/GroupedList";
-import { Segmented } from "@/components/primitives/Segmented";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
-import { PageRow } from "./PageRow";
-import { RowSkeleton } from "../../inventory/RowSkeleton";
+import { Isolate } from "@/components/primitives/Ltr";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { ButtonLink, IconButton } from "@/components/ui/Button";
+import { FilterTabs, FilterRow, SearchField } from "@/components/ui/FilterBar";
+import { DataTable, TableControls, TableFooter, useTablePreferences } from "@/components/ui/DataTable";
+import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { buildColumns, pageRecord, type PageColumnContext } from "./columns";
 import {
   EMPTY_QUERY,
-  PER_PAGE,
   isFiltered,
   listParams,
   pagesKey,
@@ -28,10 +26,10 @@ import {
   type PagesQuery,
 } from "./query";
 
-type PagesPage = { pages: PageRowData[]; total: number; excludedSystem: number };
+type PagesPage = { pages: PageRow[]; total: number; excludedSystem: number };
 
 async function fetchPages(query: PagesQuery): Promise<PagesPage> {
-  const { data, total, meta } = await acRead<PageRowData[]>(`/cms/pages?${listParams(query)}`);
+  const { data, total, meta } = await acRead<PageRow[]>(`/cms/pages?${listParams(query)}`);
 
   return {
     pages: data,
@@ -54,6 +52,22 @@ async function fetchPages(query: PagesQuery): Promise<PagesPage> {
  *
  * The index resolves that: the page is in the list with `status: "draft"`, and
  * the screen knows to read it with `?status=any`.
+ *
+ * ## No peek drawer
+ *
+ * `GET /cms/pages/{path}` returns the row **plus `content`, `excerpt` and the
+ * whole resolved `seo` block** — `lib/api/schemas/cms.ts` measures the index as
+ * deliberately less than a page, and the backend asserts the omission so it
+ * cannot drift back. A preview is free only where the two are the same object
+ * (orders, products, payments); here it would spend a request to show a page
+ * body in a 520px drawer, which is what the form is for. The identifying cell is
+ * a real anchor instead, which is the customers/coupons/inventory shape.
+ *
+ * ## No bulk and no export
+ *
+ * `content` is not in `EXPORT_SUBJECTS`, and there is no bulk endpoint on any
+ * `/cms/` collection — DECISIONS.md's rule is that no bulk write ships without a
+ * measured, allowlisted endpoint.
  */
 export function PagesList({
   locale,
@@ -64,26 +78,34 @@ export function PagesList({
 }: {
   locale: string;
   initialQuery: PagesQuery;
-  initialPages: PageRowData[] | null;
+  initialPages: PageRow[] | null;
   initialTotal: number | null;
   initialExcluded: number;
 }) {
   const t = useTranslations("content");
+  const tA11y = useTranslations("a11y");
   const router = useRouter();
   const searchParams = useSearchParams();
+  const online = useOnline();
 
   const query = queryFromParams(new URLSearchParams(searchParams.toString()));
-  const [searchDraft, setSearchDraft] = useState(query.search);
 
-  const commit = (next: PagesQuery, options: { resetPage?: boolean } = {}) => {
-    const target = options.resetPage === false ? next : { ...next, page: 1 };
-    const params = toUrlParams(target);
+  /*
+   * Not wrapped in `useCallback`. The React Compiler is on in this project and
+   * memoizes this already; a manual dependency list disagreeing with the
+   * compiler's inference makes it skip optimising the whole component.
+   */
+  function commit(next: PagesQuery) {
+    const params = toUrlParams(next);
+    /* `push`, not `replace`. Filter state living in the URL is only half the
+       promise; the other half is that the back button works. */
     router.push(`/${locale}/content/pages${params.size > 0 ? `?${params}` : ""}`, {
       scroll: false,
     });
-  };
+  }
 
-  const online = useOnline();
+  /* A new filter resets to page one; paging and per-page do not. */
+  const commitFilter = (next: PagesQuery) => commit({ ...next, page: 1 });
 
   const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: pagesKey(query),
@@ -101,176 +123,177 @@ export function PagesList({
 
   const pages = data?.pages ?? [];
   const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
   const filtered = isFiltered(query);
 
-  // Computed once for the whole list rather than per row: a row cannot know
-  // whether another row shares its path.
+  /* Computed once for the whole list rather than per row: a row cannot know
+     whether another row shares its path. */
   const collisions = collidingPaths(pages.map((page) => page.path));
 
+  const ctx: PageColumnContext = { locale, t, collisions };
+  const columns = buildColumns(ctx);
+
+  /* Held here rather than inside `DataTable` so the controls sit in the toolbar
+     beside the search field instead of floating above the card. */
+  const preferences = useTablePreferences("content-pages", columns);
+
   return (
-    <Scaffold
-      title={t("section.pages")}
-      back={{ href: `/${locale}/content`, label: t("title") }}
-      trailing={
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            aria-label={t("refresh")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-          >
-            <Icon name="refresh" className={isFetching ? "size-5 spin" : "size-5"} />
-          </button>
-          <a
-            href={`/${locale}/content/pages/new`}
-            aria-label={t("pages.create")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-          >
-            <Icon name="plus" className="size-5" />
-          </a>
-        </div>
-      }
-      toolbar={
-        <div className="flex flex-col gap-3">
-          <form
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              commit({ ...query, search: searchDraft.trim() });
-            }}
-            className="flex items-center gap-2 rounded-md bg-surface-2 px-3"
-          >
-            <Icon name="search" className="size-4 shrink-0 text-label-secondary" />
-            <input
-              type="search"
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
-              placeholder={t("pages.searchPlaceholder")}
-              aria-label={t("pages.searchLabel")}
-              enterKeyHint="search"
-              className="min-h-11 min-w-0 flex-1 bg-transparent text-body text-label outline-none placeholder:text-label-tertiary"
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("section.pages")}
+        back={{ href: `/${locale}/content`, label: t("title") }}
+        /*
+         * The visible count, and the testid the suite waits on before asserting
+         * anything else. `Isolate` and never `Ltr`: this is a translated sentence
+         * with a number in it, not an identifier.
+         */
+        subtitle={
+          <span data-testid="pages-count">
+            <Isolate>{t("pages.count", { total })}</Isolate>
+          </span>
+        }
+        actions={
+          <>
+            <IconButton
+              label={t("refresh")}
+              icon="refresh"
+              variant="secondary"
+              onClick={() => void refetch()}
+              loading={isFetching}
             />
-            {searchDraft ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchDraft("");
-                  commit({ ...query, search: "" });
-                }}
-                aria-label={t("clearSearch")}
-                className="press flex size-8 items-center justify-center rounded-full text-label-secondary"
-              >
-                <Icon name="close" className="size-4" />
-              </button>
-            ) : null}
-          </form>
+            {/* `POST /cms/pages` is allowlisted, so the primary can act. A real
+                link rather than a button: middle click and "open in new tab" are
+                how somebody drafts a second page beside the list. */}
+            <ButtonLink
+              href={`/${locale}/content/pages/new`}
+              variant="primary"
+              icon="plus"
+            >
+              {t("pages.create")}
+            </ButtonLink>
+          </>
+        }
+        toolbar={
+          <div className="flex flex-col gap-3">
+            {/*
+              **The first tab is `any`, and that is the inversion.** On every
+              other list in the panel the leading tab sends nothing and means
+              "all"; here the API's own default is `publish`, so "all" is an
+              explicit `?status=any` and it is `publish` that is the filter.
+              `toUrlParams` omits `any` because it is the *screen's* default, not
+              because it is the API's.
+            */}
+            <FilterTabs<StatusFilter>
+              tabs={STATUS_FILTERS.map((value) => ({
+                value,
+                label: t(`statusFilter.${value}`),
+              }))}
+              value={query.status}
+              onChange={(status) => commitFilter({ ...query, status })}
+              label={t("statusLabel")}
+            />
 
-          <Segmented<StatusFilter>
-            segments={STATUS_FILTERS.map((value) => ({
-              value,
-              label: t(`statusFilter.${value}`),
-            }))}
-            value={query.status}
-            onChange={(status) => commit({ ...query, status })}
-            label={t("statusLabel")}
-          />
-        </div>
-      }
-    >
-      {!online && dataUpdatedAt > 0 ? (
-        <div className="mx-auto max-w-3xl">
+            <FilterRow>
+              <SearchField
+                value={query.search}
+                onSubmit={(next) => commitFilter({ ...query, search: next })}
+                placeholder={t("pages.searchPlaceholder")}
+                label={t("pages.searchLabel")}
+                clearLabel={t("clearSearch")}
+              />
+              <div className="ms-auto">
+                <TableControls
+                  columns={columns}
+                  visible={preferences.visible}
+                  onVisibleChange={preferences.setVisible}
+                  density={preferences.density}
+                  onDensityChange={preferences.setDensity}
+                />
+              </div>
+            </FilterRow>
+          </div>
+        }
+      />
+
+      <PageBody width="full">
+        {!online && dataUpdatedAt > 0 ? (
           <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
-        </div>
-      ) : null}
+        ) : null}
 
-      <div className="mx-auto max-w-3xl px-4">
-        <p
-          aria-live="polite"
-          className="mb-2 px-1 text-footnote text-label-secondary"
-          data-testid="pages-count"
-        >
-          <Isolate numeric>{t("pages.count", { total })}</Isolate>
+        {/* A live region, so a filter that changes the result count announces it.
+            Its own testid: `pages-count` above is the *visible* count, and two
+            elements sharing one testid is a strict-mode violation. */}
+        <p aria-live="polite" className="sr-only" data-testid="pages-live">
+          {tA11y("listUpdated", { total })}
         </p>
 
         {isPending && pages.length === 0 ? (
-          <RowSkeleton rows={5} />
+          <>
+            <div className="hidden md:block">
+              <TableSkeleton rows={8} cols={3} label={t("loading")} />
+            </div>
+            {/* The card and its padding are `DataTable`'s below `md`, so the
+                skeleton wears them too — otherwise the rows shift 8px inward the
+                moment the data lands. */}
+            <div className="ui-card p-2 md:hidden">
+              <RecordListSkeleton rows={6} label={t("loading")} />
+            </div>
+          </>
         ) : isError ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : pages.length === 0 ? (
           <EmptyState
+            icon={filtered ? "search" : "note"}
+            /*
+             * Two empty states, and telling them apart is the point. No pages at
+             * all offers the create action — `POST /cms/pages` is allowlisted.
+             * No results for a filter offers to clear it, back to the *screen's*
+             * defaults rather than the API's, so clearing does not quietly hide
+             * every draft.
+             */
             message={filtered ? t("pages.empty.noResults") : t("pages.empty.none")}
             action={
               filtered
-                ? {
-                    label: t("empty.clear"),
-                    onClick: () => {
-                      setSearchDraft("");
-                      // Back to the *screen's* defaults, which are not the
-                      // API's: `?status=any`, so clearing a filter does not
-                      // quietly hide every draft.
-                      commit(EMPTY_QUERY);
-                    },
+                ? { label: t("empty.clear"), onClick: () => commitFilter(EMPTY_QUERY) }
+                : {
+                    label: t("pages.create"),
+                    onClick: () => router.push(`/${locale}/content/pages/new`),
                   }
-                : undefined
             }
           />
         ) : (
-          <>
-            <ListGroup>
-              {pages.map((page) =>
-                collisions.has(page.path) ? (
-                  /*
-                   * Not a link. Two rows share this path and only one of them is
-                   * reachable through `/cms/pages/{path}` — the panel cannot tell
-                   * which, so following either would be a coin flip that ends in
-                   * editing somebody else's page.
-                   */
-                  <ListRow key={page.id}>
-                    <PageRow page={page} locale={locale} colliding />
-                  </ListRow>
-                ) : (
-                  <ListLinkRow
-                    key={page.id}
-                    href={`/${locale}/content/pages/${page.path}`}
-                    ariaLabel={page.title}
-                  >
-                    <PageRow page={page} locale={locale} />
-                  </ListLinkRow>
-                ),
-              )}
-            </ListGroup>
-
-            {total > PER_PAGE ? (
-              <nav className="mb-4 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  disabled={query.page <= 1}
-                  onClick={() =>
-                    commit({ ...query, page: Math.max(1, query.page - 1) }, { resetPage: false })
-                  }
-                  aria-label={t("previousPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="back" flipInRtl className="size-5" />
-                </button>
-                <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>
-                    {query.page} / {pageCount}
-                  </Ltr>
-                </span>
-                <button
-                  type="button"
-                  disabled={query.page >= pageCount}
-                  onClick={() => commit({ ...query, page: query.page + 1 }, { resetPage: false })}
-                  aria-label={t("nextPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="chevron" flipInRtl className="size-5" />
-                </button>
-              </nav>
-            ) : null}
-          </>
+          <DataTable
+            preferences={preferences}
+            rows={pages}
+            columns={columns}
+            rowKey={(page) => String(page.id)}
+            rowLabel={(page) => tA11y("pageName", { title: page.title })}
+            record={(page) => pageRecord(page, ctx)}
+            /*
+             * Navigates rather than previewing — see the docblock. The title cell
+             * is a real anchor on top of this, for the keyboard and the middle
+             * click; it stops propagation so only one push happens.
+             */
+            onRowClick={(page) => router.push(`/${locale}/content/pages/${page.path}`)}
+            /*
+             * **A colliding row is not clickable, and it is not a link either.**
+             * `/cms/pages/{path}` resolves exactly one of the rows sharing a
+             * path, and the panel cannot tell which — so following any of them
+             * is a coin flip that ends in editing somebody else's page. The row
+             * still renders every fact it has, and carries the sentence saying
+             * why it does not open. DESIGN.md §3.3's rule that a control which
+             * cannot act is not rendered, reaching a table row.
+             */
+            rowClickable={(page) => !collisions.has(page.path)}
+            footer={
+              <TableFooter
+                page={query.page}
+                perPage={query.perPage}
+                total={total}
+                onPageChange={(page) => commit({ ...query, page })}
+                onPerPageChange={(perPage) => commit({ ...query, perPage, page: 1 })}
+              />
+            }
+          />
         )}
 
         {/*
@@ -278,9 +301,9 @@ export function PagesList({
           otherwise be quietly wrong.
 
           The first: the index omits the pages whose body the shop generates —
-          `shop`, `cart`, `checkout`, `my-account` — so the count here is short
-          of what wp-admin reports. `meta.excluded_system` is how many, and
-          saying so is cheaper than the bug report.
+          `shop`, `cart`, `checkout`, `my-account` — so the count here is short of
+          what wp-admin reports. `meta.excluded_system` is how many, and saying so
+          is cheaper than the bug report.
 
           The second: `?search=` matches the title and the body and **never the
           path**. `WP_Query`'s `s` does not search `post_name`, so on the one
@@ -288,7 +311,7 @@ export function PagesList({
           customers screen sets the precedent for saying what a field matches
           rather than letting somebody conclude the search is broken.
         */}
-        <p className="mb-8 px-1 text-footnote text-label-secondary">
+        <p className="mt-3 text-ui-label text-ui-subtle">
           {data && data.excludedSystem > 0 ? (
             <>
               <Isolate numeric>
@@ -298,7 +321,7 @@ export function PagesList({
           ) : null}
           {t("pages.searchMatches")}
         </p>
-      </div>
-    </Scaffold>
+      </PageBody>
+    </div>
   );
 }

@@ -373,6 +373,7 @@ function Table<T>({
   columns,
   rowKey,
   onRowClick,
+  rowClickable,
   rowOpenerId,
   rowLabel,
   density,
@@ -388,6 +389,7 @@ function Table<T>({
   columns: Column<T>[];
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
+  rowClickable?: (row: T) => boolean;
   rowOpenerId?: (row: T) => string;
   rowLabel: (row: T) => string;
   density: Density;
@@ -428,7 +430,21 @@ function Table<T>({
   useOpenerAssertion(
     tableRef,
     tableId,
-    Boolean(onRowClick),
+    /*
+     * The assertion reads the **first** row, so it has to ask whether that row
+     * is one that opens anything. A table where row one has opted out of
+     * `rowClickable` correctly renders no opener there, and an assertion blind
+     * to that would `console.error` about a row doing exactly the right thing —
+     * which the capture harness fails on, since it asserts zero console errors.
+     *
+     * Checking row one rather than "any clickable row" keeps this the one
+     * `querySelector` it was designed to be. The cost is a table whose first row
+     * opts out and whose *other* rows are genuinely missing an opener: that
+     * escapes the check. Accepted, because the alternative is walking every row
+     * on every mount to catch a case no caller has, and because the DOM query is
+     * pinned to the first row either way.
+     */
+    Boolean(onRowClick) && (rows.length === 0 || (rowClickable?.(rows[0]) ?? true)),
     Boolean(selectable),
     rows.length,
   );
@@ -549,13 +565,17 @@ function Table<T>({
           {rows.map((row) => {
             const key = rowKey(row);
             const isSelected = selected.includes(key);
+            /* `rowClickable` is per row; `onRowClick` is per table. A row that
+               opts out loses the hover fill and the pointer cursor as well as
+               the handler, because the affordance is half the promise. */
+            const clickable = onRowClick !== undefined && (rowClickable?.(row) ?? true);
             return (
               <tr
                 key={key}
-                data-hoverable={onRowClick ? "" : undefined}
+                data-hoverable={clickable ? "" : undefined}
                 data-selected={isSelected ? "true" : undefined}
-                className={onRowClick ? "cursor-pointer" : ""}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                className={clickable ? "cursor-pointer" : ""}
+                onClick={clickable ? () => onRowClick(row) : undefined}
               >
                 {selectable ? (
                   /* The checkbox cell stops propagation so ticking a row does
@@ -598,7 +618,10 @@ function Table<T>({
                    * background is `<body>`.
                    */
                   const content =
-                    index === 0 && onRowClick && rowOpenerId ? (
+                    /* `clickable` already narrows `onRowClick` to defined — it is
+                       an aliased condition — so naming it again here is a
+                       redundancy the compiler rejects rather than a guard. */
+                    index === 0 && clickable && rowOpenerId ? (
                       <button
                         type="button"
                         id={rowOpenerId(row)}
@@ -767,6 +790,7 @@ function RecordList<T>({
   rowKey,
   rowLabel,
   onRowClick,
+  rowClickable,
   record,
   rowActions,
 }: {
@@ -774,6 +798,7 @@ function RecordList<T>({
   rowKey: (row: T) => string;
   rowLabel: (row: T) => string;
   onRowClick?: (row: T) => void;
+  rowClickable?: (row: T) => boolean;
   record: (row: T) => { primary: ReactNode; secondary: ReactNode; meta: ReactNode };
   rowActions?: (row: T) => ReactNode;
 }) {
@@ -801,7 +826,7 @@ function RecordList<T>({
               Wrapping puts the row-actions button inside the link, which is
               invalid HTML and makes the menu unreachable by keyboard.
             */}
-            {onRowClick ? (
+            {onRowClick !== undefined && (rowClickable?.(row) ?? true) ? (
               <button
                 type="button"
                 aria-label={rowLabel(row)}
@@ -890,10 +915,31 @@ export function TableFooter({
              * `.ui-select-tap` carries the 44px touch floor — see globals.css.
              * A `<select>` is a replaced element with its own UA shadow tree, so
              * `.ui-tap`'s pseudo-element never renders on one and the box itself
-             * has to grow. Behind `pointer: coarse` only, so the 28px pointer
-             * height is unchanged and no list footer moves.
+             * has to grow.
+             *
+             * `min-h-8` is the **pointer** floor and it is the same argument one
+             * breakpoint down: §5 says 32px, this control was 28px, and no
+             * pseudo-element can lend a `<select>` the missing 4px either. The
+             * analytics branch closed the 44px sweep and left this open because
+             * growing the box grows the footer row on every list that has one —
+             * eight of them, `/inventory/movements` included.
+             *
+             * Measured in Chromium on an A/B of two builds, `/orders` and
+             * `/customers` at 1440 and 340: the select goes 28→32px and the
+             * footer row goes **49→53px** with it (32 + `py-2.5` twice + the 1px
+             * `border-t`), because the pagination `IconButton size="sm"` beside
+             * it is `size-7` and so was never the tall one. Below `sm` the footer
+             * is `flex-col` with the select on its own line and the row goes
+             * 79→83px, the same four.
+             *
+             * The footer is the last thing inside the table card, so the card and
+             * the document each grow by exactly those 4px and nothing reflows
+             * *within* the card — the four land at the bottom of the page. Across
+             * 84 harness captures of all seven lists, 64 grew 4px (two of the
+             * Arabic ones 5, sub-pixel line metrics) and 20 kept their dimensions
+             * outright, those being the pages already shorter than the viewport.
              */
-            className="ui-select-tap ui-ring ui-interactive min-h-7 cursor-pointer rounded-ui-md border border-ui-line-control bg-ui-surface px-1.5 text-ui-label text-ui-fg"
+            className="ui-select-tap ui-ring ui-interactive min-h-8 cursor-pointer rounded-ui-md border border-ui-line-control bg-ui-surface px-1.5 text-ui-label text-ui-fg"
           >
             {[20, 50, 100].map((n) => (
               <option key={n} value={n}>
@@ -969,6 +1015,7 @@ export function DataTable<T>({
   rowLabel,
   record,
   onRowClick,
+  rowClickable,
   rowOpenerId,
   rowActions,
   sort,
@@ -987,6 +1034,27 @@ export function DataTable<T>({
   /** The three lines shown below `md`. */
   record: (row: T) => { primary: ReactNode; secondary: ReactNode; meta: ReactNode };
   onRowClick?: (row: T) => void;
+  /**
+   * Whether *this* row opens anything, when `onRowClick` is set.
+   *
+   * Added on the content branch, for the Pages index. Two pages can carry the
+   * same `path` — `wp_unique_post_slug()` does not run for a draft — and a path
+   * is the only address `GET /cms/pages/{path}` has, so the API resolves exactly
+   * one of them and the panel cannot tell which. Following any of those rows is
+   * a coin flip that ends in editing somebody else's page.
+   *
+   * The alternative was a table-level `onRowClick` that silently no-ops on some
+   * rows, which is a dead control wearing a live control's hover fill and
+   * pointer cursor — §3.3's "a control that cannot act is not rendered", broken
+   * at row granularity. So the opt-out is honoured in **all three** places the
+   * affordance lives: the `<tr>` handler and its hover state, the identifying
+   * cell's opener button, and `RecordList`'s stretched overlay below `md`. A row
+   * that opts out is inert at every width.
+   *
+   * The row still renders every fact it has. Saying why it does not open is the
+   * caller's job, in the cell — the primitive has no words of its own.
+   */
+  rowClickable?: (row: T) => boolean;
   /**
    * The DOM id of this row's opener. Passing it makes the table wrap the
    * identifying cell in a real `<button>` that calls `onRowClick` — the keyboard
@@ -1048,6 +1116,7 @@ export function DataTable<T>({
             rowKey={rowKey}
             rowLabel={rowLabel}
             onRowClick={onRowClick}
+            rowClickable={rowClickable}
             rowOpenerId={rowOpenerId}
             density={prefs.density}
             sort={sort}
@@ -1067,6 +1136,7 @@ export function DataTable<T>({
             rowKey={rowKey}
             rowLabel={rowLabel}
             onRowClick={onRowClick}
+            rowClickable={rowClickable}
             record={record}
             rowActions={rowActions}
           />
