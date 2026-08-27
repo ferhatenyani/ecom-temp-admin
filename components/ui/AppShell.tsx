@@ -185,10 +185,28 @@ export function AppShell({
 
   return (
     <TooltipProvider>
-      {/* Before anything focusable. */}
+      {/*
+        Before anything focusable.
+
+        **`focus:min-h-11` because `not-sr-only` zeroes the padding, and that was
+        eating this control's entire height.** Measured in Chromium with the link
+        focused: 113 × **22px**, in both pointer modes — below §5's 44px touch
+        floor, below its 32px pointer floor, and below the 24px absolute minimum
+        that has no exception. `px-4 py-3` are unconditional utilities and
+        `.focus\:not-sr-only:focus` sets `padding: 0` at a higher specificity, so
+        the moment the link becomes visible it loses the 24px of block padding
+        that would have made it a target. Nothing rendered wrong — it is 113px
+        wide and perfectly legible — which is why it survived every capture.
+
+        `min-block-size` is the one property `not-sr-only` does not reset, so it
+        wins without a specificity fight; `inline-flex` + `items-center` put the
+        label back in the middle of the box it now has. Hidden it is still 1×1px,
+        and that is correct rather than a violation: a target nobody can see is
+        not a target.
+      */}
       <a
         href="#content"
-        className="ui-ring sr-only rounded-ui-md bg-ui-surface px-4 py-3 text-ui-body text-ui-accent focus:not-sr-only focus:absolute focus:z-50 focus:m-2"
+        className="ui-ring sr-only rounded-ui-md bg-ui-surface px-4 py-3 text-ui-body text-ui-accent focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:inline-flex focus:min-h-11 focus:items-center focus:px-4"
       >
         {t("skipToContent")}
       </a>

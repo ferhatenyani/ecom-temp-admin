@@ -61,6 +61,8 @@ export function ConfirmDialog({
   const t = useTranslations("ui");
   const [typed, setTyped] = useState("");
   const inputId = useId();
+  /* Named, so `Modal` can focus it past Radix's own choice. See below. */
+  const cancelId = useId();
 
   /*
    * Reset between openings, or the second confirm arrives pre-authorised with
@@ -85,15 +87,29 @@ export function ConfirmDialog({
       title={title}
       size="sm"
       returnFocusTo={returnFocusTo}
+      initialFocus={cancelId}
       footer={
         <>
-          {/* Cancel first in DOM order: first tab stop, and autoFocus makes it
-              the initial focus so Enter cannot destroy anything. */}
+          {/*
+            Cancel first in DOM order: the first tab stop, and `initialFocus`
+            makes it the *initial* focus so Enter on a dialog nobody read cannot
+            destroy anything.
+
+            **This used to be `autoFocus`, and `autoFocus` never worked here.**
+            Radix's `FocusScope` moves focus after mount, to the first tabbable
+            node in the content — `OverlayFrame`'s × button, which the header
+            renders before this footer. So rule 2 above was documented, asserted
+            in this docblock, and false on every destructive dialog in the panel:
+            each opened with the focus ring on the one control that is not the
+            safe default. Carried in DECISIONS.md for three branches and visible
+            on the shipping rule-delete capture. `Modal.initialFocus` is the
+            second focus prop the ledger said it needed.
+          */}
           <Button
+            id={cancelId}
             variant="secondary"
             onClick={() => onOpenChange(false)}
             disabled={loading}
-            autoFocus
           >
             {t("cancel")}
           </Button>

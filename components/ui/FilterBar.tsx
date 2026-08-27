@@ -21,12 +21,31 @@ import { IconButton } from "./Button";
  * re-fetches, so they are buttons in a `nav` with `aria-current` instead.
  * Claiming tab semantics for something that is not a tabpanel is worse than
  * not claiming them.
+ *
+ * ## `variant`, added on the analytics branch, because two strips are not peers
+ *
+ * `/analytics` is the first screen in the panel with **two** single-select strips
+ * stacked: which report am I reading, and over what window. They are not the same
+ * rank — the first is navigation and the second is a filter over whatever it
+ * lands on — and rendered as two identical strips they read as two filters of
+ * equal weight, which is precisely the hierarchy the screen exists to have.
+ *
+ *   `tabs`   the default and unchanged: full-bleed, closed by a rule, the
+ *            selected label underlined in ink. It spans the page, so it reads as
+ *            the page's own axis. Every list in the panel uses this.
+ *   `chips`  a labelled group of pills inside the content column, with no bleed
+ *            and no rule. The visible label is half the distinction — a filter
+ *            says what it filters, navigation does not need to.
+ *
+ * Both scroll rather than wrap at the 340px floor, for the same reason: a wrapped
+ * strip changes the page's height as the selection changes.
  */
 export function FilterTabs<T extends string>({
   tabs,
   value,
   onChange,
   label,
+  variant = "tabs",
 }: {
   /**
    * `opensDialog` is for a tab that does not apply a filter on its own — the
@@ -39,8 +58,11 @@ export function FilterTabs<T extends string>({
   value: T;
   onChange: (next: T) => void;
   label: string;
+  /** See the docblock. `tabs` is the page's axis; `chips` is a filter on it. */
+  variant?: "tabs" | "chips";
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const chips = variant === "chips";
 
   /* Keep the active tab in view when the filter is restored from a URL — at
      340px "Refunded" is well off the end of the strip, and landing on a
@@ -50,37 +72,71 @@ export function FilterTabs<T extends string>({
     node?.scrollIntoView({ inline: "center", block: "nearest" });
   }, [value]);
 
+  const strip = (
+    <div
+      ref={listRef}
+      className={
+        chips
+          ? "ui-tabs-scroll flex min-w-0 items-center gap-1 overflow-x-auto"
+          : "ui-tabs-scroll flex items-stretch gap-1 overflow-x-auto border-b border-ui-line px-4 sm:px-6 xl:px-8"
+      }
+    >
+      {tabs.map((tab) => {
+        const active = tab.value === value;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            /* `aria-current` only. An earlier draft also set `aria-selected`,
+               which is not supported on an implicit `button` role — and these
+               are not tabs in the ARIA sense anyway: there is no tabpanel, the
+               filter is a query parameter and the list re-fetches. */
+            aria-current={active ? "page" : undefined}
+            aria-haspopup={tab.opensDialog ? "dialog" : undefined}
+            onClick={() => onChange(tab.value)}
+            className={
+              chips
+                ? /* Selection is never colour alone here either: the chip changes
+                     ground, weight *and* text colour, and carries `aria-current`.
+                     `.ui-chip` carries the 44px touch floor, the way `.ui-tab`
+                     does for the strip variant — see globals.css. */
+                  `ui-chip ui-ring ui-interactive flex min-h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-ui-md px-2.5 text-ui-compact ${
+                    active
+                      ? "bg-ui-surface-3 font-semibold text-ui-fg"
+                      : "text-ui-muted hover:bg-ui-surface-2 hover:text-ui-fg"
+                  }`
+                : "ui-tab ui-ring flex min-h-10 cursor-pointer items-center gap-1.5 rounded-t-ui-md px-2.5 text-ui-compact"
+            }
+          >
+            {tab.label}
+            {typeof tab.count === "number" ? (
+              <span data-numeric="" className="text-ui-caption text-ui-subtle">
+                {tab.count}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (!chips) {
+    return (
+      <nav aria-label={label} className="-mx-4 sm:-mx-6 xl:-mx-8">
+        {strip}
+      </nav>
+    );
+  }
+
   return (
-    <nav aria-label={label} className="-mx-4 sm:-mx-6 xl:-mx-8">
-      <div
-        ref={listRef}
-        className="ui-tabs-scroll flex items-stretch gap-1 overflow-x-auto border-b border-ui-line px-4 sm:px-6 xl:px-8"
-      >
-        {tabs.map((tab) => {
-          const active = tab.value === value;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              /* `aria-current` only. An earlier draft also set `aria-selected`,
-                 which is not supported on an implicit `button` role — and these
-                 are not tabs in the ARIA sense anyway: there is no tabpanel, the
-                 filter is a query parameter and the list re-fetches. */
-              aria-current={active ? "page" : undefined}
-              aria-haspopup={tab.opensDialog ? "dialog" : undefined}
-              onClick={() => onChange(tab.value)}
-              className="ui-tab ui-ring flex min-h-10 cursor-pointer items-center gap-1.5 rounded-t-ui-md px-2.5 text-ui-compact"
-            >
-              {tab.label}
-              {typeof tab.count === "number" ? (
-                <span data-numeric="" className="text-ui-caption text-ui-subtle">
-                  {tab.count}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
+    <nav aria-label={label} className="flex min-w-0 items-center gap-2">
+      {/* `aria-hidden`, because the `nav` is already named by the same string and
+          a screen reader would otherwise read it twice. It is on screen for the
+          sighted reader, who has no other way to know what these pills scope. */}
+      <span aria-hidden="true" className="shrink-0 text-ui-label text-ui-muted">
+        {label}
+      </span>
+      {strip}
     </nav>
   );
 }
@@ -149,8 +205,14 @@ export function SearchField({
         aria-label={label}
         enterKeyHint="search"
         /* The UA's own clear button would sit beside ours and do something
-           subtly different — it clears the field without submitting. */
-        className="min-h-9 min-w-0 flex-1 bg-transparent text-ui-compact text-ui-fg outline-none placeholder:text-ui-subtle [&::-webkit-search-cancel-button]:appearance-none"
+           subtly different — it clears the field without submitting.
+
+           `.ui-field` rather than `min-h-9`: identical at 36px on a pointer, so
+           nothing moves, and 44px on touch — §5's floor, which this control had
+           never met on any list in the panel. It is the one utility that exists
+           to answer "which pointer is this person using", and hard-coding a
+           height here was the same hole the retired iOS `Field` had. */
+        className="ui-field min-w-0 flex-1 bg-transparent text-ui-compact text-ui-fg outline-none placeholder:text-ui-subtle [&::-webkit-search-cancel-button]:appearance-none"
       />
       {draft ? (
         <IconButton

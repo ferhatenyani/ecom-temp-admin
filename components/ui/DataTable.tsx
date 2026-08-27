@@ -886,7 +886,14 @@ export function TableFooter({
           <select
             value={perPage}
             onChange={(event) => onPerPageChange(Number(event.target.value))}
-            className="ui-ring ui-interactive min-h-7 cursor-pointer rounded-ui-md border border-ui-line-control bg-ui-surface px-1.5 text-ui-label text-ui-fg"
+            /*
+             * `.ui-select-tap` carries the 44px touch floor — see globals.css.
+             * A `<select>` is a replaced element with its own UA shadow tree, so
+             * `.ui-tap`'s pseudo-element never renders on one and the box itself
+             * has to grow. Behind `pointer: coarse` only, so the 28px pointer
+             * height is unchanged and no list footer moves.
+             */
+            className="ui-select-tap ui-ring ui-interactive min-h-7 cursor-pointer rounded-ui-md border border-ui-line-control bg-ui-surface px-1.5 text-ui-label text-ui-fg"
           >
             {[20, 50, 100].map((n) => (
               <option key={n} value={n}>

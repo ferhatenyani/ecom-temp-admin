@@ -30,13 +30,30 @@ import { Modal } from "./Overlay";
  * is left exactly as it is until that branch takes it. Both files render the
  * same measurements; only the chrome differs.
  *
- * ## The presets are the filter, so they are `FilterTabs`
+ * ## The presets are a filter, so they are `FilterTabs` in its `chips` shape
  *
- * Six single-select values that re-fetch the page — the same control the order,
+ * Six single-select values that re-fetch the page — the same primitive the order,
  * payment and shipment status strips are, down to scrolling rather than wrapping
  * at 340px. The old one hand-rolled a pill row with `.pill-row` and `.tonal`,
- * both retired. Nothing here is new behaviour; it is the panel's tab strip
- * carrying the panel's own six values.
+ * both retired.
+ *
+ * **`chips` rather than the default full-bleed strip, and the reason is
+ * positional rather than about rank.** `/analytics` has two single-select strips
+ * stacked: which report, and over what window. The report selector takes the
+ * default `tabs` shape, because it is that page's own axis — full-bleed, closed
+ * by a rule, the selected label underlined in ink, exactly what every list in the
+ * panel uses for its primary filter. If the window took the same shape it would
+ * sit in the same slot on `/dashboard` — directly under `PageHeader` — as the
+ * report tabs do one nav item away, so the identical control in the identical
+ * position would mean *which period* on one screen and *which report* on the
+ * other.
+ *
+ * So the rule is one sentence and holds on both pages: **a full-bleed underlined
+ * strip under the header always means which view; a labelled "Période" chip group
+ * always means the window.** It is not a prop, because there is no screen on
+ * which the second half is wrong — a range control that read as a page axis would
+ * be lying about what it scopes. The visible label is half the distinction, and
+ * on the dashboard it is a straight gain over six bare words under a title.
  *
  * ## Two measurements are the whole reason for the shape below
  *
@@ -121,6 +138,7 @@ export function RangeControl({
         label={t("rangeLabel")}
         value={range.preset}
         onChange={choose}
+        variant="chips"
         tabs={RANGE_PRESETS.map((preset) => ({
           value: preset,
           label: t(`preset.${preset}`),

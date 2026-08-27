@@ -3,44 +3,105 @@
 import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { unavailableLines, type UnavailableKey } from "@/lib/analytics";
-import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
+import { Card } from "@/components/ui/Card";
+import { Stat, StatGroup } from "@/components/ui/Stat";
 import { Icon } from "@/components/primitives/Icon";
 
 /**
- * The three pieces every report is built out of.
+ * The pieces all six reports are built out of.
  */
 
 /**
- * A figure with the population it describes underneath it.
+ * The grid the report sections sit in — 1-up at the 340px floor, 2-up at `lg`.
  *
- * `scope` is a required prop for the same reason `CodFigure.scope` is a required
- * field: this screen puts 844 beside 289 and 719 700 beside 145 150, and a reader
- * given either pair unlabelled concludes one of them is broken. The scope line is
- * not a footnote — it is what makes the number true.
+ * §2.3 puts analytics at full width capped 1440 and §0 retires `max-w-3xl` by
+ * name; this screen was the last one still rendering a 768px stripe down the
+ * middle of a 1440px monitor. Two columns is the honest maximum: a report section
+ * is a list of labelled figures and a third column would put a wilaya's name
+ * under 200px.
+ *
+ * `items-start` rather than the grid's default stretch — the sections differ
+ * wildly in length (two rows of rates beside eleven best sellers), and a stretched
+ * short card is a card with a large empty foot rather than a tidier row.
  */
-export function FigureRow({
+export function ReportGrid({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-2">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A section that takes the whole row.
+ *
+ * `Card` takes no `className` on purpose — the padding and the surface are not
+ * the caller's to vary — so the span goes on a wrapper. Used where a section's
+ * rows carry long content that a half-width column would truncate: the best
+ * sellers' product names, and the wilaya rows with their reason underneath.
+ */
+export function WideSection({ children }: { children: ReactNode }) {
+  return <div className="min-w-0 lg:col-span-2">{children}</div>;
+}
+
+/**
+ * A headline figure, and **`scope` is required.**
+ *
+ * `Stat.scope` is optional, correctly — a dashboard card whose scope would
+ * restate its own label is right not to pass one. On this screen it is never
+ * optional, and the enforcement is the point rather than the wrapper: the old
+ * `FigureRow.scope` was a required prop, and that is *why* this screen never
+ * shipped a bare pair in three iterations. Losing it in the migration would lose
+ * the only thing standing between a reader and six arithmetic traps:
+ *
+ *   `orders_placed` 901 against `orders_counted` 323   only four statuses are revenue
+ *   `net` against `collected`                          booked against actually taken
+ *   `guest_orders` on two reports                      422 all statuses, 209 counted only
+ *   `by_status.confirmed` 84 against 126               the shop now, against ever
+ *   `customers` 9                                      accounts that ordered *in this window*
+ *   `low_stock` 3                                      current state, and not window-scoped
+ *
+ * Every one of those is two correct numbers that look like one number told twice.
+ * DECISIONS.md §5, §9 and §11 are the same lesson arriving three times before
+ * this one.
+ */
+export function Figure({
   label,
   scope,
-  value,
+  href,
+  children,
 }: {
   label: string;
+  /** Required. See the docblock — this is the enforcement, not decoration. */
   scope: string;
-  value: ReactNode;
+  /** Only where this reader is not refused there; never a link to a 403. */
+  href?: string;
+  children: ReactNode;
 }) {
   return (
-    <ListRow>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-body text-label-secondary">{label}</span>
-        <span className="text-caption text-label-tertiary">{scope}</span>
-      </span>
-      {/*
-        `shrink-0` and a separate line for the label: `Button` set no width on
-        the shipping branch and a long label at 390px rendered on top of the money
-        figure beside it. A figure never shares its line with anything that can
-        grow.
-      */}
-      <span className="ms-auto shrink-0 text-title-3 text-label">{value}</span>
-    </ListRow>
+    <Stat label={label} scope={scope} href={href}>
+      {children}
+    </Stat>
+  );
+}
+
+/** The headline row. Named for the screen reader, like every `StatGroup`. */
+export function Figures({ children }: { children: ReactNode }) {
+  const t = useTranslations("analytics");
+  return <StatGroup label={t("cardsLabel")}>{children}</StatGroup>;
+}
+
+/**
+ * The notes under a report — at most three lines, and each about something on
+ * screen.
+ *
+ * The dashboard branch's restraint rule, inherited: a caveat about one figure
+ * belongs on that figure's own scope line, where the reader is already looking. A
+ * footnote is for something that is true of the *report* rather than of one row.
+ */
+export function ReportNotes({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 text-ui-label text-ui-subtle">{children}</div>
   );
 }
 
@@ -68,57 +129,31 @@ export function Unavailable({ reasons }: { reasons: Record<string, string> }) {
   if (lines.length === 0) return null;
 
   return (
-    <ListGroup title={t("unavailableTitle")} footnote={t("unavailableNote")}>
-      {lines.map((line) => (
-        <ListRow key={line.key} className="items-start">
-          <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-label-tertiary" />
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-body text-label">
-              {line.known ? t(`unavailable.${line.key as UnavailableKey}`) : line.key}
+    <Card title={t("unavailableTitle")} footnote={t("unavailableNote")}>
+      <ul className="flex min-w-0 flex-col">
+        {lines.map((line) => (
+          <li
+            key={line.key}
+            className="flex min-w-0 items-start gap-2 border-b border-ui-line py-2 last:border-b-0"
+          >
+            <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-ui-subtle" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-ui-compact text-ui-fg">
+                {line.known ? t(`unavailable.${line.key as UnavailableKey}`) : line.key}
+              </span>
+              {line.known ? (
+                <span className="text-ui-caption text-ui-subtle">
+                  {t(`unavailableWhy.${line.key as UnavailableKey}`)}
+                </span>
+              ) : (
+                <span lang="en" dir="ltr" className="text-ui-caption text-ui-subtle">
+                  {line.note}
+                </span>
+              )}
             </span>
-            {line.known ? (
-              <span className="text-caption text-label-secondary">
-                {t(`unavailableWhy.${line.key as UnavailableKey}`)}
-              </span>
-            ) : (
-              <span lang="en" dir="ltr" className="text-caption text-label-secondary">
-                {line.note}
-              </span>
-            )}
-          </span>
-        </ListRow>
-      ))}
-    </ListGroup>
-  );
-}
-
-/**
- * A window that holds nothing.
- *
- * **Measured: `range=today` on a shop with no orders today answers 200 with every
- * block present and every figure zero** — `best_sellers: []`, `providers: []`,
- * `by_wilaya: []`, every count `0` and every rate `"0.0000"`. Nothing is omitted,
- * so there is no missing key to detect it by and no error to render.
- *
- * Left alone, that is thirty zeros and a `0,0 %` delivery rate, which reads as a
- * report that failed rather than as a quiet Tuesday. This says which it is, and
- * distinguishes it from *no data at all* the way the empty state on every list in
- * the panel does — the window is the filter here, so the offer is to widen it.
- */
-export function EmptyWindow({ onWiden }: { onWiden?: () => void }) {
-  const t = useTranslations("analytics");
-  return (
-    <div className="rounded-lg bg-surface px-6 py-12 text-center">
-      <p className="text-body text-label-secondary">{t("emptyWindow")}</p>
-      {onWiden ? (
-        <button
-          type="button"
-          onClick={onWiden}
-          className="press mt-4 min-h-11 rounded-md px-4 text-headline text-accent"
-        >
-          {t("emptyWiden")}
-        </button>
-      ) : null}
-    </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }

@@ -3087,11 +3087,18 @@ function seedShipments() {
  * `"Paiement à la livraison"` for `cod`, which is the shipping `providerLabel`
  * defect in a second place: an API label written in French here would render as
  * French in the French panel by accident and as French in the Arabic one as a
- * bug, and the harness could never see either. `PaymentsScreen.tsx` resolves a
- * provider the way `ShipmentRow` used to — `methods.find(…)?.label ?? name`, with
- * no message key in front of it — so with the real labels in place the screen now
- * prints "Cash on delivery" inside both localised panels and the defect is
- * visible on a screenshot instead of hidden by the fixture.
+ * bug, and the harness could never see either.
+ *
+ * **The screen that made it visible is gone; the measurement is unchanged.**
+ * `PaymentsScreen.tsx` resolved a provider the way `ShipmentRow` used to —
+ * `methods.find(…)?.label ?? name`, with no message key in front of it — so with
+ * the real labels in place it printed "Cash on delivery" inside both localised
+ * panels, on a screenshot rather than hidden by the fixture. The payments branch
+ * deleted that file and fixed the defect: `lib/payments.ts` now resolves message
+ * key → API `label` → raw name, mirroring `lib/shipping.ts`, and `cod` reads in
+ * the reader's own language while `chargily` keeps its brand. This fixture is
+ * what that resolution is measured against, so the English labels stay exactly
+ * as the API sends them.
  */
 const PAYMENT_METHODS = [
   { name: "chargily", label: "Chargily (EDAHABIA / CIB)", is_default: true },
@@ -3338,10 +3345,13 @@ const COD_STATISTICS = {
 /* -------------------------------------------------------------- analytics --- */
 
 /**
- * ── `GET /analytics/overview`, and it is the only one of the seven served ────
+ * ── The seven reports, and the one range control they share ──────────────────
  *
- * Measured 2026-08-26 against the live shop. The other six reports stay 404s and
- * stay named in `tests/mock-api.test.ts` — the analytics branch owns them.
+ * Measured 2026-08-26 against the live shop. **All seven are served**: the
+ * overview the dashboard reads as a single request, and the six the `/analytics`
+ * screen switches between. Everything in this block is true of all seven,
+ * because they share one `range` parameter, one window reader, one `meta` and
+ * one money gate. What is true of a single report is said at that report.
  *
  * **`range` is the only parameter and it is honoured.** Over one shop:
  *
@@ -3365,15 +3375,29 @@ const COD_STATISTICS = {
  *      that held it flat would hide a control that works.
  *
  * **Accepted and silently ignored**, all byte-identical to `?range=30d`:
- * `bogus_param=1`, `per_page=5`, `orderby=id`, and — the one that matters —
- * **`date_from`/`date_to` when `range` is not `custom`**, which answer 200 with
- * the thirty-day default. That is this endpoint's own dishonesty and the reason
- * a screen must never offer bare dates: an operator picking a ten-day window
- * with no preset is shown thirty days of figures and nothing errors. Reproduced
- * by reading neither parameter outside `custom`. Note the consequence for
- * paging: `per_page` is not read here, so it is *not* refused here either —
- * `paginate()` is deliberately not called, because this route returns one object
- * and not a page.
+ * `bogus_param=1`, `per_page=5`, `orderby=id`, `limit=3`, `date_from=…`, and —
+ * the one that matters — **`date_from`/`date_to` when `range` is not `custom`**,
+ * which answer 200 with the thirty-day default. That is this endpoint's own
+ * dishonesty and the reason a screen must never offer bare dates: an operator
+ * picking a ten-day window with no preset is shown thirty days of figures and
+ * nothing errors. Reproduced by reading neither parameter outside `custom`.
+ *
+ * Re-measured 2026-08-26 on a *report* route rather than only on the overview:
+ * `bogus_param`, `per_page`, `orderby`, `limit` and `date_from` are each
+ * byte-identical to the bare `?range=30d` request on `/analytics/orders`. Note
+ * the consequence for paging: `per_page` is not read here, so it is *not*
+ * refused here either — `paginate()` is deliberately not called, because these
+ * routes return one object and not a page. **That asymmetry with the rest of
+ * this file is deliberate and measured on both halves**: `paginate()` refuses
+ * `per_page=abc` on every collection, and the analytics surface accepts and
+ * drops it. A shared helper quietly standardising one of the two would be the
+ * same class of defect as the list-envelope one the envelope suite pins.
+ *
+ * **`best_sellers_limit` is a published constant and not a knob.** Measured at
+ * `range=90d`: `limit=3`, `per_page=3` and `best_sellers_limit=3` each still
+ * return ten rows with `best_sellers_limit: 10` beside them. So no screen may
+ * offer a "show more" — the number is there to be *stated*, which is what
+ * `ProductsView`'s footnote does with it.
  *
  * **Two error shapes on one route**, and both are real:
  *
@@ -3440,24 +3464,38 @@ const ANALYTICS_PRESETS = [...Object.keys(PRESET_WINDOWS), "custom"];
  * a different answer and the reason `unavailable` is an object of sentences and
  * not a list of names.
  *
- * **These sentences are reconstructions, not the measured wording.** Only one
- * fragment of the real text survives anywhere in this repo — lib/analytics.ts
- * quotes *"Gateway fees are not summable across providers.
- * `ac_payment_transactions` has no fee column by design…"* — so `payment_fees`
- * opens on that and the other two are written to match its register. They are
- * here because a screen renders them and a screen that renders three empty
- * strings is not the screen the API produces; they are **not** something to
- * assert a sentence against, and the panel localises all three by key anyway,
- * falling back to the API's text only for a key it has no wording for.
+ * **These are now the measured sentences, verbatim, and they were
+ * reconstructions until 2026-08-26.** The block that stood here said so and gave
+ * its reason — only a fragment of `payment_fees` survived anywhere in this repo
+ * — but a reconstruction is only honest while nobody has the original, and the
+ * revenue report's own payload carries all three. They are reproduced character
+ * for character, backticks and all: the measured text writes `ac_shipments` and
+ * `ac_payment_transactions` as bare words rather than in code spans, which the
+ * reconstruction had guessed the other way.
+ *
+ * Still **not** something to assert a sentence against. The panel localises all
+ * three by key and falls back to the API's text only for a key it has no wording
+ * for, so what a screen depends on is the three keys and the fact that each
+ * value is prose. `/analytics/shipping` carries `shipping_cost` alone, out of
+ * this same object rather than restated beside it.
  */
 const ANALYTICS_UNAVAILABLE = {
   shipping_cost:
-    "Courier cost is not recorded against a shipment. The provider invoices the shop out of band and no column on a parcel carries what it actually cost to send, so a delivery cost cannot be summed here without inventing one.",
+    "What a courier charges the shop is not recorded. ac_shipments deliberately has no cost column, and shipping_revenue above is the separate figure of what the customer was charged.",
   payment_fees:
-    "Gateway fees are not summable across providers. `ac_payment_transactions` has no fee column by design, and each provider reports its commission on its own statement rather than on the transaction, so any total would be a guess.",
+    "Gateway fees are not summable across providers. ac_payment_transactions has no fee column by design; Chargily reports fees in per-transaction metadata, and a second gateway would shape them differently.",
   margin:
-    "Margin needs a cost of goods and this catalogue does not carry one. Nothing on a product or on a line item records what it was bought for, so gross margin cannot be computed from anything the shop knows.",
+    "No cost of goods exists. WooCommerce has no cost field, and PLAN §28 says to calculate profit only where reliable cost data exists.",
 };
+
+/**
+ * Why the largest slice of the geography has no name, in the API's own words and
+ * measured verbatim. It is English, like the three above, and `ShippingView`
+ * renders its own localised line instead — the sentence travels so that a reader
+ * of the *payload* is not left guessing, not so that a screen prints it.
+ */
+const UNATTRIBUTED_REASON =
+  "Orders with no shipment carry no canonical wilaya; an order address stores it as free text, which is never guessed at.";
 
 /**
  * The money block with `unavailable` **in its measured position** — between
@@ -3482,15 +3520,51 @@ const withUnavailable = ({ refund_count, refunded_orders, ...head }) => ({
 });
 
 /**
- * The COD block the overview nests is a strict subset of `/cod/statistics` —
- * measured key for key at 30d, down to the two rate strings — so it is derived
- * from that constant rather than restated beside it, where the two would drift.
+ * The COD block the overview nests is a strict subset of `/analytics/cod`, which
+ * is itself `/cod/statistics` with a range on it — measured key for key at 30d,
+ * down to the five rate strings. So the window's *full* statistics sit in the
+ * table below and both readers derive from them: the report echoes the block, the
+ * overview takes these four keys out of it. Restating the four beside the seven
+ * is how a dashboard comes to disagree with the report it links to.
  */
 const codOverview = (stats) => ({
   total_orders: stats.total_orders,
   confirmed_orders: stats.confirmed_orders,
   confirmation_rate: stats.rates.confirmation,
   delivery_rate: stats.rates.delivery,
+});
+
+/**
+ * The same arrangement for parcels: the table holds `/analytics/shipping`'s whole
+ * block and the overview takes its four keys out of it, so `shipments` on the
+ * dashboard and `shipments.total` on the report cannot drift into two numbers.
+ */
+const shippingOverview = (report) => ({
+  shipments: report.shipments.total,
+  delivered: report.shipments.by_status.delivered,
+  live: report.shipments.live,
+  delivery_rate: report.rates.delivery,
+});
+
+/**
+ * All ten shipment statuses, in the vocabulary's order, zeros filled in.
+ *
+ * The report sends every one of them and eight are 0 on this shop — which is the
+ * measurement `statusCounts()` drops zeros for, and a fixture that sent only the
+ * non-zero pair would leave that branch unexercised.
+ */
+const shipmentsByStatus = (counts) => ({
+  pending: 0,
+  created: 0,
+  picked_up: 0,
+  in_transit: 0,
+  out_for_delivery: 0,
+  delivered: 0,
+  returning: 0,
+  returned: 0,
+  cancelled: 0,
+  failed: 0,
+  ...counts,
 });
 
 /** Every figure zero, for the two windows this shop has no activity in. */
@@ -3520,11 +3594,39 @@ const NO_CUSTOMERS = {
   rates: { new: "0.0000", returning: "0.0000" },
 };
 
+/**
+ * ── The zero window, and why it is a shape rather than an absence ────────────
+ *
+ * `range=today` on a shop with no orders today is a **200 with every block
+ * present and every figure zero** — measured on all seven routes, and the key
+ * lists were re-measured report by report on 2026-08-26. `best_sellers`,
+ * `providers` and `by_wilaya` are `[]`; every count is `0` and every rate is
+ * `"0.0000"`; nothing is omitted, so there is no missing key to detect the empty
+ * window by. `isEmptyWindow()` reads a headline count for exactly that reason,
+ * and these constants are what keep the branch reachable from this harness.
+ */
 const NO_COD = {
   total_orders: 0,
+  by_status: { pending: 0, confirmed: 0, rejected: 0, unreachable: 0, cancelled: 0 },
   confirmed_orders: 0,
-  confirmation_rate: "0.0000",
-  delivery_rate: "0.0000",
+  delivered_orders: 0,
+  returned_orders: 0,
+  rates: {
+    confirmation: "0.0000",
+    rejection: "0.0000",
+    cancellation: "0.0000",
+    delivery: "0.0000",
+    return: "0.0000",
+  },
+};
+
+const NO_SHIPPING = {
+  shipments: { total: 0, by_status: shipmentsByStatus({}), live: 0 },
+  rates: { delivery: "0.0000", return: "0.0000" },
+  providers: [],
+  by_wilaya: [],
+  unattributed: { orders: 0, revenue: "0.00", reason: UNATTRIBUTED_REASON },
+  shipping_revenue: "0.00",
 };
 
 const NO_REVENUE = {
@@ -3545,7 +3647,89 @@ const NO_REVENUE = {
 };
 
 /**
- * One block per preset, and the invariants every one of them holds:
+ * ── The best-seller rows, and the one number under them that is not a knob ───
+ *
+ * `best_sellers_limit` is **10 and is not adjustable**: measured at `range=90d`,
+ * `limit=3`, `per_page=3` and `best_sellers_limit=3` all still return ten rows
+ * with `10` beside them. It is published so a screen can *state* the cut-off,
+ * which is what `ProductsView`'s footnote does; no screen may offer a "show
+ * more", because there is nothing to ask for.
+ *
+ * **The measured units are reproduced; the products they hang on are this
+ * fixture's.** The live shop's ten rows are its own test products — ids and
+ * names that do not exist here — and every row of this report is a link to
+ * `/products/{id}`. Reproducing the ids literally would have given the screen ten
+ * rows whose names contradict `/products` and whose links 404, which is the
+ * harness disagreeing with itself rather than reproducing the shop. So the
+ * measured *spread* travels — 84, 76, 44, 43, 26, 14, 14, 9, 5, 3 units, with the
+ * measured `units > orders` rows kept where they were — and it is hung on ten
+ * real catalogue rows, with `revenue` computed as units × that product's own
+ * price. `tests/mock-api.test.ts` holds all three of those to the fixture.
+ *
+ * The two rows tied at 14 units are measured and worth keeping: a ranked set
+ * containing a tie is what `barShare()` draws as two equal bars inside a set that
+ * still has a ranking, which is a different picture from the flat set below.
+ */
+const BEST_SELLERS_LIMIT = 10;
+
+const seller = (product_id, name, units, orders, revenue) => ({
+  product_id,
+  name,
+  units,
+  orders,
+  revenue,
+});
+
+const BEST_SELLERS_30D = [
+  seller(209, "Savon d'Alep, lot de 3", 84, 84, "63000.00"),
+  seller(201, "Chèche en coton, 20 coloris", 76, 76, "68400.00"),
+  seller(111, "Harissa artisanale, 200 g", 44, 44, "57200.00"),
+  seller(105, "Savon noir traditionnel, 250 g", 43, 43, "86000.00"),
+  seller(108, "Tapis berbère, 120 × 180", 26, 13, "54600.00"),
+  seller(117, "Olives cassées de Sig, 500 g", 14, 14, "42000.00"),
+  seller(126, "Lampe en fer forgé", 14, 14, "29400.00"),
+  seller(122, "Plateau en cuivre martelé", 9, 3, "81000.00"),
+  seller(109, "Figues sèches de Béni Maouche", 5, 2, "23500.00"),
+  seller(116, "Miel de montagne, 250 g", 3, 2, "9900.00"),
+];
+
+/** The same ten products over the narrower window: ten rows, measured, ranked. */
+const BEST_SELLERS_7D = [
+  seller(209, "Savon d'Alep, lot de 3", 12, 12, "9000.00"),
+  seller(201, "Chèche en coton, 20 coloris", 11, 11, "9900.00"),
+  seller(111, "Harissa artisanale, 200 g", 7, 7, "9100.00"),
+  seller(105, "Savon noir traditionnel, 250 g", 6, 6, "12000.00"),
+  seller(108, "Tapis berbère, 120 × 180", 4, 2, "8400.00"),
+  seller(117, "Olives cassées de Sig, 500 g", 2, 2, "6000.00"),
+  seller(126, "Lampe en fer forgé", 2, 2, "4200.00"),
+  seller(122, "Plateau en cuivre martelé", 2, 1, "18000.00"),
+  seller(109, "Figues sèches de Béni Maouche", 1, 1, "4700.00"),
+  seller(116, "Miel de montagne, 250 g", 1, 1, "3300.00"),
+];
+
+/**
+ * **The flat set, and it is the reason the `narrow` window exists at all.**
+ *
+ * `hasRankingSignal()` has two branches and only one of them was reachable from
+ * this harness: every window with sales returns a genuine spread, and every
+ * window without returns `[]` — which is the *empty* branch, not the flat one. So
+ * the rendering `ProductsView` falls back to when every row ties, a plain list of
+ * counts under the `bestSellersFlat` footnote, could not be photographed at any
+ * width, theme or locale.
+ *
+ * Four rows of one unit each, over the two counted orders of a two-day window.
+ * `Math.max === Math.min`, so the bars are not drawn — which is the whole point:
+ * four identical full-length bars would imply a ranking that does not exist.
+ */
+const BEST_SELLERS_NARROW = [
+  seller(105, "Savon noir traditionnel, 250 g", 1, 1, "2000.00"),
+  seller(111, "Harissa artisanale, 200 g", 1, 1, "1300.00"),
+  seller(117, "Olives cassées de Sig, 500 g", 1, 1, "3000.00"),
+  seller(209, "Savon d'Alep, lot de 3", 1, 1, "750.00"),
+];
+
+/**
+ * One block per window, and the invariants every one of them holds:
  *
  *   `orders.by_status` sums **exactly** to `orders.placed`
  *   `counted_as_revenue` is the four COUNTED_STATUSES out of `by_status` —
@@ -3556,6 +3740,40 @@ const NO_REVENUE = {
  *       `gross / orders_counted`
  *   `refund_count` and `refunded_orders` equal `by_status.refunded`
  *   every rate is its own numerator over its own denominator, to four places
+ *   `cod.by_status` sums exactly to `cod.total_orders`, and every COD rate
+ *       divides by `total_orders` — including `confirmation`, whose numerator is
+ *       the *ever* count and not `by_status.confirmed`
+ *   `shipping.providers` sum, column by column, to `shipping.shipments`
+ *
+ * ── The cross-report identities, and why they are enforced here ──────────────
+ *
+ * The same shop is described six ways on one screen and by cards on another. A
+ * report that disagrees with the dashboard above it does not teach a reader that
+ * one number is wrong; it teaches them the panel is broken. So these hold across
+ * reports and `tests/mock-api.test.ts` asserts every one of them against the
+ * *served payloads* rather than against this table:
+ *
+ *   1. `orders.by_status.refunded` = `revenue.refund_count` = `refunded_orders`
+ *   2. `orders.placed` = `revenue.orders_placed`, and `counted_as_revenue` =
+ *      `revenue.orders_counted`
+ *   3. `orders.average_order_value` and `orders.currency` are `revenue`'s own —
+ *      measured identical in one payload, so they are read off it here
+ *   4. `products.low_stock.products` = the overview's `inventory.low_stock` =
+ *      `/inventory/low-stock`'s `meta.total` — all three counted off
+ *      `inventoryRows()` on every request, never tabled
+ *   5. `cod` is `/cod/statistics` with a range on it, and the overview's four COD
+ *      keys are a strict subset of it
+ *   6. `shipping.shipping_revenue` is `revenue.shipping_revenue`
+ *   7. **`by_wilaya` plus `unattributed` reconcile to the revenue report** —
+ *      their orders sum to `orders_counted` (40 + 18 + 2 + 263 = 323) and their
+ *      revenues to `gross` (918 100). That identity was *derived from* the
+ *      measured payloads rather than stated by them, and it is why the third
+ *      wilaya row below is carved out of the unattributed slice instead of added
+ *      beside it.
+ *
+ * And the one identity that must **not** hold: `customers.guest_orders` is not
+ * `orders.guest_orders` — 209 against 422, measured in one window. Two scopes
+ * wearing one name, and the customers report exists partly to say so.
  *
  * **`90d` is `30d`, deliberately.** Measured identical on every column: this
  * shop holds nothing older than about a month, so the widest preset answers the
@@ -3567,7 +3785,8 @@ const ANALYTICS_FIGURES = {
     orders: NO_ORDERS,
     customers: NO_CUSTOMERS,
     cod: NO_COD,
-    shipping: { shipments: 0, delivered: 0, live: 0, delivery_rate: "0.0000" },
+    shipping: NO_SHIPPING,
+    bestSellers: [],
     revenue: NO_REVENUE,
   },
   yesterday: {
@@ -3575,9 +3794,152 @@ const ANALYTICS_FIGURES = {
     customers: NO_CUSTOMERS,
     cod: NO_COD,
     // Two parcels and no orders: a shipment leaves for an order placed days
-    // earlier, so these two figures are not two views of one number.
-    shipping: { shipments: 2, delivered: 1, live: 0, delivery_rate: "0.5000" },
+    // earlier, so these two figures are not two views of one number. It is also
+    // the only window with **one** provider, which is the other side of the
+    // branch `providers: []` covers at `today`.
+    shipping: {
+      shipments: { total: 2, by_status: shipmentsByStatus({ delivered: 1, cancelled: 1 }), live: 0 },
+      rates: { delivery: "0.5000", return: "0.0000" },
+      providers: [
+        {
+          provider: "manual",
+          shipments: 2,
+          delivered: 1,
+          returned: 0,
+          cancelled: 1,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "0.5000", return: "0.0000" },
+        },
+      ],
+      // No orders in the window, so nothing to attribute to a wilaya — the
+      // parcels moved for orders placed before it.
+      by_wilaya: [],
+      unattributed: { orders: 0, revenue: "0.00", reason: UNATTRIBUTED_REASON },
+      shipping_revenue: "0.00",
+    },
+    bestSellers: [],
     revenue: NO_REVENUE,
+  },
+  /*
+   * ── The narrow window, which is invention and says so ────────────────────────
+   *
+   * A custom window of two or three days. **Nothing here is measured** — the shop
+   * was asked for five presets and for nothing between one day and seven — and it
+   * exists because `bucketFor()` had a hole in exactly that range: a two-day
+   * custom window answered the *seven*-day table, which is the dishonesty
+   * `bucketFor` was written to avoid rather than an instance of it.
+   *
+   * It is where three states this harness could not otherwise reach now live, and
+   * each is a branch a shipped screen already has:
+   *
+   *   `hasRankingSignal()` false with rows present — the flat best-sellers list
+   *   `customers.returning` non-zero — every measured window is 0 / "1.0000"
+   *   `unattributed.orders` zero — the row `wilayaSlices()` filters out
+   *
+   * Held to every invariant the measured windows hold, so it is small rather than
+   * loose. `node scripts/capture.mjs "/analytics?range=custom&date_from=…"`.
+   */
+  narrow: {
+    orders: {
+      placed: 4,
+      by_status: {
+        pending: 1,
+        processing: 1,
+        "on-hold": 0,
+        completed: 1,
+        cancelled: 1,
+        refunded: 0,
+        failed: 0,
+      },
+      cancelled: 1,
+      completed: 1,
+      refunded: 0,
+      guest_orders: 2,
+      counted_as_revenue: 2,
+    },
+    customers: {
+      customers: 2,
+      new: 1,
+      returning: 1,
+      guest_orders: 1,
+      rates: { new: "0.5000", returning: "0.5000" },
+    },
+    cod: {
+      total_orders: 3,
+      by_status: { pending: 1, confirmed: 1, rejected: 0, unreachable: 0, cancelled: 1 },
+      // Two confirmed ever against one confirmed now, which is the distinction
+      // `CodFigure.scope` exists for and the measured 30-day window's 126/84.
+      confirmed_orders: 2,
+      delivered_orders: 1,
+      returned_orders: 0,
+      rates: {
+        confirmation: "0.6667",
+        rejection: "0.0000",
+        cancellation: "0.3333",
+        delivery: "0.3333",
+        return: "0.0000",
+      },
+    },
+    shipping: {
+      shipments: { total: 2, by_status: shipmentsByStatus({ delivered: 1, returned: 1 }), live: 0 },
+      // The only window with a non-zero return rate. Measured, this shop returns
+      // nothing at all, so `rates.return` is `"0.0000"` in all five presets and
+      // the figure renders the same whether it works or not.
+      rates: { delivery: "0.5000", return: "0.5000" },
+      providers: [
+        {
+          provider: "manual",
+          shipments: 1,
+          delivered: 1,
+          returned: 0,
+          cancelled: 0,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "1.0000", return: "0.0000" },
+        },
+        {
+          provider: "acfake",
+          shipments: 1,
+          delivered: 0,
+          returned: 1,
+          cancelled: 0,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "0.0000", return: "1.0000" },
+        },
+      ],
+      by_wilaya: [
+        { wilaya_id: 1, code: "01", name: "Adrar", name_ar: "أدرار", orders: 1, revenue: "3525.00" },
+        {
+          wilaya_id: 16,
+          code: "16",
+          name: "Algiers",
+          name_ar: "الجزائر",
+          orders: 1,
+          revenue: "3525.00",
+        },
+      ],
+      unattributed: { orders: 0, revenue: "0.00", reason: UNATTRIBUTED_REASON },
+      shipping_revenue: "0.00",
+    },
+    bestSellers: BEST_SELLERS_NARROW,
+    revenue: {
+      currency: "DZD",
+      order_total: "14100.00",
+      orders_placed: 4,
+      orders_counted: 2,
+      gross: "7050.00",
+      discounts: "0.00",
+      shipping_revenue: "0.00",
+      tax: "0.00",
+      refunds: "0.00",
+      net: "7050.00",
+      collected: "3525.00",
+      average_order_value: "3525.00",
+      refund_count: 0,
+      refunded_orders: 0,
+    },
   },
   "7d": {
     orders: {
@@ -3606,11 +3968,77 @@ const ANALYTICS_FIGURES = {
     },
     cod: {
       total_orders: 84,
+      by_status: { pending: 30, confirmed: 12, rejected: 6, unreachable: 0, cancelled: 36 },
       confirmed_orders: 18,
-      confirmation_rate: "0.2143",
-      delivery_rate: "0.0714",
+      delivered_orders: 6,
+      returned_orders: 5,
+      rates: {
+        confirmation: "0.2143",
+        rejection: "0.0714",
+        cancellation: "0.4286",
+        delivery: "0.0714",
+        return: "0.0595",
+      },
     },
-    shipping: { shipments: 20, delivered: 13, live: 0, delivery_rate: "0.6500" },
+    shipping: {
+      shipments: {
+        total: 20,
+        by_status: shipmentsByStatus({ delivered: 13, cancelled: 7 }),
+        live: 0,
+      },
+      rates: { delivery: "0.6500", return: "0.0000" },
+      providers: [
+        {
+          provider: "manual",
+          shipments: 12,
+          delivered: 5,
+          returned: 0,
+          cancelled: 7,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "0.4167", return: "0.0000" },
+        },
+        {
+          provider: "acfake",
+          shipments: 8,
+          delivered: 8,
+          returned: 0,
+          cancelled: 0,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "1.0000", return: "0.0000" },
+        },
+      ],
+      by_wilaya: [
+        {
+          wilaya_id: 1,
+          code: "01",
+          name: "Adrar",
+          name_ar: "أدرار",
+          orders: 6,
+          revenue: "25200.00",
+        },
+        {
+          wilaya_id: 31,
+          code: "31",
+          name: "Oran",
+          name_ar: "وهران",
+          orders: 2,
+          revenue: "8400.00",
+        },
+        {
+          wilaya_id: 16,
+          code: "16",
+          name: "Algiers",
+          name_ar: "الجزائر",
+          orders: 1,
+          revenue: "4200.00",
+        },
+      ],
+      unattributed: { orders: 36, revenue: "139500.00", reason: UNATTRIBUTED_REASON },
+      shipping_revenue: "0.00",
+    },
+    bestSellers: BEST_SELLERS_7D,
     revenue: {
       currency: "DZD",
       order_total: "412600.00",
@@ -3656,8 +4084,86 @@ const ANALYTICS_FIGURES = {
       guest_orders: 209,
       rates: { new: "1.0000", returning: "0.0000" },
     },
-    cod: codOverview(COD_STATISTICS),
-    shipping: { shipments: 131, delivered: 85, live: 0, delivery_rate: "0.6489" },
+    // `/analytics/cod` at 30d is `/cod/statistics` key for key, measured — so it
+    // *is* that constant, rather than a second copy of it that can drift.
+    cod: COD_STATISTICS,
+    /*
+     * Measured verbatim, with one deliberate departure named where it is made:
+     * **the third `by_wilaya` row is invention.** This shop attributes only two,
+     * Adrar 40 and Algiers 2, and a two-row geography is a chart that proves
+     * nothing about ranking, ties, or a third bar's label at 340px. So Oran —
+     * one of the two the API's own fixture calls high-traffic — is carved *out
+     * of* the unattributed slice rather than added beside it: 281 becomes 263,
+     * and the identity that the whole set reconciles to `orders_counted` (323)
+     * and to `gross` (918 100) survives. The unattributed row still dwarfs every
+     * named wilaya put together, 263 against 60, which is the report's real
+     * headline and the reason it is a labelled row and not a remainder.
+     *
+     * **`name` is `Algiers` and this file's own wilaya table says `Alger`.**
+     * The measured payload sends the English exonym, README §"A wilaya's `name`"
+     * records why it is deliberate in the shop, and `WILAYAS` here is the wrong
+     * half — a pre-existing divergence, named rather than fixed, because that
+     * table is a join key for orders, shipments and rules across this file.
+     */
+    shipping: {
+      shipments: {
+        total: 131,
+        by_status: shipmentsByStatus({ delivered: 85, cancelled: 46 }),
+        live: 0,
+      },
+      rates: { delivery: "0.6489", return: "0.0000" },
+      providers: [
+        {
+          provider: "manual",
+          shipments: 89,
+          delivered: 43,
+          returned: 0,
+          cancelled: 46,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "0.4831", return: "0.0000" },
+        },
+        {
+          provider: "acfake",
+          shipments: 42,
+          delivered: 42,
+          returned: 0,
+          cancelled: 0,
+          failed: 0,
+          live: 0,
+          rates: { delivery: "1.0000", return: "0.0000" },
+        },
+      ],
+      by_wilaya: [
+        {
+          wilaya_id: 1,
+          code: "01",
+          name: "Adrar",
+          name_ar: "أدرار",
+          orders: 40,
+          revenue: "168000.00",
+        },
+        {
+          wilaya_id: 31,
+          code: "31",
+          name: "Oran",
+          name_ar: "وهران",
+          orders: 18,
+          revenue: "75600.00",
+        },
+        {
+          wilaya_id: 16,
+          code: "16",
+          name: "Algiers",
+          name_ar: "الجزائر",
+          orders: 2,
+          revenue: "8400.00",
+        },
+      ],
+      unattributed: { orders: 263, revenue: "666100.00", reason: UNATTRIBUTED_REASON },
+      shipping_revenue: "0.00",
+    },
+    bestSellers: BEST_SELLERS_30D,
     revenue: {
       currency: "DZD",
       order_total: "2345200.00",
@@ -3680,18 +4186,24 @@ ANALYTICS_FIGURES["90d"] = ANALYTICS_FIGURES["30d"];
 
 /**
  * Which block a window gets. A preset takes its own; a **custom** window takes
- * the preset whose length it is nearest, so a three-day custom range answers
+ * the block whose length it is nearest, so a three-day custom range answers
  * small numbers rather than the thirty-day table.
  *
- * That bucketing is invention and is the only part of this route with no
+ * That bucketing is invention and is the only part of these routes with no
  * measurement behind it — nobody has asked the shop for a custom window and
  * compared. It is here because the alternative is worse in the direction this
  * harness cares about: answering the 30-day figures for every custom window
  * would let someone build a date picker, watch the numbers never move, and be
  * unable to tell that from a control the API ignores.
+ *
+ * **`narrow` closed a hole in that argument.** Two and three days used to land on
+ * the *seven*-day table — 126 orders for a two-day window, which is the same
+ * defect one step smaller. It now has a block of its own, and that block is where
+ * the flat best-sellers list, a non-zero `returning` rate and an empty
+ * unattributed slice live. See `ANALYTICS_FIGURES.narrow`.
  */
 const bucketFor = (days) =>
-  days <= 1 ? "today" : days <= 7 ? "7d" : days <= 30 ? "30d" : "90d";
+  days <= 1 ? "today" : days <= 3 ? "narrow" : days <= 7 ? "7d" : days <= 30 ? "30d" : "90d";
 
 /**
  * The API's cap on a custom window, and the three refusals around it. Measured
@@ -3712,13 +4224,22 @@ const rangeInvalid = (fields) => invalidBody("The reporting range is invalid.", 
  *
  * `/payments?date_from=2026-13-45` is a measured **200 with 0 rows** — the shape
  * matches, nothing checks the calendar, and a screen cannot tell "no rows in that
- * window" from "that is not a date". This route cannot do the same thing: `days`
- * is computed from the two dates and `2026-13-45` makes it `NaN`, which
+ * window" from "that is not a date". These routes cannot do the same thing:
+ * `days` is computed from the two dates and `2026-13-45` makes it `NaN`, which
  * serialises as `null` and is refused by `analyticsRange.days` at the panel's own
  * boundary — a 200 the dashboard would throw on. So an impossible date joins a
  * malformed one under "Required when range is custom." rather than reaching the
  * arithmetic. Unmeasured, like the malformed case beside it, and chosen the same
  * way: it adds no sentence the API has never sent.
+ *
+ * **It is the one place this file is knowingly *stricter* than the shop, and it
+ * now applies to seven routes rather than one.** The six reports read their
+ * window through this same function, so a refusal nobody has ever seen the API
+ * make is reproduced seven times over. It stays because the alternative is worse
+ * in the direction that matters — a 200 the panel throws on is a screen state
+ * that exists in the harness and nowhere else — but it is a real divergence and
+ * one measurement would settle it: send `/analytics/orders` a
+ * `range=custom&date_from=2026-13-45&date_to=2026-13-46` and record the answer.
  *
  * Note `2026-02-30` is *not* impossible to `Date.parse` — it rolls into March —
  * and is served as the window it rolls to. That is JavaScript's own leniency
@@ -3804,37 +4325,212 @@ function readAnalyticsRange(params) {
  * difference is that the harness can never show the stamp advancing, which no
  * screen depends on.
  */
-function analyticsOverview(params) {
+/**
+ * The one `meta` all seven reports carry, measured identical on every one of
+ * them for both a Super Admin and a Support Agent — only `money_visible` moves.
+ */
+const analyticsMeta = (money) => ({
+  generated_at: iso(0),
+  cache_ttl: 60,
+  money_visible: money,
+  money_requires: "ac_manage_orders",
+});
+
+/** Whether this credential may see money at all. The gate, in one place. */
+const canSeeMoney = () => IDENTITY.capabilities.includes("ac_manage_orders");
+
+/**
+ * The window and its figures, or the refusal. Shared by all seven routes, which
+ * is why every one of them answers the same two 400s to the same query strings.
+ */
+function analyticsWindow(params) {
   const range = readAnalyticsRange(params);
-  if (range.error) return range.error;
+  if (range.error) return range;
 
   const window = range.value;
-  const figures =
-    ANALYTICS_FIGURES[window.preset === "custom" ? bucketFor(window.days) : window.preset];
+  return {
+    window,
+    figures:
+      ANALYTICS_FIGURES[window.preset === "custom" ? bucketFor(window.days) : window.preset],
+  };
+}
 
-  const money = IDENTITY.capabilities.includes("ac_manage_orders");
+/**
+ * The three low-stock rows, counted off the fixture on every request rather than
+ * tabled per range: this is current state, and the measurement says a 90× window
+ * does not move it — `{"products":3}` at today, 7d, 30d and 90d alike, exactly
+ * like the overview's. It is also the same three rows `/inventory/low-stock`
+ * lists, which is what keeps the card and the screen it links to in agreement.
+ *
+ * It is **the proof that a figure can sit under a control that does not move it**,
+ * and it is why `AnalyticsScreen` leaves `products` out of its empty-window list.
+ */
+const lowStockCount = () => inventoryRows().filter((row) => row.low_stock).length;
+
+function analyticsOverview(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  const { window, figures } = scope;
+  const money = canSeeMoney();
 
   return ok(
     {
       range: window,
       orders: figures.orders,
       customers: figures.customers,
-      cod: figures.cod,
-      shipping: figures.shipping,
-      // Counted off the fixture on every request rather than tabled per range:
-      // this is current state, and the measurement says a 90× window does not
-      // move it. It is also the same three rows `/inventory/low-stock` lists.
-      inventory: { low_stock: inventoryRows().filter((row) => row.low_stock).length },
+      cod: codOverview(figures.cod),
+      shipping: shippingOverview(figures.shipping),
+      inventory: { low_stock: lowStockCount() },
       ...(money ? { revenue: withUnavailable(figures.revenue) } : {}),
     },
-    {
-      generated_at: iso(0),
-      cache_ttl: 60,
-      money_visible: money,
-      money_requires: "ac_manage_orders",
-    },
+    analyticsMeta(money),
   );
 }
+
+/**
+ * ── The six reports, and the money gate that is not one shape but two ────────
+ *
+ * Measured 2026-08-26 with a Support Agent — `ac_view_analytics` without
+ * `ac_manage_orders`, which is `MOCK_IDENTITY=support` here:
+ *
+ *     /analytics/revenue    403 forbidden — the only 403 in this whole surface
+ *     the other five        200, with **every money key gone, nested included**
+ *
+ * The five 200s are the subtle half and the schemas already record which keys
+ * they are: `orders.average_order_value` and `orders.currency`,
+ * `best_sellers[].revenue`, `by_wilaya[].revenue`, `unattributed.revenue`,
+ * `shipping.shipping_revenue` and `shipping.currency`. **Omitted key by key,
+ * never nulled and never zeroed** — so `customers` and `cod` are byte-identical
+ * for both credentials, because neither carries a money key at all.
+ *
+ * That is what a schema cannot catch on its own: every money field in
+ * lib/api/schemas/analytics.ts is `.optional()`, so a fixture emitting
+ * `revenue: "0.00"` here would parse cleanly and teach a screen that a Support
+ * Agent sees a shop that sold nothing.
+ *
+ * **`generated_at` is pinned and that is the honest reproduction.** Two live
+ * requests six seconds apart returned the identical stamp: the reports sit behind
+ * a 60-second server cache, which `meta.cache_ttl` reports. It is what lets a
+ * Server Component's figures be up to a minute older than the navigation that
+ * fetched them — the dashboard prints the stamp for exactly that reason, and a
+ * screen must not read a fresh stamp as proof of a fresh request. Here it never
+ * moves at all, because nothing in this file may read a clock. **The cost is
+ * real and unchanged by this branch**: no screen can be exercised against a
+ * stamp that advances, so `StaleBanner`'s relative time is frozen too, and the
+ * one thing a capture cannot show is the moment the data goes stale.
+ */
+function analyticsRevenue(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+  // The whole route, not a key of it. This is the only 403 on the surface.
+  if (!canSeeMoney()) return forbidden();
+
+  return ok(
+    { range: scope.window, ...withUnavailable(scope.figures.revenue) },
+    analyticsMeta(true),
+  );
+}
+
+function analyticsOrders(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  const money = canSeeMoney();
+  const { revenue } = scope.figures;
+
+  return ok(
+    {
+      range: scope.window,
+      ...scope.figures.orders,
+      // Both measured identical to the revenue report's own, in one payload —
+      // so they are read off it rather than restated, and they are the two keys
+      // that vanish for a reader without the capability.
+      ...(money
+        ? { average_order_value: revenue.average_order_value, currency: revenue.currency }
+        : {}),
+    },
+    analyticsMeta(money),
+  );
+}
+
+function analyticsProducts(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  const money = canSeeMoney();
+
+  return ok(
+    {
+      range: scope.window,
+      best_sellers: scope.figures.bestSellers.map(({ revenue, ...row }) =>
+        money ? { ...row, revenue } : row,
+      ),
+      best_sellers_limit: BEST_SELLERS_LIMIT,
+      low_stock: { products: lowStockCount() },
+    },
+    analyticsMeta(money),
+  );
+}
+
+function analyticsCustomers(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  // No money key anywhere in this payload, so the two credentials get the same
+  // bytes. `guest_orders` here is **not** the orders report's — 209 against 422,
+  // measured in one window — and this report exists partly to say so.
+  return ok({ range: scope.window, ...scope.figures.customers }, analyticsMeta(canSeeMoney()));
+}
+
+function analyticsShipping(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  const money = canSeeMoney();
+  const report = scope.figures.shipping;
+
+  return ok(
+    {
+      range: scope.window,
+      shipments: report.shipments,
+      rates: report.rates,
+      providers: report.providers,
+      // The one `unavailable` key this report carries, out of the same object
+      // the revenue report's three come from rather than restated beside it.
+      unavailable: { shipping_cost: ANALYTICS_UNAVAILABLE.shipping_cost },
+      by_wilaya: report.by_wilaya.map(({ revenue, ...row }) =>
+        money ? { ...row, revenue } : row,
+      ),
+      unattributed: money
+        ? report.unattributed
+        : { orders: report.unattributed.orders, reason: report.unattributed.reason },
+      ...(money ? { shipping_revenue: report.shipping_revenue, currency: "DZD" } : {}),
+    },
+    analyticsMeta(money),
+  );
+}
+
+function analyticsCod(params) {
+  const scope = analyticsWindow(params);
+  if (scope.error) return scope.error;
+
+  // `/cod/statistics` with a range on it, measured key for key — so at 30d this
+  // *is* that constant. `by_status.confirmed` (84) differs from
+  // `confirmed_orders` (126) here as it does there: the shop now, against every
+  // order ever confirmed.
+  return ok({ range: scope.window, ...scope.figures.cod }, analyticsMeta(canSeeMoney()));
+}
+
+/** Which handler serves which report. `overview` is routed beside them. */
+const ANALYTICS_REPORTS = {
+  revenue: analyticsRevenue,
+  orders: analyticsOrders,
+  products: analyticsProducts,
+  customers: analyticsCustomers,
+  shipping: analyticsShipping,
+  cod: analyticsCod,
+};
 
 /* --------------------------------------------------------------- communes --- */
 
@@ -8229,25 +8925,38 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         : notFound();
 
     /*
-     * **One of the seven reports, and the other six are declared gaps.**
-     * `/analytics/overview` is served because the dashboard is a single request
-     * to it — the screen ADMIN_PANEL.md describes as six round trips is one,
+     * **All seven reports.** `/analytics/overview` is the dashboard's whole
+     * request — the screen ADMIN_PANEL.md describes as six round trips is one,
      * because the overview nests `orders`, `customers`, `cod`, `shipping`,
-     * `inventory` and `revenue` as blocks. Until now it answered
-     * `rest_no_route`, so the dashboard rendered its error state against this
-     * harness on every capture that has ever been taken of it. None have.
+     * `inventory` and `revenue` as blocks — and the other six are the
+     * `/analytics` screen, one request per view.
      *
-     * `revenue`, `orders`, `products`, `customers`, `shipping` and `cod` under
-     * this collection stay 404s and stay named in tests/mock-api.test.ts with a
-     * reason — the analytics branch owns them. There is no gate on
-     * `ac_view_analytics` here: all three identities hold it, so a gate would be
-     * a refusal nothing in this file can reach, and this file does not grow
-     * error paths nobody can take.
+     * The six were 404s here until 2026-08-26, and the note that stood in their
+     * place is worth keeping as a warning rather than deleting: an unimplemented
+     * route in this file is not neutral. It answers `rest_no_route`, a code
+     * `ErrorNormalizer` never emits, so a screen branching on it would be built
+     * against something the API cannot send. `/analytics/shipping` in particular
+     * was recorded in DECISIONS.md as "the one allowlisted route on this subject
+     * still answering `rest_no_route`" and that is **false** — measured, it is a
+     * 200 with a full payload for a Support Agent as well as for a Super Admin.
+     * The gap was this file's. DECISIONS.md still carries the wrong sentence.
+     *
+     * **There is no gate on `ac_view_analytics` here and that is deliberate:**
+     * all three identities hold it, so a refusal branching on it could never be
+     * reached from this harness, and this file does not grow error paths nobody
+     * can take. The gate that *is* here is money — `ac_manage_orders` — and it
+     * takes two shapes, a whole-route 403 on `revenue` and key-by-key omission
+     * on the other six. Both are measured; see `analyticsRevenue()`.
      */
-    case "analytics":
-      return method === "GET" && segments.length === 2 && second === "overview"
-        ? analyticsOverview(searchParams)
-        : notFound();
+    case "analytics": {
+      if (method !== "GET" || segments.length !== 2) return notFound();
+      if (second === "overview") return analyticsOverview(searchParams);
+      const report = ANALYTICS_REPORTS[second];
+      // `Object.hasOwn` rather than a truthy check: `constructor` and `toString`
+      // are inherited properties, and `/analytics/toString` must be a 404 like
+      // any other path nobody wrote.
+      return Object.hasOwn(ANALYTICS_REPORTS, second) ? report(searchParams) : notFound();
+    }
 
     /*
      * Three routes: the provider list, the tariff, and the resolver.
@@ -8270,11 +8979,11 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * allowlisted route on this subject still answering `rest_no_route`. That is
      * false and DECISIONS.md still carries it.** Measured 2026-08-26: it answers
      * **200 with a full payload**, for a Support Agent as well as for a Super
-     * Admin. It is still a 404 *here* — the analytics branch owns it, and only
-     * `/analytics/overview` is served — but the gap is this file's and not the
-     * shop's, which is the opposite of what the old sentence said. Named so the
-     * next person diffing this surface does not re-derive it, and so nobody
-     * builds an error path for a `rest_no_route` the shop never sends.
+     * Admin. It was still a 404 *here* until this file grew the six reports; it
+     * is served now, under `case "analytics"`. The correction to DECISIONS.md is
+     * still owed — named so the next person diffing this surface does not
+     * re-derive it, and so nobody builds an error path for a `rest_no_route` the
+     * shop never sends.
      *
      * The rules list is paginated through the shared `paginate()`, which is what
      * makes it refuse the four paging edges every other collection refuses.

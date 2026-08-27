@@ -265,6 +265,54 @@ const DEFAULT_ROUTES = [
    * overlay on this route rather than a route of its own.
    */
   "/payments",
+  /*
+   * **The six reports, and this route has never been photographed at any width,
+   * theme or locale.** Not an oversight in this list: all six of
+   * `/analytics/{revenue,orders,products,customers,shipping,cod}` answered
+   * `rest_no_route` until 2026-08-26, so a capture of `/analytics` would have
+   * been a photograph of `ErrorState`. The mock serves them now.
+   *
+   * The bare path is the **revenue** report over the default 30-day window —
+   * `DEFAULT_VIEW` in `query.ts`, and the reason a shared link to it is
+   * `/analytics` rather than `/analytics?view=revenue&range=30d`.
+   *
+   * **It is captured under both identities, and the second is the point of it.**
+   *
+   *     node scripts/capture.mjs /analytics
+   *     MOCK_IDENTITY=support node scripts/capture.mjs /analytics
+   *
+   * The money gate takes a shape here it takes nowhere else in the panel. On
+   * `/dashboard` it is a *payload* refusal — a 200 with `revenue` absent, so the
+   * screen renders a different card set of the same length. On this route the
+   * default view is the one report the API refuses outright: a Support Agent gets
+   * a flat **403**, `AnalyticsScreen` renders `ForbiddenState` naming the
+   * capability the *response* asked for (`meta.money_requires`, falling back to
+   * `canSeeMoney()`'s own when a 403 carries no meta) — **and the toolbar stays
+   * live above it.** The report pills and the range control are outside the
+   * refused region, so the reader can still move to the five reports they are
+   * entitled to. That is a **view state, not a page refusal**, and the difference
+   * between the two is exactly the thing a screenshot can check and a unit test
+   * cannot: a `ForbiddenState` that had swallowed the whole `Scaffold` would look
+   * correct in every assertion and be a dead end on screen.
+   *
+   * `support`, not `reduced`, for the reason `/dashboard`'s block gives: `reduced`
+   * keeps `ac_manage_orders` on purpose and sees the money.
+   *
+   * The other five reports and the five other windows are **states of this route
+   * rather than routes**, so they are captured by name when they change. The
+   * three worth knowing about:
+   *
+   *     node scripts/capture.mjs "/analytics?view=shipping"   the geography,
+   *         where the unattributed slice outweighs every named wilaya combined
+   *     node scripts/capture.mjs "/analytics?view=products&range=today"
+   *         `best_sellers: []` under a `low_stock` that is still 3 — the figure
+   *         that does not move under a control that does
+   *     node scripts/capture.mjs \
+   *         "/analytics?view=products&range=custom&date_from=2026-08-10&date_to=2026-08-11"
+   *         every row tied at one unit, which is the flat `hasRankingSignal()`
+   *         branch: a plain list of counts where the ranked window draws bars
+   */
+  "/analytics",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
