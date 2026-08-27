@@ -5,11 +5,18 @@ import { ApiError } from "@/lib/api/errors";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
 import { pageList } from "@/lib/api/schemas/cms";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState } from "@/components/patterns/States";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { PagesList } from "./PagesList";
 import { listParams, queryFromParams } from "./query";
 
+/**
+ * The Pages index.
+ *
+ * A Server Component fetches the first page with the sealed credential and
+ * streams it, so first paint carries data — the arrangement orders, products,
+ * inventory, customers, coupons and payments all use.
+ */
 export default async function ContentPagesPage({
   params,
   searchParams,
@@ -30,11 +37,21 @@ export default async function ContentPagesPage({
   if (!has(me, "ac_manage_content")) {
     const t = await getTranslations("content");
     return (
-      <Scaffold title={t("section.pages")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No `back`, and the absence is the rule rather than an omission. Every
+            route it could point at — `/content`, `/content/pages` — is gated on
+            the same `ac_manage_content` this reader has just been refused for, so
+            the link could only ever reach another "Accès refusé". DECISIONS.md:
+            a link to a 403 is a control that cannot act. The five sibling screens
+            render their refusal the same way.
+
+            No subtitle either, so `pages-count` is absent rather than reporting a
+            total nobody was allowed to read. The suite asserts that. */}
+        <PageHeader title={t("section.pages")} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_content" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

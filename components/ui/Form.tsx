@@ -1249,6 +1249,19 @@ export function ErrorSummary({
  * has nothing to report, and printing "unsaved changes" over a form nobody has
  * touched is the same class of untruth as a stale marker on a screen that cannot
  * go stale.
+ *
+ * ## `saveId`, added on the content branch
+ *
+ * A DOM id on the primary, so an overlay this bar opens can hand focus back to
+ * it. The homepage document is the first form whose save is **gated behind a
+ * `ConfirmDialog`** — saving destroys the sections the reader could not parse, so
+ * it names the count first — and a `ConfirmDialog` restores focus to
+ * `returnFocusTo` or to whatever `useOpenerFocus` recorded at open. The recorded
+ * opener is only right where the browser focused the button on click, which
+ * Chromium does and WebKit does not; on WebKit the ring would land wherever it
+ * happened to be. Naming the control is the version that is true on every engine,
+ * and it is the same prop `Menu` triggers and table row openers already carry.
+ * Optional, so every existing caller is unchanged.
  */
 export function SaveBar({
   dirty,
@@ -1262,6 +1275,8 @@ export function SaveBar({
   onDiscard,
   /** Overrides "Enregistrer" where the action is not a save — "Publier", "Envoyer". */
   saveLabel,
+  /** The primary's DOM id, so an overlay it opens can hand focus back. See above. */
+  saveId,
   /**
    * Dirty, and still not saveable — a client-side rule the form has not met.
    * The bar still appears, because there *are* unsaved changes and hiding it
@@ -1276,6 +1291,7 @@ export function SaveBar({
   onSave: () => void;
   onDiscard?: () => void;
   saveLabel?: string;
+  saveId?: string;
   blockedReason?: string;
 }) {
   const t = useTranslations("ui.form");
@@ -1307,6 +1323,7 @@ export function SaveBar({
         </Button>
       ) : null}
       <Button
+        id={saveId}
         onClick={onSave}
         loading={saving}
         disabled={Boolean(blockedReason)}

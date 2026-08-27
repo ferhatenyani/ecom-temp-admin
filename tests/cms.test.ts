@@ -12,7 +12,7 @@ import {
   positionWrites,
   unknownSectionTypes,
 } from "@/lib/cms";
-import { moveItem } from "@/components/patterns/MoveControls";
+import { moveItem } from "@/components/ui/Reorder";
 
 describe("colliding page paths", () => {
   /*

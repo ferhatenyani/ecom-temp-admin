@@ -481,29 +481,12 @@
   }
 
   /*
-   * The toast sits above the tab bar, not behind it, and inside the safe area.
-   * The tab bar is 3.25rem plus its own safe inset, so the toast clears both.
+   * `.toast-anchor` and `.toast` were here, holding the toast 4.25rem off the
+   * bottom to clear a tab bar DESIGN.md §0 retired — `AppShell` has no tab bar,
+   * so every toast in the panel floated 68px above where it belonged. `Toast` is
+   * on the new system now; the rules are `.ui-toast-anchor` / `.ui-toast` in the
+   * `ui` layer below, and nothing else ever referenced these two.
    */
-  .toast-anchor {
-    inset-inline: 0;
-    inset-block-end: calc(4.25rem + env(safe-area-inset-bottom, 0px));
-  }
-  @media (min-width: 48rem) {
-    /* At md the tab bar becomes a sidebar, so the toast drops to the bottom. */
-    .toast-anchor {
-      inset-block-end: 1.5rem;
-    }
-  }
-  .toast {
-    border: var(--hairline) solid var(--color-separator);
-    animation: toast-in var(--dur-base) var(--ease-ios);
-  }
-  @keyframes toast-in {
-    from {
-      opacity: 0;
-      transform: translateY(0.5rem);
-    }
-  }
 
   /*
    * The action sheet sits inset from the screen edges, the way iOS does it, and
@@ -1249,6 +1232,44 @@
   }
   .ui-float[data-state="closed"] {
     animation: ui-fade-out var(--dur-ui-fast) var(--ease-ui-standard);
+  }
+
+  /* ---------------------------------------------------------------- toast ---
+   * §3.1: bottom centre below `sm`, bottom inline-end at `sm` and up, inside the
+   * safe area.
+   *
+   * The rule this replaces held it `calc(4.25rem + safe-inset)` off the bottom
+   * to clear the retired tab bar, which is why every toast in the panel has been
+   * floating 68px high. The anchor spans the full inline axis and `justify-content`
+   * decides where in it the toast sits — `flex-end` rather than `inset-inline-end`
+   * so the toast keeps its own intrinsic width and the RTL mirror is free.
+   *
+   * Nothing is inset for the `lg` sidebar: the sidebar is on the inline *start*
+   * and the toast is at the inline end, so they never meet.
+   */
+  .ui-toast-anchor {
+    inset-inline: 0;
+    inset-block-end: 0;
+    justify-content: center;
+    padding-inline: 1rem;
+    padding-block-end: max(1rem, env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 40rem) {
+    .ui-toast-anchor {
+      justify-content: flex-end;
+      padding-inline: 1.5rem;
+      padding-block-end: 1.5rem;
+    }
+  }
+  .ui-toast {
+    animation: ui-toast-in var(--dur-ui-base) var(--ease-ui-out);
+  }
+  /* The block axis does not mirror, so one keyframe serves both directions. */
+  @keyframes ui-toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
   }
 
   @keyframes ui-fade-in {

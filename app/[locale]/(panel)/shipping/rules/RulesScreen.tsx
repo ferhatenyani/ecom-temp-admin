@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Menu } from "@/components/ui/Menu";
 import { ConfirmDialog, useConfirm } from "@/components/ui/Confirm";
+import { useLatchedOpener } from "@/components/ui/Overlay";
 import { EmptyState, SectionError } from "@/components/ui/States";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
@@ -83,6 +84,12 @@ export function RulesScreen({
 
   const [editing, setEditing] = useState<ShippingRule | "new" | null>(null);
   const confirm = useConfirm<ShippingRule>();
+
+  /* Latched, because `useConfirm` clears its target on close and Radix fires
+     `onCloseAutoFocus` *after* `onOpenChange` — so a `returnFocusTo` derived
+     from `confirm.target` is already `undefined` by the time the overlay reads
+     it. Measured: it was never read at all. See `useLatchedOpener`. */
+  const confirmOpener = useLatchedOpener(confirm.target && `rule-menu-${confirm.target.id}`);
 
   const money = (value: string) => formatMoney(value, SHOP_CURRENCY, locale);
   const wilayaName = (w: Wilaya) => (locale === "ar" && w.name_ar !== "" ? w.name_ar : w.name);
@@ -401,7 +408,7 @@ export function RulesScreen({
       <ConfirmDialog
         open={confirm.open}
         onOpenChange={confirm.onOpenChange}
-        returnFocusTo={confirm.target ? `rule-menu-${confirm.target.id}` : undefined}
+        returnFocusTo={confirmOpener}
         tone="destructive"
         loading={remove.isPending}
         title={t("deleteRule")}

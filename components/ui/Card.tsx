@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
+import { Icon, type IconName } from "@/components/primitives/Icon";
 
 /**
  * The card, and the label/value list that lives inside one. See DESIGN.md §1.6
@@ -183,5 +185,70 @@ export function DataRow({
         {children}
       </dd>
     </div>
+  );
+}
+
+/**
+ * A list of destinations inside a card — the third row kind, beside `DataRow`.
+ *
+ * Built on the content branch for the section hub, which is six links to six
+ * unrelated screens. Neither existing shape fits one:
+ *
+ *   `DataRow` is a `<dt>`/`<dd>` pair. A destination is not a value of a
+ *   property, and putting an anchor inside a `<dd>` says it is.
+ *   `Stat` is a figure. The count beside "Bannières" is a hint that helps
+ *   somebody decide whether to go in, not a metric — rendered at
+ *   `--text-display` it would claim to be the reason the screen exists.
+ *
+ * So: a real `<ul>` of real anchors, the whole row clickable, the count as
+ * secondary text and a chevron that flips with the reader. This is the shape a
+ * settings index and a transfer index both want next, which is why it is here
+ * rather than in `content/`.
+ *
+ * **The count is optional and the chevron is not.** A destination with nothing
+ * to count — the homepage is one document, the menus are two — renders without
+ * it rather than with a `0` or a `1` that means nothing. What must never vary is
+ * whether the row looks like a link: every row here goes somewhere.
+ */
+export function NavList({ children }: { children: ReactNode }) {
+  return <ul className="flex min-w-0 flex-col">{children}</ul>;
+}
+
+export function NavRow({
+  href,
+  label,
+  /** One line under the label, saying what is behind the link. */
+  description,
+  /** Rendered at the inline end. A count, a badge — never a control. */
+  meta,
+  icon,
+}: {
+  href: string;
+  label: string;
+  description?: string;
+  meta?: ReactNode;
+  icon?: IconName;
+}) {
+  return (
+    <li className="border-b border-ui-line last:border-b-0">
+      <Link
+        href={href}
+        className="ui-interactive ui-ring ui-hover-fill -mx-2 flex min-h-11 items-center gap-3 rounded-ui-md px-2 py-2.5"
+      >
+        {/* `Icon` is `aria-hidden` in the primitive — the row's accessible name
+            is the label, and an icon repeating it is noise to a screen reader. */}
+        {icon ? <Icon name={icon} className="size-4 shrink-0 text-ui-subtle" /> : null}
+
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-ui-body font-medium text-ui-fg">{label}</span>
+          {description ? (
+            <span className="mt-0.5 block text-ui-label text-ui-muted">{description}</span>
+          ) : null}
+        </span>
+
+        {meta ? <span className="shrink-0 text-ui-caption text-ui-muted">{meta}</span> : null}
+        <Icon name="chevron" flipInRtl className="size-4 shrink-0 text-ui-subtle" />
+      </Link>
+    </li>
   );
 }
