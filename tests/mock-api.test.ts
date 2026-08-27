@@ -82,15 +82,27 @@ import {
   statFigures,
   statusBreakdown,
 } from "@/lib/customers";
-import { overviewReport } from "@/lib/api/schemas/analytics";
 import {
+  codReport,
+  customersReport,
+  ordersReport,
+  overviewReport,
+  productsReport,
+  revenueReport,
+  shippingReport,
+} from "@/lib/api/schemas/analytics";
+import {
+  COUNTED_STATUSES,
   RANGE_PRESETS,
   UNAVAILABLE_KEYS,
   analyticsParams,
   countedReconciliation,
   customRangeProblem,
+  hasRankingSignal,
   rateFraction,
+  statusCounts,
   unavailableLines,
+  wilayaSlices,
 } from "@/lib/analytics";
 import { notificationList } from "@/lib/api/schemas/notification";
 import { QUEUE_STATES, stateCounts } from "@/lib/notifications";
@@ -173,10 +185,15 @@ function apiError(response: MockResponse): ApiError {
 
 describe("the envelope", () => {
   it("answers an unmocked path with a well-formed rest_no_route error", () => {
-    // `/analytics/revenue` rather than `/analytics/overview`, which this stood
-    // on until the overview was served: a 404 assertion is only worth anything
-    // while its path is genuinely unmocked, and the six reports below are.
-    const response = get("/analytics/revenue");
+    /*
+     * `/campaigns`, and this assertion has now moved twice for the same reason:
+     * a 404 test is only worth anything while its path is genuinely unmocked. It
+     * stood on `/analytics/overview` until the dashboard branch served that, then
+     * on `/analytics/revenue` until this one served all six. `campaign` is in
+     * UNCOVERED below with a reason, which is what makes it the right anchor —
+     * the two lists move together or this line goes stale a third time.
+     */
+    const response = get("/campaigns");
     expect(response.status).toBe(404);
 
     // Loudly, and through the same code path a real 404 would take. A mock that
@@ -2053,6 +2070,636 @@ describe("GET /analytics/overview", () => {
     expect(get("/analytics").status).toBe(404);
     expect(get("/analytics/overview/zzz").status).toBe(404);
     expect(write("POST", "/analytics/overview", {}).status).toBe(404);
+  });
+});
+
+/**
+ * ── The other six, which the `/analytics` screen reads one at a time ─────────
+ *
+ * Measured 2026-08-26 against the live shop, payload by payload. Until then all
+ * six answered `rest_no_route`, so `/analytics` had never been captured at any
+ * width, theme or locale — every screenshot of it would have been a photograph of
+ * `ErrorState`, and there are none.
+ *
+ * The overview's suite above owns what the seven share: the range enum, the two
+ * error families, the custom window's four refusals, the ignored parameters and
+ * the pinned stamp. This one owns what is true of a report and not of the
+ * dashboard — the payload shapes, the fixture variety each screen needs, and the
+ * arithmetic that has to close *across* the six rather than inside one.
+ */
+describe("the six analytics reports", () => {
+  const REPORTS = ["revenue", "orders", "products", "customers", "shipping", "cod"] as const;
+  const ask = (view: string, query = "range=30d") => get(`/analytics/${view}`, query);
+
+  const revenue = (query = "range=30d") => parse(revenueReport, ask("revenue", query)).data;
+  const orders = (query = "range=30d") => parse(ordersReport, ask("orders", query)).data;
+  const products = (query = "range=30d") => parse(productsReport, ask("products", query)).data;
+  const customers = (query = "range=30d") => parse(customersReport, ask("customers", query)).data;
+  const shipping = (query = "range=30d") => parse(shippingReport, ask("shipping", query)).data;
+  const cod = (query = "range=30d") => parse(codReport, ask("cod", query)).data;
+
+  /**
+   * Every report parses through the panel's own schema, and the headline figure
+   * of each is the measured one. Six parses in one pass rather than six tests,
+   * because the thing being checked is that the *set* is served — a report that
+   * regressed to a 404 is the failure this catches, and it should read as one
+   * failure and not as one of six.
+   */
+  it("serves all six at the default window, through the panel's own schemas", () => {
+    for (const view of REPORTS) expect(ask(view).status, view).toBe(200);
+
+    expect(revenue().net).toBe("812200.00");
+    expect(orders().placed).toBe(901);
+    expect(products().best_sellers).toHaveLength(10);
+    expect(customers().customers).toBe(9);
+    expect(shipping().shipments.total).toBe(131);
+    expect(cod().total_orders).toBe(599);
+
+    // Every one of them echoes the window it describes, which is what
+    // `AnalyticsScreen` renders rather than the picker's own state.
+    for (const view of REPORTS) {
+      const body = ask(view).body as { data: { range: { preset: string; days: number } } };
+      expect(body.data.range.preset, view).toBe("30d");
+      expect(body.data.range.days, view).toBe(30);
+    }
+  });
+
+  /**
+   * ── The zero window, and it is a shape rather than an absence ────────────────
+   *
+   * `range=today` is a **200 on all six with every block present**, and the exact
+   * key set each one returns was measured. Nothing is omitted, so a screen cannot
+   * detect the empty window by a missing key — `isEmptyWindow()` reads a headline
+   * count instead, and this is what keeps that branch reachable here.
+   */
+  it("keeps every block present at range=today, with every figure zero", () => {
+    const KEYS: Record<string, string[]> = {
+      revenue: [
+        "range", "currency", "order_total", "orders_placed", "orders_counted", "gross",
+        "discounts", "shipping_revenue", "tax", "refunds", "net", "collected",
+        "average_order_value", "unavailable", "refund_count", "refunded_orders",
+      ],
+      orders: [
+        "range", "placed", "by_status", "cancelled", "completed", "refunded", "guest_orders",
+        "counted_as_revenue", "average_order_value", "currency",
+      ],
+      products: ["range", "best_sellers", "best_sellers_limit", "low_stock"],
+      customers: ["range", "customers", "new", "returning", "guest_orders", "rates"],
+      shipping: [
+        "range", "shipments", "rates", "providers", "unavailable", "by_wilaya", "unattributed",
+        "shipping_revenue", "currency",
+      ],
+      cod: [
+        "range", "total_orders", "by_status", "confirmed_orders", "delivered_orders",
+        "returned_orders", "rates",
+      ],
+    };
+
+    for (const view of REPORTS) {
+      const response = ask(view, "range=today");
+      expect(response.status, view).toBe(200);
+      expect(Object.keys((response.body as { data: object }).data), view).toEqual(KEYS[view]);
+    }
+
+    /*
+     * Every count `0`, every list `[]`, every rate `"0.0000"`. Walked rather
+     * than listed, because the point is that *nothing* survives the empty
+     * window with a stale figure in it — a hand-written list would check the
+     * keys somebody thought of.
+     */
+    const allZero = (value: unknown): boolean =>
+      typeof value === "number"
+        ? value === 0
+        : Array.isArray(value)
+          ? value.length === 0
+          : typeof value === "object" && value !== null
+            ? Object.values(value).every(allZero)
+            : true;
+
+    for (const view of ["revenue", "orders", "customers", "shipping", "cod"] as const) {
+      const { range, ...rest } = (ask(view, "range=today").body as { data: Record<string, unknown> })
+        .data;
+      expect(range, view).toBeDefined();
+      expect(allZero(rest), `${view} carries a non-zero figure in an empty window`).toBe(true);
+    }
+
+    // And the money strings are zeros rather than empty, which is a different
+    // answer and the one `formatMoney` can render.
+    const empty = revenue("range=today");
+    expect([empty.gross, empty.net, empty.collected, empty.average_order_value]).toEqual([
+      "0.00", "0.00", "0.00", "0.00",
+    ]);
+    expect(Object.values(shipping("range=today").rates)).toEqual(["0.0000", "0.0000"]);
+    expect(Object.values(cod("range=today").rates)).toEqual([
+      "0.0000", "0.0000", "0.0000", "0.0000", "0.0000",
+    ]);
+
+    /*
+     * **`products` is the exception and it is the whole reason it is one.** Its
+     * `best_sellers` empties like everything else, but `low_stock` is current
+     * state under a range control that does not move it — measured
+     * `{"products":3}` at today, 7d, 30d and 90d alike — and
+     * `best_sellers_limit` is configuration rather than a figure. A screen that
+     * replaced this report with "nothing happened in this window" would hide a
+     * number that is true right now, which is why `AnalyticsScreen` leaves
+     * `products` out of its empty-window list.
+     */
+    const quiet = products("range=today");
+    expect(quiet.best_sellers).toEqual([]);
+    expect(quiet.best_sellers_limit).toBe(10);
+    expect(quiet.low_stock.products).toBe(3);
+  });
+
+  /**
+   * **All six are range-scoped**, measured across a 90× window. A report that
+   * answered the same bytes for a day and for a quarter would be a control that
+   * does nothing, and the only place that can be caught is here.
+   */
+  it("scopes every report to its window", () => {
+    for (const view of REPORTS) {
+      const narrow = JSON.stringify((ask(view, "range=today").body as { data: unknown }).data);
+      const wide = JSON.stringify((ask(view, "range=90d").body as { data: unknown }).data);
+      expect(narrow, `${view} is identical across a 90x window`).not.toBe(wide);
+    }
+
+    // And the one figure inside a scoped report that is deliberately *not*
+    // scoped, which is the pair that makes the control legible.
+    const lows = ["today", "yesterday", "7d", "30d", "90d"].map(
+      (preset) => products(`range=${preset}`).low_stock.products,
+    );
+    expect(new Set(lows), "low_stock is not range-scoped").toEqual(new Set([3]));
+    expect(parseList(inventoryList, get("/inventory/low-stock")).meta.total).toBe(3);
+  });
+
+  /**
+   * ── The arithmetic that has to close across reports, not only inside one ────
+   *
+   * The same shop described six ways. A report that disagrees with the dashboard
+   * above it does not teach a reader that one number is wrong — it teaches them
+   * the panel is broken. Asserted against the *served payloads* rather than
+   * against the fixture table, so a future edit that breaks the agreement in one
+   * place cannot pass by being consistent with itself.
+   */
+  it("tells one story across the six and the overview", () => {
+    const money = revenue();
+    const activity = orders();
+    const parcels = shipping();
+    const overview = parse(overviewReport, get("/analytics/overview", "range=30d")).data;
+
+    // 1. Refunds are one number wearing three names.
+    expect(money.refund_count).toBe(activity.by_status.refunded);
+    expect(money.refunded_orders).toBe(activity.by_status.refunded);
+    expect(activity.refunded).toBe(activity.by_status.refunded);
+
+    // 2. The two order counts, and the reconciliation that explains the gap.
+    expect(money.orders_placed).toBe(activity.placed);
+    expect(money.orders_counted).toBe(activity.counted_as_revenue);
+    expect(Object.values(activity.by_status).reduce((a, b) => a + b, 0)).toBe(activity.placed);
+    const proof = countedReconciliation(activity);
+    expect(proof.proves, "the four counted statuses must sum exactly").toBe(true);
+    expect(proof.included.map((row) => row.status).sort()).toEqual(
+      [...COUNTED_STATUSES].filter((s) => (activity.by_status[s] ?? 0) > 0).sort(),
+    );
+
+    // 3. The orders report's money keys are the revenue report's own.
+    expect(activity.average_order_value).toBe(money.average_order_value);
+    expect(activity.currency).toBe(money.currency);
+    expect(activity.currency).toBe(parcels.currency);
+    expect(parcels.shipping_revenue).toBe(money.shipping_revenue);
+
+    // 4. Low stock is one count in three places, and none of them is tabled.
+    expect(products().low_stock.products).toBe(overview.inventory.low_stock);
+    expect(products().low_stock.products).toBe(
+      parseList(inventoryList, get("/inventory/low-stock")).meta.total,
+    );
+
+    // 5. `/analytics/cod` is `/cod/statistics` with a range on it, and the
+    //    overview's four keys are a strict subset of that.
+    const { range, ...statistics } = cod();
+    expect(range.preset).toBe("30d");
+    expect(statistics).toEqual(parse(codStatisticsSchema, get("/cod/statistics")).data);
+    expect(overview.cod).toEqual({
+      total_orders: statistics.total_orders,
+      confirmed_orders: statistics.confirmed_orders,
+      confirmation_rate: statistics.rates.confirmation,
+      delivery_rate: statistics.rates.delivery,
+    });
+    // And the pair inside it that looks like one number and is two: the shop
+    // now, against every order ever confirmed.
+    expect(statistics.by_status.confirmed).not.toBe(statistics.confirmed_orders);
+
+    // 6. The overview's shipping block is this report's, four keys of it.
+    expect(overview.shipping).toEqual({
+      shipments: parcels.shipments.total,
+      delivered: parcels.shipments.by_status.delivered,
+      live: parcels.shipments.live,
+      delivery_rate: parcels.rates.delivery,
+    });
+
+    /*
+     * 7. **The geography reconciles to the money.** Derived from the measured
+     *    payloads rather than stated by them: the attributed wilayas plus the
+     *    unattributed slice are `orders_counted` orders and `gross` dinars. It is
+     *    why the third wilaya row in the fixture is carved out of the
+     *    unattributed slice rather than added beside it.
+     */
+    const slices = [...parcels.by_wilaya, parcels.unattributed];
+    expect(slices.reduce((sum, row) => sum + row.orders, 0)).toBe(money.orders_counted);
+    expect(slices.reduce((sum, row) => sum + Number(row.revenue), 0)).toBeCloseTo(
+      Number(money.gross),
+      2,
+    );
+
+    /*
+     * And **the one identity that must not hold.** `customers.guest_orders`
+     * counts the orders the customer report could attribute to nobody;
+     * `orders.guest_orders` counts guest orders in the window. Two questions,
+     * one name, measured 209 against 422 in a single window — and a fixture that
+     * made them agree would delete the reason the customers report exists.
+     */
+    expect(customers().guest_orders).not.toBe(activity.guest_orders);
+    expect([customers().guest_orders, activity.guest_orders]).toEqual([209, 422]);
+    expect(customers().new + customers().returning).toBe(customers().customers);
+  });
+
+  /**
+   * Each report's own invariants, the ones a screen reads directly: the status
+   * breakdowns sum to their totals, and every rate is its own numerator over its
+   * own denominator to four places.
+   */
+  it("keeps each report's own breakdown summing and its own rates dividing", () => {
+    const parcels = shipping();
+    expect(
+      statusCounts(parcels.shipments.by_status, SHIPMENT_STATUSES).reduce(
+        (sum, row) => sum + row.count,
+        0,
+      ),
+    ).toBe(parcels.shipments.total);
+    expect(rateFraction(parcels.rates.delivery)).toBeCloseTo(
+      parcels.shipments.by_status.delivered / parcels.shipments.total,
+      4,
+    );
+
+    // Column by column, the couriers sum to the shop. Two providers, so both the
+    // empty branch (`range=today`) and the populated one are reachable, and one
+    // window has exactly one courier.
+    for (const column of ["shipments", "delivered", "returned", "cancelled", "failed"] as const) {
+      const total = parcels.providers.reduce((sum, row) => sum + row[column], 0);
+      const expected =
+        column === "shipments"
+          ? parcels.shipments.total
+          : (parcels.shipments.by_status[column] ?? 0);
+      expect(total, column).toBe(expected);
+    }
+    for (const provider of parcels.providers) {
+      expect(rateFraction(provider.rates.delivery), provider.provider).toBeCloseTo(
+        provider.delivered / provider.shipments,
+        4,
+      );
+    }
+    expect(shipping("range=today").providers).toEqual([]);
+    expect(shipping("range=yesterday").providers).toHaveLength(1);
+
+    const statistics = cod();
+    expect(Object.values(statistics.by_status).reduce((a, b) => a + b, 0)).toBe(
+      statistics.total_orders,
+    );
+    for (const [key, numerator] of [
+      ["confirmation", statistics.confirmed_orders],
+      ["rejection", statistics.by_status.rejected],
+      ["cancellation", statistics.by_status.cancelled],
+      ["delivery", statistics.delivered_orders],
+      ["return", statistics.returned_orders],
+    ] as const) {
+      expect(rateFraction(statistics.rates[key]), key).toBeCloseTo(
+        numerator / statistics.total_orders,
+        4,
+      );
+    }
+
+    const money = revenue();
+    expect(Number(money.gross) - Number(money.refunds)).toBeCloseTo(Number(money.net), 2);
+    expect(Number(money.average_order_value)).toBeCloseTo(
+      Number(money.gross) / money.orders_counted,
+      2,
+    );
+
+    const people = customers();
+    expect(rateFraction(people.rates.new)).toBeCloseTo(people.new / people.customers, 4);
+    expect(rateFraction(people.rates.returning)).toBeCloseTo(
+      people.returning / people.customers,
+      4,
+    );
+  });
+
+  /**
+   * ── The geography, which is mostly one row and says so ──────────────────────
+   *
+   * Three named wilayas, each bilingual, and an unattributed slice larger than
+   * all three put together. Two of the three are measured; the third is
+   * invention, carved out of the unattributed slice so the reconciliation above
+   * survives — a two-row chart proves nothing about ranking or about a third
+   * label at 340px, which is the lesson shipping and payments both paid for.
+   */
+  it("ranks the unattributed slice as a labelled row above every named wilaya", () => {
+    const parcels = shipping();
+    expect(parcels.by_wilaya.length).toBeGreaterThanOrEqual(3);
+    expect(parcels.by_wilaya.every((row) => row.name !== "" && row.name_ar !== "")).toBe(true);
+
+    const named = parcels.by_wilaya.reduce((sum, row) => sum + row.orders, 0);
+    expect(parcels.unattributed.orders).toBeGreaterThan(named);
+    // In English, from the API, which is why `ShippingView` renders its own line
+    // rather than this sentence.
+    expect(parcels.unattributed.reason).toMatch(/free text/);
+
+    const slices = wilayaSlices(parcels);
+    expect(slices[0]?.kind).toBe("unattributed");
+    expect(slices.reduce((sum, row) => sum + row.share, 0)).toBeCloseTo(1, 6);
+
+    // The window where nothing is attributed at all: parcels moved for orders
+    // placed before it, so the row `wilayaSlices()` filters out is reachable.
+    const idle = shipping("range=yesterday");
+    expect(idle.by_wilaya).toEqual([]);
+    expect(idle.shipments.total).toBe(2);
+    expect(wilayaSlices(idle)).toEqual([]);
+  });
+
+  /**
+   * ── The best sellers, and the limit that is not a knob ──────────────────────
+   *
+   * The measured units spread is reproduced; the products it hangs on are this
+   * fixture's, because every row of this report is a link to `/products/{id}` and
+   * ten ids that 404 would be the harness disagreeing with itself. So the
+   * agreement is asserted rather than assumed: each id resolves, each name is the
+   * catalogue's own, and each `revenue` is units × that product's price.
+   */
+  it("hangs best_sellers on catalogue rows, priced from them", () => {
+    for (const row of products().best_sellers) {
+      const listing = parse(product, get(`/products/${row.product_id}`)).data;
+      expect(listing.name, String(row.product_id)).toBe(row.name);
+      expect(Number(row.revenue), String(row.product_id)).toBeCloseTo(
+        row.units * Number(listing.price),
+        2,
+      );
+    }
+
+    // Ranked descending by units, which is what makes it a best-seller list.
+    const units = products().best_sellers.map((row) => row.units);
+    expect([...units].sort((a, b) => b - a)).toEqual(units);
+    // And the top ten do not out-sell the window they are drawn from.
+    const drawn = products().best_sellers.reduce((sum, row) => sum + Number(row.revenue), 0);
+    expect(drawn).toBeLessThanOrEqual(Number(revenue().gross));
+  });
+
+  /**
+   * **`best_sellers_limit` is a published constant, not a control.** Measured at
+   * `range=90d`: `limit=3`, `per_page=3` and `best_sellers_limit=3` each return
+   * ten rows with `10` beside them. So no screen may ship a "show more" — there
+   * is nothing to ask for, and the number is there to be *stated*.
+   */
+  it("publishes the best-seller cut-off and refuses to be moved off it", () => {
+    for (const query of ["range=90d", "range=90d&limit=3", "range=90d&per_page=3", "range=90d&best_sellers_limit=3"]) {
+      const report = products(query);
+      expect(report.best_sellers, query).toHaveLength(10);
+      expect(report.best_sellers_limit, query).toBe(10);
+    }
+  });
+
+  /**
+   * ── Both branches of `hasRankingSignal()`, which is why `narrow` exists ─────
+   *
+   * A window with sales returns a spread and the bars carry it. A window without
+   * returns `[]`, which is the *empty* branch. The third rendering — every row
+   * tied, drawn as a plain list of counts because four identical full-length bars
+   * would imply a ranking that does not exist — had **no reachable window at
+   * all**, at any preset, because this shop has no small non-zero day.
+   *
+   * So it lives on a two-day custom window, in the one part of these routes that
+   * is already declared invention: `bucketFor()`, which until now sent two days
+   * to the *seven*-day table. That is the same dishonesty one step smaller, and
+   * closing it is what makes the branch reachable.
+   */
+  it("reaches the ranked, the flat and the empty best-seller renderings", () => {
+    const ranked = products("range=30d").best_sellers.map((row) => row.units);
+    expect(hasRankingSignal(ranked)).toBe(true);
+    // A tie inside a ranked set, which draws two equal bars in a chart that still
+    // has a ranking — a different picture from the flat set below.
+    expect(new Set(ranked).size).toBeLessThan(ranked.length);
+
+    const flat = products("range=custom&date_from=2026-08-10&date_to=2026-08-11").best_sellers;
+    expect(flat.length).toBeGreaterThan(1);
+    expect(hasRankingSignal(flat.map((row) => row.units))).toBe(false);
+
+    expect(products("range=today").best_sellers).toEqual([]);
+    expect(hasRankingSignal([])).toBe(false);
+
+    /*
+     * The rest of that window, so the flat list is not a screen sitting on top of
+     * figures nothing else agrees with. Two branches live here and nowhere else:
+     * a non-zero `returning` rate — every measured window is 1.0000 / 0.0000 —
+     * and a non-zero return rate on parcels.
+     */
+    const narrow = "range=custom&date_from=2026-08-10&date_to=2026-08-11";
+    expect(customers(narrow).returning).toBe(1);
+    expect(customers(narrow).rates.returning).toBe("0.5000");
+    expect(shipping(narrow).rates.return).toBe("0.5000");
+    expect(shipping(narrow).unattributed.orders).toBe(0);
+    expect(countedReconciliation(orders(narrow)).proves).toBe(true);
+  });
+
+  /**
+   * The same window reader as the overview, so the same two error families and
+   * the same silently-ignored parameters. Asserted on a report route rather than
+   * inferred from the overview's suite: they are separate handlers, and "they
+   * share a helper" is exactly the kind of claim that stops being true quietly.
+   */
+  it("accepts and ignores every parameter but range, on a report route", () => {
+    const bare = JSON.stringify(ask("orders", "range=30d").body);
+    for (const query of [
+      "range=30d&bogus_param=1",
+      "range=30d&per_page=5",
+      "range=30d&orderby=id",
+      "range=30d&limit=3",
+      "range=30d&date_from=2026-01-01",
+      // The paging refusals every collection answers are **not** answered here.
+      // `paginate()` is not called: this route returns one object, not a page.
+      "range=30d&per_page=abc",
+      "range=30d&page=0",
+    ]) {
+      const response = ask("orders", query);
+      expect(response.status, query).toBe(200);
+      expect(JSON.stringify(response.body), query).toBe(bare);
+    }
+  });
+
+  it("refuses a bad window on every report, in the same two families", () => {
+    for (const view of REPORTS) {
+      const enumeration = apiError(ask(view, "range=zzz"));
+      expect(enumeration.status, view).toBe(400);
+      expect(enumeration.params?.range, view).toBe(
+        "range is not one of today, yesterday, 7d, 30d, 90d, and custom.",
+      );
+      expect(enumeration.fields, view).toBeNull();
+
+      const window = apiError(ask(view, "range=custom"));
+      expect(window.apiMessage, view).toBe("The reporting range is invalid.");
+      expect(window.fields, view).toEqual({
+        date_from: "Required when range is custom.",
+        date_to: "Required when range is custom.",
+      });
+      expect(window.params, view).toBeNull();
+
+      // No parameters at all is the 30-day default on every one of them.
+      expect(JSON.stringify(ask(view, "").body), view).toBe(
+        JSON.stringify(ask(view, "range=30d").body),
+      );
+    }
+
+    // Every preset the panel offers is served by every report, so `RANGE_PRESETS`
+    // and these six cannot drift apart.
+    for (const view of REPORTS) {
+      for (const preset of RANGE_PRESETS.filter((value) => value !== "custom")) {
+        const query = new URLSearchParams(analyticsParams({ preset, from: "", to: "" })).toString();
+        expect(ask(view, query).status, `${view} ${preset}`).toBe(200);
+      }
+    }
+  });
+
+  /**
+   * `unavailable` is the revenue report's three and the shipping report's one,
+   * out of one object rather than two copies of a sentence. The *sentences* are
+   * the measured wording as of 2026-08-26 — they were reconstructions until the
+   * revenue payload was captured — and nothing here asserts one, because the
+   * panel localises by key and only falls back to the API's text.
+   */
+  it("reports what cannot be known as reasons rather than as names", () => {
+    expect(unavailableLines(revenue().unavailable).map((line) => line.key)).toEqual([
+      ...UNAVAILABLE_KEYS,
+    ]);
+
+    const only = unavailableLines(shipping().unavailable);
+    expect(only.map((line) => line.key)).toEqual(["shipping_cost"]);
+    expect(only[0]?.known).toBe(true);
+    expect(only[0]?.note).toBe(revenue().unavailable.shipping_cost);
+    expect(only.every((line) => line.note.length > 40 && line.note.endsWith("."))).toBe(true);
+  });
+
+  it("carries the same meta on all six as the overview carries", () => {
+    for (const view of REPORTS) {
+      const { meta } = parse(z.looseObject({}), ask(view));
+      expect(meta, view).toEqual({
+        generated_at: "2026-08-18T02:52:22+00:00",
+        cache_ttl: 60,
+        money_visible: true,
+        money_requires: "ac_manage_orders",
+      });
+    }
+  });
+
+  it("serves no other report, no other depth and no other verb", () => {
+    // A name nobody wrote, and two inherited properties that must not resolve
+    // through the handler table.
+    for (const path of ["/analytics/traffic", "/analytics/toString", "/analytics/constructor"]) {
+      expect(get(path).status, path).toBe(404);
+    }
+    expect(get("/analytics/orders/1").status).toBe(404);
+    expect(write("POST", "/analytics/orders", {}).status).toBe(404);
+    expect(write("PATCH", "/analytics/revenue", {}).status).toBe(404);
+  });
+
+  /**
+   * ── The money gate, which is two shapes on one surface ──────────────────────
+   *
+   * Measured 2026-08-26 with a real Support Agent credential —
+   * `ac_view_analytics` without `ac_manage_orders`:
+   *
+   *     /analytics/revenue    403 forbidden, the only 403 on this whole surface
+   *     the other five        200, with every money key **gone**, nested included
+   *
+   * The five 200s are the half a schema cannot catch: every money field in
+   * `lib/api/schemas/analytics.ts` is `.optional()`, so a fixture that answered
+   * `"0.00"` here would parse cleanly and teach a screen that a Support Agent
+   * sees a shop which sold nothing.
+   */
+  it("refuses the revenue report outright and strips money from the other five", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "support");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const gated = (view: string) =>
+        mock.respond("GET", `${mock.BASE_PATH}/analytics/${view}`, new URLSearchParams("range=30d"));
+
+      const refused = gated("revenue");
+      expect(refused.status).toBe(403);
+      expect((refused.body as { error: { code: string; message: string } }).error).toEqual({
+        code: "forbidden",
+        message: "You are not allowed to perform this action.",
+      });
+
+      /*
+       * The seven keys the schemas record as money, swept for anywhere in the
+       * payload rather than checked at the top level: `best_sellers[].revenue`
+       * and `by_wilaya[].revenue` are one level down, and a fixture that stripped
+       * only the outer ones would look correct in a key-set assertion.
+       */
+      const MONEY = ["revenue", "currency", "average_order_value", "shipping_revenue"];
+      const found = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? value.flatMap(found)
+          : typeof value === "object" && value !== null
+            ? Object.entries(value).flatMap(([key, inner]) =>
+                MONEY.includes(key) ? [key, ...found(inner)] : found(inner),
+              )
+            : [];
+
+      for (const view of ["orders", "products", "customers", "shipping", "cod"]) {
+        const response = gated(view);
+        expect(response.status, view).toBe(200);
+        const { data, meta } = unwrap(z.looseObject({}), response.body, 200);
+        expect(found(data), `${view} still carries a money key`).toEqual([]);
+        expect(meta?.money_visible, view).toBe(false);
+        expect(meta?.money_requires, view).toBe("ac_manage_orders");
+      }
+
+      /*
+       * **Omitted, not nulled and not zeroed**, and the counts beside them are
+       * untouched — which is what lets the five screens render complete rather
+       * than with holes in them.
+       */
+      const parcels = unwrap(shippingReport, gated("shipping").body, 200).data;
+      expect(parcels).not.toHaveProperty("shipping_revenue");
+      expect(parcels).not.toHaveProperty("currency");
+      expect(parcels.unattributed).not.toHaveProperty("revenue");
+      expect(Object.keys(parcels.unattributed)).toEqual(["orders", "reason"]);
+      expect(parcels.by_wilaya.every((row) => !("revenue" in row))).toBe(true);
+      expect(parcels.shipments.total).toBe(131);
+      expect(parcels.unattributed.orders).toBe(263);
+
+      const activity = unwrap(ordersReport, gated("orders").body, 200).data;
+      expect(activity.average_order_value).toBeUndefined();
+      expect(activity.currency).toBeUndefined();
+      expect(activity.placed).toBe(901);
+      expect(countedReconciliation(activity).proves).toBe(true);
+
+      const catalogue = unwrap(productsReport, gated("products").body, 200).data;
+      expect(catalogue.best_sellers).toHaveLength(10);
+      expect(catalogue.best_sellers.every((row) => row.revenue === undefined)).toBe(true);
+      expect(catalogue.low_stock.products).toBe(3);
+
+      /*
+       * And the two reports with no money key at all are **byte-identical** for
+       * both credentials, which is the honest reproduction: the gate takes keys
+       * away, it does not change answers.
+       */
+      for (const view of ["customers", "cod"]) {
+        expect(JSON.stringify((gated(view).body as { data: unknown }).data), view).toBe(
+          JSON.stringify((ask(view).body as { data: unknown }).data),
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });
 
@@ -5576,12 +6223,16 @@ const COVERED = [
   // carries schemas for are named below, for the same reason.
   "notification",
   /*
-   * **Covered by one of its seven reports, and the other six are named below.**
-   * `overviewReport` is the dashboard's whole request — the screen the
-   * specification describes as six round trips is one, because the overview
-   * nests every block the cards need. The remaining schemas in this module
-   * describe routes that are still 404s here, which is a declared gap owned by
-   * the analytics branch rather than an oversight on this one.
+   * **Covered by all seven of its reports**, and it is the first module on this
+   * list with nothing named below it. `overviewReport` is the dashboard's whole
+   * request — the screen the specification describes as six round trips is one,
+   * because the overview nests every block the cards need — and the six the
+   * `/analytics` screen reads one at a time are served and parsed above.
+   *
+   * Every schema in the module is exercised: `revenueBody` on its own route and
+   * nested in the overview, `bestSeller`, `providerStat`, `wilayaRow` and
+   * `unattributed` inside their reports, `unavailableReasons` in two of them,
+   * and `analyticsRange` in all seven.
    */
   "analytics",
 ];
@@ -5670,27 +6321,31 @@ describe("what the newly-covered modules still do not serve", () => {
    *   which is the honest reproduction of a field that exists and says nothing.
    */
   /**
-   * **Six of the seven analytics reports are still 404s here**, and the reason is
-   * scope rather than doubt: the dashboard needs one route and the analytics
-   * screen — item 11 — needs the other six, each with its own payload to measure.
-   * `revenueReport`, `ordersReport`, `productsReport`, `customersReport`,
-   * `shippingReport` and `codReport` all describe answers this file cannot give.
+   * **The six analytics reports stopped being a declared gap on 2026-08-26**, and
+   * the assertion that pinned them at 404 is gone rather than deleted quietly.
+   * It said the gap was scope rather than doubt — the dashboard needed one route,
+   * the analytics screen the other six — and that was true right up until the six
+   * payloads were measured. All seven are served and parsed above.
    *
-   * **`GET /analytics/shipping` in particular is a gap in this file and not in
+   * **`GET /analytics/shipping` in particular was a gap in this file and never in
    * the shop.** DECISIONS.md still records it as "the one allowlisted route on
    * this subject still answering `rest_no_route`"; measured 2026-08-26 it answers
    * **200 with a full payload**, for a Support Agent as well as for a Super
-   * Admin. The ledger needs the correction. Nothing here should teach anyone to
+   * Admin. The ledger still needs that correction — it is a documentation file
+   * and this branch could not touch it. Nothing here should teach anyone to
    * branch on a `rest_no_route` the API does not send.
+   *
+   * What is left unserved under `/analytics` is a name nobody wrote, which is the
+   * assertion this keeps: the collection must not have become a catch-all.
    */
-  it("leaves six of the seven analytics reports unmocked", () => {
-    for (const report of ["revenue", "orders", "products", "customers", "shipping", "cod"]) {
-      const response = get(`/analytics/${report}`);
-      expect(response.status, report).toBe(404);
+  it("serves the seven analytics reports and nothing else under the collection", () => {
+    for (const report of [
+      "overview", "revenue", "orders", "products", "customers", "shipping", "cod",
+    ]) {
+      expect(get(`/analytics/${report}`).status, report).toBe(200);
     }
-    // And the one that is served, so this test cannot quietly come to mean
-    // "analytics is unmocked" again.
-    expect(get("/analytics/overview").status).toBe(200);
+    expect(get("/analytics/traffic").status).toBe(404);
+    expect(get("/analytics/inventory").status).toBe(404);
   });
 
   it("leaves the coupon redemption story unanswerable, as the API does", () => {
