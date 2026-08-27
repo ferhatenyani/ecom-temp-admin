@@ -72,7 +72,15 @@ export function ThemeToggle({
               write(option.value);
               setChoice(option.value);
             }}
-            className={`ui-interactive ui-ring flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-ui-sm ${
+            /*
+             * `.ui-tap` gives these three 32px on a pointer and 44px on touch
+             * from a pseudo-element, which is §5's own prescription — "a 20px
+             * icon gets a 44px hit area from a pseudo-element, never by growing
+             * the icon". The drawn box stays `size-7`, so the sidebar's foot does
+             * not move and no capture changes; only the hit area does. They were
+             * 28px, which fails the pointer floor as well as the touch one.
+             */
+            className={`ui-tap ui-interactive ui-ring flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-ui-sm ${
               active
                 ? "bg-ui-surface text-ui-fg shadow-ui-xs"
                 : "text-ui-subtle hover:text-ui-fg"

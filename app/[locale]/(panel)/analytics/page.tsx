@@ -10,12 +10,12 @@ import {
   revenueReport,
   shippingReport,
 } from "@/lib/api/schemas/analytics";
-import { analyticsParams } from "@/lib/analytics";
+import { analyticsParams, customRangeProblem } from "@/lib/analytics";
 import { canSeeMoney, has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { PageBody, PageHeader } from "@/components/ui/PageHeader";
+import { ForbiddenState } from "@/components/ui/States";
 import type { Session } from "@/lib/session/seal";
-import { AnalyticsScreen, type Loaded } from "./AnalyticsScreen";
+import { AnalyticsScreen, type AnalyticsFailure, type Loaded } from "./AnalyticsScreen";
 import { queryFromParams, VIEW_ROUTE, type View } from "./query";
 
 /**
@@ -94,11 +94,12 @@ export default async function AnalyticsPage({
 
   if (!has(me, "ac_view_analytics")) {
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader title={t("title")} />
+        <PageBody width="wide">
           <ForbiddenState capability="ac_view_analytics" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -112,7 +113,7 @@ export default async function AnalyticsPage({
 
   let loaded: Loaded | null = null;
   let forbidden: string | null = null;
-  let failed: string | null = null;
+  let failure: AnalyticsFailure | null = null;
   let meta: Record<string, unknown> | null = null;
 
   try {
@@ -136,20 +137,55 @@ export default async function AnalyticsPage({
       forbidden = "ac_manage_orders";
     } else {
       /*
-       * A 400 lands here too, and on this endpoint it is usually the range: a
-       * bad `range` answers `details.params.range`, a bad date answers
-       * `details.fields.date_from`. Both are the API's own sentence and both are
-       * actionable, so both are rendered rather than flattened into "something
-       * went wrong".
+       * A 400 lands here too, and on this endpoint it is about the window: a bad
+       * `range` answers `details.params.range`, a bad custom date answers
+       * `details.fields.date_from`, with a different top-level sentence on each
+       * path.
+       *
+       * **The sentence rendered is the panel's own wherever the panel has one**,
+       * which is the dashboard branch's correction arriving here. A first draft
+       * of that screen put the API's English — "The reporting range is invalid.
+       * Required when range is custom." — straight into a French and Arabic
+       * panel, and this screen has been doing exactly that since it shipped. What
+       * "surface the API's own message" protects is the *information*, never the
+       * provider's English, and all three refusals this route makes about a
+       * custom window are already mirrored in `customRangeProblem()` with
+       * localised copy the range control renders while somebody is still typing.
+       *
+       * So the panel asks its own mirror which refusal this is rather than
+       * parsing the API's prose for it — a sentence can be reworded upstream, a
+       * window is a fact — and consults it only when `details.fields` names one
+       * of the two dates, so an unrelated 400 can never be answered with a
+       * sentence about a window. `ErrorState.detail` keeps the API's own words
+       * for everything else, which is exactly `unavailableLines()`'s rule.
+       *
+       * A bad `range` cannot arrive: `rangeFromParams` resolves an unknown preset
+       * to the API's own default rather than forwarding it. A bad custom
+       * *window* can, by URL, which is why the path is real rather than
+       * defensive.
        */
       const api = error instanceof ApiError ? error : null;
-      failed =
-        api?.params?.range ??
-        api?.fields?.date_from ??
-        api?.fields?.date_to ??
-        api?.apiMessage ??
-        null;
+      const fields = api?.fields ?? null;
+      const aboutTheWindow =
+        query.range.preset === "custom" &&
+        fields !== null &&
+        ("date_from" in fields || "date_to" in fields);
+
+      const problem = aboutTheWindow
+        ? customRangeProblem(query.range.from, query.range.to)
+        : null;
+
+      failure = {
+        problem,
+        sentence:
+          problem !== null || api === null
+            ? null
+            : [api.apiMessage, ...Object.values(fields ?? api.params ?? {})].join(" "),
+      };
     }
+    /* A `NetworkError` reaches the screen as the generic failure with a retry,
+       which is the only useful thing to offer for it — it carries no sentence a
+       shopkeeper can act on, only the base URL. */
   }
 
   return (
@@ -158,7 +194,7 @@ export default async function AnalyticsPage({
       query={query}
       loaded={loaded}
       forbidden={forbidden}
-      failed={failed}
+      failure={failure}
       /*
        * `canSeeMoney(me)` decides what the screen lays out; the *presence* of a
        * money field decides what it prints. The two agree on this install and the
@@ -170,7 +206,12 @@ export default async function AnalyticsPage({
       moneyRequires={
         typeof meta?.money_requires === "string" ? meta.money_requires : null
       }
+      capabilities={me.capabilities}
       generatedAt={typeof meta?.generated_at === "string" ? meta.generated_at : null}
+      /* Read at last. It is why the stamp above it may be behind the navigation:
+         the report sits behind a 60-second server cache, and the API publishes
+         both halves of that fact. */
+      cacheTtl={typeof meta?.cache_ttl === "number" ? meta.cache_ttl : null}
     />
   );
 }

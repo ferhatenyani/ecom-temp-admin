@@ -25,7 +25,7 @@ left looking like an oversight.
 [x]  8. Shipping — parcels list + rules route
 [x]  9. Payments
 [x] 10. Dashboard
-[ ] 11. Analytics — revenue / orders / products / customers / shipping / COD
+[x] 11. Analytics — revenue / orders / products / customers / shipping / COD
 [ ] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
 [ ] 13. Media
 [ ] 14. Marketing — campaigns, composer, segments, config, templates
@@ -890,6 +890,268 @@ other fourteen belong to `/analytics` and were not touched.
 
 ---
 
+## 12. Analytics — six reports over one window
+
+Checklist item **11**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+**One route, `?view=`, and the window is the whole reason.** The six reports share
+a date range; six routes would mean six copies of the control and a window that
+resets on every move between reports — a person comparing COD confirmation
+against shipping delivery over the same fortnight would set the fortnight twice.
+`query.ts`'s contract is unchanged: six views, `DEFAULT_VIEW = "revenue"`, an
+unknown view falls back, defaults omitted from the URL.
+
+- **Two controls, and they are deliberately not peers.** The report selector is
+  *navigation* — which report am I reading — and the range is a *filter* over
+  whichever one that lands on. Two identical `FilterTabs` strips stacked would
+  flatten that into two filters of equal rank, which is the one thing this screen
+  had to get right. So **`FilterTabs` gained `variant`** rather than this screen
+  hand-rolling a second control: `tabs` is the default and unchanged (full-bleed,
+  closed by a rule, the selected label underlined in ink — every list's own
+  primary axis) and `chips` is new (a *labelled* group of pills inside the content
+  column, no bleed, no rule). The selector takes the first, the range the second,
+  in the dashboard's vertical order.
+  The old screen hand-rolled six `<button aria-pressed>` on `.pill-row` and
+  `.tonal` — both retired, and `.tonal` measured at 1.98:1.
+
+  **`RangeControl` renders `chips` unconditionally, and `/dashboard` moved onto
+  it — the variant is not a prop.** A first version left the dashboard on the
+  default strip and defended the difference by *rank*: there the window is the
+  only control on the screen and therefore is its axis. That is true and it is
+  not the objection. The objection is **positional**: the dashboard's strip sits
+  in the same slot — directly under `PageHeader`, bleeding the gutter, the
+  selected label underlined in ink — that `/analytics` uses for its **report
+  tabs**, so the identical control in the identical position would mean *which
+  period* on one screen and *which report* on the other, one nav item apart. Rank
+  does not rescue that. Unified downward instead, and the rule is now one sentence
+  that holds panel-wide: **a full-bleed underlined strip under the header always
+  means which view; a labelled "Période" chip group always means the window.**
+  It is not a prop because there is no screen on which the second half is wrong.
+  The dashboard loses nothing and gains the visible label, which is a straight
+  improvement on six bare words under a title; `dashboard/loading.tsx` was
+  re-measured to the 36px chip band in the same edit.
+- **`PageBody width="wide"`, and report sections 1-up at the floor, 2-up at `lg`.**
+  §2.3's 1440 analytics cap; the screen was the last one still rendering a 768px
+  stripe down the middle of a monitor. Two columns is the honest maximum — a
+  section is a list of labelled figures and a third column would put a wilaya's
+  name under 200px. `items-start`, because the sections differ wildly in length
+  and a stretched short card is a card with a large empty foot.
+- **A headline `StatGroup` on four reports of six, and the two absences are the
+  payloads.** `products` leads on one figure because it has one — `low_stock`,
+  which the range does not move — and `cod` leads on none: it is five figures of
+  one kind, two of which are the same word at two scopes, which is exactly the
+  case `payments/CodFunnel.tsx` argued out of a stat block and into scope-labelled
+  `DataRow`s. That argument survives `Stat` gaining a scope slot, because the COD
+  scope is not a qualifier on a headline, it is the thing that tells two rows
+  apart. The two surfaces now render that payload identically.
+- **`Figure` wraps `Stat` and makes `scope` required, which is the old
+  `FigureRow.scope` enforcement kept through the migration.** `Stat.scope` is
+  optional and correctly so — a dashboard card whose scope would restate its label
+  is right not to pass one — and on this screen it is never optional. That
+  enforcement is *why* the screen never shipped a bare pair in three iterations,
+  and there are six traps here: `orders_placed` 901 against `orders_counted` 323;
+  `net` against `collected`; `guest_orders` **422 on the orders report and 209 on
+  the customers one**, all statuses against counted only; `by_status.confirmed` 84
+  against `confirmed_orders` 126, now against ever; `customers` 9, meaning accounts
+  that ordered *in this window*; and `low_stock` 3, which is current state. The
+  seventh is not a figure — `unattributed.orders` **281 against 42 across both
+  named wilayas** — so it carries its scope as the section's own footnote, naming
+  the imbalance rather than leaving the reader to add the rows up.
+- **`components/ui/Bar.tsx` is new, and `.bar-track` / `.bar-fill` /
+  `.bar-fill-muted` kept their class names.** `e2e/analytics.spec.ts:437` measures
+  the fill's rectangle against its track's by raw class, which is the suite's only
+  proof that an RTL bar grows from the right rather than merely claiming to; a
+  rename would take that with it, and a bidi assertion cannot be rewritten as an
+  assertion about markup. Only the three colours moved to the `ui` tokens — and
+  **the mark is ink rather than accent**, because §3.3 and §8 both reserve the
+  accent for links, focus and selection, and a blue bar directly under a
+  blue-underlined tab strip reads as a second selection state rather than as data.
+  `hasRankingSignal` still decides whether a chart is drawn at all, and the wilaya
+  `muted` fill still marks a different *kind* of row rather than a smaller one.
+  Two fixes the primitive gained on the way, both from reading captures:
+  **`share: null`** for a set with no ranking (a share of 0 would draw ten
+  identical 2px nubs, because the fill has a 2px floor so that one order out of
+  379 is not an invisible track), and **a genuine zero draws no mark at all** —
+  `returning: 0` rendered that same nub, which says *a little* in the one place a
+  bar is allowed to carry a number. Seen on the Arabic capture at 768.
+- **DESIGN.md §3.5 amended, and §8's checklist line with it.** Both said "no
+  coloured bar of any kind" while §3.2 has specified a bar chart since the
+  redesign began, so a careful reader meets both rules on one page and has to
+  guess. The enforcement settles it and always did — `border-{l,r,s,e}-{2,4,8}`
+  is a **border** on a row's leading edge, standing in for a status the row should
+  have spelled out. A decorative bar encodes meaning in a colour and nowhere else;
+  a data mark's length *is* the datum and its value is printed as text beside it.
+  The word "decorative" was always meant and was never written.
+- **`best_sellers_limit` is 10, published and not adjustable, and the footnote
+  says so.** Measured: `limit=3`, `per_page=3` and `best_sellers_limit=3` each
+  answer ten rows with the field still reading 10. So there is no "show more" —
+  and the absence is *stated* where the limit is rendered rather than left looking
+  like an unfinished control, which is this run's oldest rule wearing its other
+  face.
+- **Two links are capability-gated, which the old screen did not do.** The
+  best-seller rows led to `/products/{id}` and the low-stock figure to
+  `/inventory` for every reader. A Support Agent is **403 on `/inventory`** —
+  measured on the dashboard branch — so that figure now renders unlinked, and the
+  product names render as plain text without `ac_manage_products`. The figure
+  always stays: a refused destination is not a refused number. The low-stock link
+  also drops at **zero**, because there is nothing to open.
+- **The money gate is unchanged in behaviour, because it was already right.** The
+  panel *asks* `/analytics/revenue` and renders the refusal: `ForbiddenState`
+  **inside** the report box, with the toolbar, the report tabs and the range
+  control all still live, so the reader can move to a report they can read. The
+  capability comes from **`meta.money_requires`** with `canSeeMoney()` only as the
+  fallback for a 403 body that carries no meta. The other five degrade in place —
+  measured, a Support Agent gets 200 with zero money keys anywhere, nested
+  included, and `money_visible: false`. Verified on the `MOCK_IDENTITY=support`
+  captures of all four reachable reports: no `DA` anywhere, no currency-shaped
+  hole, and the wilaya rows keep their share and drop their revenue.
+- **`StaleBanner` dropped; an "as of" line instead.** It fired on `!useOnline()`,
+  which is an offline marker on a page with no writes to disable and no client
+  cache to go stale — §3.7 as amended on the customers and dashboard branches.
+  What is true is different and published: the reports sit behind a **60-second
+  server cache**, and `meta.cache_ttl` was *fetched by this page and never read*.
+  It is read now, in the dashboard's own two keys, rendered with `formatDate`
+  rather than `formatWhen` for the mechanical reason that a relative time computed
+  on both sides of hydration differs across a rounding boundary.
+- **The empty window keeps the report.** It used to *replace* it; it now sits
+  above it, which is the dashboard's arrangement and `products` is why — its
+  `low_stock` is a real figure inside an empty window, and an empty state that
+  swallowed the report would hide the one number still worth reading. That also
+  let `products` **join** the emptiness check it used to be excluded from, and it
+  is the one view that renders `emptyWindowDetail`, because it is the only one the
+  sentence is about. The offer widens to `90d` and is not rendered there.
+- **The error state stopped rendering the API's English into a French and Arabic
+  panel.** This screen has printed `details.params.range` and
+  `details.fields.date_*` raw since it shipped — "The reporting range is invalid.
+  Required when range is custom." — which is the class of defect the dashboard
+  branch fixed as its fourth instance. It now asks `customRangeProblem()`, the
+  panel's own mirror of all three refusals, and only when `details.fields` names
+  one of the two dates, so an unrelated 400 can never be answered with a sentence
+  about a window. `ErrorState.detail` keeps the API's words where the mirror has
+  none, and the state gained the retry it never had.
+- **`loading.tsx` draws the screen.** It was `SkeletonRows rows={6}` inside a
+  `max-w-3xl` stripe against a real paint of a headline row and two to five titled
+  sections at 1440. It now draws the header, both strips at their measured heights,
+  the applied-window line, the "as of" line, four tiles and two titled cards —
+  which is the shape of four reports of six and of `revenue`, the default view.
+  It cannot do better: `loading.tsx` receives no `searchParams`, so it cannot know
+  which report is coming. `products` and `cod` settle by one row rather than by the
+  whole page.
+
+**i18n**: the `analytics` namespace is **shared with `/dashboard`** and nothing it
+reads was renamed or removed — checked key by key against `DashboardScreen`,
+`RangeControl` and the dashboard's `loading.tsx`. Seven keys added (six `scope.*`
+for the guest, first-order, prior-order and two parcel populations, plus
+`byWilayaNote`), one rewritten (`bestSellersLimit`, which now states that the
+limit is the API's), and **six removed for losing their last caller**:
+`revenueHeadline`, `ordersHeadline`, `customersHeadline` and `shippingHeadline`
+were `ListGroup` titles the `StatGroup` replaced, `lowStockTitle` duplicated
+`lowStockLabel` once the figure became a tile, and `lowStockNone` served an empty
+state that a tile reading `0` says better. Four `cardScope.*` keys gained a second
+caller here, which is why no new scope key was written for `net`, `customers`,
+`low_stock` or the two shipping rates — a reader arriving from a dashboard card
+meets the same sentence on the report it opens. **1 838 keys in each file, at
+exact parity.**
+
+### Four carried-forward items cleared on this branch
+
+**1. The 44px touch target, panel-wide — and it is now measured rather than
+argued.** The ledger listed five offenders and the fix is `.ui-field`'s shape:
+everything behind `@media (pointer: coarse)`, or on a pseudo-element, so no
+pointer layout moves. Driven in Chromium in three modes, taking the union of each
+control's own box and its `::after` — because §5 says the hit area comes from a
+pseudo-element, so `getBoundingClientRect()` alone measures the wrong thing:
+
+```
+                              pointer:fine   coarse/phone   coarse/tablet
+  .ui-tab      (was 40)         63 × 40        63 × 44        63 × 44
+  .ui-chip     (new, 36)        94 × 36        94 × 44        94 × 44
+  SearchField  (was 36)        282 × 36       312 × 44       282 × 44
+  per-page select (was 28)      58 × 28  !!    58 × 44        58 × 44
+  theme button (was 28)         32 × 32        (in a closed drawer)  44 × 44
+  skip link    (was 22)        145 × 44       145 × 44       145 × 44
+  floor                             32             44             44
+```
+
+Each by the mechanism its element allows. `.ui-tab` and `.ui-chip` grow their own
+box, because they are text controls with nothing to keep small. `SearchField`'s
+input took `.ui-field` — identical at 36px on a pointer, so nothing moved, and
+it is the utility that exists to answer "which pointer is this person using",
+which hard-coding `min-h-9` had bypassed. The three theme buttons took `.ui-tap`,
+which is §5's own prescription — the drawn box stays `size-7` and only the hit
+area grows, so the sidebar foot does not move.
+
+**Two of the five were not what the ledger said they were.** The skip link's 22px
+is not the `sr-only` state, which is 1×1px and correctly has no target at all —
+it is the **focused** state, where `.focus\:not-sr-only:focus` sets `padding: 0`
+at a higher specificity than the unconditional `px-4 py-3` and silently ate 24px
+of block padding. `focus:min-h-11` fixes it without a specificity fight, because
+`min-block-size` is the one property `not-sr-only` does not reset. And the theme
+buttons failed the **pointer** floor as well as the touch one, which the
+pseudo-element closes at both.
+
+**The per-page `<select>` stays 28px on a pointer, 4px under §5's floor, and that
+is a recorded residual rather than an oversight.** A `<select>` is a replaced
+element rendered from a UA shadow tree, so `::after` never paints on one, and a
+pseudo-element on a *wrapper* would be worse than nothing — hit-testing routes to
+the originating element, so the extra ring would swallow taps that opened no
+dropdown. Closing it means growing the control, which grows the footer row on all
+seven shipped list screens. See Carried forward.
+
+**Proved by an A/B rather than asserted**: `/orders` and `/payments` were captured
+with the touch changes in place and again with only those changes neutralised —
+36 PNGs across 340/768/1440 × light/dark × fr/ar, **all 36 byte-identical**.
+
+**2. `ConfirmDialog` now focuses Cancel, and `autoFocus` could never have done
+it.** §3.1 has required it since the redesign and `ConfirmDialog`'s own docblock
+asserted it as rule 2; both were false on every destructive dialog in the panel.
+Radix's `FocusScope` moves focus after mount to the first tabbable node in the
+content, which is always `OverlayFrame`'s × — the one control that is not the safe
+default. `Modal.initialFocus` is the second focus prop the ledger said it needed:
+an **id** to match `returnFocusTo`, honoured in `onOpenAutoFocus` by
+`preventDefault()` (which is what `FocusScope` checks before doing its own
+focusing) and an explicit `focus()`, and only while the named node is *rendered* —
+cancelling the default and then focusing nothing puts focus on `<body>`, which is
+worse than the × it replaced. Driven in Chromium from a `Menu` item, which is the
+hard path since Radix unmounts the item on select: `rules · delete → BUTTON
+"Annuler"` and `coupon · delete (type-to-confirm) → BUTTON "Annuler"`, against
+`BUTTON "Fermer"` on a build with the change reverted.
+
+**3. Three orphan message keys removed**, verified against `main` as predating
+this branch and confirmed to have no caller in `app/`, `components/`, `lib/`,
+`e2e/` or `tests/`: `movementReasonHint` (three sub-keys), `cod.turnOff` and
+`cod.reasonPlaceholder`. **1 833 keys in each file, at exact parity.**
+
+**4. Two stale docblocks repointed at `lib/payments.ts`.** `scripts/mock-api.mjs`
+and `tests/mock-api.test.ts` both explained the English-label defect by naming
+`PaymentsScreen.tsx`, which the payments branch deleted and whose defect it fixed.
+Prose only — no fixture and no assertion was touched, and the measurement they
+carry (`cod` → "Cash on delivery") is still exactly what the fixture asserts.
+
+**The `grep -rL 'ui-'` progress check now over-reports by two, and it is the check
+that is wrong rather than the files.** It reads 71 unmigrated `.tsx` under `app/`,
+down from 79 — but `CustomersView.tsx` and `CodView.tsx` are fully migrated and
+contain no `ui-` string at all, because every class they render comes from
+`Card`, `DataList`, `DataRow`, `BarList`, `BarRow` and `Figure` rather than from a
+className they wrote. That is the *end state* the heuristic exists to move screens
+towards, so it starts producing false positives exactly as the migration
+succeeds. The real count is 69. Read it as an upper bound from here on.
+
+**`e2e/analytics.spec.ts`: 18 tests before, 18 after, titles identical, and the
+fourteen that belong to this screen needed one comment fixed and nothing else.**
+That is the outcome the selectors were chosen for rather than a claim that nothing
+moved: `report-<view>` is still produced at exactly one place, `range-applied`
+already came from `ui/RangeControl.tsx` and survived the swap, both strips are
+still `<button>`s carrying the same French labels, `.bar-fill` kept its class, and
+the first `[data-numeric]` inside `report-revenue` is still an `Ltr`-wrapped money
+figure rather than an `Isolate`-wrapped sentence. The one edit is `:168`'s comment,
+which said "the sheet's description" about a control that is now a `Modal` — the
+`Sheet` is §8-forbidden and the word would have sent the next reader looking for
+one. The four dashboard tests were not touched.
+
+---
+
 ## Carried forward — teardown owns these
 
 - **`Toast` is still on retired iOS classes**, and `.toast-anchor` holds it 68px
@@ -898,6 +1160,14 @@ other fourteen belong to `/analytics` and were not touched.
   they are `fixed` with no block-end, so deleting the rule would unstick their
   bars rather than remove them.
 - **`RowSkeleton.tsx` stays** — **seven** unmigrated screens import it.
+- **`components/primitives/Bar.tsx` now has no importer at all.** The analytics
+  branch was its only caller and `components/ui/Bar.tsx` replaced it. It is left
+  in place under the rule that teardown owns `primitives/`, but unlike
+  `RowSkeleton` it is not defending anything: nothing renders it, and it would
+  now render in the *new* colours anyway, since `.bar-track`/`.bar-fill` were
+  retuned to the `ui` tokens under their own names. It is the first genuinely
+  dead file in that directory rather than an under-defended one, and it should be
+  the first thing teardown deletes.
 - **`e2e/customers.spec.ts:57,115` has the coupons row-helper bug**, unfixed: it
   asserts `toBeVisible()` on an anchor that only the `md`+ table renders, on a
   phone project. It has never surfaced because the suite is env-gated and has
@@ -971,12 +1241,23 @@ other fourteen belong to `/analytics` and were not touched.
   known: compare each value's full id sequence against **the order its own field
   implies**, never against the collection's default, and count the distinct
   values so a fixture that ties on every row cannot pass as proof.
-- `ConfirmDialog` focuses its × button rather than Cancel, contradicting §3.1.
-  Radix's `FocusScope` wins over `autoFocus`; needs a second focus prop.
-  **Still true, and now visible on a screenshot** — the shipping rule-delete
-  dialog opens with the focus ring on ×, which is the one control that is not the
-  safe default. Unchanged here because it is a primitive fix affecting every
-  destructive dialog in the panel.
+- ~~`ConfirmDialog` focuses its × button rather than Cancel, contradicting
+  §3.1.~~ **Closed on the analytics branch — see §12.** `Modal.initialFocus` is
+  the second focus prop this entry asked for, and the fix was driven in Chromium
+  from a `Menu` item rather than reasoned about.
+
+  **It surfaced a second, narrower defect that is still open: Escape from the
+  shipping rule-delete dialog drops focus to `<body>`.** Measured on both a
+  patched and an unpatched build, so it predates the focus fix and is not a
+  regression from it. The cause is §10's latch, unapplied at one call site:
+  `RulesScreen.tsx:404` derives `returnFocusTo` from `confirm.target`, and Radix
+  fires `onCloseAutoFocus` *after* `onOpenChange`, so the target is already null
+  and the id is `undefined` by the time it is read. `useLatchedOpener` is the
+  one-line fix and it already exists. **It is the only caller with this shape** —
+  the other ten `returnFocusTo` call sites were surveyed and each passes either a
+  stable id (`triggerId`, `menuTriggerId`, `fieldId(picker)`) or an already-latched
+  one. Left for whoever owns `/shipping/rules`, because it is a shipped screen
+  outside this branch.
 - The sticky first column has no divider at its frozen edge.
 - ~~**`DataTable.onRowClick` still hands its caller a `<tr>` and no keyboard
   path.**~~ **Closed — see §10**, which also corrects this entry's claim that
@@ -1018,10 +1299,25 @@ other fourteen belong to `/analytics` and were not touched.
   does.** Absence of capability is not more durable than presence of it.
 - `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
   form.
-- `movementReasonHint` has no caller in either message file. So do `cod.turnOff`
-  and `cod.reasonPlaceholder` — both predate the payments branch (checked against
-  `main`) and both belong to `orders/[id]/CodSection.tsx`, which is unmigrated.
-- **Nothing in the panel meets §5's 44px touch target, and it is the primitives
+- ~~`movementReasonHint` has no caller in either message file. So do
+  `cod.turnOff` and `cod.reasonPlaceholder`.~~ **Closed on the analytics branch —
+  all three removed from both files, parity re-verified at 1 833 keys.** They
+  belonged to `orders/[id]/CodSection.tsx`, which is unmigrated and reads neither:
+  a key an unmigrated screen does not call is an orphan now and would have to be
+  written again anyway when that screen is rebuilt to a measured contract.
+- ~~**Nothing in the panel meets §5's 44px touch target, and it is the primitives
+  rather than any screen.**~~ **Closed on the analytics branch — see §12**, with
+  the measurement table and an A/B proving 36 captures of `/orders` and
+  `/payments` byte-identical. **One residual stays open: `TableFooter`'s per-page
+  `<select>` is 28px on a pointer, 4px under §5's 32px floor.** It cannot borrow
+  `.ui-tap` — a `<select>` is a replaced element and `::after` never paints on
+  one — so closing it means growing the control, which grows the footer row on all
+  seven shipped list screens. The remedy is `min-h-8` on the select plus a
+  re-capture of every list; it is a one-line change with a seven-screen blast
+  radius, which is why it is here rather than in §12. The original entry follows,
+  because its *method* is the reusable part:
+
+  **Nothing in the panel meets §5's 44px touch target, and it is the primitives
   rather than any screen.** Driven at 340 under a coarse pointer, measuring the
   union of each control's own box and its `::after` — because §5 says the hit
   area comes from a pseudo-element, so `getBoundingClientRect()` alone measures
@@ -1033,11 +1329,8 @@ other fourteen belong to `/analytics` and were not touched.
   (18, the difference being its own extra tabs), so this has been true of every
   migrated list since orders and no screen introduced it. `.ui-tap` exists and
   gives icon buttons their 44px; these controls simply never got it.
-- **Two docblocks name a file that no longer exists.** `scripts/mock-api.mjs:3041`
-  and `tests/mock-api.test.ts:435` both explain the English-label defect by
-  pointing at `PaymentsScreen.tsx`, which the payments branch deleted and whose
-  defect it fixed. The prose is now stale in a file the branch was told not to
-  touch — both are done and committed — so it is recorded here rather than
-  edited. The measurement they carry (`cod` → "Cash on delivery") is still right
-  and is still what the fixture asserts; only the sentence about who renders it
-  wrongly has expired. `lib/payments.ts` is the file to name.
+- ~~**Two docblocks name a file that no longer exists.**~~ **Closed on the
+  analytics branch**, which was given those two files unlocked for exactly this.
+  Both now name `lib/payments.ts`. Prose only: no fixture and no assertion moved,
+  and the measurement they carry (`cod` → "Cash on delivery") is still what the
+  fixture asserts.

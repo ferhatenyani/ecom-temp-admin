@@ -462,9 +462,13 @@ describe("the detail's reference lists", () => {
    * until 2026-08-26, which is the shipping `providerLabel` defect in a second
    * place: a French label in the fixture renders correctly in the French panel by
    * accident and in the Arabic one as a bug, and no capture could show either.
-   * `PaymentsScreen` resolves a provider with `methods.find(…)?.label ?? name`
+   *
+   * `PaymentsScreen` resolved a provider with `methods.find(…)?.label ?? name`
    * and no message key in front of it, so with the real labels in place the
-   * defect is on a screenshot.
+   * defect landed on a screenshot. That screen was deleted on the payments
+   * branch and `lib/payments.ts` is the resolver now — message key → API `label`
+   * → raw name, the same rule `lib/shipping.ts` follows. These labels are what it
+   * is measured against, which is why they must stay the API's own English.
    */
   it("serves the two payment methods, chargily first, labelled as the API labels them", () => {
     const { data } = parse(paymentMethods, get("/payments/methods"));

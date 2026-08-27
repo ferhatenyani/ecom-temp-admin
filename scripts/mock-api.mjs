@@ -3087,11 +3087,18 @@ function seedShipments() {
  * `"Paiement à la livraison"` for `cod`, which is the shipping `providerLabel`
  * defect in a second place: an API label written in French here would render as
  * French in the French panel by accident and as French in the Arabic one as a
- * bug, and the harness could never see either. `PaymentsScreen.tsx` resolves a
- * provider the way `ShipmentRow` used to — `methods.find(…)?.label ?? name`, with
- * no message key in front of it — so with the real labels in place the screen now
- * prints "Cash on delivery" inside both localised panels and the defect is
- * visible on a screenshot instead of hidden by the fixture.
+ * bug, and the harness could never see either.
+ *
+ * **The screen that made it visible is gone; the measurement is unchanged.**
+ * `PaymentsScreen.tsx` resolved a provider the way `ShipmentRow` used to —
+ * `methods.find(…)?.label ?? name`, with no message key in front of it — so with
+ * the real labels in place it printed "Cash on delivery" inside both localised
+ * panels, on a screenshot rather than hidden by the fixture. The payments branch
+ * deleted that file and fixed the defect: `lib/payments.ts` now resolves message
+ * key → API `label` → raw name, mirroring `lib/shipping.ts`, and `cod` reads in
+ * the reader's own language while `chargily` keeps its brand. This fixture is
+ * what that resolution is measured against, so the English labels stay exactly
+ * as the API sends them.
  */
 const PAYMENT_METHODS = [
   { name: "chargily", label: "Chargily (EDAHABIA / CIB)", is_default: true },

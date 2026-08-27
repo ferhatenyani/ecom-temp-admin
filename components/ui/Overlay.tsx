@@ -84,12 +84,42 @@ const DRAWER_WIDTH: Record<Size, string> = {
  * is an **id** rather than a ref so that a caller can name a control it does not
  * hold a handle to.
  */
-function useOpenerFocus(returnFocusTo?: string) {
+function useOpenerFocus(returnFocusTo?: string, initialFocus?: string) {
   const opener = useRef<HTMLElement | null>(null);
 
   return {
-    onOpenAutoFocus: () => {
+    onOpenAutoFocus: (event: Event) => {
       opener.current = document.activeElement as HTMLElement | null;
+
+      /*
+       * ## `initialFocus`, and why `autoFocus` could never have worked
+       *
+       * DESIGN.md §3.1 wants Cancel focused when a `ConfirmDialog` opens, so that
+       * Enter on a dialog nobody read is safe. `ConfirmDialog` asked for that with
+       * `autoFocus` on the Cancel button and **never got it**: Radix's
+       * `FocusScope` moves focus after mount, to the first tabbable node in the
+       * content — which is `OverlayFrame`'s × close button, since the header
+       * precedes the footer in DOM order. So every destructive dialog in the panel
+       * opened with the ring on ×, one keystroke from the one control that is not
+       * the safe default. Visible on the shipping rule-delete screenshot, and
+       * carried in the ledger for three branches.
+       *
+       * `preventDefault()` here is what `FocusScope` checks before doing its own
+       * focusing (it dispatches `AUTOFOCUS_ON_MOUNT` and skips when the event is
+       * defaulted), so the caller's element has to be focused explicitly
+       * afterwards. Only when the named node is actually **rendered** — the same
+       * test `onCloseAutoFocus` uses below, and for the same reason: cancelling
+       * the default and then focusing nothing puts focus on `<body>`, which is
+       * strictly worse than the × it replaced.
+       *
+       * An **id** rather than a ref, to match `returnFocusTo` — a caller passing a
+       * footer button it renders as a prop does not hold a handle to it.
+       */
+      if (initialFocus === undefined) return;
+      const target = document.getElementById(initialFocus);
+      if (!target || !target.isConnected || target.getClientRects().length === 0) return;
+      event.preventDefault();
+      target.focus();
     },
     onCloseAutoFocus: (event: Event) => {
       /*
@@ -222,6 +252,7 @@ export function Modal({
   children,
   footer,
   returnFocusTo,
+  initialFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -236,13 +267,22 @@ export function Modal({
    */
   returnFocusTo?: string;
   /**
+   * The id of the control to focus on open, instead of Radix's own choice.
+   *
+   * Radix focuses the first tabbable node in the content, which is always
+   * `OverlayFrame`'s × button. That is right for a modal you are meant to read
+   * and wrong for one you are meant to answer — see `useOpenerFocus`. Left
+   * unset, the behaviour is exactly what it was.
+   */
+  initialFocus?: string;
+  /**
    * Actions. Cancel first in DOM order so it is the first tab stop and, on a
    * phone, the *lower* of the two — `flex-col-reverse` puts the primary on top
    * where the thumb is not, which is deliberate for a confirming action.
    */
   footer?: ReactNode;
 }) {
-  const focus = useOpenerFocus(returnFocusTo);
+  const focus = useOpenerFocus(returnFocusTo, initialFocus);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>

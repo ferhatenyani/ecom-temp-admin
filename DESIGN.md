@@ -660,8 +660,30 @@ link         accent, underline on hover
   to the standard it claims to meet.
 - Always carries a word. A `<Dot>` variant exists for rows too dense for a badge,
   and it is always accompanied by the status text in the same cell.
-- **No coloured bars.** Not on the leading edge of a row, not on a card, not
-  anywhere. `check-design.sh` fails on `border-{l,r,s,e}-{2,4,8}`.
+- **No decorative coloured bars.** Not on the leading edge of a row, not on a
+  card, not anywhere. `check-design.sh` fails on `border-{l,r,s,e}-{2,4,8}`.
+
+  > **Amended on the analytics branch: the word "decorative" was always meant and
+  > was never written, and it read as a contradiction.**
+  >
+  > This line and §8's checklist both said "no coloured bar of any kind", and §3.2
+  > has specified a **bar chart** since the redesign began — one mark, one hue,
+  > the value printed as text on every row. A careful reader building the six
+  > analytics reports meets both rules on the same page and has to guess which
+  > wins.
+  >
+  > The enforcement settles it and always did: `check-design.sh` fails on
+  > `border-{l,r,s,e}-{2,4,8}` — a **border**, on the leading edge of a row or a
+  > card, standing in for a status the row should have spelled out in a word. The
+  > two objects are not the same thing. A decorative accent bar encodes meaning in
+  > a colour and nowhere else, which is what makes it an accessibility failure; a
+  > data mark's *length is the datum*, its value is printed as text on the same
+  > row, and its identity comes from the label beside it. Removing the second
+  > would not remove a colour from the panel, it would remove the chart.
+  >
+  > So: no coloured bar **as decoration or as a status marker**. The bar chart
+  > `components/ui/Bar.tsx` draws is not one, and it is ink rather than accent for
+  > §3.3's reason — see the note on `.bar-fill` in `globals.css`.
 
 ### 3.6 Loading
 
@@ -886,7 +908,8 @@ document meant to be re-read each time.
 - [ ] No colour literal, no arbitrary value — `npm run test:design` passes
 - [ ] Numerics carry `[data-numeric]`
 - [ ] Status has a word beside its colour
-- [ ] No coloured bar of any kind
+- [ ] No **decorative** coloured bar — see §3.5's amendment. A §3.2 bar chart is
+      a data mark, not one of these, and is the only exception
 - [ ] Primary button is ink; accent appears only on links, focus and selection
 
 **Accessibility**

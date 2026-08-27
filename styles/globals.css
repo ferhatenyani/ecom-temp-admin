@@ -647,31 +647,53 @@
    * with a square baseline; a hairline-recessive track; no gradient, no shadow,
    * no border drawn round the mark. `border-*-end-radius` is logical, so the
    * rounded end is the growing end in both directions with no mirrored rule.
+   *
+   * ## Retuned to the `ui` tokens on the analytics branch, and the hue changed
+   *
+   * The three classes kept their names because `e2e/analytics.spec.ts` asserts
+   * the fill's *geometry* by raw class — it is the one place in the suite that
+   * proves an RTL bar grows from the right — and a rename would take that
+   * assertion with it. Only the three colours moved, from the retired iOS set
+   * (`--color-fill-tertiary`, `--color-accent`, `--color-fill`) to the panel's
+   * own.
+   *
+   * **The mark is ink rather than accent, and that is DESIGN.md §3.3 and §8
+   * reaching a chart.** Both reserve the accent for links, focus and selection —
+   * "a panel where every primary button is accent-coloured is a panel with no
+   * hierarchy" — and the panel's own emphasis mark is ink: the primary button,
+   * and `.ui-tab`'s selected underline directly above these bars on the same
+   * screen. A blue bar beside a blue-underlined tab reads as a second selection
+   * state rather than as data.
    */
   .bar-track {
     block-size: 0.5rem;
     border-radius: var(--radius-full);
-    background-color: var(--color-fill-tertiary);
+    background-color: var(--color-ui-surface-3);
   }
   .bar-fill {
     block-size: 100%;
-    background-color: var(--color-accent);
+    background-color: var(--color-ui-fg);
     border-start-end-radius: var(--radius-full);
     border-end-end-radius: var(--radius-full);
-    /* A row with one order must not render as an empty track: at 249 orders to
+    /* A row with one order must not render as an empty track: at 281 orders to
      * the maximum, one order is 0.4 % of the width and rounds to nothing. */
     min-inline-size: 2px;
-    transition: inline-size var(--dur-base) var(--ease-ios);
+    transition: inline-size var(--dur-ui-base) var(--ease-ui-standard);
   }
   /*
    * The second fill, and it marks a different *kind* of row rather than a lesser
-   * one. `unattributed` is the largest row in the wilaya report and is not a
-   * place; drawing it in the same hue as Adrar invites the reader to compare
-   * them as peers. It is never colour alone — the row is named and carries the
-   * API's own reason underneath.
+   * one. `unattributed` is the largest row in the wilaya report — 281 orders
+   * against 42 across both named wilayas — and is not a place; drawing it in the
+   * same hue as Adrar invites the reader to compare them as peers. It is never
+   * colour alone — the row is named and carries the API's own reason underneath.
+   *
+   * `--color-ui-line-control` rather than a surface step, because it is the one
+   * neutral that stays visible against the track in **both** themes: a fill
+   * built from `--color-ui-line-strong` disappears into `--color-ui-surface-3`
+   * in dark, where the two are four points apart.
    */
   .bar-fill-muted {
-    background-color: var(--color-fill);
+    background-color: var(--color-ui-line-control);
   }
 
   /* A 20px icon gets a 44px hit area via a pseudo-element, not by growing the
@@ -1031,6 +1053,61 @@
     transition:
       color var(--dur-ui-instant) var(--ease-ui-standard),
       background-color var(--dur-ui-instant) var(--ease-ui-standard);
+  }
+  /*
+   * 44px on touch — §5's floor, and the tab strip had never met it.
+   *
+   * Measured at 340 under a coarse pointer, taking the union of the control's own
+   * box and its `::after`: `min-h-10` is 40px, on every list in the panel and on
+   * both of the analytics screen's strips. It is a text control rather than an
+   * icon, so it grows its own box rather than borrowing `.ui-tap`'s
+   * pseudo-element — there is nothing here to keep small.
+   *
+   * Behind the media query alone, which is `.ui-field`'s shape one line up: the
+   * pointer figure stays 40px, so no laptop or desktop layout moves and no
+   * existing capture changes by a pixel. 40px is already above §5's 32px pointer
+   * floor, so nothing is owed there.
+   */
+  @media (pointer: coarse) {
+    .ui-tab {
+      min-block-size: 2.75rem;
+    }
+  }
+  /*
+   * The same, for `FilterTabs`'s `chips` variant — the range control's presets on
+   * `/dashboard` and `/analytics`. Its pills are `min-h-9` (36px), so they were
+   * born 8px short on touch. Written as its own class rather than folded into
+   * `.ui-tab` because the two variants share no styling at all: `.ui-tab` is the
+   * underlined strip's skin and this is only a hit area.
+   */
+  .ui-chip {
+    white-space: nowrap;
+  }
+  @media (pointer: coarse) {
+    .ui-chip {
+      min-block-size: 2.75rem;
+    }
+  }
+  /*
+   * `TableFooter`'s rows-per-page picker, which was 28px and is the smallest
+   * control in the panel.
+   *
+   * It grows its own box because it cannot borrow `.ui-tap`: a `<select>` is a
+   * replaced element rendered from a UA shadow tree, so `::after` never paints on
+   * one — and a pseudo-element on a *wrapper* would be worse than nothing, since
+   * hit-testing routes to the originating element and the extra ring would swallow
+   * taps that then opened no dropdown.
+   *
+   * **Coarse only, and the pointer figure is a known residual.** 28px is 4px under
+   * §5's 32px pointer floor, and closing that means growing the control, which
+   * grows the footer row on all seven shipped list screens — a layout change on
+   * screens this branch does not own. Recorded in DECISIONS.md with its remedy
+   * rather than taken here.
+   */
+  @media (pointer: coarse) {
+    .ui-select-tap {
+      min-block-size: 2.75rem;
+    }
   }
   .ui-tab:hover:not([aria-current="page"]) {
     color: var(--color-ui-fg);

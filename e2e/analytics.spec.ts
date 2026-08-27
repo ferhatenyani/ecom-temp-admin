@@ -185,7 +185,7 @@ test.describe("the reporting range", () => {
     await expect(page.getByRole("button", { name: "Appliquer" })).toBeDisabled();
 
     // Over 366 days: the API's own cap, mirrored. Matched on the field error's
-    // own wording rather than on the number — the sheet's description states the
+    // own wording rather than on the number — the modal's description states the
     // cap too, and both are correct copy.
     await from.fill("2024-01-01");
     await to.fill("2026-08-21");

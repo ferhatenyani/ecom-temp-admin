@@ -42,23 +42,20 @@ export default async function DashboardLoading() {
         toolbar={
           <div className="flex flex-col gap-2">
             {/*
-              The tab strip's own geometry — `FilterTabs` bleeds its gutter with
-              a negative inline margin and closes on a rule. Its tabs are
-              `min-h-10`, so a 20px bar inside `my-2.5` is a band of exactly the
-              40px the real strip measures; that height is the only thing here
-              that can shift.
+              The range in its `chips` shape — a visible "Période" label beside
+              pills that are `min-h-9`, so an 18px block inside `my-1.5` is a
+              band of exactly the 36px the real strip measures. That height is
+              the only thing here that can shift.
 
-              Four bands rather than six: six grey blocks would run off both
-              edges of a 340px screen, and the band's height is the same either
-              way.
+              Three pills rather than six: six grey blocks plus the label would
+              run off both edges of a 340px screen, and the band's height is the
+              same either way.
             */}
-            <div className="-mx-4 sm:-mx-6 xl:-mx-8">
-              <div className="flex items-center gap-1 border-b border-ui-line px-4 sm:px-6 xl:px-8">
-                <Skeleton className="my-2.5 h-5 w-16 rounded-ui-md" />
-                <Skeleton className="my-2.5 h-5 w-12 rounded-ui-md" />
-                <Skeleton className="my-2.5 h-5 w-14 rounded-ui-md" />
-                <Skeleton className="my-2.5 h-5 w-16 rounded-ui-md" />
-              </div>
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-4.5 w-16" />
+              <Skeleton className="my-1.5 h-4.5 w-20 rounded-ui-md" />
+              <Skeleton className="my-1.5 h-4.5 w-16 rounded-ui-md" />
+              <Skeleton className="my-1.5 h-4.5 w-16 rounded-ui-md" />
             </div>
             <Skeleton className="h-4 w-48" />
           </div>
