@@ -20,17 +20,29 @@ function intlLocale(locale: string): string {
 }
 
 /**
- * The API sends two different timestamp formats, and only one of them is safe to
- * hand to `new Date()`.
+ * The API sends **three** different timestamp formats, and only one of them is
+ * safe to hand to `new Date()`.
  *
  *   order.date_created  "2026-08-18T02:52:22+00:00"   ISO 8601, has an offset
  *   note.created_at     "2026-08-18 02:52:22"         no offset, no `T`
+ *   media.date_created  "2026-08-18T02:52:22"         no offset, **with** a `T`
  *
  * Measured: `new Date("2026-08-18 02:52:22")` is parsed as **local** time, which
  * on a UTC+2 machine silently reports 00:52 UTC — every order note off by the
  * host's offset, with nothing to show that it happened. An offsetless stamp is
  * therefore read as UTC explicitly, which is what the API means by it: the
  * install's `wp_timezone_string()` is `+00:00`.
+ *
+ * **The third was added on the media branch and needed no code change**, which
+ * is worth saying rather than leaving to be re-derived: `MediaPresenter` uses
+ * `mysql_to_rfc3339()`, which despite the name emits `Y-m-d\TH:i:s` with no zone
+ * at all, on `date_created` and `date_modified` alike. The test below is for a
+ * *zone*, not for the separator, so it already answered `false` for that shape
+ * and the `Z` was already being appended. Verified against the media library in
+ * a browser, not reasoned about: the same instant renders identically whether it
+ * arrives with the offset or without it. `new Date()` on the third would shift
+ * by the host's offset exactly as it does on the second — the trap is the same
+ * one wearing a `T`.
  */
 export function parseApiDate(value: string | null | undefined): Date | null {
   if (!value) return null;

@@ -4,11 +4,10 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { MediaItem } from "@/lib/api/schemas/media";
+import { MEDIA_PER_PAGE } from "@/lib/media";
 import { acRead, BrowserApiError } from "@/lib/api/browser";
 import { EmptyState, ErrorState, ForbiddenState } from "@/components/ui/States";
-import { IconButton } from "@/components/ui/Button";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { Ltr } from "@/components/primitives/Ltr";
+import { MediaGrid, MediaGridSkeleton } from "@/components/ui/MediaGrid";
 
 /**
  * Choose an existing image.
@@ -29,10 +28,21 @@ import { Ltr } from "@/components/primitives/Ltr";
  * So this is a **panel**: a grid, a pager and the four states, with no chrome of
  * its own. The host decides where it lives, which is what lets the banner form
  * make it a *step* inside its own drawer — the form swaps to the picker and
- * back — and lets a future full-page media screen render the identical grid with
- * no overlay at all. `onCancel` is what the host binds to its back control; the
- * panel does not draw one, because "back" means something different in a step
- * than it does on a page.
+ * back — and lets the full-page media screen render the identical grid with no
+ * overlay at all. The host draws its own back control; this panel does not,
+ * because "back" means something different in a step than it does on a page.
+ *
+ * **That last sentence used to name an `onCancel` prop that has never existed**,
+ * which is the class of thing a docblock is worst at: it described a contract a
+ * caller could have written to and got `undefined` from. `BannerDrawer` binds
+ * its footer button to its own state and always has.
+ *
+ * ## The grid is not this file's any more
+ *
+ * `components/ui/MediaGrid.tsx` draws the tiles and the pager, because item 13's
+ * full-page library needs the identical thing and forking one into a page is the
+ * one move DESIGN.md §3 forbids by name. What is left here is what is actually
+ * the *picker's*: the request, the four states, and `onPick`.
  *
  * ## It can be forbidden to somebody who can use the screen around it
  *
@@ -44,8 +54,6 @@ import { Ltr } from "@/components/primitives/Ltr";
  * naming the capability instead of an empty grid, which is the difference
  * between "there are no images" and "you cannot see them".
  */
-const PER_PAGE = 30;
-
 export function MediaPicker({
   /**
    * `false` while the host has the panel mounted but not showing — a closed
@@ -66,7 +74,7 @@ export function MediaPicker({
     enabled: active,
     queryFn: async () => {
       const { data: items, total } = await acRead<MediaItem[]>(
-        `/media?per_page=${PER_PAGE}&page=${page}`,
+        `/media?per_page=${MEDIA_PER_PAGE}&page=${page}`,
       );
       return { items, total };
     },
@@ -76,7 +84,6 @@ export function MediaPicker({
   const forbidden = isError && error instanceof BrowserApiError && error.status === 403;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
 
   if (forbidden) return <ForbiddenState capability="ac_manage_content" />;
   if (isError) {
@@ -85,86 +92,22 @@ export function MediaPicker({
 
   if (isPending) {
     return (
-      <div
-        role="status"
-        aria-busy="true"
-        aria-label={t("loading")}
-        className="grid grid-cols-3 gap-2 sm:grid-cols-4"
-      >
-        {/* Nine tiles at the real aspect ratio and the real gap — DESIGN.md §3.6
-            asks a skeleton to mirror the box model, and a grid's box model is its
-            cell, not a row of bars. */}
-        {Array.from({ length: 9 }, (_, index) => (
-          <Skeleton key={index} className="aspect-square w-full rounded-ui-md" />
-        ))}
-      </div>
+      <MediaGridSkeleton label={t("loading")} variant="panel" count={MEDIA_PER_PAGE} />
     );
   }
 
   if (items.length === 0) return <EmptyState message={t("empty")} icon="image" />;
 
   return (
-    <>
-      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-        {items.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              onClick={() => onPick(item)}
-              className="ui-interactive ui-ring block w-full cursor-pointer overflow-hidden rounded-ui-md border border-ui-line bg-ui-surface-2 hover:border-ui-line-strong"
-            >
-              {/*
-                `url` rather than a size from `sizes`. Measured: every fixture in
-                this shop has `sizes: []` because the images are 30×20 and
-                WordPress generates no thumbnail below its thresholds — so code
-                that indexed into `sizes[0]` would work in production and fail on
-                every test fixture. `url` is the one that always exists.
-              */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={item.url}
-                alt={item.alt || item.title}
-                loading="lazy"
-                className="aspect-square w-full object-cover"
-              />
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {total > PER_PAGE ? (
-        <nav className="mt-3 flex items-center justify-between gap-3">
-          <IconButton
-            label={t("previousPage")}
-            icon="back"
-            flipInRtl
-            variant="secondary"
-            disabled={page <= 1}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-          />
-          {/*
-            `Ltr` around the whole indicator rather than around each number, and
-            the wrap is the fix rather than decoration: `"{page} / {pages}"` has
-            spaces around the slash, which break what would otherwise be one bidi
-            number run, so an RTL paragraph swaps the two figures and tells the
-            reader they are on the last page. `TableFooter` carries the same wrap
-            for the same reason — see DECISIONS.md §8.
-          */}
-          <span className="text-ui-caption text-ui-muted">
-            <Ltr numeric>
-              {page} / {pageCount}
-            </Ltr>
-          </span>
-          <IconButton
-            label={t("nextPage")}
-            icon="chevron"
-            flipInRtl
-            variant="secondary"
-            disabled={page >= pageCount}
-            onClick={() => setPage((current) => current + 1)}
-          />
-        </nav>
-      ) : null}
-    </>
+    <MediaGrid
+      items={items}
+      scope="media-pick"
+      variant="panel"
+      onOpen={onPick}
+      page={page}
+      perPage={MEDIA_PER_PAGE}
+      total={total}
+      onPageChange={setPage}
+    />
   );
 }

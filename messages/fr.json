@@ -1522,7 +1522,6 @@
     "empty": "Aucun fichier pour l’instant.",
     "loading": "Chargement",
     "refresh": "Actualiser",
-    "cancel": "Annuler",
     "save": "Enregistrer",
     "saved": "Fichier enregistré.",
     "upload": "Téléverser",
@@ -1536,8 +1535,6 @@
     "metadataNote": "Facultatif, et modifiable après le téléversement.",
     "sending": "Envoi",
     "processing": "Traitement sur le serveur",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "fileGroup": "Fichier",
     "filenameNote": "Le nom stocké est généré par le serveur : il diffère souvent du nom choisi.",
     "field": {
@@ -1549,7 +1546,9 @@
       "type": "Type",
       "size": "Taille",
       "dimensions": "Dimensions",
-      "uploaded": "Téléversé"
+      "uploaded": "Téléversé",
+      "dimensionsValue": "{width} × {height}",
+      "url": "Adresse du fichier"
     },
     "refusal": {
       "tooLarge": "Ce fichier fait {size}, au-delà de la limite de {max}.",
@@ -1566,8 +1565,13 @@
       "badFilenameFix": "Renommez le fichier sans point ni extension supplémentaire.",
       "network": "Le téléversement n’a pas pu être envoyé.",
       "other": "Le téléversement a échoué.",
-      "otherFix": "Réessayez, puis signalez le problème s’il persiste."
-    }
+      "otherFix": "Réessayez, puis signalez le problème s’il persiste.",
+      "title": "Le téléversement a été refusé",
+      "advisoryTitle": "Ce fichier sera probablement refusé"
+    },
+    "noChanges": "Aucune modification à enregistrer.",
+    "chosenFile": "Fichier choisi",
+    "percent": "{percent} %"
   },
   "notifications": {
     "title": "Notifications",

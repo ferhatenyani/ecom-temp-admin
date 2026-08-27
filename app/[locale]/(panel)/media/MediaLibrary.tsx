@@ -1,58 +1,105 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations, useLocale } from "next-intl";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MediaItem } from "@/lib/api/schemas/media";
-import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
-import { formatBytes } from "@/lib/media";
+import { acRead } from "@/lib/api/browser";
+import { MEDIA_PER_PAGE } from "@/lib/media";
 import { formatWhen } from "@/lib/format/date";
-import { decodeEntities } from "@/lib/format/html";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
-import { Sheet } from "@/components/primitives/Sheet";
-import { ListGroup, ListRow, ListValueRow } from "@/components/primitives/GroupedList";
-import { TextField } from "@/components/primitives/Field";
-import { Button } from "@/components/primitives/Button";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { useToast } from "@/components/primitives/Toast";
 import { useOnline } from "@/lib/use-online";
-import { UploadSheet } from "./UploadSheet";
-
-const PER_PAGE = 30;
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { MediaGrid, MediaGridSkeleton } from "@/components/ui/MediaGrid";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Isolate } from "@/components/primitives/Ltr";
+import { MEDIA_SCOPE, MediaDrawer } from "./MediaDrawer";
+import { UploadModal } from "./UploadModal";
 
 /**
  * The media library.
  *
- * A grid rather than a list, which is the one place this panel departs from the
- * grouped-list grammar and does so because the content is the picture: a list
- * row showing a 44px thumbnail beside a generated filename is a worse way to
- * find an image than three columns of images.
+ * ## A grid, and the absence of a table is the decision
  *
- * **There is no delete.** `DELETE /media/{id}` exists and `ac_manage_content`
- * allows it, and it is deliberately off the proxy allowlist with a unit test
- * saying so. Nothing in this API tells the panel what an attachment is used by —
- * a banner's `image`, a page thumbnail and a homepage section all reference one
- * with no back-reference anywhere — so the library cannot answer "what would
+ * DESIGN.md §3.2's table contract is about rows of fields, and here the picture
+ * **is** the identifying cell: a list row showing a 44px thumbnail beside a
+ * generated filename is a worse way to find an image than four columns of
+ * images. So there is no `DataTable`, no `RecordList` and no `columns.tsx` — the
+ * record's fields live in the peek drawer, which is the trade `RecordList`
+ * already makes below `md`, taken one step further because there is nothing here
+ * a column could usefully hold. `components/ui/MediaGrid.tsx` draws it, shared
+ * with the picker rather than forked into this page.
+ *
+ * `PageBody width="full"` — §2.3's table/list row, capped at 1600. The screen
+ * this replaces used `max-w-3xl`, which §0 retires by name.
+ *
+ * ## What this screen deliberately does not ship
+ *
+ * **No delete.** `DELETE /media/{id}` exists and `ac_manage_content` allows it,
+ * and `lib/api/allowlist.ts` refuses it deliberately with `tests/boundary.test.ts`
+ * pinning it shut. Nothing in this API tells the panel what an attachment is used
+ * by — a banner's `image`, a page thumbnail and a homepage section all reference
+ * one with no back-reference anywhere — so the library cannot answer "what would
  * this break?". An irreversible action a screen cannot explain is worse than one
- * it does not offer.
+ * it does not offer, so it is **not rendered**, not disabled.
+ *
+ * **No sorting, and no `aria-sort` anywhere.** `orderby` is `date|title|id` and
+ * the only control anyone has taken is *negative* — `rand` answers 400, backend
+ * suite `:373`. DECISIONS.md's standing rule wants a positive control that is
+ * not the collection's resting order, and `date desc` is the resting order.
+ *
+ * **No `type` filter**, though the parameter demonstrably works — four positive
+ * controls at `:337-361`. Two reasons, either sufficient. There is no allowlisted
+ * enumeration of what a library can *hold*: `ACCEPTED_MIME` is what the panel can
+ * upload, which is definitionally a subset, and the picker rule refuses a control
+ * built on an incomplete one — the shipping-provider precedent. And every one of
+ * the 41 rows is `image/*`, so the filter has exactly one non-empty value. A
+ * control that can only answer "all of them" cannot act.
+ *
+ * **No search box.** `search` is honoured in backend code and has **no control at
+ * all**, here or in the backend suite; the harness's own note says which fields it
+ * would match is a guess. Unmeasured is treated as broken.
+ *
+ * **No bulk and no export** — media is not in `EXPORT_SUBJECTS`, so an export
+ * control would point at a route that does not exist.
+ *
+ * ## One empty state, and the missing half has no producer
+ *
+ * §3.7 wants *nothing yet* told apart from *nothing matching this filter*. This
+ * screen ships no filter, no search and no sort, and its pager is bounded by the
+ * total it renders — so there is no control a reader can operate that produces an
+ * empty result. A second state for it would be unreachable code standing in for a
+ * control that does not exist, which is the same thing as a dead control.
+ *
+ * ## The stale marker stays
+ *
+ * §3.7's amendment exempts a screen that cannot hold data older than its own last
+ * fetch. This is not one: it is a client component over a react-query cache with a
+ * manual refresh **and it writes** — the upload and the drawer both — so both
+ * halves of the rule bite, and every write control carries the same reason.
  */
 export function MediaLibrary({
+  locale,
   initialItems,
   initialTotal,
 }: {
+  locale: string;
   initialItems: MediaItem[] | null;
   initialTotal: number | null;
 }) {
   const t = useTranslations("media");
-  const locale = useLocale();
-  const toast = useToast();
+  const tStates = useTranslations("states");
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
 
+  /* The page is local state and the peek is a URL parameter, which is the split
+     `/orders` uses: the peek is worth sharing and worth a back button, and a
+     page number on a screen with no filters is not a view anybody links to. */
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [selected, setSelected] = useState<MediaItem | null>(null);
+  const peekId = searchParams.get("peek");
 
   const online = useOnline();
 
@@ -60,7 +107,7 @@ export function MediaLibrary({
     queryKey: ["media", "library", page],
     queryFn: async () => {
       const { data: items, total } = await acRead<MediaItem[]>(
-        `/media?per_page=${PER_PAGE}&page=${page}`,
+        `/media?per_page=${MEDIA_PER_PAGE}&page=${page}`,
       );
       return { items, total };
     },
@@ -68,273 +115,167 @@ export function MediaLibrary({
       initialItems !== null && page === 1
         ? { items: initialItems, total: initialTotal ?? initialItems.length }
         : undefined,
+    /* Keeps the previous page on screen while the next loads, so paging never
+       flashes a skeleton over content that is still valid. §3.6's third
+       mechanism. */
     placeholderData: keepPreviousData,
   });
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
+
+  const inPage = peekId === null ? null : (items.find((item) => String(item.id) === peekId) ?? null);
+
+  /*
+   * **A peek off the current page, and it is a deep link that has to work.**
+   *
+   * Every other `?peek=` in this panel resolves against the rows already in
+   * memory and stops there, because on those screens the id in the URL got there
+   * by somebody clicking a row that is on screen. Here it does not survive
+   * contact with the resting order: the collection is **newest first**, so
+   * `/media?peek=5001` — the oldest attachment, and the harness's own capture
+   * target — sits on page **three** and resolved to nothing at all. A URL that
+   * silently renders no drawer is the same defect as a control that silently
+   * does nothing.
+   *
+   * `GET /media/{id}` is what closes it, and it costs nothing this screen was
+   * saving: `MediaPresenter::toArrayList` is `array_map(toArray)`, so the single
+   * read is the list row exactly — the same fact that makes the drawer free in
+   * the first place. Only fired when the row is not already here, so clicking a
+   * tile still costs no request.
+   *
+   * `retry: false`, and a failure opens nothing: an id naming no attachment is a
+   * file that is gone or a URL somebody typed, and the library behind it is
+   * intact and usable. There is no error state to put on a screen that is
+   * working.
+   */
+  const peekQuery = useQuery({
+    queryKey: ["media", "item", peekId],
+    enabled: peekId !== null && inPage === null,
+    queryFn: async () => (await acRead<MediaItem>(`/media/${peekId}`)).data,
+    retry: false,
+  });
+
+  const peeked = inPage ?? peekQuery.data ?? null;
+
+  /* Not wrapped in `useCallback`: the React Compiler is on in this project and
+     memoizes this already; a manual dependency list disagreeing with the
+     compiler's inference makes it skip optimising the whole component. */
+  function setPeek(id: number | null) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id === null) params.delete("peek");
+    else params.set("peek", String(id));
+    /* `push`, not `replace` — closing a preview with the back button is half of
+       what putting it in the URL is for. */
+    router.push(`/${locale}/media${params.size > 0 ? `?${params}` : ""}`, { scroll: false });
+  }
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["media"] });
 
-  return (
-    <Scaffold
-      title={t("title")}
-      trailing={
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            aria-label={t("refresh")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-          >
-            <Icon name="refresh" className={isFetching ? "size-5 spin" : "size-5"} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setUploadOpen(true)}
-            aria-label={t("upload")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-          >
-            <Icon name="plus" className="size-5" />
-          </button>
-        </div>
-      }
-    >
-      {!online && dataUpdatedAt > 0 ? (
-        <div className="mx-auto max-w-3xl">
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
-        </div>
-      ) : null}
+  /* The fifth state's second half. Every write on this screen carries the same
+     sentence, and the two that can act are the upload and the drawer's save. */
+  const blocked = online ? null : tStates("offlineWrites");
 
-      <div className="mx-auto max-w-3xl px-4">
-        <p aria-live="polite" className="mb-2 px-1 text-footnote text-label-secondary" data-testid="media-count">
-          <Isolate numeric>{t("count", { total })}</Isolate>
-        </p>
+  return (
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("title")}
+        subtitle={
+          /* The count, and it does not claim a total before one has arrived: a
+             failed server fetch leaves the client pending, where `total` is 0 and
+             `count` reads "Aucun fichier" — a sentence about a library nobody has
+             counted yet. */
+          <span data-testid="media-count">
+            {isPending && items.length === 0 ? (
+              t("loading")
+            ) : (
+              <Isolate>{t("count", { total })}</Isolate>
+            )}
+          </span>
+        }
+        actions={
+          <>
+            <IconButton
+              label={t("refresh")}
+              icon="refresh"
+              variant="secondary"
+              onClick={() => void refetch()}
+              loading={isFetching}
+            />
+            {/* The screen's one primary, and the id is what the modal returns
+                focus to — see `UploadModal`. */}
+            <Button
+              id="media-upload"
+              icon="plus"
+              onClick={() => setUploadOpen(true)}
+              disabled={blocked !== null}
+              title={blocked ?? undefined}
+            >
+              {t("upload")}
+            </Button>
+          </>
+        }
+      />
+
+      <PageBody width="full">
+        {!online && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        ) : null}
 
         {isPending && items.length === 0 ? (
-          <div
-            role="status"
-            aria-busy="true"
-            aria-label={t("loading")}
-            className="grid grid-cols-3 gap-2 sm:grid-cols-4"
-          >
-            {Array.from({ length: 12 }, (_, i) => (
-              <div key={i} className="skeleton aspect-square rounded-md" />
-            ))}
-          </div>
+          <MediaGridSkeleton label={t("loading")} count={MEDIA_PER_PAGE} />
         ) : isError ? (
+          /* The API's own sentence and a retry — never the empty state's words. A
+             failed request and a shop with no files are different situations and
+             only one of them is worth pressing a button about. */
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : items.length === 0 ? (
           <EmptyState
+            icon="image"
             message={t("empty")}
-            action={{ label: t("upload"), onClick: () => setUploadOpen(true) }}
+            /* Absent while offline rather than dimmed: the banner above says why,
+               and §3.3 removes a control that cannot act. */
+            action={
+              blocked === null
+                ? { label: t("upload"), onClick: () => setUploadOpen(true) }
+                : undefined
+            }
           />
         ) : (
-          <>
-            <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {items.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelected(item)}
-                    className="press block w-full overflow-hidden rounded-md bg-surface-2"
-                    aria-label={item.alt || item.title || item.filename}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.url}
-                      alt={item.alt || item.title}
-                      loading="lazy"
-                      className="aspect-square w-full object-cover"
-                    />
-                  </button>
-                </li>
-              ))}
-            </ul>
-
-            {total > PER_PAGE ? (
-              <nav className="mt-3 mb-8 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
-                  aria-label={t("previousPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="back" flipInRtl className="size-5" />
-                </button>
-                <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>
-                    {page} / {pageCount}
-                  </Ltr>
-                </span>
-                <button
-                  type="button"
-                  disabled={page >= pageCount}
-                  onClick={() => setPage((current) => current + 1)}
-                  aria-label={t("nextPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="chevron" flipInRtl className="size-5" />
-                </button>
-              </nav>
-            ) : null}
-          </>
+          <MediaGrid
+            items={items}
+            /* The same scope the drawer's `returnFocusTo` is built from. */
+            scope={MEDIA_SCOPE}
+            onOpen={(item) => setPeek(item.id)}
+            page={page}
+            perPage={MEDIA_PER_PAGE}
+            total={total}
+            onPageChange={setPage}
+          />
         )}
-      </div>
+      </PageBody>
 
-      <UploadSheet
+      <MediaDrawer
+        item={peeked}
+        locale={locale}
+        online={online}
+        onOpenChange={(next) => {
+          if (!next) setPeek(null);
+        }}
+        onSaved={invalidate}
+      />
+
+      <UploadModal
         open={uploadOpen}
+        online={online}
         onOpenChange={setUploadOpen}
         onUploaded={() => {
           invalidate();
+          /* The new file is the newest, and the collection rests newest-first —
+             so page one is where it landed. */
           setPage(1);
         }}
       />
-
-      {selected ? (
-        <MediaDetail
-          item={selected}
-          onOpenChange={(open) => !open && setSelected(null)}
-          onSaved={(updated) => {
-            setSelected(updated);
-            invalidate();
-            toast.show(t("saved"));
-          }}
-        />
-      ) : null}
-    </Scaffold>
-  );
-}
-
-/**
- * One item's metadata.
- *
- * The **stored filename** is the one rendered, never the name that was picked.
- * Measured: uploading `real.jpg` three times stored `real.jpg`, `real-1.jpg` and
- * `real-2.jpg`, and the extension comes from the sniffed type rather than from
- * the name — so a screen echoing the chosen name would show a file that is not
- * the file.
- */
-function MediaDetail({
-  item,
-  onOpenChange,
-  onSaved,
-}: {
-  item: MediaItem;
-  onOpenChange: (open: boolean) => void;
-  onSaved: (item: MediaItem) => void;
-}) {
-  const t = useTranslations("media");
-  const locale = useLocale();
-  const toast = useToast();
-
-  const [alt, setAlt] = useState(decodeEntities(item.alt));
-  const [title, setTitle] = useState(decodeEntities(item.title));
-  const [caption, setCaption] = useState(decodeEntities(item.caption));
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    setErrors({});
-
-    try {
-      const updated = await acWrite<MediaItem>("PATCH", `/media/${item.id}`, {
-        alt,
-        title,
-        caption,
-      });
-      onSaved(updated);
-      onOpenChange(false);
-    } catch (error) {
-      if (error instanceof BrowserApiError) {
-        setErrors(error.fields ?? {});
-        toast.show(error.message, "danger");
-      } else {
-        throw error;
-      }
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Sheet
-      open
-      onOpenChange={onOpenChange}
-      title={t("detailTitle")}
-      footer={
-        <div className="flex items-center gap-3">
-          <Button
-            variant="plain"
-            onClick={() => onOpenChange(false)}
-            disabled={saving}
-            className="flex-1"
-          >
-            {t("cancel")}
-          </Button>
-          <Button variant="filled" onClick={() => void save()} loading={saving} className="flex-1">
-            {t("save")}
-          </Button>
-        </div>
-      }
-    >
-      <div className="mb-4 overflow-hidden rounded-lg bg-surface-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={item.url}
-          alt={item.alt || item.title}
-          className="max-h-64 w-full object-contain"
-        />
-      </div>
-
-      <ListGroup>
-        <TextField label={t("field.alt")} value={alt} onChange={setAlt} error={errors.alt} hint={t("field.altHint")} />
-        <TextField label={t("field.title")} value={title} onChange={setTitle} error={errors.title} />
-        <TextField
-          label={t("field.caption")}
-          value={caption}
-          onChange={setCaption}
-          error={errors.caption}
-        />
-      </ListGroup>
-
-      <ListGroup title={t("fileGroup")} footnote={t("filenameNote")}>
-        <ListValueRow
-          label={t("field.filename")}
-          value={<Ltr numeric={false}>{item.filename}</Ltr>}
-        />
-        <ListValueRow
-          label={t("field.type")}
-          value={<Ltr numeric={false}>{item.mime_type}</Ltr>}
-        />
-        <ListValueRow
-          label={t("field.size")}
-          value={<Isolate>{formatBytes(item.filesize, locale)}</Isolate>}
-        />
-        {item.width !== null && item.height !== null ? (
-          <ListValueRow
-            label={t("field.dimensions")}
-            value={
-              <Ltr numeric>
-                {item.width} × {item.height}
-              </Ltr>
-            }
-          />
-        ) : null}
-        <ListValueRow
-          label={t("field.uploaded")}
-          value={<Isolate>{formatWhen(item.date_created, locale)}</Isolate>}
-        />
-        <ListRow>
-          <Icon name="link" className="size-4 shrink-0 text-label-tertiary" />
-          <Ltr numeric={false} className="min-w-0 flex-1 truncate text-footnote text-label-secondary">
-            {item.url}
-          </Ltr>
-        </ListRow>
-      </ListGroup>
-    </Sheet>
+    </div>
   );
 }

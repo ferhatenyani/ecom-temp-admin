@@ -49,6 +49,15 @@
  * one screen under three credentials — so capture them one at a time and move
  * the output if you want to hold them side by side.
  *
+ * **`MOCK_MEDIA` is the third and it works exactly the same way.**
+ *
+ *     MOCK_MEDIA=empty node scripts/capture.mjs /media    41 attachments → none
+ *
+ * The media library takes no parameters at all — no search, no filter, no sort —
+ * so an empty collection is a property of the *shop* rather than of the URL, and
+ * there is no request that reaches it. It empties `MediaPicker` inside the banner
+ * sheet too, which is the only way to photograph a picker with nothing to pick.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale
@@ -481,14 +490,42 @@ const DEFAULT_ROUTES = [
    */
   "/content/menus",
   /*
-   * **`/media` is deliberately not on this list.** It is checklist item 13, it
-   * has not been migrated, and a capture of it would photograph its unmigrated
-   * self and land in the same folder as twelve screens that have been — which is
-   * how a review report comes to say a screen is done. The mock serves the
-   * collection because the hub counts it and `MediaPicker` reads it from inside
-   * the banner form; that is the whole reason it is served, and it is not a
-   * reason to photograph it.
+   * The media library, which is checklist item 13 and is on this list from the
+   * media branch. It was excluded until then for the reason that entry gave —
+   * a capture of an unmigrated screen lands in the same folder as the migrated
+   * ones and is how a review report comes to say a screen is done.
+   *
+   * **The whole point of capturing this one is that the tiles are real.** `url`
+   * pointed at `boutique.example.dz` until this branch — a host that does not
+   * resolve — so a grid of 41 thumbnails would have photographed as 41 broken
+   * boxes and the capture would have proved nothing but the layout. The mock now
+   * serves genuine 30×20 PNG/JPEG/WebP bytes from its own origin, so a broken
+   * tile in a screenshot is a real defect rather than the fixture.
+   *
+   * The 340px risk here is **row 19's filename**: 80 characters of `[a-z0-9]`
+   * with no break opportunity, which is the longest name
+   * `UploadPolicy::storedFilename()` can produce. Row 26 carries the other wrap —
+   * a long title with spaces in it.
+   *
+   *     MOCK_MEDIA=empty node scripts/capture.mjs /media
+   *
+   * is the empty state, and it needs the switch because **the screen takes no
+   * parameters**: no search, no filter, no sort, so unlike every list in the
+   * panel there is no URL that empties it. Same argument `MOCK_HOMEPAGE` makes,
+   * and read at module load the same way.
    */
+  "/media",
+  /*
+   * The peek drawer, on the precedent `/content/menus?location=footer` set
+   * directly above: a state this screen owns through a query parameter is its own
+   * capture rather than a state of the one above it.
+   *
+   * 5001 is the first row of the measured collision trio — `real.jpg`, the file
+   * uploaded three times — so the drawer's filename line has something to be
+   * right about, and its caption is one of the empty ones (`index % 4 === 0`),
+   * which is the field the drawer has to render absent rather than blank.
+   */
+  "/media?peek=5001",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
@@ -674,7 +711,26 @@ async function capture(browser, cookie, route, width, theme, locale) {
     const dir = resolve(OUT, slugOf(route));
     mkdirSync(dir, { recursive: true });
     const file = resolve(dir, `${width}-${theme}-${locale}${SUFFIX}.png`);
-    await page.screenshot({ path: file, fullPage: true });
+    /*
+     * **`animations: "disabled"`, and it is a bug fix rather than a tidy-up.**
+     *
+     * The 400ms above is sized for a font swap. It is not sized for *hydrate →
+     * fetch a record → mount an overlay → slide it in*, and `networkidle` does
+     * not cover that chain because the query fires after hydration, once the
+     * network has already gone quiet. `/media?peek=5001` is the run's first
+     * capture of an overlay opened from a URL parameter, and it photographed the
+     * drawer **mid-slide** — content laid out for a 520px panel with only ~320px
+     * of it on screen, which reads in the PNG as a clipped drawer rather than as
+     * a moving one. Driven in a browser with a 900ms settle, the same drawer
+     * measures x=920 w=520 right=1440 with zero overflow: the screen was right
+     * and the harness was early.
+     *
+     * Playwright finishes every running CSS transition and animation and pins it
+     * to its end state, which is exactly the frame this harness wants. Raising
+     * the timeout instead would trade a wrong frame for a slower run and still
+     * race whatever is slowest on the day.
+     */
+    await page.screenshot({ path: file, fullPage: true, animations: "disabled" });
 
     const measured = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,

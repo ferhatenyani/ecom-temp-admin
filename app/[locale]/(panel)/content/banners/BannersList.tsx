@@ -9,6 +9,7 @@ import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import {
   CMS_LIST_PER_PAGE,
   DEFAULT_STATUS_FILTER,
+  embeddedImageSrc,
   isStatusFilter,
   positionWrites,
   reorderBlock,
@@ -331,14 +332,19 @@ export function BannersList({
                   <ul className="flex flex-col">
                     {group.map((banner, index) => (
                       <li key={banner.id} className="ui-row flex min-w-0 items-center gap-3 py-2">
-                        {banner.image ? (
+                        {/* `embeddedImageSrc` rather than `image.url`: the
+                            presenter's key is `src` and the harness's is `url`,
+                            so the *presence of a picture* is the presence of a
+                            URL and not the presence of the object — see
+                            `lib/api/schemas/cms.ts`. */}
+                        {embeddedImageSrc(banner.image) !== null ? (
                           /* A plain `<img>`, not `next/image`: the URL is on the
                              WordPress origin, the optimiser would need it in
                              `remotePatterns`, and routing a staff-only thumbnail
                              through a CDN buys nothing on a list of four. */
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={banner.image.url}
+                            src={embeddedImageSrc(banner.image) ?? ""}
                             /* Decorative here, so `alt=""` rather than
                                `image.alt`: the banner's title is the next
                                element in the same row and is the row's

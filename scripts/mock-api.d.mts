@@ -20,9 +20,10 @@ export declare const BASE_PATH: string;
 export type MockResponse = { status: number; body: unknown };
 
 /**
- * `body` is the parsed JSON of a write, or null. Typed as `unknown` for the same
- * reason the response body is: the mock validates it the way the API does, and a
- * hand-written request type here would be a second copy of that contract.
+ * `body` is the parsed JSON of a write, the parsed multipart of an upload, or
+ * null. Typed as `unknown` for the same reason the response body is: the mock
+ * validates it the way the API does, and a hand-written request type here would
+ * be a second copy of that contract.
  */
 export declare function respond(
   method: string,
@@ -32,6 +33,19 @@ export declare function respond(
 ): MockResponse;
 
 /**
+ * `multipart/form-data` → the `body` argument `respond()` takes for an upload.
+ *
+ * `POST /media` is the only multipart request the panel makes. This is exported
+ * so the unit suite can build a **real** multipart buffer and parse it rather
+ * than hand-writing the object the parser produces — a hand-written one would be
+ * a second copy of the boundary the panel's `FormData` actually crosses, and the
+ * parser itself would go untested.
+ *
+ * Returns `null` when the content type carries no boundary.
+ */
+export declare function parseMultipart(buffer: Buffer, contentType: string): unknown;
+
+/**
  * Rebuild every mutable thing — order statuses, COD records, parcels, payments,
  * the products a PATCH or a DELETE has rewritten, the coupons a POST, a PATCH or
  * either delete has, the shipping rules a POST, a PATCH or a DELETE has, and the
@@ -39,6 +53,12 @@ export declare function respond(
  * categories and the two menus — from the seeded baseline. Runs once at module
  * load; the unit suite calls it between tests so a write in one cannot be read by
  * another.
+ *
+ * **Media joined on the media branch and it clears bytes as well as rows.** An
+ * upload writes an attachment *and* the file `/wp-content/uploads/…` answers
+ * with, so both go — otherwise the second test to upload `tapis.jpg` would be
+ * handed `tapis-1.jpg` by this file's `wp_unique_filename()` counterpart, and the
+ * measured collision trio would stop meaning what it says.
  *
  * **Content is where this matters most on the read side, not the write side.**
  * `GET /cms/homepage` carries `meta.problems` only while the stored document

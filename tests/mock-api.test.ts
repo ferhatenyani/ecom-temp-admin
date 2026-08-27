@@ -17,10 +17,18 @@
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BASE_PATH, resetState, respond, type MockResponse } from "@/scripts/mock-api.mjs";
+import {
+  BASE_PATH,
+  createServer,
+  parseMultipart,
+  resetState,
+  respond,
+  type MockResponse,
+} from "@/scripts/mock-api.mjs";
 import { unwrap, listMeta } from "@/lib/api/envelope";
 import { ApiError } from "@/lib/api/errors";
 import { decodeEntities } from "@/lib/format/html";
+import { parseApiDate } from "@/lib/format/date";
 import { z } from "zod";
 
 import {
@@ -147,7 +155,14 @@ import {
   pageList,
   pageSeo,
 } from "@/lib/api/schemas/cms";
-import { mediaItem, mediaList, mediaSize } from "@/lib/api/schemas/media";
+import { mediaItem, mediaList, mediaSizes } from "@/lib/api/schemas/media";
+import {
+  ACCEPTED_MIME,
+  MAX_BYTES,
+  MIN_BYTES,
+  classifyRefusal,
+  formatBytes,
+} from "@/lib/media";
 import {
   CONTENT_STATUSES,
   DEFAULT_STATUS_FILTER,
@@ -6913,11 +6928,20 @@ describe("GET /cms/banners", () => {
 });
 
 describe("the banner writes", () => {
+  /**
+   * **Both sentences here are `src/CMS/`'s own since the media branch**, and both
+   * were this file's invention before it — two of the six DECISIONS.md carries.
+   * `BannerInput::REFUSED` quotes the field name it is telling the client to use,
+   * and the mock did not; `CmsRepository::assertImageAttachment()` answers "{id}
+   * is not an image attachment." where this file wrote its own wording. Settled by
+   * reading the router, which is a better source than reading the panel and is
+   * still not the request-for-request diff that collection has never had.
+   */
   it("refuses image_url by name, telling the client which field to send", () => {
     const error = apiError(write("PATCH", "/cms/banners/7301", { image_url: "https://x/y.jpg" }));
     expect(error.status).toBe(400);
     expect(error.fields?.image_url).toBe(
-      "Upload through POST /media and send the attachment id as image_id.",
+      'Upload through POST /media and send the attachment id as "image_id".',
     );
   });
 
@@ -6929,8 +6953,16 @@ describe("the banner writes", () => {
     // And an id naming nothing is refused rather than stored blind — the defect
     // `{"product_ids":[999999]}` was on coupons, one collection over.
     expect(apiError(write("PATCH", "/cms/banners/7301", { image_id: 9999 })).fields?.image_id).toBe(
-      "No attachment with id 9999.",
+      "9999 is not an image attachment.",
     );
+    // A bad *shape* is a different sentence from an id that names nothing, and
+    // `0` is one of the three ways to clear the picture rather than an id to look
+    // up — this rule refused it until the media branch, which made one of the
+    // documented ways to remove a banner image unreachable against the harness.
+    expect(apiError(write("PATCH", "/cms/banners/7301", { image_id: -1 })).fields?.image_id).toBe(
+      "Must be an attachment id, or 0 to clear.",
+    );
+    expect(parse(banner, write("PATCH", "/cms/banners/7301", { image_id: 0 })).data.image).toBeNull();
   });
 
   it("creates with 201 and removes on delete", () => {
@@ -7256,14 +7288,85 @@ describe("/cms/menus", () => {
 });
 
 /**
- * ── `/media`, which is checklist item 13 and is served rather than redesigned ─
+ * ── `/media`, checklist item 13, and the branch that owns it ─────────────────
  *
- * The Content hub renders a media count and `MediaPicker` reads the collection
- * from inside the banner form, so leaving it a 404 would photograph two Content
- * screens in their error state. What is measured and what is assumed is drawn
- * out in the mock's own docblock; these assertions pin only the measured half
- * plus the shape the two callers depend on.
+ * These assertions used to pin "the measured half plus the shape the two Content
+ * callers depend on", because the collection was served for the hub's count and
+ * nothing else. The screen is being built now, so the upload, the four query
+ * parameters and every PATCH refusal are pinned as well — and pinned by their
+ * **`code` and their `details` keys**, not by their sentences. DECISIONS.md's
+ * "Every error `code` in the mock was WordPress's" entry is why: fourteen wrong
+ * codes survived for weeks behind assertions that only ever compared prose.
+ *
+ * The five upload refusals are additionally run through `classifyRefusal()` —
+ * the panel's own function, from lib/media.ts — because that is what a screen
+ * will branch on, and a mock whose refusals classify wrongly is a mock that
+ * teaches an upload dialog to show the wrong sentence.
  */
+
+/** The three formats the mock serves, as the bytes it serves. */
+const REAL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAUCAIAAAAVyRqTAAAAJklEQVR42mPYp6FBI8QwavSo0aNG" +
+    "jxo9ajQVjZ4mJ0cjNGo0GgIAT/Vcz6Ldo2YAAAAASUVORK5CYII=",
+  "base64",
+);
+const REAL_JPEG = Buffer.from(
+  "/9j/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB" +
+    "AQEBAQEBAQEBAQEBAQH/wAARCAAUAB4DAREAAhEAAxEA/8QAMgAAAAAMAAAAAAAAAAAAAAAAAAEC" +
+    "AwQFBgcICQoLEAACAAAAAAAAAAAAAAAAAAAA8P/aAAwDAQACAAMAAD8AlTkG5UsAAAAAAAAAAAAA" +
+    "AAAAAAAAEM41A4cAAAAAAAAA/9k=",
+  "base64",
+);
+
+/**
+ * A real `multipart/form-data` body, built the way a browser's `FormData` does.
+ *
+ * Hand-writing the object `parseMultipart()` produces would leave the parser
+ * itself untested and would pin the upload against a shape nothing sends. This
+ * builds bytes and hands them to the mock's own parser, so the boundary the
+ * panel's `uploadWithProgress()` crosses is the boundary under test.
+ */
+const MULTIPART_BOUNDARY = "----ac-test-boundary";
+function multipart(parts: { name: string; filename?: string; value: string | Buffer }[]): Buffer {
+  const chunks: Buffer[] = [];
+  for (const part of parts) {
+    const disposition =
+      part.filename === undefined
+        ? `form-data; name="${part.name}"`
+        : `form-data; name="${part.name}"; filename="${part.filename}"`;
+    chunks.push(Buffer.from(`--${MULTIPART_BOUNDARY}\r\nContent-Disposition: ${disposition}\r\n\r\n`, "latin1"));
+    chunks.push(Buffer.isBuffer(part.value) ? part.value : Buffer.from(part.value, "utf8"));
+    chunks.push(Buffer.from("\r\n", "latin1"));
+  }
+  chunks.push(Buffer.from(`--${MULTIPART_BOUNDARY}--\r\n`, "latin1"));
+  return Buffer.concat(chunks);
+}
+
+const upload = (parts: { name: string; filename?: string; value: string | Buffer }[]) =>
+  respond(
+    "POST",
+    `${BASE_PATH}/media`,
+    new URLSearchParams(),
+    parseMultipart(multipart(parts), `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`),
+  );
+
+const uploadFile = (filename: string, value: Buffer | string, fields: [string, string][] = []) =>
+  upload([{ name: "file", filename, value }, ...fields.map(([name, v]) => ({ name, value: v }))]);
+
+/** The raw error, because `details` is what separates two refusals that share a code. */
+const rawError = (response: MockResponse) =>
+  (
+    response.body as {
+      error: { code: string; message: string; details?: Record<string, unknown> };
+    }
+  ).error;
+
+/** What the panel would make of a refusal — its own function, on the mock's own answer. */
+const classify = (response: MockResponse) => {
+  const error = rawError(response);
+  return classifyRefusal(response.status, error.code, error.details ?? {}, error.message);
+};
+
 describe("GET /media", () => {
   it("parses the library, with sizes empty on every row", () => {
     const { data, meta } = parseList(mediaList, get("/media", "per_page=100"));
@@ -7273,68 +7376,682 @@ describe("GET /media", () => {
       // 30×20 fixtures, below every threshold at which WordPress generates a
       // thumbnail — so a client indexing into `sizes[0]` works in production and
       // fails on every test fixture. `url` is the size that always exists.
-      expect(item.sizes, String(item.id)).toEqual([]);
+      //
+      // `{}` and not `[]`: the mock emits PHP's serialisation of an empty map,
+      // and the schema normalises it to the map it means. See `mediaSizes`.
+      expect(item.sizes, String(item.id)).toEqual({});
       expect(item.url).not.toBe("");
     }
-    // Which is why `mediaSize` has no fixture anywhere, and saying so is the
-    // point of naming it.
-    expect(mediaSize.safeParse({ name: "thumbnail", url: "u", width: 1, height: 1 }).success).toBe(
-      true,
-    );
-  });
-
-  it("generates the filename as a collision suffix rather than a rewrite", () => {
-    const { data } = parseList(mediaList, get("/media", "per_page=3"));
-    // `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg` and
-    // `real-2.jpg`, and the extension comes from the *sniffed* type. Show the
-    // returned name, never the one the person picked.
-    expect(data.map((item) => item.filename)).toEqual(["real.jpg", "real-1.png", "real-2.webp"]);
-  });
-
-  it("pages the way both of its callers ask it to", () => {
-    const first = parseList(mediaList, get("/media", "per_page=30&page=1"));
-    const second = parseList(mediaList, get("/media", "per_page=30&page=2"));
-    expect(first.data).toHaveLength(30);
-    expect(second.data).toHaveLength(11);
-    expect(first.meta.total_pages).toBe(2);
-    expect(get("/media", "per_page=101").status).toBe(400);
-  });
-
-  it("writes alt, title and caption, and drops the rest in silence", () => {
-    const { data } = parse(
-      mediaItem,
-      write("PATCH", "/media/5001", { alt: "Nouvelle description", title: "T", caption: "C" }),
-    );
-    expect(data.alt).toBe("Nouvelle description");
-    // A read-only key leaves in silence; an unknown one is a 400. The rule
-    // products and coupons already share.
-    expect(write("PATCH", "/media/5001", { filename: "autre.jpg" }).status).toBe(200);
-    expect(parse(mediaItem, get("/media/5001")).data.filename).toBe("real.jpg");
-    expect(apiError(write("PATCH", "/media/5001", { nope: 1 })).fields?.nope).toBe("Unknown field.");
   });
 
   /**
-   * **`POST /media` is allowlisted and unserved; `DELETE /media/{id}` is neither
-   * allowlisted nor served.** Two different absences and both are deliberate.
+   * **The populated shape has no fixture and cannot have one, so it is asserted
+   * directly.**
    *
-   * The upload is the only `multipart/form-data` request the panel makes and the
-   * mock's server parses JSON, so every upload would arrive indistinguishable
-   * from an empty one and all five of its measured failure shapes would be
-   * unreachable. Item 13 owns the upload screen and owns modelling it — a
-   * fixture answering 201 to anything would be an invitation to build that
-   * screen against a fiction.
+   * `sizes` is empty on all 41 rows and on every upload through this mock, which
+   * is a *consequence* of the 30×20 fixtures rather than a shortcut — see the
+   * seed. That left the field with no exercise at all, and it was wrong:
+   * `MediaPresenter::sizes()` returns `array<string, array{width, height,
+   * mime_type}>`, a map keyed by size name, and this schema declared an **array
+   * of `{name, url, width, height}`**. It parsed only because an empty PHP map
+   * serialises as `[]`; the day one sub-size existed, every media response in
+   * the panel would have thrown at the boundary.
    *
-   * The delete exists at the API and `ac_manage_content` allows it. Nothing here
-   * tells a client what an attachment is *used by* — a banner's `image`, a page
+   * So: both serialisations in, the map out, and the retired shape refused
+   * rather than tolerated — a populated array is not something PHP can emit for
+   * this field, and accepting one would be the permissive direction.
+   */
+  it("accepts both serialisations of sizes and refuses the shape that never existed", () => {
+    expect(mediaSizes.parse([])).toEqual({});
+    expect(
+      mediaSizes.parse({
+        thumbnail: { width: 150, height: 150, mime_type: "image/jpeg" },
+        medium: { width: 300, height: 200, mime_type: "image/jpeg" },
+      }).thumbnail.width,
+    ).toBe(150);
+
+    expect(
+      mediaSizes.safeParse([{ name: "thumbnail", url: "u", width: 1, height: 1 }]).success,
+    ).toBe(false);
+    expect(mediaSizes.safeParse({ thumbnail: { width: 150 } }).success).toBe(false);
+  });
+
+  /**
+   * **Every row is `image/*`, and that is a measurement rather than a
+   * convenience.** All 41 attachments in this shop are images, so seeding a
+   * `video/mp4` row to give a type filter something to separate would make the
+   * harness hold something the shop does not — and a screen built to it would
+   * render a "video" tile nobody can produce. `?type=video/mp4` is still a 200
+   * with nothing in it, which is the honest way to reach that state.
+   */
+  it("holds nothing but images, because that is what the shop holds", () => {
+    const { data } = parseList(mediaList, get("/media", "per_page=100"));
+    for (const item of data) {
+      expect(item.mime_type, String(item.id)).toMatch(/^image\//);
+      expect(ACCEPTED_MIME as readonly string[]).toContain(item.mime_type);
+    }
+    const empty = parseList(mediaList, get("/media", "type=video/mp4"));
+    expect(empty.data).toEqual([]);
+    expect(empty.meta.total).toBe(0);
+  });
+
+  it("generates the filename as a collision suffix rather than a rewrite", () => {
+    // Oldest first, because the resting order is `date desc` and these three are
+    // the first attachments the shop ever took.
+    const { data } = parseList(mediaList, get("/media", "per_page=3&orderby=id&order=asc"));
+    // `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg` and
+    // `real-2.jpg`, and the extension comes from the *sniffed* type. Show the
+    // returned name, never the one the person picked. All three are JPEG: one
+    // file uploaded three times cannot have produced three different types, and
+    // this fixture rotated them through jpg/png/webp until the media branch.
+    expect(data.map((item) => item.filename)).toEqual(["real.jpg", "real-1.jpg", "real-2.jpg"]);
+  });
+
+  it("pages the way its callers ask it to, at the screen's PER_PAGE of 20", () => {
+    const first = parseList(mediaList, get("/media", "per_page=20&page=1"));
+    const third = parseList(mediaList, get("/media", "per_page=20&page=3"));
+    expect(first.data).toHaveLength(20);
+    expect(third.data).toHaveLength(1);
+    expect(first.meta.total_pages).toBe(3);
+    expect(get("/media", "per_page=101").status).toBe(400);
+  });
+
+  /**
+   * The fixtures the screen's own code paths need, each present for one reason.
+   *
+   * `filesize` is the length of what `/wp-content/uploads/…` really answers with
+   * on every row, so the megabyte one is a genuine 1.2 MB file rather than a
+   * large number over a 95-byte body.
+   */
+  it("carries the four fixtures the grid and the drawer have branches for", () => {
+    const { data } = parseList(mediaList, get("/media", "per_page=100&orderby=id&order=asc"));
+
+    // A row with no alt text at all: the grid says so rather than rendering blank.
+    expect(data.filter((item) => item.alt === "")).toHaveLength(1);
+
+    // The longest name `UploadPolicy::storedFilename()` can produce — an 80-char
+    // stem with no break opportunity — and the title WordPress derives from it.
+    const longest = data.find((item) => item.filename.length > 60);
+    expect(longest?.filename.replace(/\.[^.]*$/, "")).toHaveLength(80);
+    expect(longest?.filename).not.toContain("-");
+    expect(longest?.title).toBe(longest?.filename.replace(/\.[^.]*$/, ""));
+
+    // A long *title* is the other wrap, and it comes from a PATCH rather than
+    // from a filename — `MediaInput::MAX_LENGTH` is 500.
+    const wordy = data.find((item) => item.title.length > 100);
+    expect(wordy?.title.length).toBeGreaterThan(100);
+    expect(wordy?.title.length).toBeLessThanOrEqual(500);
+
+    // `formatBytes`' `Mo` branch had no fixture anywhere until this row existed.
+    const large = data.find((item) => item.filesize >= 1024 * 1024);
+    expect(large).toBeDefined();
+    expect(formatBytes(large!.filesize, "fr")).toMatch(/Mo$/);
+    // And the other two branches, so all three are exercised by real rows.
+    expect(formatBytes(data[0].filesize, "fr")).toMatch(/ o$/);
+  });
+
+  /**
+   * **`url` resolves.** It named `boutique.example.dz` until this branch — a host
+   * that does not exist — so every tile in a capture would have been a broken
+   * box. The bytes themselves are fetched over HTTP further down; this pins the
+   * shape, which is the half a pure `respond()` can see.
+   */
+  it("points url at this process rather than at a host that does not resolve", () => {
+    const { data } = parseList(mediaList, get("/media", "per_page=100"));
+    for (const item of data) {
+      expect(item.url, String(item.id)).toMatch(
+        new RegExp(`^http://127\\.0\\.0\\.1:\\d+/wp-content/uploads/2026/08/${item.filename}$`),
+      );
+    }
+  });
+
+  /**
+   * **A third timestamp format, measured on the live router 2026-08-27.**
+   *
+   * `MediaPresenter` uses `mysql_to_rfc3339()`, which emits `Y-m-d\\TH:i:s` with
+   * no offset — `"2026-08-27T19:52:00"`. This file emitted the order's
+   * `"…+00:00"` until the media branch. `new Date()` reads an offsetless stamp as
+   * *local* time and shifts it by the host's offset in silence, so a mock with an
+   * offset here would let a media screen skip `parseApiDate()` and look right.
+   */
+  it("stamps dates with no offset, which is a third format and not the order's", () => {
+    const { data } = parseList(mediaList, get("/media", "per_page=100"));
+    for (const item of data) {
+      for (const field of [item.date_created, item.date_modified]) {
+        expect(field, String(item.id)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      }
+    }
+    // And it still reaches the right instant through the panel's own reader,
+    // which is the only thing that makes reproducing the format safe.
+    expect(parseApiDate(data[0].date_created)?.toISOString()).toBe(
+      `${data[0].date_created}.000Z`,
+    );
+  });
+});
+
+/**
+ * ── The four parameters the router honours and this file used to ignore ──────
+ *
+ * `type`, `orderby`, `order` and `search` all reach `MediaRepository::paginate()`
+ * and all four do something. The mock ignored every one of them, which is the
+ * *less capable* direction — a screen offering a sort would have looked broken
+ * against the harness and invited someone to delete a control that works.
+ *
+ * The refusals are the router's, and they are what keeps two fallbacks in the
+ * repository unreachable: an off-enum `orderby` silently becomes `date` there and
+ * a non-mime `type` silently becomes no filter, but `MediaController::indexArgs()`
+ * 400s on both first. Copying the repository instead of the router is how a mock
+ * becomes more permissive than the shop.
+ */
+describe("GET /media — the query", () => {
+  it("refuses off-enum and off-pattern exactly where the controller does", () => {
+    const orderby = get("/media", "orderby=rand");
+    expect(orderby.status).toBe(400);
+    expect(rawError(orderby).code).toBe("invalid_request");
+    expect(apiError(orderby).params?.orderby).toBe("orderby is not one of date, title, and id.");
+
+    const order = get("/media", "order=sideways");
+    expect(order.status).toBe(400);
+    expect(apiError(order).params?.order).toBe("order is not one of asc and desc.");
+
+    const type = get("/media", "type=../../etc");
+    expect(type.status).toBe(400);
+    expect(rawError(type).code).toBe("invalid_request");
+    expect(apiError(type).params?.type).toContain("does not match pattern");
+
+    expect(get("/media", "per_page=100000").status).toBe(400);
+
+    // `""` is a value that fails the pattern, not an absence — the reading
+    // `?date_from=` was measured to take and `?orderby=` takes everywhere.
+    expect(get("/media", "type=").status).toBe(400);
+    expect(get("/media", "orderby=").status).toBe(400);
+  });
+
+  it("sorts by all three fields in both directions, with distinct sequences", () => {
+    const ids = (query: string) =>
+      parseList(mediaList, get("/media", `${query}&per_page=100`)).data.map((item) => item.id);
+
+    const ascending = ids("orderby=id&order=asc");
+    const descending = ids("orderby=id&order=desc");
+    expect(ascending).toEqual([...descending].reverse());
+    expect(new Set(ascending).size).toBe(41);
+
+    /*
+     * The positive control the standing rules ask for: a sort proved against the
+     * order its own field implies, and never against the collection's default.
+     * Compared accent-folded because MySQL's own collation is, which is the same
+     * reason `searchRows` folds — a raw code-unit sort puts `épices` after
+     * `nattes` and the shop does not.
+     */
+    const byTitle = parseList(mediaList, get("/media", "orderby=title&order=asc&per_page=100")).data;
+    const titles = byTitle.map((item) =>
+      item.title.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase(),
+    );
+    expect([...titles].sort()).toEqual(titles);
+    // 27 distinct titles over 41 rows, so this cannot pass by tying on every row.
+    expect(new Set(titles).size).toBeGreaterThan(20);
+
+    // `date desc` is the resting order, which is what the bare listing answers.
+    expect(ids("orderby=date&order=desc")).toEqual(ids("page=1"));
+  });
+
+  it("filters by a mime family and by an exact type", () => {
+    const family = parseList(mediaList, get("/media", "type=image&per_page=100"));
+    expect(family.meta.total).toBe(41);
+
+    const exact = parseList(mediaList, get("/media", "type=image/jpeg&per_page=100"));
+    expect(exact.meta.total).toBeGreaterThan(0);
+    expect(exact.meta.total).toBeLessThan(41);
+    for (const item of exact.data) expect(item.mime_type).toBe("image/jpeg");
+  });
+
+  /**
+   * `?search=` matches title and caption — `WP_Query`'s `s` over `post_title` and
+   * `post_excerpt`, which are the two of the three it searches that this
+   * presenter emits. **Filename is deliberately not searched**: core has gated
+   * attachment-filename search behind `wp_allow_query_attachment_by_filename`
+   * since 5.9 and nobody has measured which way it sits on this install, so a
+   * screen must not learn "search finds filenames" from the harness.
+   */
+  it("searches title and caption, accent-folded, and not the filename", () => {
+    const found = parseList(mediaList, get("/media", "search=savon&per_page=100"));
+    expect(found.meta.total).toBeGreaterThan(0);
+    for (const item of found.data) {
+      expect(`${item.title} ${item.caption}`.toLowerCase()).toContain("savon");
+    }
+    // The collation behind this endpoint is accent-insensitive on both sides.
+    expect(parseList(mediaList, get("/media", "search=ceramique&per_page=100")).meta.total).toBe(
+      parseList(mediaList, get("/media", "search=céramique&per_page=100")).meta.total,
+    );
+    // A filename that no title or caption contains finds nothing.
+    expect(parseList(mediaList, get("/media", "search=real-1.png")).meta.total).toBe(0);
+  });
+});
+
+/**
+ * ── `PATCH /media/{id}`, against `tests/Api/media.php:387-437` case by case ───
+ *
+ * Every one of these is an assertion the backend's own suite makes, reproduced
+ * here so the mock cannot drift from it in silence. Two of them were wrong in
+ * this file before the media branch: `{}` answered **200** where the shop answers
+ * 400, and the refusal sentence was `"The attachment is invalid."` where
+ * `MediaInput` says `"The media data is invalid."`
+ */
+describe("PATCH /media/{id}", () => {
+  it("writes alt, title and caption, and reads them back", () => {
+    const { data } = parse(
+      mediaItem,
+      write("PATCH", "/media/5001", { alt: "Tapis berbère", title: "Tapis", caption: "Fait main" }),
+    );
+    expect(data.alt).toBe("Tapis berbère");
+    expect(data.title).toBe("Tapis");
+    expect(parse(mediaItem, get("/media/5001")).data.caption).toBe("Fait main");
+  });
+
+  it("refuses an empty body, and a body of nothing but read-only keys", () => {
+    for (const body of [{}, { filename: "autre.jpg", id: 9, sizes: [] }]) {
+      const response = write("PATCH", "/media/5001", body);
+      expect(response.status).toBe(400);
+      expect(rawError(response).code).toBe("invalid_request");
+      expect(rawError(response).message).toBe("No supported fields were provided.");
+      // The shape `PATCH /products/{id}` was measured with: no `details` at all,
+      // so a screen reaching for `details.fields` has to check.
+      expect(rawError(response)).not.toHaveProperty("details");
+    }
+    // And the read-only key really did leave in silence rather than land.
+    expect(parse(mediaItem, get("/media/5001")).data.filename).toBe("real.jpg");
+  });
+
+  it("refuses an unknown field, and the file by name", () => {
+    const unknown = write("PATCH", "/media/5001", { description: "nope" });
+    expect(unknown.status).toBe(400);
+    expect(rawError(unknown).message).toBe("The media data is invalid.");
+    expect(apiError(unknown).fields?.description).toBe("Unknown field.");
+
+    // The bytes are not editable, and the refusal says what to do instead —
+    // asserted by substring in the backend suite, so by substring here.
+    const file = write("PATCH", "/media/5001", { file: "other.jpg" });
+    expect(file.status).toBe(400);
+    expect(String(apiError(file).fields?.file)).toContain("upload a new one");
+  });
+
+  it("refuses the three post fields a write path must never reach", () => {
+    for (const field of ["post_type", "post_status", "post_author"]) {
+      const response = write("PATCH", "/media/5001", { [field]: "page" });
+      expect(response.status, field).toBe(400);
+      expect(apiError(response).fields?.[field], field).toBe("Not editable.");
+    }
+  });
+
+  it("clears a field with null, and takes a scalar rather than refusing it", () => {
+    expect(parse(mediaItem, write("PATCH", "/media/5001", { caption: null })).data.caption).toBe("");
+    /*
+     * `MediaInput` casts anything `is_scalar()` and PATCH has no arg schema above
+     * it, so `{"alt": 5}` is a 200 storing `"5"` at the shop. This file answered
+     * 400 — the *stricter* direction, which DECISIONS.md §0 says is not the safe
+     * one. Only objects and arrays are refused.
+     */
+    expect(parse(mediaItem, write("PATCH", "/media/5001", { alt: 5 })).data.alt).toBe("5");
+    expect(apiError(write("PATCH", "/media/5001", { alt: { a: 1 } })).fields?.alt).toBe(
+      "Must be a string.",
+    );
+    expect(apiError(write("PATCH", "/media/5001", { title: "x".repeat(501) })).fields?.title).toBe(
+      "Must be at most 500 characters.",
+    );
+  });
+
+  /**
+   * **Two different 404s.** `/media/99999999` matches the route pattern and
+   * reaches the controller, which answers `not_found` with its own sentence;
+   * `/media/abc` matches nothing and is a `rest_no_route`. This file answered
+   * `rest_no_route` to both until the media branch, which would have let a screen
+   * treat "no such attachment" as "no such endpoint".
+   */
+  it("separates the missing row from the missing route", () => {
+    for (const response of [get("/media/99999999"), write("PATCH", "/media/99999999", { alt: "x" })]) {
+      expect(response.status).toBe(404);
+      expect(rawError(response).code).toBe("not_found");
+      expect(rawError(response).message).toBe("No media item with that id.");
+    }
+    expect(rawError(get("/media/abc")).code).toBe("rest_no_route");
+  });
+
+  /**
+   * `DELETE /media/{id}` exists at the API and `ac_manage_content` allows it. It
+   * is off the panel's allowlist and unserved here for one reason: nothing tells
+   * a client what an attachment is *used by* — a banner's `image`, a page
    * thumbnail and a homepage section all reference one with no back-reference
    * anywhere — so the library cannot answer "what would this break?", and an
    * irreversible action a screen cannot explain is worse than one it does not
    * offer.
    */
-  it("leaves the upload and the delete unreachable, for two different reasons", () => {
-    expect(write("POST", "/media", { file: "x" }).status).toBe(404);
+  it("leaves the delete unreachable", () => {
     expect(write("DELETE", "/media/5001").status).toBe(404);
     expect(write("PUT", "/media/5001", { alt: "x" }).status).toBe(404);
+  });
+});
+
+/**
+ * ── `POST /media`, and the order of its checks is the whole contract ─────────
+ *
+ * The five refusals are lib/media.ts:18-23, with their statuses, their codes and
+ * their `details` keys — and the ordering trap that measurement itself took a
+ * correction for: **the size floor fires before the sniffer**, so a 48-byte fake
+ * PDF answers 400 `invalid_upload` and not 415. That reading survived a whole
+ * measurement until a 5.4 KB control was run beside it.
+ *
+ * Asserted by `code` and by `details`, never by sentence alone: the two 415s that
+ * share a code are separated by `details` and by nothing else, and comparing
+ * prose is exactly what let fourteen wrong codes live in this file for weeks.
+ */
+describe("POST /media", () => {
+  it("creates an attachment, at 201, with the name the server generated", () => {
+    const response = uploadFile("Tapis Berbère #2.JPG", REAL_JPEG, [["alt", "Un tapis"]]);
+    expect(response.status).toBe(201);
+
+    const { data } = parse(mediaItem, response);
+    // The stored name comes from `storedFilename()`: lowercased, every character
+    // outside [a-z0-9] collapsed to a hyphen, and the extension from the
+    // *sniffed* type rather than from the `.JPG` that was sent.
+    expect(data.filename).toBe("tapis-berb-re-2.jpg");
+    expect(data.mime_type).toBe("image/jpeg");
+    expect(data.alt).toBe("Un tapis");
+    // Read from the image header, the way `getimagesize()` does.
+    expect([data.width, data.height]).toEqual([30, 20]);
+    expect(data.filesize).toBe(REAL_JPEG.length);
+    // The empty map, normalised from PHP's `[]` — see `mediaSizes`.
+    expect(data.sizes).toEqual({});
+
+    // And it is in the library immediately, at the top of the resting order.
+    const listed = parseList(mediaList, get("/media", "per_page=100"));
+    expect(listed.meta.total).toBe(42);
+    expect(listed.data[0].id).toBe(data.id);
+  });
+
+  it("suffixes a name already taken, which is the trio the fixture reproduces", () => {
+    expect(parse(mediaItem, uploadFile("real.jpg", REAL_JPEG)).data.filename).toBe("real-3.jpg");
+    expect(parse(mediaItem, uploadFile("real.jpg", REAL_JPEG)).data.filename).toBe("real-4.jpg");
+  });
+
+  it("takes alt, title and caption beside the file, and ignores anything else", () => {
+    const { data } = parse(
+      mediaItem,
+      uploadFile("x.png", REAL_PNG, [
+        ["title", "Titre"],
+        ["caption", "Légende"],
+        // The controller only ever reads `MediaInput::allowedFields()` out of the
+        // request, so an unknown field beside the file is dropped where the same
+        // key on `PATCH` is a 400. The asymmetry is the router's.
+        ["nope", "1"],
+      ]),
+    );
+    expect(data.title).toBe("Titre");
+    expect(data.caption).toBe("Légende");
+
+    // The text fields are validated before the policy runs — `MediaService`'s
+    // own order — so an over-long alt is an `invalid_request`, not a file error.
+    const long = uploadFile("y.png", REAL_PNG, [["alt", "a".repeat(501)]]);
+    expect(long.status).toBe(400);
+    expect(rawError(long).code).toBe("invalid_request");
+  });
+
+  it("refuses a file under the 64-byte floor, before it sniffs anything", () => {
+    const response = uploadFile("t.jpg", Buffer.alloc(MIN_BYTES - 16, 0x41));
+    expect(response.status).toBe(400);
+    expect(rawError(response).code).toBe("invalid_upload");
+    expect(rawError(response).details).toEqual({ size: MIN_BYTES - 16 });
+    expect(classify(response)).toEqual({ kind: "too_small", size: MIN_BYTES - 16 });
+
+    /*
+     * The ordering trap, and the reason lib/media.ts carries a paragraph about
+     * it: a 48-byte PDF renamed `.png` answers **400** and not 415, because
+     * `MIN_BYTES` is checked before `finfo` runs. A mock that sniffed first would
+     * teach an upload dialog to expect a `detected` that never arrives.
+     */
+    const tiny = uploadFile("t.png", Buffer.from(`%PDF-1.4\n${"A".repeat(39)}`));
+    expect(tiny.status).toBe(400);
+    expect(rawError(tiny).code).toBe("invalid_upload");
+    expect(rawError(tiny).details).not.toHaveProperty("detected");
+  });
+
+  it("refuses a file over 8 MiB, with the cap in the details", () => {
+    const response = uploadFile("big.jpg", Buffer.alloc(MAX_BYTES + 1, 0x41));
+    expect(response.status).toBe(413);
+    expect(rawError(response).code).toBe("file_too_large");
+    expect(rawError(response).details).toEqual({ size: MAX_BYTES + 1, max_bytes: MAX_BYTES });
+    expect(classify(response)).toEqual({
+      kind: "too_large",
+      size: MAX_BYTES + 1,
+      maxBytes: MAX_BYTES,
+    });
+  });
+
+  it("refuses an extension it does not accept, naming the extension", () => {
+    const response = uploadFile(
+      "drawing.gif",
+      Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(200, 0x41)]),
+    );
+    expect(response.status).toBe(415);
+    expect(rawError(response).code).toBe("unsupported_media_type");
+    expect(rawError(response).details).toEqual({ extension: "gif" });
+    expect(classify(response)).toEqual({ kind: "bad_extension", extension: "gif" });
+
+    // The SVG the backend suite sends, byte for byte, takes this same path —
+    // `.svg` is not an accepted extension, so nothing ever reads the `<script>`
+    // inside it. It is 71 bytes, which is over the floor, so the extension check
+    // really is what refuses it rather than the size one.
+    expect(
+      uploadFile(
+        "a.svg",
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      ).status,
+    ).toBe(415);
+  });
+
+  it("refuses a file that is not an image, naming what it detected", () => {
+    // 5.4 KB, which is the control the measurement needed: over `MIN_BYTES`, so
+    // the sniffer actually runs.
+    const pdf = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(5400, 0x41)]);
+    const response = uploadFile("doc.png", pdf);
+    expect(response.status).toBe(415);
+    expect(rawError(response).code).toBe("unsupported_media_type");
+    expect(rawError(response).details).toEqual({ detected: "application/pdf" });
+    expect(classify(response)).toEqual({ kind: "not_an_image", detected: "application/pdf" });
+
+    // A PHP web shell wearing an image's extension: nothing about the name gives
+    // it away, and the content sniff is the only thing that refuses it.
+    const shell = uploadFile("innocent.jpg", `<?php system($_GET['c']); ?>${"#".repeat(300)}`);
+    expect(shell.status).toBe(415);
+    expect(rawError(shell).details).toHaveProperty("detected");
+    expect(classify(shell).kind).toBe("not_an_image");
+  });
+
+  /**
+   * The fifth, and the one worth separating from the third. "Only jpg, png and
+   * webp are accepted" tells someone who picked a `.gif` exactly what to do; it
+   * tells someone who renamed a JPEG to `.png` something that looks false, when
+   * the fix is to re-export rather than to pick a different file. `details`
+   * carrying **both** facts is the only thing that separates the two.
+   */
+  it("refuses a file whose contents disagree with its extension, naming both", () => {
+    const response = uploadFile("photo.png", REAL_JPEG);
+    expect(response.status).toBe(415);
+    expect(rawError(response).code).toBe("unsupported_media_type");
+    expect(rawError(response).details).toEqual({ extension: "png", detected: "image/jpeg" });
+    expect(classify(response)).toEqual({
+      kind: "contents_disagree",
+      extension: "png",
+      detected: "image/jpeg",
+    });
+  });
+
+  /**
+   * **`../../evil.jpg` is not in this list, and that is the correction the diff
+   * against the live router produced.** PHP strips the path before the
+   * application sees a name, so a traversal filename is a **201** storing
+   * `evil.jpg` — measured 2026-08-27. `a..b.jpg` carries no separator for the
+   * basename to strip and is the shape that really does reach the path check.
+   *
+   * The control-character case cannot arrive over HTTP either; it is kept
+   * because the shop keeps it.
+   */
+  it("refuses a hostile filename with no details at all", () => {
+    const cases: [string, string][] = [
+      ["shell.php.jpg", "The filename contains a disallowed extension."],
+      ["a..b.jpg", "The filename must not contain a path."],
+      ["evil.php\u0007.jpg", "The filename contains control characters."],
+      ["noextension", "The filename has no extension."],
+    ];
+    for (const [filename, message] of cases) {
+      const response = uploadFile(filename, REAL_JPEG);
+      expect(response.status, filename).toBe(400);
+      expect(rawError(response).code, filename).toBe("invalid_upload");
+      expect(rawError(response).message, filename).toBe(message);
+      // No `details`, which is what `classifyRefusal()` reads as "bad filename"
+      // rather than as "too small" — the two share both status and code.
+      expect(rawError(response), filename).not.toHaveProperty("details");
+      expect(classify(response), filename).toEqual({ kind: "bad_filename" });
+    }
+  });
+
+  it("refuses a request with no file, and one with more than one", () => {
+    const none = upload([{ name: "alt", value: "x" }]);
+    expect(none.status).toBe(400);
+    expect(rawError(none).code).toBe("invalid_upload");
+    expect(rawError(none).message).toContain('field named "file"');
+
+    /*
+     * **Only a `file[]` field reaches this refusal.** Two parts both named
+     * `file` are one field written twice — PHP keeps the last and the shop
+     * answers 201, measured live 2026-08-27. This file answered 400 to both
+     * until the diff that found it, which is a refusal an upload dialog could
+     * never provoke.
+     */
+    const two = upload([
+      { name: "file[]", filename: "a.jpg", value: REAL_JPEG },
+      { name: "file[]", filename: "b.jpg", value: REAL_JPEG },
+    ]);
+    expect(two.status).toBe(400);
+    expect(rawError(two).message).toBe("Upload one file per request.");
+
+    const repeated = upload([
+      { name: "file", filename: "first.jpg", value: REAL_JPEG },
+      { name: "file", filename: "second.jpg", value: REAL_JPEG },
+    ]);
+    expect(repeated.status).toBe(201);
+    expect(parse(mediaItem, repeated).data.filename).toBe("second.jpg");
+
+    // And the path a traversal name really takes: stripped by PHP, stored, 201.
+    expect(parse(mediaItem, uploadFile("../../evil.jpg", REAL_JPEG)).data.filename).toBe("evil.jpg");
+    expect(parse(mediaItem, uploadFile("C:\\dir\\b.jpg", REAL_JPEG)).data.filename).toBe("b.jpg");
+
+    // A JSON body reaches the same refusal: to this route, "no multipart" and
+    // "no file entry" are the same failure.
+    const json = write("POST", "/media", { file: "x" });
+    expect(json.status).toBe(400);
+    expect(rawError(json).code).toBe("invalid_upload");
+  });
+
+  /**
+   * The **second** reader `UploadPolicy::sniff()` runs. `finfo` matches the head
+   * of a file and `getimagesize()` parses the image header, and a file that
+   * satisfies one and not the other is refused with the *detected* type rather
+   * than with a fourth code. A truncated PNG is what reaches that line.
+   */
+  it("refuses a file whose magic bytes and header disagree", () => {
+    const truncated = Buffer.concat([REAL_PNG.subarray(0, 12), Buffer.alloc(80, 0x41)]);
+    const response = uploadFile("t.png", truncated);
+    expect(response.status).toBe(415);
+    expect(rawError(response).details).toEqual({ detected: "image/png" });
+  });
+});
+
+/**
+ * ── The half a pure `respond()` cannot see ───────────────────────────────────
+ *
+ * `url` is the field the whole screen rests on, and until this branch it pointed
+ * at `boutique.example.dz` — so every tile in a capture would have been a broken
+ * box and the screenshot would have proved only that the grid laid out. Fetching
+ * one is the only assertion that can tell the difference, so it is taken over
+ * real HTTP against a real listener rather than inferred from the string.
+ */
+describe("the uploads directory", () => {
+  it("answers real image bytes for a seeded tile and for an uploaded one", async () => {
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", () => done()));
+    const port = (server.address() as { port: number }).port;
+    // `url` carries the port this module read at load, which is not the ephemeral
+    // one this listener took — the path is what is under test either way.
+    const fetchTile = (url: string) => fetch(`http://127.0.0.1:${port}${new URL(url).pathname}`);
+
+    try {
+      const { data } = parseList(mediaList, get("/media", "per_page=100"));
+      // One row of each accepted type, plus the 1.2 MB one — which is the row
+      // where a declared size and a real body are most able to disagree.
+      const samples = [
+        ...ACCEPTED_MIME.map((mime) => data.find((item) => item.mime_type === mime)!),
+        data.find((item) => item.filesize >= 1024 * 1024)!,
+      ];
+
+      const magic: Record<string, (bytes: Buffer) => void> = {
+        "image/jpeg": (bytes) =>
+          expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff])),
+        "image/png": (bytes) => expect(bytes.subarray(1, 4).toString("latin1")).toBe("PNG"),
+        "image/webp": (bytes) => expect(bytes.subarray(8, 12).toString("latin1")).toBe("WEBP"),
+      };
+
+      for (const item of samples) {
+        const response = await fetchTile(item.url);
+        expect(response.status, item.filename).toBe(200);
+        expect(response.headers.get("content-type"), item.filename).toBe(item.mime_type);
+        const bytes = Buffer.from(await response.arrayBuffer());
+        // The declared size is the real one, which is what keeps `formatBytes`
+        // honest about a file somebody could download.
+        expect(bytes.length, item.filename).toBe(item.filesize);
+        // And the magic bytes, so "200 with a body" cannot pass for an image.
+        magic[item.mime_type](bytes);
+      }
+
+      // An uploaded file is served the same way, or the grid right after an
+      // upload is one broken box among forty-one working ones.
+      const created = parse(mediaItem, uploadFile("tapis.jpg", REAL_JPEG));
+      const uploaded = await fetchTile(created.data.url);
+      expect(uploaded.status).toBe(200);
+      expect(Buffer.from(await uploaded.arrayBuffer())).toEqual(REAL_JPEG);
+
+      expect((await fetchTile("http://x/wp-content/uploads/2026/08/nothing.png")).status).toBe(404);
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  });
+});
+
+/**
+ * `MOCK_MEDIA=empty`, on the `MOCK_HOMEPAGE` precedent — and it is the only way
+ * to reach an empty library, because the screen takes no parameters at all.
+ */
+describe("MOCK_MEDIA", () => {
+  it("serves an empty library behind the knob, and nothing else changes", async () => {
+    vi.stubEnv("MOCK_MEDIA", "empty");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const response = mock.respond("GET", `${mock.BASE_PATH}/media`);
+      const { data, meta } = unwrap(mediaList, response.body, response.status);
+      expect(data).toEqual([]);
+      expect(listMeta.parse(meta).total).toBe(0);
+      // The picker inside the banner sheet reads this collection, so an empty
+      // library is also the only way to photograph a picker with nothing to pick
+      // — and an `image_id` it cannot resolve is correctly a 400 there.
+      expect(
+        mock.respond("PATCH", `${mock.BASE_PATH}/cms/banners/7301`, new URLSearchParams(), {
+          image_id: 5001,
+        }).status,
+      ).toBe(400);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });
 
@@ -7402,14 +8119,23 @@ const COVERED = [
    */
   "cms",
   /*
-   * **`media` is covered because two Content screens read it, not because item
-   * 13 is done.** The hub renders a media count and `MediaPicker` reads the
-   * collection from inside the banner form, so a 404 here would have photographed
-   * two Content screens in their error state.
+   * `mediaItem` and `mediaList` are exercised across the listing, the four query
+   * parameters, every PATCH case in the backend's own suite and the upload — the
+   * media branch owns this collection and covers it.
    *
-   * `mediaItem` and `mediaList` are exercised; `mediaSize` has no fixture and
-   * cannot have one — `sizes` is empty on all 41 rows because the images are
-   * 30×20. The upload and the delete are named below.
+   * **`mediaSizes` has no fixture and that is correct, not a gap.** `sizes` is
+   * empty on all 41 rows because the images are 30×20, below every threshold at
+   * which WordPress generates a thumbnail, and an upload through this mock
+   * produces none either. Inventing one would mean inventing WordPress's
+   * thresholds.
+   *
+   * **What it did hide, until the media branch, was a wrong shape.** The schema
+   * declared an array of `{name, url, width, height}` where
+   * `MediaPresenter::sizes()` returns a map keyed by size name of
+   * `{width, height, mime_type}` — two objects with nothing in common, parsing
+   * only because an empty PHP map serialises as `[]`. A missing fixture is not
+   * the same as a field nobody has to be right about, so the corrected schema is
+   * asserted directly beside the listing rather than left to a future upload.
    */
   "media",
 ];

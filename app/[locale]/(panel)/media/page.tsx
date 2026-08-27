@@ -4,9 +4,10 @@ import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
+import { MEDIA_PER_PAGE } from "@/lib/media";
 import { mediaList } from "@/lib/api/schemas/media";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ForbiddenState } from "@/components/patterns/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { ForbiddenState } from "@/components/ui/States";
 import { MediaLibrary } from "./MediaLibrary";
 
 /**
@@ -19,10 +20,16 @@ import { MediaLibrary } from "./MediaLibrary";
  * describes as theirs cannot be reached either. Measured — a Manager is 403 on
  * `GET /media` — which makes one live credential a real forbidden fixture for
  * this screen and for the picker inside every form that embeds it.
+ *
+ * A Server Component fetches page one with the sealed credential and streams it,
+ * so first paint carries data — the arrangement every other list in this panel
+ * uses. It takes no `searchParams`: `?peek=` is resolved in the browser against
+ * the page already in memory, because `GET /media/{id}` is the list row exactly.
  */
 export default async function MediaPage({
   params,
 }: {
+  /** A Promise in Next 16, like `searchParams` and `cookies()`. */
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
@@ -31,25 +38,32 @@ export default async function MediaPage({
 
   if (!has(me, "ac_manage_content")) {
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No subtitle, so `media-count` is absent rather than reporting a total
+            nobody was allowed to read — and no back link, because every route
+            that could receive one is gated on the capability just refused. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="full">
           <ForbiddenState capability="ac_manage_content" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
-  const initial = await acFetch(mediaList, session, "/media?per_page=30&page=1").catch(
-    (error: unknown) => {
-      if (error instanceof ApiError) return null;
-      throw error;
-    },
-  );
+  const initial = await acFetch(
+    mediaList,
+    session,
+    `/media?per_page=${MEDIA_PER_PAGE}&page=1`,
+  ).catch((error: unknown) => {
+    if (error instanceof ApiError) return null;
+    throw error;
+  });
 
   const meta = initial?.meta ? listMeta.safeParse(initial.meta) : null;
 
   return (
     <MediaLibrary
+      locale={locale}
       initialItems={initial?.data ?? null}
       initialTotal={meta?.success ? meta.data.total : null}
     />

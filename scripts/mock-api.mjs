@@ -158,8 +158,21 @@
  * mocked must fail loudly rather than quietly render an empty table.
  */
 import { createServer as createHttpServer } from "node:http";
+import { crc32 } from "node:zlib";
 
 export const BASE_PATH = "/wp-json/algerian-commerce/v1";
+
+/**
+ * Read once, because `/media` puts it in a **response body**.
+ *
+ * `url` on an attachment is an absolute URL on the shop's own host, and the mock
+ * has to answer one that resolves — so the port this process listens on is data
+ * now, not only a listen argument. `startServer()` still takes an override; a
+ * caller that passes a different one gets a library whose `url`s name this one,
+ * which is why the two read the same variable rather than the same expression.
+ */
+const MOCK_PORT = Number(process.env.MOCK_PORT ?? 8099);
+const MOCK_ORIGIN = `http://127.0.0.1:${MOCK_PORT}`;
 
 /* ------------------------------------------------------------ determinism --- */
 
@@ -3424,8 +3437,9 @@ const MAX_MENU_ITEMS = 50;
  * **`filename` is generated server-side and is a collision suffix, not a
  * rewrite**: `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg` and
  * `real-2.jpg`, and the extension comes from the *sniffed* type rather than from
- * the name. Rows 0-2 below reproduce that trio so the "show the returned name"
- * rule has something to be right about.
+ * the name. Rows 0-2 below reproduce that trio — **all three as JPEG**, which is
+ * the only way one file uploaded three times could have produced them — so the
+ * "show the returned name" rule has something to be right about.
  */
 const MEDIA_TYPES = [
   ["image/jpeg", "jpg"],
@@ -3433,25 +3447,215 @@ const MEDIA_TYPES = [
   ["image/webp", "webp"],
 ];
 
-const MEDIA_SEED = Array.from({ length: 41 }, (_, index) => {
-  const [mime, extension] = MEDIA_TYPES[index % 3];
-  // The measured collision trio, then one file per subject.
-  const base = index < 3 ? "real" : `${PAGE_TOPICS[index % PAGE_TOPICS.length][0]}`;
+/**
+ * ── The tiles are real image bytes, served from this process ─────────────────
+ *
+ * `url` was `https://boutique.example.dz/wp-content/uploads/…` until this
+ * branch — a host that does not resolve, so a grid of 41 tiles photographed as
+ * 41 broken boxes and no capture of the screen would have been worth taking.
+ * The path shape is kept because it is the shop's; only the **origin** moves to
+ * this server, and `/wp-content/uploads/…` is served beside `/__mock/stats` as
+ * harness-talking-to-harness rather than through `respond()`.
+ *
+ * **The dimensions are the measured ones and the bytes are the mock's own.**
+ * lib/api/schemas/media.ts records why `sizes` is empty on all 41: the live
+ * fixtures are 30×20, below every threshold at which WordPress generates a
+ * thumbnail. So these are 30×20 too, which is what keeps `sizes: []` a
+ * *consequence* here rather than a shortcut — a fixture at 300×200 would make
+ * an empty `sizes` a lie the next reader would have to un-learn.
+ *
+ * Each is a genuine, complete file of its own format, generated once and
+ * verified by decoding it in Chromium (`naturalWidth`/`naturalHeight` and the
+ * drawn pixels at two sample points), because "it starts with the right magic
+ * bytes" is not the same claim as "a browser renders it":
+ *
+ *   image/png    95 bytes   truecolour, filter 0, deflated
+ *   image/jpeg  191 bytes   baseline, 1×1 sampling, quant tables of all 1s and
+ *                           two minimal Huffman tables of this file's own —
+ *                           JPEG lets a file define any, and the standard Annex
+ *                           K tables carry 162 AC symbols for an image that
+ *                           uses one
+ *   image/webp  260 bytes   VP8L, no transform, no colour cache, five simple
+ *                           prefix codes
+ *
+ * **The colour is the backend's own**: `tests/Api/media.php`'s `ac_jpeg_bytes()`
+ * fills a 30×20 with rgb(190,40,40), so that is what a fixture attachment in
+ * this shop looks like. The darker band from y=16 is **invented** and is there
+ * for one reason: VP8L's cheapest encoding of a *uniform* image is 32 bytes,
+ * under `MIN_BYTES`, so a solid WebP would be a file this API could never have
+ * accepted. y=16 is an 8×8 block boundary, which is what lets the JPEG stay
+ * flat inside every block and the three formats stay pixel-identical.
+ */
+const MEDIA_IMAGE_BYTES = {
+  "image/png": Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAUCAIAAAAVyRqTAAAAJklEQVR42mPYp6FBI8QwavSo0aNG" +
+      "jxo9ajQVjZ4mJ0cjNGo0GgIAT/Vcz6Ldo2YAAAAASUVORK5CYII=",
+    "base64",
+  ),
+  "image/jpeg": Buffer.from(
+    "/9j/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB" +
+      "AQEBAQEBAQEBAQEBAQH/wAARCAAUAB4DAREAAhEAAxEA/8QAMgAAAAAMAAAAAAAAAAAAAAAAAAEC" +
+      "AwQFBgcICQoLEAACAAAAAAAAAAAAAAAAAAAA8P/aAAwDAQACAAMAAD8AlTkG5UsAAAAAAAAAAAAA" +
+      "AAAAAAAAEM41A4cAAAAAAAAA/9k=",
+    "base64",
+  ),
+  "image/webp": Buffer.from(
+    "UklGRvwAAABXRUJQVlA4TPAAAAAvHcAEADiKx30tj+LR//j/////////////////////////////" +
+      "////////////////////////////////////////////////////////////////////////////" +
+      "////////////////////////////////////////////////////////////////////////////" +
+      "/////////////////////////////////////////////////////////wcAAAAAAAAAAAAAAAAA" +
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "base64",
+  ),
+};
+
+/** A PNG chunk, so the megabyte fixture below can be a real megabyte. */
+function pngChunk(type, data) {
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, "ascii");
+  data.copy(out, 8);
+  out.writeUInt32BE(
+    crc32(Buffer.concat([Buffer.from(type, "ascii"), data])) >>> 0,
+    8 + data.length,
+  );
+  return out;
+}
+
+/**
+ * The same PNG, grown to an exact byte count with one `tEXt` chunk.
+ *
+ * `formatBytes`' `Mo` branch (lib/media.ts:157) had no fixture, and the obvious
+ * way to give it one is to write a large number into `filesize`. That would put
+ * a figure on screen that disagrees with the bytes behind it — small, invisible,
+ * and the class of thing this file exists to not do. A `tEXt` chunk after IHDR
+ * is ignored by every decoder and makes the number true instead.
+ */
+function grownPng(bytes, targetBytes) {
+  const filler = Buffer.concat([
+    Buffer.from("Comment\0", "latin1"),
+    Buffer.alloc(targetBytes - bytes.length - 12 - 8, 0x2e),
+  ]);
+  // After the 8-byte signature and the 25-byte IHDR chunk.
+  return Buffer.concat([bytes.subarray(0, 33), pngChunk("tEXt", filler), bytes.subarray(33)]);
+}
+
+/**
+ * **The stem `UploadPolicy::storedFilename()` can actually produce at its
+ * longest**, which is `MAX_STEM_LENGTH` — 80 — of `[a-z0-9]` with every other
+ * character already collapsed to a hyphen. Written without one so it has no
+ * break opportunity at all, which is what makes it the 340px fixture for this
+ * screen the way `LONG_SKU` is for products.
+ */
+const LONG_MEDIA_STEM =
+  "photographiedelateliercooperatifdetiziouzoulejourdelinaugurationdesnouveauxmetie";
+
+/**
+ * A title nobody's filename produced, because `PATCH` writes this field and
+ * `MediaInput::MAX_LENGTH` is 500. Spaced rather than unbroken on purpose: it is
+ * the *other* wrap, and the row above already carries the unbreakable one.
+ */
+const LONG_MEDIA_TITLE =
+  "Photographie de l’atelier coopératif de Tizi Ouzou, prise le jour de " +
+  "l’inauguration des nouveaux métiers à tisser installés au premier étage";
+
+/**
+ * **A third timestamp format, and this file had it as the first.**
+ *
+ * `MediaPresenter` uses `mysql_to_rfc3339()`, which despite the name emits
+ * `Y-m-d\TH:i:s` with **no offset at all**. Measured on the live router
+ * 2026-08-27: `"2026-08-27T19:52:00"`, on `date_created` and `date_modified`
+ * alike. This file emitted `iso()`'s `"…+00:00"`, which is the order's format and
+ * not this one.
+ *
+ * The three the API now demonstrably has:
+ *
+ *   order.date_created  "2026-08-18T02:52:22+00:00"   ISO with an offset
+ *   note.created_at     "2026-08-18 02:52:22"         no offset, no `T`
+ *   media.date_created  "2026-08-18T02:52:22"         no offset, **with** a `T`
+ *
+ * `parseApiDate()` reads all three correctly — it appends `Z` to anything with no
+ * zone — but `new Date()` on the third silently shifts by the host's offset, and
+ * a mock that emitted an offset here would let a media screen skip
+ * `parseApiDate()` and look right doing it. Which is the whole argument
+ * lib/format/date.ts already makes about the second.
+ */
+const mediaStamp = (minutesAgo) => iso(minutesAgo).replace("+00:00", "");
+
+/**
+ * The uploads directory this shop writes into, kept from the measured URL — only
+ * its origin moved. WordPress files by year and month; the fixtures are all from
+ * the month the library was measured.
+ */
+const MEDIA_UPLOAD_PATH = "/wp-content/uploads/2026/08";
+
+/**
+ * `filename` → the bytes `/wp-content/uploads/…` answers with.
+ *
+ * Keyed on the filename because that is what the URL carries, which makes a
+ * collision between two rows silent — one tile would quietly serve another's
+ * picture. `wp_unique_filename()` is what makes that impossible at the shop, so
+ * it is checked below rather than assumed: the 41 stems repeat every 25 and the
+ * extensions every 3, and 38 rows is short of the 75 where the two would meet.
+ */
+const MEDIA_FIXTURE_BYTES = new Map();
+
+const MEDIA_LIBRARY = [];
+
+for (let index = 0; index < 41; index += 1) {
+  /*
+   * **Rows 0-2 are all JPEG, and that is the measurement rather than the
+   * rotation.** `real.jpg` uploaded three times stored `real.jpg`, `real-1.jpg`
+   * and `real-2.jpg` — one file, three collisions, one extension. This loop
+   * rotated the three accepted types through them until the media branch, which
+   * produced `real-1.png` and `real-2.webp`: a trio no sequence of uploads could
+   * have made, sitting under a docblock claiming to reproduce one that did.
+   * Everything from index 3 rotates, so all three types are still in the library.
+   */
+  const [mime, extension] = index < 3 ? MEDIA_TYPES[0] : MEDIA_TYPES[index % 3];
+  // The measured collision trio, then one file per subject — and one deliberately
+  // awful name, which is the longest one this API can store.
+  const base =
+    index < 3
+      ? "real"
+      : index === 18
+        ? LONG_MEDIA_STEM
+        : PAGE_TOPICS[index % PAGE_TOPICS.length][0];
   const suffix = index < 3 ? (index === 0 ? "" : `-${index}`) : "";
   const filename = `${base}${suffix}.${extension}`;
 
-  return {
+  /*
+   * `filesize` is the length of what `/wp-content/uploads/…` actually answers
+   * for this row, never a decorative number. Row 31 is grown to 1.2 MB so
+   * `formatBytes`' `Mo` branch has a fixture and the file behind it is really
+   * that large.
+   */
+  const bytes =
+    index === 31 ? grownPng(MEDIA_IMAGE_BYTES[mime], 1_258_291) : MEDIA_IMAGE_BYTES[mime];
+  MEDIA_FIXTURE_BYTES.set(filename, { mime, bytes });
+
+  MEDIA_LIBRARY.push({
     id: 5001 + index,
-    title: index < 3 ? "Photo d’atelier" : `Photo — ${PAGE_TOPICS[index % PAGE_TOPICS.length][1]}`,
+    title:
+      index < 3
+        ? "Photo d’atelier"
+        : index === 18
+          ? // What `MediaRepository::titleFrom()` makes of the stem above: the
+            // stored name minus its extension, with hyphens and underscores as
+            // spaces. There are none in it, so the title is the same unbroken run.
+            LONG_MEDIA_STEM
+          : index === 25
+            ? LONG_MEDIA_TITLE
+            : `Photo — ${PAGE_TOPICS[index % PAGE_TOPICS.length][1]}`,
     slug: `${base}${suffix}`,
     // One row with no alt text at all, because that is a real attachment and the
     // grid has to say so rather than render an empty caption.
     alt: index === 7 ? "" : `Gros plan sur ${PAGE_TOPICS[index % PAGE_TOPICS.length][1]}`,
     caption: index % 4 === 0 ? "" : "Atelier de Tizi Ouzou, 2026",
     mime_type: mime,
-    url: `https://boutique.example.dz/wp-content/uploads/2026/08/${filename}`,
+    url: `${MOCK_ORIGIN}${MEDIA_UPLOAD_PATH}/${filename}`,
     filename,
-    filesize: 1024 + index * 37,
+    filesize: bytes.length,
     // 30×20, which is why `sizes` is empty on all 41.
     width: 30,
     height: 20,
@@ -3459,10 +3663,53 @@ const MEDIA_SEED = Array.from({ length: 41 }, (_, index) => {
     // One row whose uploader WordPress no longer knows, because the schema allows
     // it and there is no route that turns the number into a name either way.
     uploaded_by: index === 12 ? null : 514,
-    date_created: iso(20_000 - index * 120),
-    date_modified: iso(20_000 - index * 120),
-  };
-});
+    date_created: mediaStamp(20_000 - index * 120),
+    date_modified: mediaStamp(20_000 - index * 120),
+  });
+}
+
+if (MEDIA_FIXTURE_BYTES.size !== MEDIA_LIBRARY.length) {
+  throw new Error("two media fixtures share a filename, so one would serve the other's bytes");
+}
+
+/**
+ * **An empty library, and it is reachable no other way.**
+ *
+ * The screen takes no parameters — no search, no filter, no sort — so unlike
+ * every list in the panel there is no request that empties it. Same argument
+ * `MOCK_HOMEPAGE` makes for the homepage document, and the same shape: read once
+ * at module load, a whole run rather than a per-capture switch, so `respond()`
+ * stays pure.
+ *
+ * It empties more than the library. `MediaPicker` inside the banner sheet reads
+ * this collection and `mustBeMediaId` validates against it, so `MOCK_MEDIA=empty`
+ * is also the only way to photograph a picker with nothing to pick — and a
+ * `PATCH /cms/banners/{id} {"image_id": 5001}` under it is a 400, correctly,
+ * because no attachment with that id exists in that world.
+ */
+const MEDIA_VARIANTS = {
+  library: MEDIA_LIBRARY,
+  empty: [],
+};
+
+const REQUESTED_MEDIA = process.env.MOCK_MEDIA ?? "library";
+if (!(REQUESTED_MEDIA in MEDIA_VARIANTS)) {
+  throw new Error(
+    `MOCK_MEDIA must be one of ${Object.keys(MEDIA_VARIANTS).join(", ")} — got "${REQUESTED_MEDIA}".`,
+  );
+}
+
+const MEDIA_SEED = MEDIA_VARIANTS[REQUESTED_MEDIA];
+
+/*
+ * The bytes follow the variant. An empty library has no files behind it, so
+ * `/wp-content/uploads/…` must 404 rather than answer for an attachment that
+ * does not exist — and `uniqueMediaFilename()` must not dodge a name nothing
+ * holds, or the first upload into an empty shop would come back `real-3.jpg`.
+ */
+for (const filename of [...MEDIA_FIXTURE_BYTES.keys()]) {
+  if (!MEDIA_SEED.some((row) => row.filename === filename)) MEDIA_FIXTURE_BYTES.delete(filename);
+}
 
 /* ------------------------------------------ the order detail's sub-resources --- */
 
@@ -5655,6 +5902,16 @@ const state = {
   nextMenuItemId: 0,
   /** Media id → the row as it reads now. `PATCH` writes alt, title and caption. */
   media: new Map(),
+  /** The ids `POST /media` created, newest last. */
+  createdMedia: [],
+  nextMediaId: 0,
+  /**
+   * `filename` → the bytes an upload sent, so `/wp-content/uploads/…` can answer
+   * with them. Without this a freshly uploaded tile is the one broken box in a
+   * grid of working ones, which is the state a screen is least likely to be
+   * built for and most likely to reach.
+   */
+  uploads: new Map(),
 };
 
 export function resetState() {
@@ -5717,6 +5974,11 @@ export function resetState() {
   state.nextMenuId = 4300;
   state.nextMenuItemId = 4400;
   state.media = new Map();
+  state.createdMedia = [];
+  // Clear of the 41 seeded ids (5001-5041) and fixed rather than derived, which
+  // is what keeps a screenshot of a just-uploaded tile byte-stable.
+  state.nextMediaId = 5120;
+  state.uploads = new Map();
 }
 
 resetState();
@@ -9888,9 +10150,35 @@ const mustBeWholeNumber = (value) =>
  * coupons, one collection over.
  */
 const mustBeMediaId = (value) => {
-  if (value === null) return null;
-  if (typeof value !== "number" || !Number.isInteger(value)) return "Must be a whole number.";
-  return mediaRows().some((row) => row.id === value) ? null : `No attachment with id ${value}.`;
+  /*
+   * **Both sentences here were this file's own words until the media branch, and
+   * both are now the router's.** `BannerInput`/`PageInput` answer "Must be an
+   * attachment id, or 0 to clear." for a bad shape, and
+   * `CmsRepository::assertImageAttachment()` answers "{id} is not an image
+   * attachment." for an id that names nothing. This file said "Must be a whole
+   * number." and "No attachment with id 5001." — two of the six invented CMS
+   * refusals DECISIONS.md carries, settled by reading `src/CMS/` rather than by
+   * a request-for-request diff, which still has not been run on that collection.
+   *
+   * **`0` clears, and it was refused here.** `null`, `""` and `0` all mean "no
+   * image" to both inputs; this rule looked `0` up as an id, found nothing and
+   * answered 400, so one of the three documented ways to remove a banner's
+   * picture was unreachable against the harness. That is the *stricter*
+   * direction.
+   *
+   * Still stricter in one place, deliberately: `is_numeric("5001")` is true at
+   * the shop and a numeric **string** is accepted there. Reproducing that needs a
+   * coercion channel `readContentBody()` does not have — it stores the value it
+   * was given — so `"5001"` is refused here and the divergence is named rather
+   * than half-built.
+   */
+  if (value === null || value === "" || value === 0) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return "Must be an attachment id, or 0 to clear.";
+  }
+  return mediaRows().some((row) => row.id === value)
+    ? null
+    : `${value} is not an image attachment.`;
 };
 
 const PAGE_FIELD_RULES = {
@@ -10385,7 +10673,10 @@ const BANNER_FIELD_RULES = {
 const BANNER_READ_ONLY = ["id", "image", "date_modified"];
 
 const BANNER_NAMED_REFUSALS = {
-  image_url: "Upload through POST /media and send the attachment id as image_id.",
+  // `BannerInput::REFUSED`, verbatim — **including the quotes around the field
+  // name**, which this file dropped. Another of the six invented CMS sentences,
+  // settled the same way `mustBeMediaId`'s two were: by reading `src/CMS/`.
+  image_url: 'Upload through POST /media and send the attachment id as "image_id".',
 };
 
 /**
@@ -10995,18 +11286,15 @@ function putMenu(location, body) {
 
 /* ------------------------------------------------------------------ media --- */
 
-/** Every attachment this process can see. Nothing creates or removes one here. */
-const mediaRows = () => MEDIA_SEED.map((row) => state.media.get(row.id) ?? row);
-
 /**
  * ── What of `/media`'s contract is verified, and what is not ─────────────────
  *
- * **This screen is checklist item 13 and is not being redesigned on this
- * branch.** It is served because the Content hub renders a media count and
- * `MediaPicker` reads the collection from inside the banner form, so leaving it
- * a 404 would photograph two Content screens in an error state. What follows is
- * the boundary between what was measured and what this file assumed, so that
- * item 13 does not inherit a guess as a measurement:
+ * Rewritten on the media branch (item 13), which owns this surface. The block
+ * this replaces recorded `POST /media` as deliberately unserved and the four
+ * query parameters as deliberately ignored; both were true of a *shell* that
+ * parsed JSON only and of a branch that did not own the screen. Neither is true
+ * now, and what follows is the new boundary between what was read out of the
+ * backend and what this file made up:
  *
  *   **measured**   41 items on `GET /media`; `sizes` empty on every one of them,
  *                  because the fixtures are 30×20 and below every thumbnail
@@ -11015,36 +11303,62 @@ const mediaRows = () => MEDIA_SEED.map((row) => state.media.get(row.id) ?? row);
  *                  extension from the *sniffed* type; `ac_manage_content` guards
  *                  the **reads** as well as the writes, so a Manager is 403 on
  *                  `GET /media`; `DELETE /media/{id}` exists at the API and is
- *                  deliberately off the panel's allowlist.
+ *                  deliberately off the panel's allowlist; and the five upload
+ *                  refusals recorded in lib/media.ts:18-23 with their codes and
+ *                  their `details` keys, the size floor firing **before** the
+ *                  sniffer.
  *
- *   **unverified** the list **envelope** — this pages through the shared
- *                  `paginate()` because both callers send `per_page` and `page`
- *                  and both read `total`, and no request-for-request diff has
- *                  been taken; whether `GET /media` takes `?search=` or any
- *                  filter at all, so none is served; what `PATCH /media/{id}`
- *                  accepts beyond `alt`, `title` and `caption`, which are the
- *                  three the panel sends; the **statuses** of that PATCH's
- *                  refusals; and the resting order, which is newest first here
- *                  and is an assumption.
+ *   **read out of the backend, not measured over the wire** every status,
+ *                  sentence and enum below traces to a file in
+ *                  `src/Media/` or to `tests/Api/media.php` — `201` on the
+ *                  create (`MediaController::store`), `ORDERBY` of
+ *                  `date · title · id` (`MediaRepository::ORDERBY`), the `type`
+ *                  pattern (`MediaController::indexArgs`), the refusal
+ *                  sentences (`UploadPolicy`, `MediaInput`) and the PATCH cases
+ *                  (`tests/Api/media.php:387-437`). Reading the router is a
+ *                  better source than reading the panel, and it is still not a
+ *                  request-for-request diff: **none has been run on this
+ *                  collection**, and the envelope in particular is still the
+ *                  shared `paginate()` because both callers send `per_page` and
+ *                  `page` and read `total`.
  *
- *   **not served** `POST /media`. It is allowlisted and it is the only
- *                  `multipart/form-data` request the panel makes — this server
- *                  parses JSON and hands `respond()` a `null` body for anything
- *                  else, so every upload would arrive indistinguishable from an
- *                  empty one and all five of its measured failure shapes
- *                  (400 `invalid_upload`, 413 `file_too_large`, and three
- *                  different 415s separated only by `details`) would be
- *                  unreachable. Item 13 owns the upload screen and owns
- *                  modelling it; a fixture that answered 201 to anything would
- *                  be an invitation to build that screen against a fiction.
- *                  This is the *less capable* direction and it is named rather
- *                  than left to be discovered.
+ *   **invented**   flagged at each site, and there are four: the `detected` mime
+ *                  for every non-image (only `application/pdf` is measured); the
+ *                  fields `?search=` matches; the tie-break inside a sort; and
+ *                  the resting order, which is newest first here and is what
+ *                  `orderby=date&order=desc` implies rather than something
+ *                  anyone watched.
+ *
+ * **Two fallbacks in the backend are unreachable and are reproduced as
+ * unreachable.** `MediaRepository::paginate()` silently falls back to `date` for
+ * an off-enum `orderby`, and to `''` — no filter — for a `type` that is not a
+ * mime type; the controller's `enum` and `pattern` both 400 first, so neither
+ * line can run. A mock that copied the repository rather than the router would
+ * answer 200 to `?orderby=rand`, which is the *more permissive* direction and
+ * exactly what the coupons branch got wrong in reverse.
  */
-const MEDIA_FIELD_RULES = {
-  alt: mustBeText,
-  title: mustBeText,
-  caption: mustBeText,
-};
+
+/** Every attachment this process can see, seeded and uploaded. */
+const mediaRows = () => [
+  ...state.createdMedia.map((id) => state.media.get(id)),
+  ...MEDIA_SEED.map((row) => state.media.get(row.id) ?? row),
+];
+
+/** `MediaRepository::ORDERBY`. `order` is the file-wide `SORT_DIRECTIONS`. */
+const MEDIA_ORDERBY = ["date", "title", "id"];
+
+/**
+ * `MediaController::indexArgs()`' own pattern, verbatim — a family (`image`) or
+ * a full type (`image/png`). It is a *pattern* refusal rather than an enum one,
+ * which is the family that prints the regex at the reader; the media screen ships
+ * no type filter, which is what keeps it unreachable there.
+ */
+const MEDIA_TYPE_PATTERN = "^[a-z]+(/[a-z0-9.+-]+)?$";
+
+const MEDIA_FIELDS = ["alt", "title", "caption"];
+
+/** `MediaInput::MAX_LENGTH`, checked against the **trimmed** value. */
+const MEDIA_MAX_LENGTH = 500;
 
 const MEDIA_READ_ONLY = [
   "id",
@@ -11061,22 +11375,553 @@ const MEDIA_READ_ONLY = [
   "date_modified",
 ];
 
+/**
+ * `MediaInput::REFUSED`, verbatim — and `file` is the one the backend suite
+ * asserts by substring (`tests/Api/media.php:414-422`, "upload a new one"),
+ * because a client that PATCHes `file` has to be told to upload instead of being
+ * told the field is unknown. The four post fields beside it are the privilege
+ * escalation an attachment-is-a-post write path would otherwise open.
+ */
+const MEDIA_NAMED_REFUSALS = {
+  file: "The stored file cannot be replaced; upload a new one.",
+  post_type: "Not editable.",
+  post_status: "Not editable.",
+  post_author: "Not editable.",
+  parent_id: "Not editable.",
+};
+
+/**
+ * `MediaInput::fromPayload()`'s per-field rule, and it is **looser than
+ * `mustBeText`** — which is what this used to use.
+ *
+ * `null` clears the field to `""` (asserted at `tests/Api/media.php:430-435`),
+ * and anything `is_scalar()` is cast rather than refused: `PATCH {"alt": 5}` is
+ * a 200 storing `"5"` at the shop. PATCH reads `get_json_params()` with no arg
+ * schema above it, so a JSON number really does reach that cast. `mustBeText`
+ * answered 400 to both, which is the *stricter* direction — the one DECISIONS.md
+ * §0 says is not the safe one.
+ *
+ * Objects and arrays are the only things refused, and `sanitize_text_field()` /
+ * `wp_kses_post()` on the way to the database are **not** modelled: a title of
+ * `<b>x</b>` reads back `x` at the shop and `<b>x</b>` here. Named because
+ * nothing in this file models WordPress's sanitisers and a screen that displayed
+ * either field as HTML would want it.
+ */
+function mediaFieldValue(value) {
+  if (value === null) return { value: "" };
+  if (typeof value === "object") return { problem: "Must be a string." };
+  const text = (typeof value === "boolean" ? (value ? "1" : "") : String(value)).trim();
+  if ([...text].length > MEDIA_MAX_LENGTH) {
+    return { problem: `Must be at most ${MEDIA_MAX_LENGTH} characters.` };
+  }
+  return { value: text };
+}
+
+/**
+ * `MediaInput::fromPayload()`, whole.
+ *
+ * The read-only keys leave in silence — `array_diff_key` runs *before* the
+ * unknown-field pass — so a client can GET a row and PATCH the body back. What
+ * survives that and is still not one of the three is an error, and the message
+ * is `MediaInput`'s own: **"The media data is invalid."** This file said "The
+ * attachment is invalid." until this branch, which was one of the six invented
+ * CMS sentences DECISIONS.md carries.
+ */
+function readMediaInput(body) {
+  const source = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (MEDIA_READ_ONLY.includes(key)) continue;
+    if (MEDIA_NAMED_REFUSALS[key] !== undefined) {
+      fields[key] = MEDIA_NAMED_REFUSALS[key];
+      continue;
+    }
+    if (!MEDIA_FIELDS.includes(key)) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const read = mediaFieldValue(value);
+    if (read.problem === undefined) writes[key] = read.value;
+    else fields[key] = read.problem;
+  }
+
+  return Object.keys(fields).length > 0
+    ? { error: invalidBody("The media data is invalid.", fields) }
+    : { writes };
+}
+
+/** `MediaService::require()` — the id is in the route pattern, so this is not a `rest_no_route`. */
+const mediaNotFound = () => fail(404, "not_found", "No media item with that id.");
+
+/**
+ * `?search=`, and **which fields it matches is this file's guess.**
+ *
+ * `MediaRepository::paginate()` hands the term to `WP_Query`'s `s`, which is a
+ * `LIKE` over `post_title`, `post_excerpt` and `post_content` — title and caption
+ * of the three this presenter emits, since an attachment's description is not in
+ * the response at all. `alt` is post meta and cannot be reached by `s`;
+ * **filename is the one that would matter to a person and is the one nobody has
+ * measured** — core has searched attachments by filename since 4.7 but gated it
+ * behind `wp_allow_query_attachment_by_filename` in 5.9, and which way that
+ * filter sits on this install is unknown. Not searched here, so a screen cannot
+ * ship a "search by filename" that only works against the harness.
+ *
+ * Folded on both sides like every other search in this file, because MySQL's own
+ * collation is accent-insensitive.
+ */
+const searchMedia = (rows, params) => searchRows(rows, params, (row) => [row.title, row.caption]);
+
+/**
+ * `orderby` × `order`, honoured — the router validates both and the repository
+ * really does sort.
+ *
+ * The **tie-break is invented**: MySQL leaves rows tied on `post_title` in
+ * whatever order the index hands back, and a screenshot cannot be byte-stable on
+ * that, so ties fall to descending id here. It is named because a screen must
+ * not ship a sort whose secondary order it learnt from this file.
+ */
+function sortMedia(rows, orderby, order) {
+  const key =
+    orderby === "title"
+      ? (row) => fold(row.title)
+      : orderby === "id"
+        ? (row) => row.id
+        : (row) => row.date_created;
+
+  const direction = order === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const left = key(a);
+    const right = key(b);
+    if (left < right) return -direction;
+    if (left > right) return direction;
+    return b.id - a.id;
+  });
+}
+
+/**
+ * `post_mime_type` as `WP_Query` reads it: a family matches `image/%`, a full
+ * type matches exactly. `type=video/mp4` is a 200 with nothing in it — asserted
+ * at `tests/Api/media.php:352-357` — and **not** a refusal, which is the
+ * distinction a screen offering a type filter would have to render.
+ */
+const matchesMediaType = (row, type) =>
+  type === "" || row.mime_type === type || row.mime_type.startsWith(`${type}/`);
+
 function mediaListing(params) {
-  const page = paginate(mediaRows(), params);
+  /*
+   * The collection's own parameters first and `paginate()` last, which is the
+   * order every other listing in this file uses. **WordPress reports *every*
+   * invalid parameter in one `Invalid parameter(s): a, b`** and this file has
+   * always reported exactly one — `paginate()` says so in as many words, and
+   * which one wins for a request with two wrong is not measured on any
+   * collection here.
+   */
+  const orderby = params.get("orderby");
+  if (orderby !== null && !MEDIA_ORDERBY.includes(orderby)) {
+    return invalidParam("orderby", notOneOf("orderby", MEDIA_ORDERBY));
+  }
+  const order = params.get("order");
+  if (order !== null && !SORT_DIRECTIONS.includes(order)) {
+    return invalidParam("order", notOneOf("order", SORT_DIRECTIONS));
+  }
+  /*
+   * `?type=` is a 400 rather than "no filter". The empty string is a *value*
+   * that fails the pattern, which is the same reading `?date_from=` was measured
+   * to take on `/payments` and the same one `?orderby=` takes on every
+   * collection that validates a sort. It is also what makes the repository's
+   * `if ($type !== '')` branch unreachable through the router.
+   */
+  const type = params.get("type");
+  if (type !== null && !new RegExp(MEDIA_TYPE_PATTERN).test(type)) {
+    return invalidParam("type", notMatching("type", MEDIA_TYPE_PATTERN));
+  }
+
+  const rows = sortMedia(
+    searchMedia(mediaRows(), params).filter((row) => matchesMediaType(row, type ?? "")),
+    orderby ?? "date",
+    order ?? "desc",
+  );
+
+  const page = paginate(rows, params);
   return page.error ?? ok(page.rows, page.meta);
 }
 
 function patchMedia(current, body) {
-  const parsed = readContentBody(body, {
-    rules: MEDIA_FIELD_RULES,
-    readOnly: MEDIA_READ_ONLY,
-    message: "The attachment is invalid.",
-  });
+  const parsed = readMediaInput(body);
   if (parsed.error) return parsed.error;
+
+  /*
+   * `MediaInput::isEmpty()`. A body of `{}` — and a body of nothing but read-only
+   * keys, which reduces to the same thing — is a 400 naming no field at all,
+   * exactly as `PATCH /products/{id}` is. This file answered **200** to both
+   * until this branch: a save that changed nothing looked like a save.
+   */
+  if (Object.keys(parsed.writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
 
   const next = { ...current, ...parsed.writes };
   state.media.set(current.id, next);
   return ok(next);
+}
+
+/* ----------------------------------------------------------- media upload --- */
+
+/**
+ * ── `POST /media`, and the order of its checks is the whole contract ─────────
+ *
+ * `UploadPolicy::accept()` runs size → filename → contents → agreement, and
+ * lib/media.ts:9-16 exists because getting that order wrong cost a measurement:
+ * a 48-byte PDF renamed `.png` answered **400 `invalid_upload`**, not 415, and
+ * the reading "there is a third code for a disguised file" survived until a
+ * 5.4 KB control was run beside it. `MIN_BYTES` fires before anything reads a
+ * byte. Do not reorder these four.
+ *
+ * Everything below is `UploadPolicy` and `UploadedFile` re-expressed; every
+ * sentence is theirs. The one thing that is **not** modelled is the rate limit —
+ * `MediaService::guardUploadRate()` is a tighter counter than the namespace-wide
+ * write limit, nothing in this file models any rate limit, and a harness that
+ * refused the eleventh upload of a capture run would be inventing a state no
+ * screenshot needs.
+ */
+const MEDIA_MIN_BYTES = 64;
+const MEDIA_MAX_BYTES = 8388608;
+const MEDIA_MAX_FILENAME_LENGTH = 255;
+const MEDIA_MAX_STEM_LENGTH = 80;
+
+/** `UploadPolicy::ACCEPTED_TYPES` — what a file may prove itself to be. */
+const MEDIA_ACCEPTED_TYPES = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+/** `UploadPolicy::ALLOWED_EXTENSIONS` — what a client may present. Four, for three types. */
+const MEDIA_ALLOWED_EXTENSIONS = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+};
+
+/** `UploadPolicy::FORBIDDEN_SEGMENTS`, verbatim — refused **anywhere** in a name. */
+const MEDIA_FORBIDDEN_SEGMENTS = [
+  "php", "php3", "php4", "php5", "php7", "php8", "phps", "pht", "phtml", "phar",
+  "shtml", "htaccess", "htpasswd", "ini", "cgi", "pl", "py", "rb", "sh", "bash",
+  "exe", "dll", "so", "jar", "jsp", "asp", "aspx", "cer", "swf",
+  "html", "htm", "xhtml", "svg", "js", "mjs",
+];
+
+/** `sprintf('Only %s files are accepted.', implode(', ', array_keys(ACCEPTED_TYPES)))`. */
+const MEDIA_TYPES_SENTENCE = `Only ${Object.keys(MEDIA_ACCEPTED_TYPES).join(", ")} files are accepted.`;
+
+const badUploadName = (message) => fail(400, "invalid_upload", message);
+
+/** `UploadPolicy::badType()` — the detected type is echoed to an authenticated caller. */
+const badUploadType = (detected) =>
+  fail(415, "unsupported_media_type", MEDIA_TYPES_SENTENCE, {
+    detected: detected === "" ? "unknown" : detected,
+  });
+
+/**
+ * `finfo(FILEINFO_MIME_TYPE)`, to the extent this file needs one.
+ *
+ * The three accepted types are magic numbers and are exact. **Everything else is
+ * invented** and is here only so `details.detected` carries a plausible string:
+ * `application/pdf` is the one value lib/media.ts actually measured, and
+ * `text/x-php`, `image/svg+xml`, `image/gif`, `text/plain` and
+ * `application/octet-stream` are what libmagic is *expected* to answer for the
+ * backend suite's own hostile fixtures. A screen must branch on the presence of
+ * `details.detected`, never on its value — `classifyRefusal()` already does,
+ * which is why this being approximate is affordable.
+ */
+function sniffMedia(bytes) {
+  const head = bytes.subarray(0, 16);
+  const ascii = (start, end) => bytes.subarray(start, end).toString("latin1");
+
+  if (head.length >= 8 && ascii(0, 8) === "\x89PNG\r\n\x1a\n") return "image/png";
+  if (head.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (head.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (head.length >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) return "image/gif";
+  if (head.length >= 4 && ascii(0, 4) === "%PDF") return "application/pdf";
+
+  const opening = bytes.subarray(0, 512).toString("utf8");
+  if (/<\?php/i.test(opening)) return "text/x-php";
+  if (/^\s*(<\?xml[^>]*\?>\s*)?(<!--.*?-->\s*)*<svg[\s>]/is.test(opening)) return "image/svg+xml";
+  if (!/[\x00-\x08\x0e-\x1f]/.test(opening) && opening.length > 0) return "text/plain";
+  return "application/octet-stream";
+}
+
+/**
+ * `getimagesize()`, which is the **second** reader `UploadPolicy::sniff()` runs.
+ *
+ * Two readers that fail differently is the point: `finfo` matches the head of
+ * the file and this parses enough of the image header to report dimensions, so a
+ * truncated PNG satisfies the first and not the second. Returning `null` here is
+ * what reproduces that — the policy answers 415 with the *detected* type, not a
+ * fourth code.
+ */
+function mediaDimensions(bytes, mime) {
+  try {
+    if (mime === "image/png") {
+      if (bytes.subarray(12, 16).toString("latin1") !== "IHDR") return null;
+      return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    }
+
+    if (mime === "image/jpeg") {
+      let at = 2;
+      while (at + 9 < bytes.length) {
+        if (bytes[at] !== 0xff) return null;
+        const marker = bytes[at + 1];
+        const length = bytes.readUInt16BE(at + 2);
+        const isFrame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+        if (isFrame) {
+          return { width: bytes.readUInt16BE(at + 7), height: bytes.readUInt16BE(at + 5) };
+        }
+        at += 2 + length;
+      }
+      return null;
+    }
+
+    if (mime === "image/webp") {
+      const chunk = bytes.subarray(12, 16).toString("latin1");
+      if (chunk === "VP8L") {
+        const packed = bytes.readUInt32LE(22);
+        return { width: (packed & 0x3fff) + 1, height: ((packed >> 14) & 0x3fff) + 1 };
+      }
+      if (chunk === "VP8 ") {
+        return {
+          width: bytes.readUInt16LE(26) & 0x3fff,
+          height: bytes.readUInt16LE(28) & 0x3fff,
+        };
+      }
+      if (chunk === "VP8X") {
+        const read24 = (at) => bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16);
+        return { width: read24(24) + 1, height: read24(27) + 1 };
+      }
+      return null;
+    }
+  } catch {
+    // A header that runs off the end of the buffer is exactly what
+    // `getimagesize()` answers false for.
+    return null;
+  }
+  return null;
+}
+
+/**
+ * `UploadPolicy::assertFilename()` — reject a hostile name, return what it claims.
+ *
+ * A path separator, a `..`, a NUL or a control character is never a mistake, so
+ * none is repaired. **Three of these cannot arrive over real HTTP**, and each is
+ * kept anyway because the shop keeps them:
+ *
+ *   a NUL, a control character   cannot travel in a `Content-Disposition` header
+ *   a leading `/` or `\`         `parseMultipart()` has already stripped it, the
+ *                                way PHP does — measured live at 201
+ *
+ * The `..` check is **not** in that list: `a..b.jpg` carries no separator for the
+ * basename to strip and answers 400 at the shop, measured 2026-08-27. So the path
+ * branch is live for that shape and dead for the shape everyone tests it with.
+ */
+function assertMediaFilename(rawName) {
+  const name = rawName.trim();
+
+  if (name === "" || Buffer.byteLength(name) > MEDIA_MAX_FILENAME_LENGTH) {
+    return { error: badUploadName("The filename is missing or too long.") };
+  }
+  if (/[\x00-\x1f\x7f]/.test(name)) {
+    return { error: badUploadName("The filename contains control characters.") };
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+    return { error: badUploadName("The filename must not contain a path.") };
+  }
+
+  const segments = name.toLowerCase().split(".");
+  const extension = segments.pop();
+
+  if (segments.length === 0) {
+    return { error: badUploadName("The filename has no extension.") };
+  }
+  // Every interior segment and the stem: `.htaccess` arrives as stem "" and
+  // extension "htaccess", `shell.php.jpg` as an interior one.
+  for (const segment of segments) {
+    if (MEDIA_FORBIDDEN_SEGMENTS.includes(segment)) {
+      return { error: badUploadName("The filename contains a disallowed extension.") };
+    }
+  }
+  if (MEDIA_ALLOWED_EXTENSIONS[extension] === undefined) {
+    return {
+      error: fail(415, "unsupported_media_type", MEDIA_TYPES_SENTENCE, { extension }),
+    };
+  }
+
+  return { extension };
+}
+
+/** `UploadPolicy::storedFilename()` — the stem is kept, the extension is the sniffed type's. */
+function storedMediaStem(clientName) {
+  let stem = clientName
+    .trim()
+    .replace(/\.[^.]*$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (stem.length > MEDIA_MAX_STEM_LENGTH) {
+    stem = stem.slice(0, MEDIA_MAX_STEM_LENGTH).replace(/-+$/, "");
+  }
+  // A name made entirely of characters we drop — Arabic, for one — is normal
+  // here and must not produce a file called ".jpg".
+  return stem === "" ? "image" : stem;
+}
+
+/**
+ * `wp_unique_filename()`, which is the thing the measured trio proves: `real.jpg`
+ * uploaded three times stored `real.jpg`, `real-1.jpg`, `real-2.jpg`.
+ */
+function uniqueMediaFilename(stem, extension) {
+  let candidate = `${stem}.${extension}`;
+  let suffix = 0;
+  while (state.uploads.has(candidate) || MEDIA_FIXTURE_BYTES.has(candidate)) {
+    suffix += 1;
+    candidate = `${stem}-${suffix}.${extension}`;
+  }
+  return candidate;
+}
+
+/** `MediaRepository::titleFrom()` — `tapis-berbere.jpg` becomes `tapis berbere`. */
+const mediaTitleFrom = (storedName) =>
+  storedName.replace(/\.[^.]*$/, "").replace(/[-_]/g, " ").trim() || "image";
+
+/**
+ * The multipart body the shell parsed, or `null` for anything else.
+ *
+ * A JSON `POST /media` reaches here as `null` and is answered with
+ * `UploadedFile::fromParams()`' own sentence, which is what the shop answers to a
+ * request carrying no `file` entry — the two are the same failure to that class.
+ */
+const multipartOf = (body) =>
+  body !== null && typeof body === "object" && !Array.isArray(body) && body.multipart !== undefined
+    ? body.multipart
+    : null;
+
+function uploadMedia(body) {
+  const form = multipartOf(body);
+  const entries = form === null ? [] : (form.files.file ?? []);
+
+  if (entries.length === 0) {
+    return fail(
+      400,
+      "invalid_upload",
+      'Send the file as multipart/form-data in a field named "file".',
+    );
+  }
+  /*
+   * `UploadedFile::fromParams()` refuses a multi-file field outright: taking the
+   * first silently would make "did my other three upload?" unanswerable.
+   *
+   * **Reachable only through a `file[]` field**, measured live: two parts both
+   * named `file` are one field written twice and the second wins, answering 201.
+   * `parseMultipart()` is what draws that line, because PHP draws it there.
+   */
+  if (entries.length > 1) {
+    return fail(400, "invalid_upload", "Upload one file per request.");
+  }
+
+  const file = entries[0];
+
+  /*
+   * `MediaService::upload()` validates the text fields **before** the policy runs,
+   * and the controller only ever reads `MediaInput::allowedFields()` out of the
+   * request — so an unknown field beside the file is **ignored**, where the same
+   * key on `PATCH` is a 400. That asymmetry is the router's, not a shortcut here.
+   */
+  const parsed = readMediaInput(
+    Object.fromEntries(
+      MEDIA_FIELDS.filter((field) => form?.fields[field] !== undefined).map((field) => [
+        field,
+        form.fields[field],
+      ]),
+    ),
+  );
+  if (parsed.error) return parsed.error;
+
+  const size = file.bytes.length;
+  if (size < MEDIA_MIN_BYTES) {
+    return fail(400, "invalid_upload", "The uploaded file is empty or truncated.", { size });
+  }
+  if (size > MEDIA_MAX_BYTES) {
+    return fail(413, "file_too_large", `The file is larger than the ${MEDIA_MAX_BYTES} byte limit.`, {
+      size,
+      max_bytes: MEDIA_MAX_BYTES,
+    });
+  }
+
+  const named = assertMediaFilename(file.name);
+  if (named.error) return named.error;
+
+  const detected = sniffMedia(file.bytes);
+  if (MEDIA_ACCEPTED_TYPES[detected] === undefined) return badUploadType(detected);
+
+  const dimensions = mediaDimensions(file.bytes, detected);
+  if (dimensions === null) return badUploadType(detected);
+
+  if (MEDIA_ALLOWED_EXTENSIONS[named.extension] !== detected) {
+    return fail(415, "unsupported_media_type", "The file contents do not match its extension.", {
+      extension: named.extension,
+      detected,
+    });
+  }
+
+  const stem = storedMediaStem(file.name);
+  const filename = uniqueMediaFilename(stem, MEDIA_ACCEPTED_TYPES[detected]);
+  state.uploads.set(filename, { mime: detected, bytes: file.bytes });
+
+  const id = state.nextMediaId;
+  state.nextMediaId += 1;
+
+  const row = {
+    id,
+    title: parsed.writes.title ?? mediaTitleFrom(filename),
+    slug: filename.replace(/\.[^.]*$/, ""),
+    alt: parsed.writes.alt ?? "",
+    caption: parsed.writes.caption ?? "",
+    mime_type: detected,
+    url: `${MOCK_ORIGIN}${MEDIA_UPLOAD_PATH}/${filename}`,
+    filename,
+    filesize: size,
+    ...dimensions,
+    /*
+     * **Empty on every upload, and this is the one place the mock is knowingly
+     * less capable than WordPress.** A 30×20 file generates no sub-size, which is
+     * why all 41 fixtures have none; a 2000px photograph through this route would
+     * generate four at the shop. Modelling that would mean inventing WordPress's
+     * thresholds *and* a shape — and lib/api/schemas/media.ts declares `sizes` an
+     * **array** of `{name,url,width,height}` where `MediaPresenter::sizes()`
+     * returns an **object keyed by size name** of `{width,height,mime_type}`, so
+     * emitting one would be inventing the wrong thing twice over. Named here
+     * because a screen must not read "the mock never sends sizes" as "the API
+     * never does".
+     */
+    sizes: [],
+    uploaded_by: IDENTITY.id,
+    date_created: mediaStamp(0),
+    date_modified: mediaStamp(0),
+  };
+
+  state.media.set(id, row);
+  state.createdMedia.push(id);
+
+  // 201, from `MediaController::store()`. The fourth create in this file to be
+  // pinned there, and the first pinned by reading the controller rather than by
+  // firing a request at the shop.
+  return created(row);
 }
 
 /* ------------------------------------------------------------------ route --- */
@@ -11124,9 +11969,10 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     // one carrying a `PUT`: the homepage and a menu are both documents replaced
     // whole rather than collections of addressable rows.
     "cms",
-    // `PATCH /media/{id}` is the alt-text edit. `POST /media` is the upload and
-    // stays unserved — it is `multipart/form-data` and this shell parses JSON,
-    // so the case below refuses it by name rather than letting this list decide.
+    // `PATCH /media/{id}` is the alt-text edit and `POST /media` is the upload —
+    // the one `multipart/form-data` request the panel makes, which the shell
+    // parses since the media branch. `DELETE` is still refused by the case below
+    // rather than by this list.
     "media",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
@@ -11981,26 +12827,34 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * line between what was measured and what this file assumed, so item 13 does
      * not inherit a guess as a measurement.
      *
-     * **`POST /media` is allowlisted and deliberately unserved**, and **`DELETE
-     * /media/{id}` is deliberately not allowlisted.** The first is the only
-     * `multipart/form-data` request the panel makes and this shell parses JSON —
-     * every upload would arrive indistinguishable from an empty one, and all five
-     * of its measured failure shapes would be unreachable. The second exists at
-     * the API and is off the proxy's list with a unit test saying so: nothing
-     * here tells a client what an attachment is *used by*, so the library cannot
-     * answer "what would this break?".
+     * **`POST /media` is served on this branch**, and it is the only
+     * `multipart/form-data` request the panel makes — the shell parses one now,
+     * so all five measured refusals are reachable instead of arriving
+     * indistinguishable from an empty upload. **`DELETE /media/{id}` is still
+     * deliberately not allowlisted and still unserved**: it exists at the API and
+     * `ac_manage_content` allows it, but nothing here tells a client what an
+     * attachment is *used by*, so the library cannot answer "what would this
+     * break?" and the route stays unreachable until a screen can.
      */
     case "media": {
       const denied = gatedOn("ac_manage_content");
       if (denied !== null) return denied;
 
       if (second === undefined) {
-        return method === "GET" ? mediaListing(searchParams) : notFound();
+        if (method === "GET") return mediaListing(searchParams);
+        return method === "POST" ? uploadMedia(body) : notFound();
       }
       if (segments.length !== 2) return notFound();
       const id = numericId(second);
-      const item = id === null ? undefined : mediaRows().find((row) => row.id === id);
-      if (item === undefined) return notFound();
+      /*
+       * `/media/abc` is a `rest_no_route` — the route pattern is `(?P<id>\d+)`
+       * and nothing matches — while `/media/99999999` reaches the controller and
+       * answers `not_found` with its own sentence. Two different 404s, and this
+       * file answered `rest_no_route` to both until this branch.
+       */
+      if (id === null) return notFound();
+      const item = mediaRows().find((row) => row.id === id);
+      if (item === undefined) return mediaNotFound();
       if (method === "GET") return ok(item);
       return method === "PATCH" ? patchMedia(item, body) : notFound();
     }
@@ -12026,6 +12880,101 @@ export function stats() {
   return { count: requestLog.length, paths };
 }
 
+/**
+ * `multipart/form-data`, parsed the way **PHP's** parser does — which is not the
+ * way the backend's own unit fixtures do, and the difference is two refusals.
+ *
+ * Measured against the live router 2026-08-27, after a request-for-request diff
+ * of twelve uploads answered `DIFF` on exactly these two:
+ *
+ *   `filename="../../evil.jpg"`   live **201**, stored `evil.jpg`
+ *   `filename="C:\dir\b.jpg"`     live **201**, stored `b.jpg`
+ *   two parts both named `file`   live **201**, the **second** one stored
+ *   two parts named `file[]`      live 400 "Upload one file per request."
+ *   `filename="a..b.jpg"`         live 400 "The filename must not contain a path."
+ *
+ * So `php_rfc1867_basename()` strips everything through the last `/` or `\`
+ * before `$_FILES['file']['name']` exists, and a repeated scalar field
+ * **overwrites** rather than accumulating — only a `name[]` suffix makes an
+ * array. `UploadPolicy::assertFilename()` therefore never sees a leading path,
+ * and `UploadedFile::fromParams()` never sees two files unless the client asked
+ * for an array field.
+ *
+ * `tests/Api/media.php:243-253,287-297` assert 400 for both, and they are right
+ * about the code they call: they build `$_FILES` **in-process**, where no PHP
+ * multipart parser has run. This file used to reproduce those tests instead of
+ * the shop, and answered 400 to two uploads the shop takes — the *stricter*
+ * direction, which DECISIONS.md §0 says is not the safe one and which would have
+ * grown two error paths an upload dialog can never reach.
+ *
+ * Exported because `tests/mock-api.test.ts` calls `respond()` directly and the
+ * alternative — hand-building the object this returns — would test the upload
+ * against a shape nothing produces, and would have hidden exactly this.
+ *
+ * Returns `null` for a body that is not multipart at all, which `uploadMedia()`
+ * answers exactly as the shop answers a request with no file entry.
+ */
+export function parseMultipart(buffer, contentType) {
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType ?? "");
+  if (match === null) return null;
+
+  const delimiter = Buffer.from(`\r\n--${(match[1] ?? match[2]).trim()}`);
+  // The first boundary has no leading CRLF of its own; prepending one lets the
+  // opening and every later delimiter be found by the same search.
+  const body = Buffer.concat([Buffer.from("\r\n"), buffer]);
+
+  const fields = {};
+  const files = {};
+
+  let at = body.indexOf(delimiter);
+  while (at !== -1) {
+    const start = at + delimiter.length;
+    if (body.subarray(start, start + 2).toString("latin1") === "--") break;
+
+    const next = body.indexOf(delimiter, start);
+    if (next === -1) break;
+
+    const part = body.subarray(start, next);
+    const headerEnd = part.indexOf("\r\n\r\n");
+    if (headerEnd === -1) {
+      at = next;
+      continue;
+    }
+
+    // Headers are read as latin1 so a NUL or a control character in a filename
+    // survives to `assertMediaFilename()` rather than being replaced.
+    const headers = part.subarray(2, headerEnd).toString("latin1");
+    const content = part.subarray(headerEnd + 4);
+
+    const rawName = /name="([^"]*)"/.exec(headers)?.[1];
+    if (rawName !== undefined) {
+      // `file[]` is the array field; `file` twice is one field written twice.
+      const isArray = rawName.endsWith("[]");
+      const name = isArray ? rawName.slice(0, -2) : rawName;
+      const filename = /filename="([^"]*)"/.exec(headers)?.[1];
+
+      if (filename === undefined) {
+        fields[name] = content.toString("utf8");
+      } else {
+        const entry = {
+          // The path is stripped here rather than in `assertMediaFilename()`,
+          // because PHP strips it here — before the application sees a name.
+          // A browser sends the name as UTF-8 bytes inside the header.
+          name: Buffer.from(filename, "latin1").toString("utf8").split(/[/\\]/).pop(),
+          type: /content-type:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim() ?? "",
+          bytes: content,
+        };
+        if (isArray) (files[name] ??= []).push(entry);
+        else files[name] = [entry];
+      }
+    }
+
+    at = next;
+  }
+
+  return { multipart: { fields, files } };
+}
+
 export function createServer() {
   return createHttpServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -12038,6 +12987,33 @@ export function createServer() {
       return;
     }
 
+    /*
+     * The uploads directory, which is the other half of `url` being answerable
+     * at all. Also outside `respond()` — it answers bytes rather than an
+     * envelope — and deliberately **outside `requestLog`**: the log is what
+     * `capture.mjs` reads to prove the panel talked to this API, and a browser
+     * fetching 41 tiles would inflate that count with requests the panel's
+     * server never made.
+     */
+    if (url.pathname.startsWith(`${MEDIA_UPLOAD_PATH}/`)) {
+      const filename = url.pathname.slice(MEDIA_UPLOAD_PATH.length + 1);
+      const file = state.uploads.get(filename) ?? MEDIA_FIXTURE_BYTES.get(filename);
+      if (file === undefined) {
+        response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        response.end("No such file.\n");
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": file.mime,
+        "content-length": String(file.bytes.length),
+        // A capture run rewrites nothing, but a tile that a browser served from
+        // cache is a tile this process cannot prove it answered.
+        "cache-control": "no-store",
+      });
+      response.end(file.bytes);
+      return;
+    }
+
     requestLog.push(`${request.method} ${url.pathname}`);
 
     /*
@@ -12045,20 +13021,26 @@ export function createServer() {
      * argument — the routing stays pure and synchronous, and this shell stays
      * the only asynchronous thing in the file.
      *
-     * A body that is not JSON arrives at `respond()` as `null` rather than as an
-     * error of its own. Every write here validates what it needs and answers its
-     * own 400, and the panel sends JSON or nothing at all: `POST
-     * /payments/{id}/verify` is called with no body whatsoever.
+     * A body that is neither JSON nor multipart arrives at `respond()` as `null`
+     * rather than as an error of its own. Every write here validates what it
+     * needs and answers its own 400, and the panel sends JSON, multipart or
+     * nothing at all: `POST /payments/{id}/verify` is called with no body
+     * whatsoever and `POST /media` is the one multipart request it makes.
      */
+    const contentType = request.headers["content-type"] ?? "";
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
     request.on("end", () => {
       let parsed = null;
       if (chunks.length > 0) {
-        try {
-          parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        } catch {
-          parsed = null;
+        if (contentType.toLowerCase().startsWith("multipart/form-data")) {
+          parsed = parseMultipart(Buffer.concat(chunks), contentType);
+        } else {
+          try {
+            parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            parsed = null;
+          }
         }
       }
 
@@ -12074,7 +13056,7 @@ export function createServer() {
   });
 }
 
-export function startServer(port = Number(process.env.MOCK_PORT ?? 8099)) {
+export function startServer(port = MOCK_PORT) {
   const server = createServer();
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -12086,7 +13068,6 @@ export function startServer(port = Number(process.env.MOCK_PORT ?? 8099)) {
 
 // Run directly (`npm run mock`) rather than imported by the capture harness.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.MOCK_PORT ?? 8099);
-  await startServer(port);
-  console.log(`mock-api listening on http://127.0.0.1:${port}${BASE_PATH}`);
+  await startServer();
+  console.log(`mock-api listening on ${MOCK_ORIGIN}${BASE_PATH}`);
 }

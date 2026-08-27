@@ -79,10 +79,33 @@ export type PageSeo = z.infer<typeof pageSeo>;
  *
  * Null on every fixture in this shop, and null is the common case: a banner
  * without a picture is a banner. Never assume the object.
+ *
+ * ## `url` was required and the presenter has never sent one
+ *
+ * `MediaPresenter::image()` returns exactly `{id, src, thumbnail, alt}` — no
+ * `url`, no `width`, no `height`. So a banner that *has* a picture threw at the
+ * boundary, and the only reason nobody saw it is that `image` is null on every
+ * seeded row: the shape is reachable through one write and nothing else.
+ *
+ * **The two sources disagree and neither has been measured over the wire.** The
+ * presenter says `src`; the harness resolves `{id, url, alt, width, height}`,
+ * which is this schema's old shape read back at it — a fixture built from the
+ * panel's guess rather than from the router, and the harness owns fixing that.
+ * So `id` is the only required key and every carrier of the picture is optional:
+ * that parses both, and it is the shape a request-for-request diff on
+ * `/cms/banners` would settle. `looseObject` keeps whatever else arrives.
+ *
+ * `embeddedImageSrc` in `lib/cms.ts` is the one place that decides which key
+ * wins, so no screen has to know there are two.
  */
 export const embeddedImage = z.looseObject({
   id: z.number(),
-  url: z.string(),
+  /** `MediaPresenter::image()`'s own key — `wp_get_attachment_image_url($id, 'full')`. */
+  src: z.string().optional(),
+  /** The presenter's `medium`, falling back to `src`. Nothing renders it yet. */
+  thumbnail: z.string().optional(),
+  /** What the harness sends where the presenter sends `src`. See above. */
+  url: z.string().optional(),
   alt: z.string().optional(),
   width: z.number().optional(),
   height: z.number().optional(),

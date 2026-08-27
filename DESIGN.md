@@ -553,6 +553,37 @@ responsive wrapper. A page defines its columns once.
 > rather than back in this one. The scope answers *what is this*, a delta answers
 > *how is it moving*, and a figure that needs the first does not stop needing it.
 
+**`<MediaGrid>`** — when the identifying cell *is* a picture.
+
+> **Added on the media branch, because §3.2 had no shape for this and the screen
+> that needed one was about to hand-roll it.**
+>
+> Everything above is rows of fields, and the rule that a page must not fork a
+> primitive only helps if the primitive exists. The media library's record is an
+> image: a 44px thumbnail beside a generated filename is a worse way to find one
+> than four columns of images, so the table is not squeezed, it is **replaced**.
+> That is the same trade `RecordList` makes below `md`, taken to its end.
+>
+> - A tile is a real `<button>` carrying `rowOpenerId`'s id — the keyboard path,
+>   and the target an overlay's `returnFocusTo` names. A `<li>` is no more
+>   focusable than a `<tr>`.
+> - **Image plus one line of text**, truncated, the full value reachable — from
+>   the drawer the tile opens, never from a `title` attribute alone.
+> - A placeholder sits *behind* the picture rather than replacing it on error. A
+>   file not fetched yet and a file whose bytes have gone are indistinguishable
+>   before `onerror` and unrecoverable after it, so both read as "no picture"
+>   instead of as a torn box.
+> - The columns are a **named variant**, not a viewport query: Tailwind's
+>   breakpoints are the viewport's, and the same grid renders inside a 520px
+>   `Drawer` as the image picker. Six tiles across a drawer at a 1440 viewport is
+>   78px each.
+> - **The absence of a table is a decision and is recorded as one.** The record's
+>   fields live in the peek, because nothing here is a column anybody would scan.
+>
+> The pager is the primitive's, and it borrows `ui.table`'s three strings rather
+> than minting identical ones: it is the same control doing the same job, `Ltr`
+> wrap included — see the note on `TableFooter`.
+
 **Charts** — one bar mark, one hue, value printed as text on every row. This rule
 survives from the old system and is still right: five semantic colours reserved
 for status cannot also be a categorical palette, and inventing more would put
@@ -714,6 +745,22 @@ system, restyled per §1.
 2. **Empty** — distinguishes *nothing yet* from *nothing matching this filter*.
    The first offers the create action; the second offers to clear the filter.
    Icon in `--color-subtle`, one line, one action. No illustration.
+
+   > **Amended on the media branch: the distinction is required wherever a
+   > control can produce the second state, which is not every screen.**
+   >
+   > §8's checklist asks for both halves unconditionally, and the media library
+   > is the first screen in the run that can only ever have one. It ships no
+   > filter, no search and no sort — each absence measured and argued — and its
+   > pager is bounded by the total it renders, so there is no control a reader
+   > can operate that returns an empty result. A second state for it would be
+   > unreachable code standing in for a control that does not exist, which is the
+   > same defect as a dead control wearing a live one's clothes.
+   >
+   > So: a screen whose controls can empty the list ships both, and each offers
+   > the right action. A screen whose controls cannot ships one and **says so in
+   > its own docblock**, pointing at this sentence — the same shape §3.7's stale
+   > amendment already uses two items below.
 3. **Forbidden** — names the capability required and who to ask. Never a blank
    page, never a logout, never a disappearing toast.
 4. **Error** — one line, a retry, and the API's own message only where it is
