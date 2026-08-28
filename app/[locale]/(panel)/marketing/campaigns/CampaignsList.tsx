@@ -1,90 +1,246 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { Campaign } from "@/lib/api/schemas/campaign";
+import type { Campaign, Segment } from "@/lib/api/schemas/campaign";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
-import { CAMPAIGN_TONE, isCampaignStatus } from "@/lib/campaigns";
 import { useOnline } from "@/lib/use-online";
-import { useHydrated } from "@/lib/use-hydrated";
-import { formatDate, formatWhen } from "@/lib/format/date";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
-import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
-import { Segmented } from "@/components/primitives/Segmented";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { useToast } from "@/components/primitives/Toast";
-import { RowSkeleton } from "../../inventory/RowSkeleton";
+import { formatWhen } from "@/lib/format/date";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
-  PER_PAGE,
+  DataTable,
+  TableControls,
+  TableFooter,
+  useTablePreferences,
+  type SortState,
+} from "@/components/ui/DataTable";
+import { FilterRow, FilterTabs, SearchField } from "@/components/ui/FilterBar";
+import { Select } from "@/components/ui/Form";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { RecordListSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Isolate } from "@/components/primitives/Ltr";
+import { useToast } from "@/components/primitives/Toast";
+import {
+  buildColumns,
+  campaignOpenerId,
+  campaignRecord,
+  type CampaignColumnContext,
+} from "./columns";
+import { CampaignPeek } from "./CampaignPeek";
+import {
+  EMPTY_QUERY,
   STATUS_FILTERS,
   campaignsKey,
   isFiltered,
   listParams,
+  orderbyFromKey,
   queryFromParams,
   toUrlParams,
   type CampaignsQuery,
   type StatusFilter,
 } from "./query";
 
-async function fetchCampaigns(query: CampaignsQuery) {
-  const { data, total } = await acRead<Campaign[]>(`/campaigns?${listParams(query)}`);
-  return { campaigns: data, total };
-}
-
 /**
- * The campaign list.
+ * The campaign list, rebuilt on the new design system.
  *
- * A campaign's row has to answer two things at a glance — what state it is in,
- * and how many people it reached — and the second is only real once it has been
- * sent. A draft's `recipients.total` is `0`, which is not "nobody" but "not yet",
- * so the row shows the count only from `sending` onwards and shows the audience
- * instead while it is a draft.
+ * ## Four filter dimensions in one row, and no drawer and no chips
+ *
+ * Status tabs above; then the search box, the segment picker and — only while
+ * something is filtered — the clear button. Products needed a `Drawer` with
+ * draft-then-apply at nine dimensions; four fit a row, and that is payments'
+ * judgement at exactly this count. **No chips**, for payments' reason as well: the
+ * status is the highlighted tab, the term is in its own box and the segment is
+ * the `Select`'s own selected option, so a chip row would restate three controls
+ * standing six inches above it. What survives is the one affordance no individual
+ * control offers — dropping every dimension at once — rendered only when it can
+ * act, per §3.3, and it is the same control the no-results empty state offers.
+ *
+ * **The search placeholder names its scope, and here that scope is two fields.**
+ * `?search=Ramadan` hits campaign 320 on its *name*; the same parameter matches
+ * the subject. Saying so is the coupons rule ("porte sur le code") with a
+ * different answer rather than the same one: a person who searches a body and
+ * gets nothing needs the sentence to be on screen where they are already looking.
+ *
+ * **The segment picker ships where shipping's provider box did not**, and the
+ * difference is the enumeration rather than the parameter. `?segment_id=99999` is
+ * a silent **200 with 0 rows**, not a refusal, so free text would make a typo
+ * indistinguishable from "no campaign uses this segment"; `GET /segments` is
+ * allowlisted and enumerates **all four**, so a picker can offer every value that
+ * matters and cannot express one that does not. DECISIONS.md's picker rule,
+ * landing on the yes side.
+ *
+ * ## Sorting, on three of six columns
+ *
+ * The strongest sort in the run — see `query.ts`, which carries every request.
+ * `name`, `updated_at` and `created_at` carry a `sortKey` and those three headers
+ * announce `aria-sort`; `subject`, `audience` and `recipients` deliberately do
+ * not, because the API cannot sort them. `id` sorts, gets no column and stays
+ * reachable by URL. **No sort below `md`**: `RecordList` takes no sort props and
+ * that is correct rather than a gap — a control with nothing on screen to act on
+ * is worse than no control.
+ *
+ * ## Create is a `Button`, and it was broken
+ *
+ * **A POST, so it must not be a link.** Next prefetches links, so a `/new` route
+ * that created a draft would create one when somebody's thumb passed over it —
+ * which is also why `PageHeader` had to learn to hold a button rather than the
+ * primary being demoted to the toolbar. `POST /campaigns` is what makes the
+ * composer's save-on-advance possible: the preview is a render of the **server's**
+ * copy.
+ *
+ * The body this used to send was `subject: ""`, with a comment calling it "the
+ * minimum the API accepts". It is a **400** — `subject: Required — a campaign
+ * with no subject line is not sendable.` — so the button had never worked against
+ * the live shop. The real minimum is a name, a non-empty subject and an
+ * `audience_type`: absent behaves as `"segment"`, which then refuses for a
+ * missing `segment_id`, so `"all"` is the only value that needs no second field.
+ * Both bodies may be empty — that is a measured **201**, and the rule that they
+ * must both be filled is the wizard's rather than the API's.
+ *
+ * ## The stale marker stays
+ *
+ * §3.7's amendment exempts a screen that cannot hold data older than its own last
+ * fetch. This is not one: a client component over a react-query cache with a
+ * manual refresh **and** a write, so both halves of the rule bite.
  */
 export function CampaignsList({
   locale,
   initialQuery,
   initialCampaigns,
   initialTotal,
+  segments,
 }: {
   locale: string;
   initialQuery: CampaignsQuery;
   initialCampaigns: Campaign[] | null;
   initialTotal: number | null;
+  /**
+   * The whole segment list, fetched on the server beside page one.
+   *
+   * It feeds two things at once and neither costs a second request: the filter
+   * picker, and the audience column's ability to say *which* segment rather than
+   * "Un segment". Empty when the request failed — the picker is then not
+   * rendered at all, per §3.3, and the clear button is still the way out of a
+   * `?segment_id=` that arrived in the URL.
+   */
+  segments: Segment[];
 }) {
   const t = useTranslations("campaigns");
+  const tA11y = useTranslations("a11y");
   const router = useRouter();
   const searchParams = useSearchParams();
-  const hydrated = useHydrated();
   const toast = useToast();
 
-  const query = queryFromParams(new URLSearchParams(searchParams.toString()));
-  const [searchDraft, setSearchDraft] = useState(query.search);
   const [creating, setCreating] = useState(false);
-  const now = new Date();
+
+  const query = useMemo(
+    () => queryFromParams(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
+
+  const online = useOnline();
+
+  const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
+    queryKey: campaignsKey(query),
+    queryFn: async () => {
+      const result = await acRead<Campaign[]>(`/campaigns?${listParams(query)}`);
+      return { campaigns: result.data, total: result.total };
+    },
+    initialData:
+      initialCampaigns !== null && campaignsKey(query)[2] === campaignsKey(initialQuery)[2]
+        ? { campaigns: initialCampaigns, total: initialTotal ?? initialCampaigns.length }
+        : undefined,
+    /* Keeps the previous page on screen while the next loads, so changing a
+       filter, the tab, the sort or the page never flashes a skeleton over content
+       still valid. §3.6's third mechanism. */
+    placeholderData: keepPreviousData,
+  });
+
+  const campaigns = data?.campaigns ?? [];
+  const total = data?.total ?? 0;
+  const filtered = isFiltered(query);
+  /* `?page=999` answers 200 with an empty array, so the table is not drawn and
+     with it goes the only control that could page back. */
+  const overPaged = campaigns.length === 0 && query.page > 1;
+
+  const peekId = searchParams.get("peek");
+  const inPage =
+    peekId === null ? null : (campaigns.find((row) => String(row.id) === peekId) ?? null);
 
   /*
-   * The minimum the API accepts. `audience_type: "all"` because it is the only
-   * one needing no second field, so the draft is valid the moment it exists and
-   * the audience step opens on a real choice rather than on an error.
+   * **A peek off the current page, and it is a deep link that has to work.**
    *
-   * A stray draft from somebody who taps and changes their mind is the cost, and
-   * it is the right trade: a stray draft is named, visible and one tap from
-   * deletion, while a wizard holding four steps of unsaved work in a tab is what
-   * loses an afternoon.
+   * `/orders` and `/products` resolve `?peek=` against the rows already in memory
+   * and stop there, which DECISIONS.md §14 records as a carried-forward defect:
+   * on those screens the id got into the URL by somebody clicking a visible row,
+   * so only a shared or bookmarked link reaches the gap — and then it silently
+   * renders no drawer at all. The media branch fixed it there rather than
+   * reproducing it, and this screen does the same.
+   *
+   * It costs nothing this list was saving: `GET /campaigns/{id}` is the list row
+   * exactly, which is the same fact that makes the drawer free. Only fired when
+   * the row is not already here, so clicking one still costs no request.
+   *
+   * `retry: false`, and a failure opens nothing: an id naming no campaign is one
+   * somebody deleted or typed, and the list behind it is intact and usable. There
+   * is no error state to put on a screen that is working.
    */
+  const peekQuery = useQuery({
+    queryKey: ["campaigns", "item", peekId],
+    enabled: peekId !== null && inPage === null,
+    queryFn: async () => (await acRead<Campaign>(`/campaigns/${peekId}`)).data,
+    retry: false,
+  });
+
+  const peeked = inPage ?? peekQuery.data ?? null;
+
+  /* Not wrapped in `useCallback`: the React Compiler is on in this project and
+     memoizes this already; a manual dependency list disagreeing with the
+     compiler's inference makes it skip optimising the whole component. */
+  function commit(next: CampaignsQuery) {
+    const params = toUrlParams(next);
+    /* `push`, not `replace` — going back from a filtered list must reach the
+       unfiltered one, and closing a preview with the back button is half of what
+       putting it in the URL is for. */
+    router.push(`/${locale}/marketing/campaigns${params.size > 0 ? `?${params}` : ""}`, {
+      scroll: false,
+    });
+  }
+
+  /* A new filter or a new sort resets to page one; paging and per-page do not.
+     Page 3 of a re-ordered list is a different set of rows, not the same ones
+     rearranged. */
+  const commitFilter = (next: CampaignsQuery) => commit({ ...next, page: 1 });
+
+  function setPeek(id: number | null) {
+    const params = toUrlParams(query);
+    if (id !== null) params.set("peek", String(id));
+    router.push(`/${locale}/marketing/campaigns${params.size > 0 ? `?${params}` : ""}`, {
+      scroll: false,
+    });
+  }
+
   const create = async () => {
     setCreating(true);
     try {
       const created = await acWrite<{ id: number }>("POST", "/campaigns", {
         name: t("create"),
-        subject: "",
+        /*
+         * A real subject, because an empty one is a 400 on this route. It is a
+         * placeholder the content step exists to replace, and it says so in the
+         * reader's language rather than being a blank the person has to notice.
+         */
+        subject: t("newSubject"),
+        /* Both accepted empty — a measured 201. The wizard will not let either
+           stay empty, which is its rule and not the API's. */
         body_html: "",
         body_text: "",
+        /* The only audience needing no second field, so the draft is valid the
+           moment it exists and the audience step opens on a choice rather than on
+           a refusal. Absent would behave as `"segment"` and refuse. */
         audience_type: "all",
       });
       router.push(`/${locale}/marketing/campaigns/${created.id}`);
@@ -94,236 +250,240 @@ export function CampaignsList({
     }
   };
 
-  const commit = (next: CampaignsQuery, options: { resetPage?: boolean } = {}) => {
-    const target = options.resetPage === false ? next : { ...next, page: 1 };
-    const params = toUrlParams(target);
-    router.push(`/${locale}/marketing/campaigns${params.size > 0 ? `?${params}` : ""}`, {
-      scroll: false,
-    });
-  };
+  const segmentName = (id: number) =>
+    segments.find((segment) => segment.id === id)?.name ?? null;
 
-  const online = useOnline();
+  const ctx: CampaignColumnContext = { locale, t, segmentName };
+  const columns = buildColumns(ctx);
 
-  const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: campaignsKey(query),
-    queryFn: () => fetchCampaigns(query),
-    initialData:
-      initialCampaigns !== null &&
-      campaignsKey(query).join("|") === campaignsKey(initialQuery).join("|")
-        ? { campaigns: initialCampaigns, total: initialTotal ?? initialCampaigns.length }
-        : undefined,
-    placeholderData: keepPreviousData,
-  });
+  /* Held here rather than inside `DataTable` so the controls sit in the toolbar
+     beside the filters instead of floating above the card. */
+  const preferences = useTablePreferences("campaigns", columns);
 
-  const campaigns = data?.campaigns ?? [];
-  const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
-  const filtered = isFiltered(query);
+  /* Read straight off the URL state. At rest `query.orderby` is `created_at`,
+     which the created column *does* declare — so that header reads
+     `aria-sort="descending"` on a first paint, which is true: the list really is
+     in that order, and the third click drops `orderby` and returns to it. */
+  const sortState: SortState = { key: query.orderby, direction: query.order };
+
+  /*
+   * The picker's options, and the last branch is the honest half.
+   *
+   * A hand-edited or stale `?segment_id=` outside the enumeration is **not**
+   * refused by the API — it is a silent 200 with zero rows — so it travels, and a
+   * `<select>` whose value matches none of its options renders blank. Adding the
+   * value as its own option is what keeps the control able to show the state it
+   * is in; the clear button beside it is how it comes off.
+   */
+  const segmentOptions = [
+    { value: "0", label: t("segmentAny") },
+    ...segments.map((segment) => ({ value: String(segment.id), label: segment.name })),
+    ...(query.segmentId > 0 && segmentName(query.segmentId) === null
+      ? [{ value: String(query.segmentId), label: t("segmentUnknown", { id: query.segmentId }) }]
+      : []),
+  ];
+
+  const clearAll = () => commit({ ...EMPTY_QUERY, perPage: query.perPage });
 
   return (
-    <Scaffold
-      title={t("campaigns")}
-      back={{ href: `/${locale}/marketing`, label: t("hubTitle") }}
-      trailing={
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            aria-label={t("refresh")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-          >
-            <Icon name="refresh" className={isFetching ? "size-5 spin" : "size-5"} />
-          </button>
-          {/*
-            **A button, not a link to `/new`.** Creating the draft is what makes
-            the composer's save-on-advance possible — the preview has to be a
-            render of the *saved* campaign — so "new" is a POST, and a POST must
-            not live on a render path: Next prefetches links, so a `/new` route
-            that created a draft would create one when somebody's thumb passed
-            over the plus.
-          */}
-          <button
-            type="button"
-            onClick={() => void create()}
-            disabled={creating}
-            aria-label={t("create")}
-            className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent disabled:opacity-40"
-            data-testid="create-campaign"
-          >
-            <Icon name={creating ? "refresh" : "plus"} className={creating ? "size-5 spin" : "size-5"} />
-          </button>
-        </div>
-      }
-      toolbar={
-        <div className="flex flex-col gap-3">
-          <form
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              commit({ ...query, search: searchDraft.trim() });
-            }}
-            className="flex items-center gap-2 rounded-md bg-surface-2 px-3"
-          >
-            <Icon name="search" className="size-4 shrink-0 text-label-secondary" />
-            <input
-              type="search"
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
-              aria-label={t("campaigns")}
-              enterKeyHint="search"
-              className="min-h-11 min-w-0 flex-1 bg-transparent text-body text-label outline-none placeholder:text-label-tertiary"
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("campaigns")}
+        back={{ href: `/${locale}/marketing`, label: t("hubTitle") }}
+        subtitle={
+          <span data-testid="campaigns-count">
+            <Isolate>{t("count", { total })}</Isolate>
+          </span>
+        }
+        actions={
+          <>
+            <IconButton
+              label={t("refresh")}
+              icon="refresh"
+              variant="secondary"
+              onClick={() => void refetch()}
+              loading={isFetching}
             />
-            {searchDraft ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchDraft("");
-                  commit({ ...query, search: "" });
-                }}
-                aria-label={t("empty.clear")}
-                className="press flex size-8 items-center justify-center rounded-full text-label-secondary"
-              >
-                <Icon name="close" className="size-4" />
-              </button>
-            ) : null}
-          </form>
+            {/* A `Button`, never a `ButtonLink` — see the docblock. */}
+            <Button
+              variant="primary"
+              icon="plus"
+              loading={creating}
+              onClick={() => void create()}
+              data-testid="create-campaign"
+            >
+              {t("create")}
+            </Button>
+          </>
+        }
+        toolbar={
+          <div className="flex flex-col gap-3">
+            <FilterTabs<StatusFilter>
+              tabs={STATUS_FILTERS.map((value) => ({
+                value,
+                label: value === "" ? t("statusAll") : t(`status.${value}`),
+              }))}
+              value={query.status}
+              onChange={(status) => commitFilter({ ...query, status })}
+              label={t("statusLabel")}
+            />
 
-          <Segmented<StatusFilter>
-            segments={STATUS_FILTERS.map((value) => ({
-              value,
-              label: value === "" ? t("statusAll") : t(`status.${value}`),
-            }))}
-            value={query.status}
-            onChange={(status) => commit({ ...query, status })}
-            label={t("statusLabel")}
-          />
-        </div>
-      }
-    >
-      {!online && dataUpdatedAt > 0 ? (
-        <div className="mx-auto max-w-3xl">
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale, now)} />
-        </div>
-      ) : null}
+            {/* `align="end"`, because the segment picker carries a visible label
+                over its box and the search field does not — see `FilterRow`. */}
+            <FilterRow align="end">
+              <div className="flex min-w-56 flex-1 sm:max-w-80">
+                <SearchField
+                  value={query.search}
+                  onSubmit={(next) => commitFilter({ ...query, search: next })}
+                  placeholder={t("searchPlaceholder")}
+                  label={t("searchLabel")}
+                  clearLabel={t("clearSearch")}
+                />
+              </div>
 
-      <div className="mx-auto max-w-3xl px-4">
-        <p
-          aria-live="polite"
-          className="mb-2 px-1 text-footnote text-label-secondary"
-          data-testid="campaigns-count"
-        >
-          <Isolate numeric>{t("count", { total })}</Isolate>
+              {/*
+                Not rendered when there is nothing to pick from — §3.3, and it is
+                a real case rather than a defensive one: the list is fetched on the
+                server and a failure there leaves this empty while every other
+                control still works.
+              */}
+              {segments.length > 0 || query.segmentId > 0 ? (
+                <div className="w-full sm:w-56">
+                  <Select
+                    label={t("field.segment")}
+                    value={String(query.segmentId)}
+                    onChange={(value) =>
+                      commitFilter({ ...query, segmentId: Number(value) || 0 })
+                    }
+                    options={segmentOptions}
+                  />
+                </div>
+              ) : null}
+
+              {filtered ? (
+                <Button variant="ghost" size="sm" icon="close" onClick={clearAll}>
+                  {t("empty.clear")}
+                </Button>
+              ) : null}
+
+              <div className="ms-auto">
+                <TableControls
+                  columns={columns}
+                  visible={preferences.visible}
+                  onVisibleChange={preferences.setVisible}
+                  density={preferences.density}
+                  onDensityChange={preferences.setDensity}
+                />
+              </div>
+            </FilterRow>
+          </div>
+        }
+      />
+
+      <PageBody width="full">
+        {!online && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        ) : null}
+
+        {/* A live region, so a filter that changes the result count announces it.
+            Its own testid: `campaigns-count` above is the *visible* count and is
+            what the suite asserts on, and two elements sharing one testid is a
+            strict-mode violation the moment either is queried. */}
+        <p aria-live="polite" className="sr-only" data-testid="campaigns-live">
+          {tA11y("listUpdated", { total })}
         </p>
 
         {isPending && campaigns.length === 0 ? (
-          <RowSkeleton rows={5} />
+          <>
+            <div className="hidden md:block">
+              <TableSkeleton rows={5} cols={6} label={t("loading")} />
+            </div>
+            {/* The card and its 8px padding are `DataTable`'s below `md`, so the
+                skeleton wears them too or the rows step inward when data lands. */}
+            <div className="ui-card p-2 md:hidden">
+              <RecordListSkeleton rows={5} label={t("loading")} />
+            </div>
+          </>
         ) : isError ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : campaigns.length === 0 ? (
           <EmptyState
-            message={filtered ? t("empty.noResults") : t("empty.none")}
+            icon={filtered || overPaged ? "search" : "mail"}
+            /*
+             * **Three empty states, and telling them apart is the point.** Past
+             * the last page is the most specific fact and wins the one action this
+             * state gets. No results for these filters offers to clear them and
+             * names what the search covers, because the person who needs that
+             * sentence is already looking at nothing. No campaigns at all offers
+             * the create action — `POST /campaigns` is allowlisted and this screen
+             * is where a first campaign comes from.
+             */
+            message={
+              overPaged
+                ? t("empty.pastEnd")
+                : filtered
+                  ? t("empty.noResults")
+                  : t("empty.none")
+            }
             action={
-              filtered
-                ? {
-                    label: t("empty.clear"),
-                    onClick: () => {
-                      setSearchDraft("");
-                      commit({ ...query, status: "", search: "", segmentId: 0 });
-                    },
-                  }
-                : undefined
+              overPaged
+                ? { label: t("empty.firstPage"), onClick: () => commit({ ...query, page: 1 }) }
+                : filtered
+                  ? { label: t("empty.clear"), onClick: clearAll }
+                  : { label: t("create"), onClick: () => void create() }
             }
           />
         ) : (
-          <>
-            <ListGroup>
-              {campaigns.map((campaign) => (
-                <ListLinkRow
-                  key={campaign.id}
-                  href={`/${locale}/marketing/campaigns/${campaign.id}`}
-                  ariaLabel={campaign.name}
-                >
-                  <div className="flex w-full min-w-0 flex-col gap-1">
-                    <div className="flex min-h-6 items-center gap-2">
-                      {/* A campaign's name is what somebody typed, so `dir="auto"`. */}
-                      <span dir="auto" className="min-w-0 truncate text-body text-label">
-                        {campaign.name}
-                      </span>
-                      {isCampaignStatus(campaign.status) ? (
-                        <StatusBadge tone={CAMPAIGN_TONE[campaign.status]} className="ms-auto">
-                          {t(`status.${campaign.status}`)}
-                        </StatusBadge>
-                      ) : null}
-                    </div>
-
-                    <div className="flex min-w-0 items-baseline gap-2">
-                      {/*
-                        **The count only once it means something.** A draft's
-                        `recipients.total` is 0, which is "not yet" rather than
-                        "nobody" — showing it would report every unsent campaign
-                        as reaching no one. Until then the row names the audience,
-                        which is the fact a draft actually has.
-                      */}
-                      <span className="min-w-0 truncate text-footnote text-label-secondary">
-                        {campaign.status === "draft" || campaign.status === "cancelled" ? (
-                          t(`audience.${campaign.audience.type === "segment" ? "segment" : campaign.audience.type === "ids" ? "ids" : "all"}`)
-                        ) : (
-                          <Isolate numeric>
-                            {t("recipients.count", { total: campaign.recipients.total })}
-                          </Isolate>
-                        )}
-                      </span>
-                      <span className="ms-auto shrink-0 text-footnote text-label-secondary">
-                        {/*
-                          `Intl` formatted, so `Isolate`. Absolute on the server
-                          and relative once hydrated — `formatWhen` is relative
-                          under 24 hours and cannot be server-rendered without a
-                          hydration mismatch; the notifications branch found it.
-                        */}
-                        <Isolate>
-                          {hydrated
-                            ? formatWhen(campaign.updated_at, locale, now)
-                            : formatDate(campaign.updated_at, locale)}
-                        </Isolate>
-                      </span>
-                    </div>
-                  </div>
-                </ListLinkRow>
-              ))}
-            </ListGroup>
-
-            {total > PER_PAGE ? (
-              <nav className="mb-8 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  disabled={query.page <= 1}
-                  onClick={() =>
-                    commit({ ...query, page: Math.max(1, query.page - 1) }, { resetPage: false })
-                  }
-                  aria-label={t("previousPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="back" flipInRtl className="size-5" />
-                </button>
-                <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>
-                    {query.page} / {pageCount}
-                  </Ltr>
-                </span>
-                <button
-                  type="button"
-                  disabled={query.page >= pageCount}
-                  onClick={() => commit({ ...query, page: query.page + 1 }, { resetPage: false })}
-                  aria-label={t("nextPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="chevron" flipInRtl className="size-5" />
-                </button>
-              </nav>
-            ) : null}
-          </>
+          <DataTable
+            preferences={preferences}
+            rows={campaigns}
+            columns={columns}
+            rowKey={(campaign) => String(campaign.id)}
+            rowLabel={(campaign) => tA11y("campaignName", { name: campaign.name })}
+            record={(campaign) => campaignRecord(campaign, ctx)}
+            /*
+             * The whole row opens the peek, and there is no trailing `Menu`: the
+             * drawer holds the one action and a 40px column repeating "open" is
+             * not an action.
+             *
+             * `onRowClick` is the *pointer* path only — a `<tr>` is not focusable.
+             * `rowOpenerId` is what makes the name cell a real `<button>`, which
+             * is the keyboard path and the drawer's focus target.
+             */
+            onRowClick={(campaign) => setPeek(campaign.id)}
+            rowOpenerId={(campaign) => campaignOpenerId(campaign.id)}
+            sort={sortState}
+            onSortChange={(next) =>
+              /* `null` is the third click and it restores the resting order rather
+                 than sending `orderby=created_at&order=desc` as an explicit ask:
+                 `toUrlParams` omits both when they equal `EMPTY_QUERY`. */
+              commitFilter({
+                ...query,
+                orderby: next === null ? EMPTY_QUERY.orderby : orderbyFromKey(next.key),
+                order: next === null ? EMPTY_QUERY.order : next.direction,
+              })
+            }
+            footer={
+              <TableFooter
+                page={query.page}
+                perPage={query.perPage}
+                total={total}
+                onPageChange={(page) => commit({ ...query, page })}
+                onPerPageChange={(perPage) => commit({ ...query, perPage, page: 1 })}
+              />
+            }
+          />
         )}
-      </div>
-    </Scaffold>
+      </PageBody>
+
+      <CampaignPeek
+        campaign={peeked}
+        ctx={ctx}
+        locale={locale}
+        onOpenChange={(next) => {
+          if (!next) setPeek(null);
+        }}
+      />
+    </div>
   );
 }

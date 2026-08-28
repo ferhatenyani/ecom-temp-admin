@@ -669,6 +669,38 @@ link         accent, underline on hover
   column and knows none of them: it rests at the foot of a short form and pins to
   the viewport while a long one scrolls. `data-testid="save-bar"` is the handle.
 
+  > **Amended on the marketing branch: a form built as steps saves per step and
+  > ships no `SaveBar` at all.**
+  >
+  > The rule above says "long forms get a sticky footer that appears only when the
+  > form is dirty", and it was written about a long form — a coupon, a product, a
+  > page: one screen of independent fields, edited in any order, saved once at the
+  > end, and every save reversible by saving again. A **multi-step** form is a
+  > different object and the difference is not its length. Each forward move is
+  > itself the save, so there is no accumulated dirty state for a bar to report,
+  > and a bar that appeared anyway would offer a second, competing way to commit
+  > the same edit.
+  >
+  > The campaign composer is the case that forced it and the argument is specific
+  > rather than stylistic. Its last step is **irreversible** — the send freezes an
+  > audience and mail leaves the building — and its third step is a *server render*
+  > of the saved campaign, which only exists because the second step already
+  > PATCHed. Collapse it into one long form with a sticky bar and the preview
+  > becomes a render of the client's draft against an act that cannot be undone.
+  > `lib/campaigns.ts` carries the measurement; DECISIONS.md §15 carries the
+  > decision.
+  >
+  > So: **one screen of fields → `SaveBar` when dirty. A sequence of steps →
+  > save on advance, and `StepIndicator`.** Both live in
+  > `components/ui/Form.tsx`, beside each other, so the choice is made once and at
+  > the import. A screen that ships both is a screen that has not decided which it
+  > is.
+  >
+  > What a stepped form still owes: every step's refusal binds to its own control
+  > through `ErrorSummary` exactly as a long form's does, a failed advance leaves
+  > the person **on the step that failed**, and backwards is always free — a step
+  > already reached is one press away, at the keyboard as well as the pointer.
+
 ### 3.5 Status and badges
 
 `<Badge tone size>` where tone is `neutral | info | success | warning | danger`.

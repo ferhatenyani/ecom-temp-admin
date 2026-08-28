@@ -82,9 +82,19 @@ export function canSend(campaign: { allowed_transitions: readonly string[] }): b
  * Three kinds, and the panel never sends a fourth.
  *
  * `ids` carries `customer_ids` (at most 1 000), `segment` carries `segment_id`,
- * `all` carries neither. Measured: sending `audience_type: "segment"` without a
- * `segment_id` is a 400 on that field, so the composer validates before the
- * round trip.
+ * `all` carries neither.
+ *
+ * **`audience_type: "segment"` with no `segment_id` is a 400 on *create only*.**
+ * Corrected 2026-08-28: this said "a 400 on that field" without qualifying the
+ * verb, and the two verbs disagree. `POST /campaigns` refuses it — and refuses it
+ * even when `audience_type` is absent, because absent behaves as `"segment"`.
+ * `PATCH /campaigns/{id}` answers **200** and stores `segment_id: 0`, which is a
+ * campaign pointed at a segment that is not one.
+ *
+ * So `audienceProblem()` below is the *panel's* rule on the edit path rather than
+ * a mirror of the API's, and that is the reason it exists: the composer refuses
+ * to advance rather than letting a person walk to a send whose audience resolves
+ * to nothing. On create it happens to agree with the API.
  */
 export const AUDIENCE_TYPES = ["all", "segment", "ids"] as const;
 export type AudienceType = (typeof AUDIENCE_TYPES)[number];
@@ -381,9 +391,16 @@ export function previousStep(step: ComposerStep): ComposerStep | null {
  * step you cannot yet reach is reachable *backwards*, always, because a person
  * who got to `preview` and wants to fix the subject must not be trapped.
  *
- * `content` needs a subject and both bodies — the API requires both parts and
- * §85 is explicit that the text part is authored rather than stripped from the
- * HTML, so an empty `body_text` is a refusal and not a convenience.
+ * `content` needs a subject and both bodies, and **that is this wizard's rule
+ * rather than the API's.** Corrected 2026-08-28: this said "an empty `body_text`
+ * is a refusal", and it is not — `POST /campaigns` with `body_html: ""` and
+ * `body_text: ""` is a **201**, measured. What is true is §85's editorial rule,
+ * that the text part is *authored* rather than stripped from the HTML, and the
+ * consequence the panel actually cares about: a campaign advanced past this step
+ * with an empty part would preview as an empty mail and send as one.
+ *
+ * The subject half **is** the API's: `subject` is `Required` on create and
+ * `Cannot be blank.` on edit, two sentences for one field chosen by the verb.
  */
 export function furthestStep(draft: {
   audience: { type: string; segment_id: number; customer_ids: readonly number[] };

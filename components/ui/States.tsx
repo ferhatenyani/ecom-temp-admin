@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon, type IconName } from "@/components/primitives/Icon";
-import { Button } from "./Button";
+import { Button, ButtonLink } from "./Button";
 
 /**
  * The five states, restyled for the new system. See DESIGN.md §3.7.
@@ -71,7 +71,19 @@ export function EmptyState({
 }: {
   message: string;
   detail?: string;
-  action?: { label: string; onClick: () => void };
+  /**
+   * The one thing to do about the absence. `onClick` for a client screen's own
+   * handler; `href` where the remedy is a **navigation**.
+   *
+   * `href` was added on the marketing branch and it is a boundary fact rather
+   * than a convenience: this module is `"use client"`, so a Server Component
+   * cannot pass a function through it at all — and two of this run's empty states
+   * are server-rendered with a URL for a remedy (a page past the end, whose way
+   * back is `?page=1`). Without it those states had to ship actionless, which is
+   * the inventory branch's defect #3 — a report paged past its last page with no
+   * way back.
+   */
+  action?: { label: string; onClick?: () => void; href?: string };
   icon?: IconName;
 }) {
   return (
@@ -80,11 +92,15 @@ export function EmptyState({
       body={message}
       detail={detail}
       action={
-        action ? (
+        action === undefined ? null : action.href !== undefined ? (
+          <ButtonLink href={action.href} variant="secondary" size="sm">
+            {action.label}
+          </ButtonLink>
+        ) : (
           <Button variant="secondary" size="sm" onClick={action.onClick}>
             {action.label}
           </Button>
-        ) : null
+        )
       }
     />
   );
@@ -176,29 +192,53 @@ export function StaleBanner({ time }: { time: string }) {
  *
  * Tone is a paired `-fg`/`-bg` token per §3.5, never a hue mixed into its own
  * text colour, and the icon means the colour is never the only signal.
+ *
+ * ## `success` and `info`, added on the marketing branch
+ *
+ * It took `warning | danger` only, which is two of §3.5's five and was right
+ * while every caller was reporting something wrong. The campaign composer needs
+ * the other direction and cannot use a `Toast` for it: `send` answers 202 naming
+ * **the command that will actually send the mail**, so the confirmation carries a
+ * string somebody has to read, copy and run. §3.1's own rule — "an error a person
+ * must act on is not a toast" — is really about *acting*, and a success that
+ * hands over work is the same case; a 4-second toast would take the command away
+ * mid-sentence. The test-send result is the pair on the other side: a 200 that
+ * reports `sent: true` is a success and `sent: false` is a warning, and rendering
+ * them in two different components would be a fork.
+ *
+ * The icon follows the tone, so the colour is still never the only signal: a
+ * check for a success, an alert for everything else. There is no `neutral`, and
+ * that is deliberate — an untoned box with a border is a `Card`.
  */
+const NOTICE_SKIN: Record<NoticeTone, string> = {
+  info: "border-ui-info-fg bg-ui-info-bg text-ui-info-fg",
+  success: "border-ui-success-fg bg-ui-success-bg text-ui-success-fg",
+  warning: "border-ui-warning-fg bg-ui-warning-bg text-ui-warning-fg",
+  danger: "border-ui-danger-fg bg-ui-danger-bg text-ui-danger-fg",
+};
+
+type NoticeTone = "info" | "success" | "warning" | "danger";
+
 export function Notice({
   tone,
   title,
   role = "status",
   children,
 }: {
-  tone: "warning" | "danger";
+  tone: NoticeTone;
   title: string;
   role?: "status" | "alert";
   children?: ReactNode;
 }) {
-  const skin =
-    tone === "danger"
-      ? "border-ui-danger-fg bg-ui-danger-bg text-ui-danger-fg"
-      : "border-ui-warning-fg bg-ui-warning-bg text-ui-warning-fg";
-
   return (
     <div
       role={role}
-      className={`flex items-start gap-2.5 rounded-ui-lg border px-4 py-3 ${skin}`}
+      className={`flex items-start gap-2.5 rounded-ui-lg border px-4 py-3 ${NOTICE_SKIN[tone]}`}
     >
-      <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
+      <Icon
+        name={tone === "success" ? "check" : "alert"}
+        className="mt-0.5 size-4 shrink-0"
+      />
       <div className="flex min-w-0 flex-col gap-1.5">
         <p className="text-ui-subheading">{title}</p>
         {children}

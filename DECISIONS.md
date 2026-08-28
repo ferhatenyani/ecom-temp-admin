@@ -28,7 +28,7 @@ left looking like an oversight.
 [x] 11. Analytics — revenue / orders / products / customers / shipping / COD
 [x] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
 [x] 13. Media
-[ ] 14. Marketing — campaigns, composer, segments, config, templates
+[x] 14. Marketing — campaigns, composer, segments, config, templates
 [ ] 15. Notifications — list + detail
 [ ] 16. Staff — list, detail, new
 [ ] 17. Settings
@@ -39,13 +39,16 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **50
-files left**, down from 53 after the content branch. Read it as an **upper
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **37
+files left**, down from 50 after the media branch. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
 primitive contains no `ui-` string of its own. Content added none, and neither
 did media — its four files all carry one, and `UploadSheet.tsx` was deleted
 rather than migrated — but `CustomersView.tsx` and `CodView.tsx` still do not.
+Marketing added none either: all sixteen of its files carry one, and
+`campaigns/[id]/StepIndicator.tsx` was **promoted into `components/ui/Form.tsx`**
+rather than migrated in place.
 
 ---
 
@@ -1832,7 +1835,302 @@ either way.
 
 ---
 
+## 15. Marketing — six routes, one capability, and the run's strongest sort
+
+Checklist item **14**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+Six routes, fourteen files, none migrated: every one imported `Scaffold`,
+`GroupedList`, `Segmented`, `Sheet` and `primitives/Field`, and every one was
+`max-w-3xl`.
+
+### The composer stays a wizard, and §3.4 was amended to allow it
+
+**A stepped form is the panel's *other* long-form shape and §3.4 legislated only
+the first** — "a sticky footer that appears when the form is dirty", right for a
+coupon: one screen of independent fields, saved once, every save reversible by
+saving again. This is neither, for two measured reasons. The last step is
+**irreversible** (`send` freezes the audience as one row per recipient), and the
+third is a **server render of the saved campaign**, which exists only because the
+second already PATCHed. Collapsed into one form with a `SaveBar` the preview
+would render the *client's* draft against that irreversible act — and the preview
+is a step precisely because an unknown token renders **empty**, invisible in a
+body carrying a name from a token that resolved.
+
+§3.4 now says it in as many words: **one screen of fields → `SaveBar` when dirty;
+a sequence of steps → save on advance, and `StepIndicator`.** A screen shipping
+both has not decided which it is.
+
+**`StepIndicator` is in `Form.tsx` beside `SaveBar`**, and beside it is the
+point — the two are alternatives, so the choice is made once, at the import.
+Promoting it from a page-local file fixed a live defect: the strip was
+`aria-hidden` with `tabIndex={-1}` on every button, so **the only way back from
+step five to step one was four presses of "Retour"**. Ordinary buttons now, with
+`aria-current="step"`, an unreached step disabled with its reason (§3.3). Five
+labels are 44 characters and do not fit at 340, so the bars carry position, the
+names are accessible labels, and the sentence below is the visible one.
+
+### The index stays a real page
+
+Four unlike destinations under one capability — no shared query, envelope or row
+— plus the fact that settles it: **nothing else in the panel links to `config` or
+`email-templates`**, so a redirect to `/marketing/campaigns` would leave both as
+URLs with no door. `Card` + `NavList`/`NavRow`, the content hub's shape.
+`NavRow.description` had no caller until now: "Segments 4" does not tell a
+marketing manager which of the four they want.
+
+### Sorting ships on campaigns, and it is the run's strongest control
+
+Measured 2026-08-28 against the live router, one value at a time, and re-driven
+through the built panel in Chromium:
+
+```
+bare / created_at desc / id desc   [322, 320, 319, 318]
+name asc                           [320, 319, 322, 318]   4 distinct names, NOT the default
+name desc                          [318, 322, 319, 320]   the exact reverse
+created_at asc                     [319, 318, 320, 322]
+updated_at asc                     [320, 322, 318, 319]   a fourth distinct sequence
+?orderby=zzz / ?orderby= / ?order=zzz / ?order=   ** 400 **
+?bogus_param=1                     200, resting order
+```
+
+Two things make it the strongest sort measured on this run. **`name` and
+`updated_at` each answer a sequence the default cannot produce** — the positive
+control the standing rule asks for, and one `created_at desc` and `id desc`, both
+byte-identical to the bare listing, could never supply. And **garbage reaches a
+validator**: outside the enum is a 400, where the same request on `/shipping` and
+`/payments` is a silent 200. So `name`, `created_at` and `updated_at` carry a
+`sortKey` and announce `aria-sort`; `subject`, `audience` and `recipients` carry
+neither.
+
+**`id` sorts and gets no column.** Four campaigns, each with a name a person
+typed; a column of primary keys is nothing anybody scans, and adding one to hang
+a sort on is chrome — `date` on coupons exactly. Reachable by URL, as products
+treats `popularity`. **No sort below `md`**: `RecordList` takes no sort props and
+that is correct rather than a gap. The third header click drops `orderby`.
+
+**On segments, `name` only, and the control is two-part.** `name asc` is the
+default and proves nothing alone; `created_at` and `updated_at` are accepted,
+validated and **honoured**, and tie on every row because all four segments were
+seeded in one pass and share one stamp of each kind. What proves the parameter
+works is that **`name desc` reverses the default exactly** *and* **`id desc`
+differs from `name desc`** — together, `orderby` discriminating between fields.
+Neither half alone would do. The two stamp fields' untestability is a property of
+the fixture, recorded rather than worked around: the remedy is distinct stamps,
+not a control.
+
+### The peek is free, and does not reproduce the carried-forward defect
+
+`GET /campaigns/{id}` is **value-identical to the list row** on all four ids —
+sixteen keys, zero diff — so the drawer is free by the standing rule. It earns
+its place on `body_html`, `body_text`, the audience and the recipient partition:
+four facts no column can carry, and all four things somebody checks before an
+irreversible act. `rowOpenerId` (§10) makes the name cell a real `<button>`;
+`useLatchedOpener` holds the target past the close, and `?peek=` needs it most.
+
+**A peeked id not on the current page falls through to `GET /{id}`.**
+`OrdersList.tsx:162` and `ProductsList.tsx:244` resolve only from rows in memory,
+which §14 records as carried forward — a shared peek link silently opens nothing.
+Media fixed it rather than reproducing it, and so does this.
+
+### The create button was broken, and the mock reproduces the refusal
+
+`CampaignsList.tsx:85` sent `subject: ""` under a comment calling it "the minimum
+the API accepts". It is a **400** — so the panel's only create had never worked
+against the live shop. The real minimum is a name, a non-empty subject and an
+`audience_type`: **absent behaves as `"segment"`**, which then refuses for a
+missing `segment_id`, so `"all"` is the only value needing no second field. Both
+bodies may be empty — a measured **201**. It stays a `Button`, never a
+`ButtonLink`: Next prefetches links, so a `/new` route would create a draft when
+a thumb passed over it.
+
+### Four filter dimensions in one row, no drawer and no chips
+
+Status tabs (five states plus "all", the first sending nothing), search, the
+segment picker, and a clear button rendered only when something is filtered.
+Payments' judgement at the same count and for payments' reason: the status is the
+highlighted tab, the term is in its own box, the segment is the `Select`'s
+selected option, so chips would restate three controls six inches above them.
+
+**The placeholder names two fields because the search matches two** — `?search=`
+hits name *and* subject, so coupons' rule ("the code only") arrives here with a
+different answer rather than the same one.
+
+**The segment picker ships where shipping's provider box did not**, and the
+difference is the enumeration, not the parameter: `?segment_id=99999` is a silent
+**200 with 0 rows**, so free text would make a typo indistinguishable from "no
+campaign uses this segment", and `GET /segments` enumerates **all four**.
+
+### The segments editor is a `Modal`, and the delete is not in it
+
+Shipping's precedent exactly — nothing behind it is being read from, and it is a
+task to be finished or abandoned. Size `md`. **The recipient count renders for an
+existing segment and not for a new one** (§3.3): there is nothing to count, and a
+placeholder zero would be indistinguishable from the fact this screen exists to
+show, since a `wilaya_id` segment really does match nobody until an order ships.
+
+**Delete moved to the row's own `Menu`** — §3.1 rather than taste: a
+`ConfirmDialog` *is* a `Modal`, so a delete inside the editor would nest one.
+**No type-to-confirm on either delete**, per §3.1 as amended on shipping: a
+campaign's and a segment's only identifier is a free-text name, and this shop's
+rows are "Soldes d'août — brouillon" and "Clients à plus de 10 000 DA" — an em
+dash and a narrow no-break space, neither off a keyboard. A guard nobody can
+satisfy is a dead end with a text box in it.
+
+### The API's English is never rendered, and there were four sites
+
+`segments/{id}/preview`'s `note` is parsed and **not read** — `segment.consentNote`
+is the panel's mirror. Both criteria refusals are mirrored too, and they disagree
+about where the enumeration lives, which is worth writing down: the
+**empty-criteria** refusal publishes `details.supported` as a *sibling* of
+`fields`; the **unknown-criterion** refusal writes the same eleven **inline in the
+sentence** with no `supported` key. `lib/campaigns.ts` called the eleven "a copy
+of a constant the server publishes on refusal" — true of the first shape only.
+`supportedNames()` prefers the published list, falls back to the panel's copy, and
+renders **translated** criterion names either way. The fourth site is the
+segment-in-use 409. `ErrorSummary` keeps the API's words only for a field the
+panel has no mirror for. **The sixth time this run has fixed that class.**
+
+### `/marketing/config` is a report whose main state is a disabled integration
+
+Measured `enabled: false`, `providers: []` — "nothing is configured" is what every
+reader sees rather than an edge case, so the screen leads with it as an `info`
+`Notice` saying what it would take and **naming nothing that does not exist in
+this panel**: the pixel is set in the shop's own configuration and this screen
+only reads. No empty state, no stale marker — one object that always exists, a
+Server Component with no writes and no refresh.
+
+### Omitted deliberately, each measured
+
+- **No `ids` customer picker.** `/customers` is `ac_manage_customers`, which a
+  Marketing Manager does not hold, so it would be empty for the one role whose job
+  this is — and no `GET /campaigns/eligible-customers` exists to build one from.
+  The comma-separated field stays and says why **without naming a screen or action
+  that does not exist**.
+- **No schedule and no duplicate** — no such transition. `is_editable` and
+  `allowed_transitions` are read off the record; nothing hard-codes a table.
+- **No search, sort or filter on `email-templates`.** `?orderby=`, `?status=` and
+  `?search=` are each accepted and **ignored**, and `?orderby=zzz` is a **200** —
+  the strong negative, where the same value on `/campaigns` is a 400.
+- **No search on segments.** `?search=Alger` answers all four; the route declares
+  no such argument, so it is "accepted and ignored", not "nobody asked".
+- **No writes on `email-templates` or `/marketing/config`** — GET-only, refused by
+  the allowlist deliberately.
+- **No live send progress** — the drain is a CLI command and `send`'s 202 names
+  it. A progress bar would be a lie an operator acts on.
+- **No `ConfirmDialog` on `send`.** Irreversible but not destructive, and the
+  wizard *is* the guard: a fifth step whose whole content is the recipient count
+  and what will and will not happen. A modal on top would confirm the same act one
+  step after the first.
+
+**Two screens ship one half of the empty state** (§3.7 as amended on media):
+segments has no search or filter and email-templates publishes only paging, so
+"nothing matching this filter" has no producer. Both docblocks carry the sentence
+in the file a new control would land in, which is the point of the rule. A page
+past the end is reachable on both and gets its own state and action.
+
+### Primitives extended rather than forked
+
+- **`StepIndicator` → `Form.tsx`** — above.
+- **`Notice` gained `success` and `info`.** It took `warning | danger`, right
+  while every caller reported something wrong. `send`'s 202 names **the command
+  that actually sends the mail**, so the confirmation carries a string somebody
+  must read and run — §3.1's "an error a person must act on is not a toast" is
+  about *acting*, and 4 seconds would take the command away mid-sentence. The
+  test-send's `sent: true`/`false` is its pair, and two components would be a fork.
+  The icon follows the tone, so colour is never the only signal.
+- **`EmptyState.action` gained `href`.** `States.tsx` is `"use client"`, so a
+  Server Component cannot pass it a function *at all*, and two of this branch's
+  empty states are server-rendered with a URL for a remedy. Without it they shipped
+  actionless — the inventory branch's defect #3.
+
+### Four defects the captures found that a code review would not have
+
+1. **The audience cell clipped a French segment name from its front in Arabic.**
+   "Segment : Clients à plus de 10 000 DA" is one string whose first strong
+   character is Arabic, so the run goes RTL, `truncate` puts the ellipsis at the
+   physical left, and the 340 Arabic capture read "…lus de 10 000 DA". Label and
+   name are two boxes now — the fix `coupons/columns.tsx` records, arriving through
+   a *label* rather than a container.
+2. **`DetailGrid` was the wrong layout for the sent campaign.** The aside opens at
+   `lg`, so at 1024 the recipient table had **352px** for five columns, and at 1440
+   its last column fell off its own scroll container. Three small cards over a
+   full-width table now — §9's call about the COD report, in the other direction.
+3. **The campaigns table overflowed its card at 1440**, so the created column —
+   the one carrying the resting order — was reachable only by scrolling.
+4. **Three column headers and a drawer row read "Filtrer par état".**
+   `statusLabel` is a *filter's* name being used as a field label; `field.status`
+   is the noun.
+
+### i18n and e2e
+
+**1 983 keys in each file, at exact parity** — 1 902 before, 94 added, 13 removed;
+the `campaigns` namespace ends at 228 and has no reader outside
+`app/[locale]/(panel)/marketing/`, checked rather than assumed. Six values were
+rewritten because each duplicated a line now standing beside it. Thirteen lost
+their last caller, including **`sendStep.cancel`** — it did have the second caller
+in the segments sheet, and both are gone: an overlay footer takes `ui.cancel` from
+the primitive. New outside the namespace: `ui.steps.{of,goTo,locked}` and four
+`a11y.*` row labels.
+
+**`e2e/campaigns.spec.ts`: 9 test declarations before, 9 after** (the brief said
+eight), titles byte-identical, nothing deleted. Three edits: `selectSegment()`
+kept its name and lost its body (it clicked a `<label>` for `Segmented`'s
+`sr-only` radio; `FilterTabs` draws a real `<button>`); rows resolve through
+coupons' visible-filtered `tbody tr, li.ui-card` helper; and `openCampaign()` is
+two clicks where it was one, since a row now opens the peek. That second click is
+itself an assertion — the label comes from `is_editable`.
+
+### Verified
+
+`tsc` silent · lint 0 errors, **10** warnings — the baseline's eleventh was an
+unused `stepIndex` import in a file this branch rewrote · `test:design` 14/14, floor 275 → 307
+against 314 scanned · `test:unit` 864/864 · clean `rm -rf .next && npm run build`
+· **156 captures clean**, plus 72 on six screens this branch does not own but
+whose `Notice` and `EmptyState` it extended. Driven in Chromium beyond the
+captures: the three-click sort cycle and its `aria-sort`, `aria-sort` absent on
+the three columns nothing sorts, one focusable per row (`#campaign-opener-322`),
+Escape from a **pointer** open restoring to it, the deep-linked peek opening, the
+segment `Modal` at 560 centred and restoring focus, and zero overflow at 340
+across ten route/locale pairs.
+
+**Both identity runs had to be re-taken rather than read.** The `-no_marketing`
+and `-no_customers` PNGs already on disk were the *harness* commit's, and
+`MOCK_IDENTITY` is a whole-run variable, so a default pass leaves them untouched
+and they read as current. Judging the composer's `no_customers` capture is what
+caught it — it still showed the screen this branch replaced. **A stale capture is
+worse than a missing one.**
+
+---
+
 ## Carried forward — teardown owns these
+
+- **Every parameter refusal in the mock puts the enum sentence in the top-level
+  `message`, and the wire puts `"Invalid parameter(s): <name>"` there.** Found by
+  the marketing honesty audit, verified live on `/coupons`, `/products`,
+  `/customers`, `/media`, `/notifications` and `/orders` — so it is **five
+  collections**, not one, and `mock-api.mjs`'s `checkSort()` and
+  `notificationsListing()` are where it lives. `filterByStatus()` additionally
+  drops the Oxford comma and the full stop the wire sends. Nothing branches on the
+  sentence today, which is why it survived; it is the same class as the
+  `rest_invalid_param` codes, one layer up. Out of scope for item 14 and a
+  one-line change at each site.
+- **The mock's `send` transition refusal is the mock's own sentence**, modelled on
+  the measured `cancel` one and flagged at the site (`mock-api.mjs:13353`). Its
+  code and `details` are measured; the prose is not, because firing a send is
+  irreversible. This is the coupons `"Read-only."` shape exactly — a screen built
+  to an invented refusal — and the only defence is that no screen can reach it.
+  Whoever is willing to spend a real send on a disposable campaign should take it.
+- **`lib/campaigns.ts:96` says the API refuses the 1001st recipient id. Nobody has
+  measured it.** Dated-guess shape, which this file has been wrong about three
+  times.
+- **`RowSkeleton.tsx`'s importer count is now six, not seven** — `CampaignsList.tsx`
+  was one of them and no longer imports it.
+- **Live-shop residue from the harness work: campaign 325 `zz-harness-3`,
+  cancelled.** It could not be removed — `DELETE` on a non-draft is a 409, *"Only
+  a draft can be deleted. Cancel the campaign instead."* — which is itself the
+  measurement that produced it. Scratch segments 47/48 and campaigns 323/324 were
+  created and deleted cleanly.
 
 - **Every French timestamp in the panel reads "6:32 AM", and it is one line in
   `lib/format/date.ts`.** Found on the media drawer's `Téléversé` row and then
