@@ -2239,6 +2239,25 @@ the audience was created through the mock's own stateful `PATCH`.
   irreversible. This is the coupons `"Read-only."` shape exactly — a screen built
   to an invented refusal — and the only defence is that no screen can reach it.
   Whoever is willing to spend a real send on a disposable campaign should take it.
+- **`Steps.tsx:777` hard-codes `wp algerian-commerce send-campaigns`, and
+  `e2e/campaigns.spec.ts:240` asserts the string.** Everywhere *after* a send the
+  panel reads the command from the 202's `next.command` (`sendOutcome()`), which
+  is right; the **pre-send** step explains what will happen and there is no
+  response to read it from yet, so it is spelled out. The reason is legitimate and
+  the consequence still bites: this shop is expected to move off the WP-CLI drain,
+  and on that day the panel names a command that does not exist, in the one place
+  a person is deciding whether to send. It is the "copy never names an action that
+  does not exist" rule with a fuse on it. The fix is a published pre-send fact —
+  the send route's own description, or a `GET` that names the drain — not a second
+  hard-coded string.
+- **`sendCampaign()` in the mock writes counts but no recipient rows**
+  (`mock-api.mjs:13366`), so a panel-driven send leaves `/recipients` empty under a
+  non-zero `total`. Nothing reaches it today because the seeded `sending` campaign
+  is constructed rather than sent through the panel, which is exactly why it
+  survived.
+- **`/{collection}/abc` is `not_found` on the wire and `rest_no_route` in the
+  mock**, on `/campaigns`, `/products` and `/coupons` alike — cross-collection,
+  and the same class as the enum-sentence entry above.
 - **`lib/campaigns.ts:96` says the API refuses the 1001st recipient id. Nobody has
   measured it.** Dated-guess shape, which this file has been wrong about three
   times.
@@ -2394,11 +2413,38 @@ the audience was created through the mock's own stateful `PATCH`.
   Separately, `/locations/wilayas` holds **58 rows in the mock against 69 live**;
   that is fixture completeness rather than envelope shape, and nothing on any
   migrated screen reads past the ones it has.
-- **Re-measure every collection's `orderby` before trusting it.** Two of them
-  were recorded dead and were not, and in both cases the record outlived a
-  backend repair rather than ever having been wrong. `/orders`, `/customers`,
-  `/customers/{id}/orders` and `/notifications` all still carry "accepted and
-  ignored" from dates nobody has revisited. The check is cheap and the shape is
+- **Re-measure every collection's `orderby` before trusting it.** ~~Two~~ **Three**
+  of them were recorded dead and were not, and in every case the record outlived a
+  backend repair or a bad control rather than ever having been right. ~~`/orders`,
+  `/customers`,~~ `/orders`, `/customers/{id}/orders` and `/notifications` still
+  carry "accepted and ignored" from dates nobody has revisited.
+
+  **`/customers` is struck 2026-08-28: it sorts, and §5's "nothing records a
+  positive control" is now false.** Measured against the bare listing rather than
+  against a sibling value:
+
+  ```
+  bare / registered desc / ID desc   [235, 52, 47, 42, 36, 26, 25, 24, 19]
+  registered asc / ID asc            [2, 3, 4, 5, 6, 7, 13, 19, 24]
+  display_name asc / user_email asc  [13, 19, 26, 25, 24, 36, 42, 47, 52]
+  display_name desc / user_email desc[3, 7, 4, 6, 5, 2, 235, 52, 47]
+  ?orderby=zzz                       ** 400 **
+  ```
+
+  Three distinct sequences and a validator that refuses garbage. **The original
+  error is the reusable part**: `display_name` and `user_email` are byte-identical
+  *to each other* — most customers have no display name, so both fall back the
+  same way — and the measurement that killed the control compared only those two
+  and never either against the default. That is the products defect (§2), the
+  coupons `date` defect (§7) and the media defect (§14) for the fourth time, and
+  it recurred **twice on the marketing branch alone**: once here, and once when
+  the orchestrator read `?search=` as matching names off two customers whose
+  emails contained the terms. A control needs a value the default cannot produce;
+  two values agreeing with each other is not one. Whoever ships sorting on
+  `/customers` inherits a measured control.
+  The mock ignores all four values (`mock-api.mjs:8918`) and is therefore now
+  **less capable than the API**, which is the direction §0 warns is the quieter
+  one. Fixing it rewrites the customers screen's guard, so it is its own change. The check is cheap and the shape is
   known: compare each value's full id sequence against **the order its own field
   implies**, never against the collection's default, and count the distinct
   values so a fixture that ties on every row cannot pass as proof.
