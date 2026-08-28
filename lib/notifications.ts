@@ -107,6 +107,18 @@ export const STATE_TONE: Record<QueueState, "neutral" | "success" | "warning" | 
  * So the panel labels the channels it knows and renders an unknown one as
  * itself, the way `unknownSectionTypes()` does for the homepage. It must never
  * refuse to display a row because it has no label for its channel.
+ *
+ * **And there is no channel filter, which is this list's own doing.** Added
+ * 2026-08-28, because this is the file somebody reads before building one. The
+ * parameter works; the standing rule is that a picker over a working filter
+ * ships only when the *allowlisted enumeration* is complete, and there is no
+ * route anywhere in this API that enumerates channels. What is below is a copy
+ * of a server-side constant with nothing keeping the two in step — the sentence
+ * above says so — so a picker built from it cannot offer the value that matters
+ * the day a fifth channel is registered, and `?channel=nonsense` being a silent
+ * 200 means free text cannot keep a typo unreachable either.
+ * `app/[locale]/(panel)/notifications/query.ts` carries the argument in full and
+ * names the one request that would make the control buildable.
  */
 export const KNOWN_CHANNELS = ["email", "sms"] as const;
 export type KnownChannel = (typeof KNOWN_CHANNELS)[number];
@@ -318,13 +330,24 @@ export function messageParagraphs(body: string): string[] {
 /* --------------------------------------------------------------- summary --- */
 
 /**
- * What the list says above itself.
+ * A per-state tally of the rows in hand.
  *
  * Derived from the rows on the page rather than requested: there is no
  * `meta.summary` on `GET /notifications` — the `--summary` counts exist only on
  * the CLI drain — so a total per state would cost one request per state. The
  * count is therefore scoped to the page, and the label has to say so rather than
  * implying it counted the queue.
+ *
+ * **Corrected 2026-08-28: this used to say "what the list says above itself",
+ * and the queue list no longer says it.** The redesign gives the state its own
+ * column and its own filter tabs, so a strip of tallies above the table restated
+ * what every row already carries — and the header's subtitle is a queue-wide
+ * `total`, which a page-scoped breakdown cannot stand beside without inviting the
+ * arithmetic §5 and §9 both record as the panel's recurring defect.
+ *
+ * The one caller left is the customer detail's section, where it still earns its
+ * place: that card has no filter, no badge column and at most ten rows, so the
+ * tally is the only thing on it that says *how this person's queue is doing*.
  */
 export function stateCounts(
   rows: readonly { status: string; attempts: number; last_error: string | null }[],

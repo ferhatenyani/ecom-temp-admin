@@ -1,13 +1,20 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * The notification queue — deliberately small.
  *
- * **Eight tests, one project.** Everything about this screen that a unit test can
- * answer is answered in `tests/notification-schema.test.ts`, which parses twelve
- * captured payloads and covers the state derivation, the retry's two branches,
- * the 409, the unreadable payload and both filters. What is left for a browser is
- * the handful of things a schema cannot see:
+ * **Eight tests, and every one of them runs five times.** The docblock said "one
+ * project" for two branches and it was never true: `playwright.config.ts:57` sets
+ * a global `testMatch` and defines five projects with no per-project filter, so
+ * this file is executed by `phone`, `phone-min`, `phone-max`, `desktop` and
+ * `phone-webkit` alike. That is not a footnote — four of the five are phone-sized,
+ * which is the reason every row locator below had to change.
+ *
+ * Everything about this screen that a unit test can answer is answered in
+ * `tests/notification-schema.test.ts`, which parses twelve captured payloads and
+ * covers the state derivation, the retry's two branches, the 409, the unreadable
+ * payload and both filters. What is left for a browser is the handful of things a
+ * schema cannot see:
  *
  *   - the **capability refusal**, which is a fact about the session and the
  *     proxy rather than about a payload;
@@ -16,10 +23,6 @@ import { test, expect, type Page } from "@playwright/test";
  *   - that a retry's **202 reaches the screen** as a sentence saying nothing was
  *     sent, rather than as a spinner that resolves into a checkmark;
  *   - that the customer tab's **one request** actually renders.
- *
- * There is no capture suite on this branch and no four-width sweep, by
- * instruction. Anything a screenshot would have proved is proved by a unit test
- * or is not proved.
  *
  * Every fixture here comes from `scripts/seed-notifications.mjs`, whose own floor
  * asserts it created the states — so a failure in this file is a failure of the
@@ -45,13 +48,41 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
 }
 
 /**
- * The segmented control's `<input type="radio">` is `sr-only`, so a pointer
- * reaches it through its `<label>` and Playwright must do the same — an
- * actionability check on a visually hidden input never passes. The customers,
- * inventory and content suites all document this.
+ * One queue row, in whichever presentation the running viewport paints.
+ *
+ * **This file had no `rows()` helper and every other list spec does**, which was
+ * survivable while the screen drew one inset row at every width and is not now.
+ * `DataTable` renders both presentations into the DOM and hides one per
+ * breakpoint: the `<table>` — the only place the event's `<a href>` exists — is
+ * `hidden md:block`, and below `md` a `RecordList` card navigates through a
+ * stretched overlay button instead. So the old inline `a[href*="/notifications/"]`
+ * doubles nothing but *is never painted* on four of the five projects, and its
+ * `toHaveCount(1)` would have broken the moment both presentations shipped.
+ *
+ * `<tr>` and `<li class="ui-card">` rather than the link and the overlay button,
+ * because a row is read as well as clicked — "the row is badged Échec" is an
+ * assertion about the row's text, and the overlay button has none. Both
+ * containers are clickable: `<tr>` carries `onRowClick`, and the card's overlay
+ * covers it edge to edge.
+ *
+ * Coupons introduced this shape and campaigns adopted it; this is the third
+ * caller.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
+/**
+ * Pick one of the status tabs.
+ *
+ * **The helper kept its name and lost its body.** It was written for
+ * `Segmented`'s `sr-only` radio, which a pointer can only reach through its
+ * `<label>`; `FilterTabs` draws a real `<button>`, so the label locator matched
+ * nothing at all. The campaigns and content branches made exactly this change for
+ * exactly this reason.
  */
 async function selectSegment(page: Page, label: string) {
-  await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
+  await page.getByRole("button", { name: label, exact: true }).click();
 }
 
 async function openQueue(page: Page, locale: string, query = "") {
@@ -61,7 +92,7 @@ async function openQueue(page: Page, locale: string, query = "") {
 
 /** The first row whose badge reads as the given state. */
 function rowWithState(page: Page, state: string) {
-  return page.locator('a[href*="/notifications/"]').filter({ hasText: state }).first();
+  return rows(page).filter({ hasText: state }).first();
 }
 
 test.describe("the queue", () => {
@@ -71,57 +102,71 @@ test.describe("the queue", () => {
      * pending**, one channel, `sent_at` and `last_error` null on every one. So
      * this assertion is the seed's whole justification — without it the screen
      * can only ever show one badge and three of the four are dead code.
+     *
+     * `.filter({ visible: true })` is the redesign's only change here, and it is
+     * the same fact `rows()` exists for: the badge is drawn twice, once in the
+     * table and once on the record card, and `.first()` would otherwise resolve to
+     * whichever of the two this project does not paint.
      */
     await signIn(page, "fr");
     await openQueue(page, "fr");
 
     for (const state of ["Transmise", "Échec", "Nouvel essai", "En file"]) {
       await expect(
-        page.getByText(state, { exact: true }).first(),
+        page.getByText(state, { exact: true }).filter({ visible: true }).first(),
         `no row badged "${state}"`,
       ).toBeVisible();
     }
   });
 
-  test("filters by a channel that only exists because the seed wrote one", async ({ page }) => {
+  test("narrows the list with a filter the API honours rather than ignores", async ({ page }) => {
     /*
-     * `?channel=` is honoured — and with one channel in the table it is a
-     * control that cannot be wrong. The `sms` row is written underneath the API
-     * (there is no `sms` channel to queue one) precisely so this proves
-     * something.
+     * **This is the one test on the branch whose title changed, and the change is
+     * the honest half of the rule rather than an exception to it.** It read
+     * "filters by a channel that only exists because the seed wrote one". The
+     * channel control came off on the redesign branch — the parameter *is*
+     * honoured (`email` 25, `sms` 0), and the
+     * standing rule is that a picker over a working filter ships only when the
+     * allowlisted enumeration is complete. There is no allowlisted enumeration of
+     * channels anywhere in this API, `KNOWN_CHANNELS` is a panel-side copy of a
+     * server constant one `add()` from being stale, and `?channel=nonsense` is a
+     * silent 200 — so a picker is the only thing that could keep a typo
+     * unreachable and it cannot. `notifications/query.ts` carries the argument.
      *
-     * **Asserted on membership, not on counts**, and that is not fussiness. The
-     * first version compared `email === all - 1`, which held at ten rows and
-     * would have failed the moment the queue passed `per_page`: this table
-     * accumulates rows from *other* repositories' suites — `tests/Api/campaigns.php`
-     * queues transactional notifications of its own and drains them — so the
-     * total is not the panel's to predict. Measured after one campaigns run, it
-     * went 10 → 19.
+     * **What this test checks has not been weakened, which is why the title could
+     * move without coverage moving with it.** It was never about the channel: it
+     * is the one browser-side proof that a filter control on this screen genuinely
+     * narrows the list, as opposed to being accepted and silently ignored the way
+     * `?event=` and `?audience=` are. Its own comment said so —
+     * *"asserted on membership, not on counts"*, because the total is not the
+     * panel's to predict (this table accumulates rows from other repositories'
+     * suites; measured after one campaigns run it went 10 → 19).
      *
-     * The sms row is still exactly one, because nothing can queue a second: the
-     * registry holds one channel and it is not this one. So the floor is the
-     * pair — SMS finds that row and only it, e-mail finds several and never it.
-     * A filter that is accepted and ignored, which is what `?event=` and
-     * `?audience=` do on this route, fails both halves.
+     * So the pair is the same and the dimension is the one the screen still
+     * offers: **sent finds rows and never a failed one, failed finds rows and
+     * never a sent one.** A filter that is accepted and ignored fails both halves,
+     * which is the whole floor. Counts are asserted as "more than none" rather
+     * than as a number, for the reason above.
      */
-    const SMS_RECIPIENT = "+213661234567";
+    const SENT = "Transmise";
+    const FAILED = "Échec";
 
     await signIn(page, "fr");
     await openQueue(page, "fr");
 
-    const rows = page.locator('a[href*="/notifications/"]');
-    expect(await rows.count()).toBeGreaterThan(1);
-    await expect(page.getByText(SMS_RECIPIENT)).toBeVisible();
+    const queue = rows(page);
+    expect(await queue.count()).toBeGreaterThan(1);
+    await expect(queue.filter({ hasText: SENT }).first()).toBeVisible();
 
-    await selectSegment(page, "SMS");
-    await page.waitForURL(/channel=sms/);
-    await expect(rows).toHaveCount(1);
-    await expect(page.getByText(SMS_RECIPIENT)).toBeVisible();
+    await selectSegment(page, "Envoyées");
+    await page.waitForURL(/status=sent/);
+    expect(await queue.count()).toBeGreaterThan(0);
+    await expect(queue.filter({ hasText: FAILED })).toHaveCount(0);
 
-    await selectSegment(page, "E-mail");
-    await page.waitForURL(/channel=email/);
-    expect(await rows.count()).toBeGreaterThan(1);
-    await expect(page.getByText(SMS_RECIPIENT)).toHaveCount(0);
+    await selectSegment(page, "Échouées");
+    await page.waitForURL(/status=failed/);
+    expect(await queue.count()).toBeGreaterThan(0);
+    await expect(queue.filter({ hasText: SENT })).toHaveCount(0);
   });
 });
 
@@ -152,10 +197,15 @@ test.describe("the frozen message", () => {
      * payload with `wp_json_encode()` — so the seed writes one underneath, the
      * `seed-cms.mjs` drop-report precedent. The screen must state the shape of
      * the problem rather than render an empty quote.
+     *
+     * The row is opened through `rows()` rather than by clicking the event label
+     * directly: below `md` that label sits under `RecordList`'s stretched overlay
+     * button, which intercepts the pointer, and at `md`+ it is inside an anchor
+     * that is only painted there.
      */
     await signIn(page, "fr");
     await openQueue(page, "fr");
-    await page.getByText("Colis livré", { exact: true }).first().click();
+    await rows(page).filter({ hasText: "Colis livré" }).first().click();
 
     await expect(page.getByText(/contenu enregistré est illisible/)).toBeVisible();
     await expect(page.getByTestId("message")).toHaveCount(0);
@@ -176,6 +226,11 @@ test.describe("retry", () => {
      * So the confirmation is asserted on its *negative* — "Rien n’a été envoyé"
      * — and on the command being on screen. A spinner resolving into a checkmark
      * would pass a laxer test and be a lie.
+     *
+     * The control is the `PageHeader` primary now rather than a button inside a
+     * card, and the outcome is a `Notice` in the body rather than a tinted panel
+     * inside the same card. Both still answer to their own testids, which is the
+     * whole reason those testids exist.
      */
     await signIn(page, "fr");
     await openQueue(page, "fr");
@@ -220,10 +275,22 @@ test.describe("one customer's own queue", () => {
      *
      * Karim Mansouri is customer 5 and the seed gives him rows across several
      * states on two real orders.
+     *
+     * **There is no tab to select any more, and that is not this branch's doing.**
+     * The customers redesign put the orders and the notifications in stacked cards
+     * and retired `Segmented` outright — its own docblock argues it: a tab you open
+     * to find nothing in it is the worst version of that trade, and this section is
+     * empty for 11 of the 16 customers. So `selectSegment(page, "Notifications")`
+     * has been clicking a `<label>` that does not exist since that branch merged.
+     * The section is on screen from the navigation; the assertions below are
+     * untouched.
+     *
+     * The anchors here are the customer card's own `<Link>` per row, not
+     * `DataTable`'s — that section is a plain list, so it draws one presentation
+     * and `rows()` does not apply to it.
      */
     await signIn(page, "fr");
     await page.goto("/fr/customers/5");
-    await selectSegment(page, "Notifications");
 
     const rows = page.locator('a[href*="/notifications/"]');
     await expect(rows.first()).toBeVisible();
@@ -259,6 +326,10 @@ test.describe("the capability", () => {
      * branch took it off the proxy's refused list. So the same credential is
      * asserted to reach `/coupons`, which a Marketing Manager holds — measured
      * 200 — in the same session.
+     *
+     * `notifications-count` is what distinguishes the refusal from the screen: the
+     * refused page keeps its `PageHeader` so the box lands where the person asked
+     * for it, and the subtitle carrying that testid is rendered only past the gate.
      */
     await signIn(page, "fr", MARKETING_USER!, MARKETING_PASS!);
 
@@ -289,7 +360,7 @@ test.describe("Arabic", () => {
     await openQueue(page, "ar");
 
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-    await page.getByText("سُلِّمت", { exact: true }).first().click();
+    await rowWithState(page, "سُلِّمت").click();
 
     const quote = page.getByTestId("message");
     await expect(quote).toBeVisible();
