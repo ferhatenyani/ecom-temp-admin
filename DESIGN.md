@@ -816,6 +816,32 @@ system, restyled per §1.
    page, never a logout, never a disappearing toast.
 4. **Error** — one line, a retry, and the API's own message only where it is
    actionable (a 409, typically).
+
+   > **Amended on the notifications branch: the error state replaces the content
+   > only when there is no content. A failed *refetch* is still a refetch.**
+   >
+   > This item and §8's "background refetch keeps content on screen — no skeleton
+   > flash" are two rules about the same moment, and the document never said which
+   > wins. Every migrated list read it the same way and branched
+   > `isPending ? skeleton : isError ? <ErrorState> : …`, which is right while the
+   > only way to reach `isError` is a first load that failed — and wrong the moment
+   > a list **polls**. There, one dropped request thirty seconds after a good one
+   > blanks a screenful of rows that are still perfectly readable, replaces them
+   > with a sentence about a failure the person did not cause, and takes away the
+   > pager and the filters that were the only way back to them.
+   >
+   > So: `isError` **and nothing on screen** is the error state, with its retry.
+   > `isError` **over rows already rendered** keeps the rows and reports their age
+   > through the fifth state below, which is exactly what the fifth state is for —
+   > the data is now older than it looks, and that is the honest thing to say
+   > about it. The manual refresh control is the retry.
+   >
+   > The distinction only bites on a screen that can fetch twice. A one-shot list
+   > reaches `isError` with nothing on screen by construction and its behaviour is
+   > unchanged, which is why nothing shipped before this needed to know the rule —
+   > and also why the four shipped lists that *do* poll or refresh still blank on
+   > a failed second fetch. They are not wrong against the old text; they are
+   > untouched by this branch.
 5. **Stale / offline** — a visible marker carrying the age of the data, and every
    write control disabled with that same reason.
 

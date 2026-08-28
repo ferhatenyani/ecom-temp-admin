@@ -5,8 +5,8 @@ import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { notificationDetail } from "@/lib/api/schemas/notification";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { NotificationDetail } from "./NotificationDetail";
 
 /** `params` is a Promise in Next 16, like `searchParams` and `cookies()`. */
@@ -21,11 +21,15 @@ export default async function NotificationPage({
   if (!has(me, "ac_manage_customers")) {
     const t = await getTranslations("notifications");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* No `back` link on the refusal: the list is the same 403, so offering a
+            way to it would be a control that cannot act. §3.3, reaching a
+            breadcrumb. */}
+        <PageHeader title={t("title")} divided={false} />
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_customers" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

@@ -194,6 +194,7 @@
     "errorTitle": "Une erreur est survenue",
     "retry": "Réessayer",
     "offline": "Données de {time} — hors ligne",
+    "refreshFailed": "Données de {time} — la dernière actualisation a échoué",
     "offlineWrites": "Les modifications nécessitent une connexion.",
     "loading": "Chargement",
     "notFoundAddress": "Cette adresse n’existe pas."
@@ -228,7 +229,8 @@
     "campaignName": "Campagne {name}",
     "segmentName": "Segment {name}",
     "recipientEmail": "Destinataire {email}",
-    "templateName": "Modèle {name}"
+    "templateName": "Modèle {name}",
+    "notification": "Notification {event} du {date}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -1622,10 +1624,6 @@
   "notifications": {
     "title": "Notifications",
     "refresh": "Actualiser",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
-    "previous": "Précédent",
-    "next": "Suivant",
     "count": "{total, plural, =0 {Aucune notification} one {# notification} other {# notifications}}",
     "statusLabel": "Filtrer par état",
     "status": {
@@ -1634,9 +1632,7 @@
       "sent": "Envoyées",
       "failed": "Échouées"
     },
-    "channelLabel": "Filtrer par canal",
     "channel": {
-      "all": "Tous",
       "email": "E-mail",
       "sms": "SMS"
     },
@@ -1669,22 +1665,20 @@
     "errorQuote": "« {error} »",
     "dateFrom": "Depuis le",
     "dateTo": "Jusqu’au",
-    "clearDates": "Effacer",
-    "dateScope": "Du {from} au {to}, en UTC, journées entières.",
-    "clearKey": "Retirer le filtre de clé",
-    "clearSubject": "Retirer le filtre de commande",
     "subjectChip": "Commande #{id}",
     "empty": {
       "none": "La file est vide. Rien n’a encore été mis en attente d’envoi.",
       "noResults": "Aucune notification pour ces filtres.",
-      "clear": "Effacer les filtres"
+      "clear": "Effacer les filtres",
+      "pastEnd": "Cette page est vide : il n’y a plus rien au-delà.",
+      "firstPage": "Revenir à la première page"
     },
     "notFound": "Cette notification n’existe pas. Elle a peut-être été purgée par une réinitialisation de l’environnement.",
     "section": {
       "status": "État",
-      "retry": "Remettre en file",
       "message": "Message figé",
-      "delivery": "Acheminement"
+      "delivery": "Acheminement",
+      "links": "Aller à"
     },
     "field": {
       "state": "État",
@@ -1710,7 +1704,9 @@
       "alreadyPending": "La ligne était déjà en file. Rien n’a changé.",
       "drainLabel": "L’envoi se fera par cette commande :",
       "alreadyQueuedNote": "Cette ligne attend déjà. La remettre en file remettra ses tentatives à zéro, sans rien envoyer.",
-      "alreadySentOn": "Elle a été transmise le {date}. La renvoyer expédierait un message figé à ce moment-là."
+      "alreadySentOn": "Elle a été transmise le {date}. La renvoyer expédierait un message figé à ce moment-là.",
+      "sentTitle": "Déjà transmise",
+      "sentNote": "Une notification transmise ne se remet pas en file : la renvoyer expédierait le message figé au moment de sa mise en file."
     },
     "message": {
       "frozenNote": "Le texte exact mis en file, figé à ce moment-là. Il est reproduit tel quel, dans sa langue d’origine : c’est ce que le client a reçu, pas du texte du panneau.",
@@ -1725,7 +1721,17 @@
       "scopeNote": "Les messages adressés à ce client. Les alertes envoyées à la boutique au sujet de ses commandes n’y figurent pas.",
       "failed": "Impossible de charger les notifications de ce client."
     },
-    "customerRowLabel": "{event} — {date}"
+    "customerRowLabel": "{event} — {date}",
+    "loading": "Chargement…",
+    "columns": {
+      "event": "Événement",
+      "recipient": "Destinataire",
+      "audience": "Destiné à",
+      "attempts": "Tentatives",
+      "lastError": "Dernière erreur",
+      "created": "Mis en file",
+      "state": "État"
+    }
   },
   "campaigns": {
     "hubTitle": "Marketing",

@@ -5,8 +5,8 @@ import { ApiError } from "@/lib/api/errors";
 import { notificationList } from "@/lib/api/schemas/notification";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { NotificationsList } from "./NotificationsList";
 import { listParams, queryFromParams } from "./query";
 
@@ -39,11 +39,17 @@ export default async function NotificationsPage({
   if (!has(me, "ac_manage_customers")) {
     const t = await getTranslations("notifications");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* The header still renders, so the refusal arrives on the screen the
+            person asked for rather than on a blank page — §3.7's third state. No
+            toolbar and no count: there is nothing behind the gate to filter or to
+            count, and `notifications-count` being absent is what the e2e suite
+            asserts the refusal by. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="full">
           <ForbiddenState capability="ac_manage_customers" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 

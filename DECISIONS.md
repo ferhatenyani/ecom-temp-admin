@@ -29,7 +29,7 @@ left looking like an oversight.
 [x] 12. Content — pages, page form, banners, FAQs, homepage, menus, index
 [x] 13. Media
 [x] 14. Marketing — campaigns, composer, segments, config, templates
-[ ] 15. Notifications — list + detail
+[x] 15. Notifications — list + detail
 [ ] 16. Staff — list, detail, new
 [ ] 17. Settings
 [ ] 18. Transfer
@@ -39,8 +39,8 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **37
-files left**, down from 50 after the media branch. Read it as an **upper
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **31
+files left**, down from 37 after the marketing branch. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
 primitive contains no `ui-` string of its own. Content added none, and neither
@@ -65,7 +65,7 @@ Apply these to every remaining screen unless something measured says otherwise.
 | **No bulk write without a measured endpoint.** | `POST /products/bulk` and `/inventory/bulk` are both refused by the allowlist and asserted refused in tests. |
 | **A control that cannot act is not rendered.** | Same principle the nav uses for capabilities. |
 | **Copy never names a screen or action that does not exist.** | Three such strings were found and fixed; one had just been written. |
-| **A picker over a working filter ships only when the allowlisted enumeration is complete.** Payments yes, shipping no. | Both parameters work and neither is validated — a wrong value is a silent 200 with 0 rows, not a refusal, so the *picker* is the only thing that can keep a typo unreachable. `/payments/methods` lists both values the collection carries, so it can; `/shipping/providers` lists one of two, so it cannot and shipping ships no provider filter. The test is the enumeration, never the parameter. |
+| **A picker over a working filter ships only when the allowlisted enumeration is complete.** Payments yes, shipping no. | Both parameters work and neither is validated — a wrong value is a silent 200 with 0 rows, not a refusal, so the *picker* is the only thing that can keep a typo unreachable. `/payments/methods` lists both values the collection carries, so it can; `/shipping/providers` lists one of two, so it cannot and shipping ships no provider filter. The test is the enumeration, never the parameter. **Notifications is the third and the starkest: there is no channel enumeration at any URL**, so the only candidate was a panel-side copy of a server constant — and a control took it off a shipped screen rather than being declined before one existed. |
 | **A translated word for a shop's own vocabulary, a brand for a brand.** | `providerLabel`'s message key → API `label` → raw name, now in two places. `manual` and `cod` are states of this shop and read in the reader's language; `acfake` and `chargily` keep what their own side of the wire calls them. Nobody translates "Yalidine". |
 | **A figure links only where its reader is not refused, and a figure with no honest destination renders unlinked.** Dashboard. | The same rule the nav and every disabled control follow, reaching a *number*. A link to a 403 is a control that cannot act, and a link to the wrong list is worse than none — `awaiting` counts two statuses the API cannot filter together and led to a list of half its own value. The figure always stays: a refused destination is not a refused number. A type that made the destination mandatory is what produced both defects, so "this cannot be drilled into" has to be representable. |
 
@@ -2221,7 +2221,179 @@ the audience was created through the mock's own stateful `PATCH`.
 
 ---
 
+## 16. Notifications — the queue, and a filter set smaller than the row
+
+Checklist item **15**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **List**: `PageBody width="full"`, `DataTable`/`RecordList` + one
+  `columns.tsx`. Event (the identifying cell, a real anchor) · recipient ·
+  audience · attempts (`optional`) · last_error · created · state last.
+  **Detail**: `PageBody width="detail"` — §2.3 names "notification" in its
+  768px row by name, so this is the first screen in the run that reads its width
+  off the table rather than arguing for one. No `DetailGrid`.
+- **The badge is `queueState()`, never `status`.** A retryable failure is left
+  `status: "pending"` with the attempt counted, so a list badged on the API's own
+  field shows a row the drain has already choked on as though nothing had touched
+  it. That distinction is the whole reason the screen exists, and it is the one
+  thing on it that is derived rather than reported.
+- Filters: status `FilterTabs` (the first sending nothing, because **`?status=`
+  is a 400 here** and not an absence), `date_from`/`date_to` as `DateField` with
+  `echo`, and a clear button rendered only when something is filtered. Payments'
+  judgement at payments' count: no chips restating controls that are visible six
+  inches above.
+- **`dedupe_key` and `subject_id` keep their chips, and this is the screen where
+  the exception is the rule's own logic.** Neither is a toolbar control — nobody
+  types a dedupe key or an order id — and both arrive by following a link from a
+  record. §9 dropped chips because each restated a live control; here **no
+  control on screen restates them**, so without a chip the list is silently
+  narrowed by a parameter with no visible cause, which reads as broken.
+- **Nothing sorts, and this is the run's strongest negative.**
+  `NotificationRepository::search()` ends in a literal
+  `ORDER BY created_at DESC, id DESC` with no branch — so unlike every previous
+  "accepted and ignored" record, this one is a property of the source rather than
+  a dated observation. Fourteen spellings (`orderby`, `order`, `sort`, `sort_by`,
+  `_orderby`, each with both directions) returned the identical 25-id sequence,
+  and the fixture discriminates: 25 distinct `dedupe_key`, 12 distinct
+  `subject_id`, 10 distinct `created_at`. `?orderby=zzz` is a **200** — it never
+  reaches a validator. No `sortKey`, no `aria-sort`, verified in a browser:
+  26 `<th>` on the page, every one `null`.
+  **This strikes the carried-forward entry rather than renewing it.** Three
+  collections on that list turned out to sort after all; this one cannot, and the
+  difference is that somebody read the query builder instead of the note.
+- **No peek, and the identifying cell is a real anchor.** `GET /{id}` is the list
+  row plus exactly one key — `message` — and that key is the entire reason
+  anybody opens the record, so the drawer is not free by the standing rule. §5's
+  argument, one screen over. Therefore no `rowOpenerId` either (§3.2: omit it
+  when the cell is already a link and following it is what clicking the row
+  does). Driven at 1440: **one focusable per row and it is the event anchor**,
+  `<th scope="row">` on the cell, Enter opens the record.
+- **The channel filter came off, and it is the branch's one reversal.**
+  `?channel=` *is* honoured (`email` 25, `sms` 0) — that was never the test. The
+  standing rule asks for a complete **allowlisted enumeration**, and there is no
+  channel enumeration anywhere in this API: `KNOWN_CHANNELS` is a panel-side copy
+  of a server constant `lib/notifications.ts` says is four `add()` calls from
+  being stale, and `?channel=nonsense` is a silent 200 with 0 rows, so a picker
+  is the only thing that could keep a typo unreachable and it cannot. On this
+  shop its two answers are also "all 25" and "none", which is media's `type`
+  argument (§14) arriving second. The channel still renders on the row and the
+  record. What would make it buildable is one request: an allowlisted route that
+  enumerates channels.
+- **Retry is the `PageHeader` primary and there is no `ConfirmDialog`** — it is
+  neither destructive nor irreversible; it queues a row and mails nothing. On a
+  `sent` row the control is **not rendered** and two footnotes say why (shipping's
+  terminal parcel, §8), while the 409 stays handled because a row that sends
+  between the render and the tap is the race the backend's conditional `UPDATE`
+  exists for. The outcome is a `Notice` and never a `Toast`: §3.1's "an error a
+  person must act on is not a toast" is about *acting*, and the 202's
+  `meta.drain` names the command that actually sends the mail. It leads with the
+  negative. Measured in a browser: **exactly one POST per press** — the
+  `acWriteWithMeta` lesson holding — and the result panel survives the `refetch()`
+  that follows it.
+- **Both lists poll and the detail's poll is gated.** 30s,
+  `refetchIntervalInBackground: false`, orders' numbers; the detail only while
+  the row is `queued` or `retrying`, marketing's shape (§15.1). A queue drains
+  without the operator acting, and this is the screen somebody leaves open.
+- Omitted, each measured: **no search** (`?search=`, `?s=`, `?q=` each answer all
+  25), **no `event` or `audience` filter** (accepted and ignored, and both are on
+  every row — exactly the controls that would appear to work over one page and
+  lie across the second), **no recipient filter** (exact-match and
+  case-insensitive, `?recipient=amina` is 0 rows against
+  `amina@example.test`'s 3; nobody types an address and the per-customer question
+  already has its own surface), no bulk, no export (notifications is not in
+  `EXPORT_SUBJECTS`), no create (`POST /notifications` does not exist).
+- **Retry stays offered on the unreadable-payload row.** It will fail again — the
+  drain cannot decode the payload and parks it without attempting a send — but
+  the API permits the requeue, the panel does not get to be stricter than the API
+  it is a client of, and the card says in the reader's language exactly what the
+  drain saw. A control the API accepts is not a control that cannot act.
+
+**DESIGN.md §3.7-4 amended, and it is the first rule this run has found by
+polling.** §3.7-4 and §8's "background refetch keeps content on screen" are two
+rules about one moment and the document never said which wins. Every migrated
+list branched `isPending ? skeleton : isError ? <ErrorState> : …`, which is right
+while the only way to reach `isError` is a first load that failed — and wrong the
+moment a list polls, where one dropped request thirty seconds after a good one
+blanks a screenful of readable rows and takes the pager and the filters with
+them. So: `isError` **with nothing on screen** is the error state; `isError`
+**over rows already rendered** keeps the rows and reports their age through the
+fifth state. Verified by breaking the network against a live list: 20 rows → 20
+rows, pager intact.
+
+**And the amendment broke the marker's own sentence, which is the defect the
+branch nearly shipped.** `StaleBanner` renders `states.offline` — "Données de
+{time} — hors ligne" — and every one of its twenty-two callers gated on
+`!useOnline()`, so that was a fact. Gating it additionally on *the last refetch
+failed* made it say "offline" with the interface perfectly up, which is a marker
+naming a cause it has not established: the same class as a label naming an action
+that does not exist, arriving in a state instead of in copy. `StaleBanner` gained
+`reason`, defaulting to `offline` so all twenty-two are byte-identical and none
+was touched. **Found by driving a browser with the route aborted, not by
+reading** — the capture harness cannot fail a request on purpose, and the
+sentence renders perfectly well while being wrong.
+
+**`e2e/notifications.spec.ts`: 8 tests before, 8 after, nothing deleted — and one
+title changed, which is a first for this run.** `:86` was "filters by a channel
+that only exists because the seed wrote one", and the channel control is gone. It
+now drives the status tabs, and what it checks is untouched: it was never about
+the channel, it is the one browser-side proof that a filter on this screen
+genuinely narrows rather than being accepted and ignored the way `?event=` and
+`?audience=` are — *"membership, not counts"*, as its own comment already said.
+Keeping the title byte-identical would have left a test named for a control that
+does not exist, which is the copy rule reaching a test file; the byte-identical
+discipline exists to prove no coverage was dropped, and the diff proves that
+better than the string did. Also fixed: the file had **no `rows()` helper** while
+every other list spec has one, and its inline `a[href*="/notifications/"]`
+resolved through a `hidden md:block` table on four of the five phone-sized
+projects; `selectSegment()` kept its name and lost its `Segmented` `<label>`
+body; and its docblock claimed "one project" for two branches against a config
+that runs it five times.
+
+**i18n**: **2 012 keys in each file, exact parity.** The `notifications`
+namespace 82 → 84: eleven lost their last caller and went (`previousPage`,
+`nextPage`, `previous`, `next`, `channelLabel`, `channel.all`, `clearDates`,
+`dateScope`, `clearKey`, `clearSubject`, `section.retry`), thirteen added, plus
+`a11y.notification` and `states.refreshFailed`. `channel.email`/`sms` stay — the
+control went, the *label* did not. The namespace is shared with
+`customers/[id]/NotificationsSection.tsx` and nothing it reads was renamed;
+**that screen turned out to be already migrated**, contrary to this brief, and
+its e2e caller had been clicking a `<label>` that stopped existing when the
+customers branch retired `Segmented`.
+
+**Verified**: `tsc` silent · lint 0 errors, 10 warnings · `test:design` 14/14,
+floor 308 → **315** against 317 scanned · `test:unit` 884/884 · clean
+`rm -rf .next && npm run build` · **156 captures clean** across the two routes,
+five record states, two empty states, the `no_customers` forbidden pair and three
+screens this branch does not own but whose `StaleBanner` it extended. Driven in
+Chromium beyond the captures: the failed-refetch behaviour, one focusable per
+row, no `aria-sort` on 26 headers, one POST per retry, and zero horizontal
+overflow at 340 across six route/locale pairs.
+
+---
+
 ## Carried forward — teardown owns these
+
+- **Four shipped lists still blank their rows on a failed *refetch*.** DESIGN.md
+  §3.7-4 was amended on the notifications branch to say that the error state
+  replaces content only when there is no content; every list written before it
+  branches `isPending ? skeleton : isError ? <ErrorState> : …`, which is correct
+  for a one-shot list and wrong for one that polls or offers a refresh. They are
+  not wrong against the text they were written to — they are untouched by that
+  branch, and each is a two-line change in its own screen. **The tell is a
+  refresh control or a `refetchInterval`**, not the list's age.
+- **`?date_from=2026-13-45` is a 200 with 0 rows and a database error nobody can
+  see.** It passes `NotificationController`'s `^\d{4}-\d{2}-\d{2}$`, reaches
+  MySQL as `'2026-13-45 00:00:00'`, and logs `Incorrect DATETIME value` twice —
+  once for the page and once for the count — while answering `total: 0`. This is
+  §9's payments finding one collection over, and it is recorded rather than
+  defended for the same reason: the router validates the shape and never the
+  calendar, and the panel does not get to be stricter than the API it is a client
+  of. A native date control cannot produce the value; only a hand-edited URL can.
+  It is the backend's to fix, and it is the only one of these entries that is.
+- **The mock does not gate `/customers` on `ac_manage_customers`** while the wire
+  answers 403. Found by the notifications harness audit, which gated its own three
+  routes; one line at that collection's own `case`, and out of scope for a branch
+  that does not own the screen.
 
 - **Every parameter refusal in the mock puts the enum sentence in the top-level
   `message`, and the wire puts `"Invalid parameter(s): <name>"` there.** Found by
@@ -2233,6 +2405,12 @@ the audience was created through the mock's own stateful `PATCH`.
   sentence today, which is why it survived; it is the same class as the
   `rest_invalid_param` codes, one layer up. Out of scope for item 14 and a
   one-line change at each site.
+
+  **Narrowed 2026-08-28: `notificationsListing()` is fixed and the other two are
+  not.** It was not a rewrite — `invalidParam()` at `mock-api.mjs:8323` already
+  emitted the correct shape and this one call site hand-rolled `fail()` instead of
+  calling it, which is worth knowing before anyone budgets for the remaining two.
+  `checkSort()` and `filterByStatus()` still owe it.
 - **The mock's `send` transition refusal is the mock's own sentence**, modelled on
   the measured `cancel` one and flagged at the site (`mock-api.mjs:13353`). Its
   code and `details` are measured; the prose is not, because firing a send is
@@ -2316,7 +2494,13 @@ the audience was created through the mock's own stateful `PATCH`.
 - **`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
   they are `fixed` with no block-end, so deleting the rule would unstick their
   bars rather than remove them.
-- **`RowSkeleton.tsx` stays** — **seven** unmigrated screens import it.
+- **`RowSkeleton.tsx` stays** — ~~**seven**~~ **two** unmigrated screens import it,
+  `users/UsersList.tsx` and `audit/AuditList.tsx`. The count had been stale by
+  four before the notifications branch removed the fifth, and nobody had recounted
+  it since it was written; it is checklist items 16 and 19 away from being zero.
+  **The notifications list was importing it across a page boundary** — from
+  `../inventory/RowSkeleton`, a migrated screen's neighbour — which is how a
+  retired primitive keeps an importer that no directory listing suggests.
 - **Three files in `primitives/` and `patterns/` now have no importer at all, and
   they are the first genuinely dead ones rather than under-defended ones.**
   `components/patterns/MoveControls.tsx` and `components/patterns/MediaPicker.tsx`
@@ -2416,8 +2600,19 @@ the audience was created through the mock's own stateful `PATCH`.
 - **Re-measure every collection's `orderby` before trusting it.** ~~Two~~ **Three**
   of them were recorded dead and were not, and in every case the record outlived a
   backend repair or a bad control rather than ever having been right. ~~`/orders`,
-  `/customers`,~~ `/orders`, `/customers/{id}/orders` and `/notifications` still
+  `/customers`,~~ `/orders` and `/customers/{id}/orders` still
   carry "accepted and ignored" from dates nobody has revisited.
+
+  **`/notifications` is struck 2026-08-28, and it is the one that went the other
+  way.** Fourteen spellings identical to the bare listing against a fixture with
+  25 distinct `dedupe_key` and 10 distinct `created_at`, and `?orderby=zzz` a
+  200 — but the part worth keeping is that none of that evidence had to be
+  weighed: `NotificationRepository::search()` ends in a literal
+  `ORDER BY created_at DESC, id DESC` with no branch. **A note that read the
+  source is a different kind of fact from a note that read a response**, and it
+  is the only one of these five that cannot rot under a backend repair without
+  the repair being visible in the query builder. Where the source is readable,
+  read it — that is cheaper than the re-measurement this entry keeps asking for.
 
   **`/customers` is struck 2026-08-28: it sorts, and §5's "nothing records a
   positive control" is now false.** Measured against the bare listing rather than

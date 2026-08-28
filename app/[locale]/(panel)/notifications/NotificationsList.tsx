@@ -1,33 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { Notification } from "@/lib/api/schemas/notification";
 import { acRead } from "@/lib/api/browser";
-import { QUEUE_STATES, STATE_TONE, stateCounts } from "@/lib/notifications";
-import { useOnline } from "@/lib/use-online";
-import { formatDay, formatWhen } from "@/lib/format/date";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { EmptyState, ErrorState, StaleBanner } from "@/components/patterns/States";
-import { ListGroup, ListLinkRow } from "@/components/primitives/GroupedList";
-import { Segmented } from "@/components/primitives/Segmented";
-import { Dot } from "@/components/primitives/StatusBadge";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { NotificationRow } from "./NotificationRow";
-import { RowSkeleton } from "../inventory/RowSkeleton";
 import {
-  CHANNEL_FILTERS,
-  PER_PAGE,
+  eventMessageKey,
+  isNotificationEvent,
+} from "@/lib/notifications";
+import { useOnline } from "@/lib/use-online";
+import { useHydrated } from "@/lib/use-hydrated";
+import { formatDate, formatDay, formatWhen } from "@/lib/format/date";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import {
+  DataTable,
+  TableControls,
+  TableFooter,
+  useTablePreferences,
+} from "@/components/ui/DataTable";
+import { FilterChips, FilterRow, FilterTabs } from "@/components/ui/FilterBar";
+import { DateField } from "@/components/ui/Form";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { RecordListSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Isolate } from "@/components/primitives/Ltr";
+import {
+  buildColumns,
+  notificationRecord,
+  type NotificationColumnContext,
+} from "./columns";
+import {
+  EMPTY_QUERY,
   STATUS_FILTERS,
+  dayFromInput,
   isFiltered,
+  isOverPaged,
   listParams,
   notificationsKey,
   queryFromParams,
   toUrlParams,
-  type ChannelFilter,
   type NotificationsQuery,
   type StatusFilter,
 } from "./query";
@@ -40,15 +53,68 @@ async function fetchNotifications(query: NotificationsQuery) {
 /**
  * The queue: did it send?
  *
- * **There is no sort control and no event filter, and both absences are
- * measured.** `?orderby=` and `?order=` are accepted and ignored — even
- * `?orderby=nonsense` answers 200 — so the ordering is `created_at DESC` and
- * nothing can change it. `?event=` and `?audience=` are likewise accepted and
- * ignored, and both are published on every row, which makes them exactly the
- * controls a person would build first and exactly the ones that would appear to
- * work over one page and lie across the second. So neither is offered.
+ * ## Four filter dimensions in one row, and no drawer
  *
- * What is offered is what the API honours: status, channel and a date range.
+ * Payments' count and payments' judgement: the status tabs above, then the two
+ * date bounds and a clear button. Products needed a `Drawer` with
+ * draft-then-apply at nine dimensions; four fit a row, and a drawer here would be
+ * a click and a modal between a person and a filter that was already on screen.
+ *
+ * **The first status tab sends no parameter**, and here that is load-bearing
+ * rather than tidy: `?status=` is a **400** on this collection — *"status is not
+ * one of pending, sent, and failed."* — not an absence, so a first tab sending an
+ * empty string would be a refusal rather than a redundant parameter.
+ *
+ * **No `FilterChips` for those three.** They restate controls standing six inches
+ * above them: the status is the highlighted tab and each date bound is printed in
+ * the page's own language by `echo`, directly under its own picker. That is
+ * payments' argument at the same count. What the chip row *does* carry is the two
+ * dimensions no control on screen restates — see below.
+ *
+ * ## `dedupe_key` and `subject_id` are URL-only, and they earn chips
+ *
+ * This is the one screen in the run where chips are the honest answer rather than
+ * a duplication. Nobody types a dedupe key and nobody types an order id: both
+ * arrive by following a link from a notification's detail. So the list can be
+ * silently narrowed by a parameter with no visible control, which is a screen
+ * that looks broken. Each renders as a removable chip instead.
+ *
+ * There is deliberately **no `recipient` filter**, though the parameter works and
+ * this branch is why it exists. It is exact-match-only — `?recipient=amina`
+ * answers 0 rows against `?recipient=amina@example.test`'s 3 — nobody types an
+ * address, and "this person's queue" already has its own surface on the customer
+ * detail.
+ *
+ * ## What this screen deliberately does not ship
+ *
+ * **No sorting and no `aria-sort`** — see `columns.tsx`. **No search box**:
+ * `?search=`, `?s=` and `?q=` each answer all 25 rows. **No `event` and no
+ * `audience` filter**: both accepted and ignored, and both published on every row,
+ * which is exactly what makes them the controls somebody would build first and the
+ * ones that would appear to work over one page and lie across the second. **No
+ * `channel` filter**, and that one *is* honoured — the reason is the enumeration
+ * rather than the parameter, and `query.ts` argues it. **No primary action**:
+ * `POST /notifications` does not exist; a notification is written by an order or a
+ * payment, never by hand.
+ *
+ * ## The stale marker, and the half of §3.7 that has nothing to bite on
+ *
+ * §3.7's amendment exempts a screen that cannot hold data older than its own last
+ * fetch. This is not one: it is a client component over a react-query cache, it
+ * polls, and it has a manual refresh. So the marker ships.
+ *
+ * The rule's other half — *"and every write control disabled with that same
+ * reason"* — has **nothing to disable here**. The list writes nothing; the queue's
+ * only write is `retry`, which lives on the detail and is disabled there with this
+ * same sentence. That is the shape the customers and dashboard screens use, and
+ * this paragraph is the sentence §3.7 asks a screen to carry in its own docblock.
+ *
+ * It is **not** gated on `!navigator.onLine` alone, which is the anti-pattern the
+ * dashboard branch was corrected for. A polling list can hold stale pixels while
+ * the browser still reports an interface: a background refetch that fails leaves
+ * rows on screen that are older than they look, and that is exactly the condition
+ * the marker exists to name. So the gate is *offline **or** the last fetch failed*,
+ * over data that exists at all.
  */
 export function NotificationsList({
   locale,
@@ -62,318 +128,359 @@ export function NotificationsList({
   initialTotal: number | null;
 }) {
   const t = useTranslations("notifications");
+  const tA11y = useTranslations("a11y");
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const query = queryFromParams(new URLSearchParams(searchParams.toString()));
+  const query = useMemo(
+    () => queryFromParams(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
 
-  // One clock for the whole list, taken on render rather than per row: `new
-  // Date()` inside a row gives twenty slightly different answers and re-derives
-  // on every filter change.
-  const now = new Date();
-
-  const commit = (next: NotificationsQuery, options: { resetPage?: boolean } = {}) => {
-    const target = options.resetPage === false ? next : { ...next, page: 1 };
-    const params = toUrlParams(target);
-    router.push(`/${locale}/notifications${params.size > 0 ? `?${params}` : ""}`, {
-      scroll: false,
-    });
-  };
-
+  /*
+   * The fifth state's first half. `navigator.onLine` is trusted in one direction
+   * only — it reports the interface rather than reachability — which is why the
+   * refresh control stays enabled below.
+   */
   const online = useOnline();
-  const [dates, setDates] = useState({ from: query.dateFrom, to: query.dateTo });
+
+  /* See `NotificationColumnContext.hydrated`: this queue's rows are minutes old,
+     so a relative stamp is a hydration mismatch on the server-rendered first
+     page. */
+  const hydrated = useHydrated();
 
   const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: notificationsKey(query),
     queryFn: () => fetchNotifications(query),
     initialData:
       initialNotifications !== null &&
-      notificationsKey(query).join("|") === notificationsKey(initialQuery).join("|")
+      notificationsKey(query)[1] === notificationsKey(initialQuery)[1]
         ? {
             notifications: initialNotifications,
             total: initialTotal ?? initialNotifications.length,
           }
         : undefined,
+    /*
+     * **A queue drains without the operator acting**, and this is the screen
+     * somebody leaves open on a second monitor while a drain runs. Orders' numbers
+     * and orders' reason: nothing below 30 s, because reads are 600/min per
+     * credential and shared across every tab this person has open, and a hidden
+     * tab is not watching a queue.
+     */
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    /* Keeps the previous page on screen while the next loads, so changing a
+       filter, the tab or the page never flashes a skeleton over content still
+       valid. §3.6's third mechanism, and what makes the poll invisible. */
     placeholderData: keepPreviousData,
   });
 
   const notifications = data?.notifications ?? [];
   const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
   const filtered = isFiltered(query);
-  const counts = stateCounts(notifications);
+  const overPaged = isOverPaged(query);
+
+  /* Not wrapped in `useCallback`: the React Compiler is on in this project and
+     memoizes this already; a manual dependency list disagreeing with the
+     compiler's inference makes it skip optimising the whole component. */
+  function commit(next: NotificationsQuery) {
+    const params = toUrlParams(next);
+    /* `push`, not `replace` — going back from a filtered list must reach the
+       unfiltered one. */
+    router.push(`/${locale}/notifications${params.size > 0 ? `?${params}` : ""}`, {
+      scroll: false,
+    });
+  }
+
+  /* A new filter resets to page one; paging and per-page do not. Page 3 of a
+     differently filtered list is a different set of rows. */
+  const commitFilter = (next: NotificationsQuery) => commit({ ...next, page: 1 });
+
+  /* The one affordance no individual control offers: dropping every dimension at
+     once, chips included, while keeping the reading position's page size. Same
+     control, same words and same handler as the no-results empty state. */
+  const clearAll = () => commit({ ...EMPTY_QUERY, perPage: query.perPage });
+
+  /* One clock for the whole list, taken on render rather than per row: `new
+     Date()` inside a cell gives twenty slightly different answers and re-derives
+     on every filter change. */
+  const now = new Date();
+
+  const ctx: NotificationColumnContext = { locale, hydrated, now, t };
+  const columns = buildColumns(ctx);
+
+  /* Held here rather than inside `DataTable` so the controls sit in the toolbar
+     beside the filters instead of floating above the card. */
+  const preferences = useTablePreferences("notifications", columns);
+
+  const chips = [
+    ...(query.dedupeKey !== ""
+      ? [
+          {
+            key: "dedupe_key",
+            /* The key itself, because it is what the chip is *about* — an
+               operator quotes this string in a ticket and it is the only filter
+               that answers "this event, for this order" exactly. `FilterChips`
+               renders a chip's label `dir="auto"`, which resolves LTR over an
+               all-ASCII identifier and is the right answer inside the Arabic
+               panel too. */
+            label: query.dedupeKey,
+            onRemove: () => commitFilter({ ...query, dedupeKey: "" }),
+          },
+        ]
+      : []),
+    ...(query.subjectId > 0
+      ? [
+          {
+            key: "subject_id",
+            label: t("subjectChip", { id: query.subjectId }),
+            onRemove: () => commitFilter({ ...query, subjectId: 0 }),
+          },
+        ]
+      : []),
+  ];
+
+  /* Offline, or the last fetch failed over rows still on screen. See the
+     docblock: a polling list goes stale while the interface is still up. */
+  const stale = dataUpdatedAt > 0 && (!online || isError);
 
   return (
-    <Scaffold
-      title={t("title")}
-      trailing={
-        <button
-          type="button"
-          onClick={() => void refetch()}
-          aria-label={t("refresh")}
-          className="tap-44 press flex size-11 items-center justify-center rounded-full text-accent"
-        >
-          <Icon name="refresh" className={isFetching ? "size-5 spin" : "size-5"} />
-        </button>
-      }
-      toolbar={
-        <div className="flex flex-col gap-3">
-          <Segmented<StatusFilter>
-            segments={STATUS_FILTERS.map((value) => ({
-              value,
-              label: value === "" ? t("status.all") : t(`status.${value}`),
-            }))}
-            value={query.status}
-            onChange={(status) => commit({ ...query, status })}
-            label={t("statusLabel")}
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={t("title")}
+        /*
+         * The visible count, and the testid the suite waits on before asserting
+         * anything else. `Isolate` and never `Ltr`: this is a translated sentence
+         * with a number in it, not an identifier, and forcing LTR lays an Arabic
+         * count out from the left.
+         */
+        subtitle={
+          <span data-testid="notifications-count">
+            <Isolate>{t("count", { total })}</Isolate>
+          </span>
+        }
+        /*
+         * One control, and it is not a primary. **Nothing on this screen creates a
+         * notification**: `POST /notifications` does not exist, and a row is
+         * written by an order or a payment. A "new notification" button would name
+         * an action this panel does not have.
+         */
+        actions={
+          <IconButton
+            label={t("refresh")}
+            icon="refresh"
+            variant="secondary"
+            onClick={() => void refetch()}
+            loading={isFetching}
           />
+        }
+        toolbar={
+          <div className="flex flex-col gap-3">
+            <FilterTabs<StatusFilter>
+              tabs={STATUS_FILTERS.map((value) => ({
+                value,
+                label: value === "" ? t("status.all") : t(`status.${value}`),
+              }))}
+              value={query.status}
+              onChange={(status) => commitFilter({ ...query, status })}
+              label={t("statusLabel")}
+            />
 
-          {/*
-            A second segmented control rather than a filter sheet. Two groups of
-            three and four values do not earn a sheet — the products screen has
-            nine filters and that is what `FilterSheet` exists for — and a sheet
-            here would hide the one control that proves the second channel is
-            real behind a tap.
-          */}
-          <Segmented<ChannelFilter>
-            segments={CHANNEL_FILTERS.map((value) => ({
-              value,
-              label: value === "" ? t("channel.all") : t(`channel.${value}`),
-            }))}
-            value={query.channel}
-            onChange={(channel) => commit({ ...query, channel })}
-            label={t("channelLabel")}
-          />
+            {/* `align="end"` because the two date pickers carry a visible label
+                above the box and the clear button does not — see `FilterRow`. */}
+            <FilterRow align="end">
+              {/*
+                Two bounds, each bounding the other so an inverted range is hard
+                to express — it is a 200 with zero rows rather than a refusal, so
+                nothing on screen would explain it.
 
-          <DateRange />
-        </div>
-      }
-    >
-      {!online && dataUpdatedAt > 0 ? (
-        <div className="mx-auto max-w-3xl">
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale, now)} />
-        </div>
-      ) : null}
+                `echo` on both, and it is a measured defence rather than a nicety:
+                a native date input follows the *browser's* locale and there is no
+                way to change it, so the Arabic panel renders `mm/dd/yyyy` — a US
+                ordering in a right-to-left screen for a shop in Algeria. The
+                readback underneath is the only place the applied bound is legible.
 
-      <div className="mx-auto max-w-3xl px-4">
-        {/*
-          Neither `dedupe_key` nor `subject_id` is a control — one is
-          exact-match-only and the other is an order id, so nobody types either.
-          Both arrive by following a link from a notification's detail, and a
-          list silently narrowed by a parameter with no visible control is a
-          screen that looks broken. So each renders as a removable chip.
-        */}
-        {query.dedupeKey !== "" || query.subjectId > 0 ? (
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            {query.dedupeKey !== "" ? (
-              <span className="tone-accent tonal flex min-h-8 items-center gap-1 rounded-full ps-3 pe-1 text-footnote">
-                <Ltr numeric={false} className="min-w-0 max-w-56 truncate">
-                  {query.dedupeKey}
-                </Ltr>
-                <button
-                  type="button"
-                  onClick={() => commit({ ...query, dedupeKey: "" })}
-                  aria-label={t("clearKey")}
-                  className="press flex size-6 shrink-0 items-center justify-center rounded-full"
-                >
-                  <Icon name="close" className="size-3.5" />
-                </button>
-              </span>
-            ) : null}
-            {query.subjectId > 0 ? (
-              <span
-                className="tone-accent tonal flex min-h-8 items-center gap-1 rounded-full ps-3 pe-1 text-footnote"
-                data-testid="subject-chip"
-              >
-                {/* A label and an id in one truncating run, so `Isolate` — the
-                    label leads and resolves the direction. */}
-                <Isolate className="min-w-0 max-w-56 truncate">
-                  {t("subjectChip", { id: query.subjectId })}
-                </Isolate>
-                <button
-                  type="button"
-                  onClick={() => commit({ ...query, subjectId: 0 })}
-                  aria-label={t("clearSubject")}
-                  className="press flex size-6 shrink-0 items-center justify-center rounded-full"
-                >
-                  <Icon name="close" className="size-3.5" />
-                </button>
-              </span>
-            ) : null}
+                `formatDay` and not `formatDate`: these are calendar days the
+                server draws in **UTC**, both ends inclusive of the whole day, not
+                instants in the shop's clock. `Isolate` and never `Ltr` — it is
+                `Intl`-formatted, and forcing a direction over the marks ICU
+                inserts renders an Arabic date backwards.
+              */}
+              <div className="w-full sm:w-44">
+                <DateField
+                  label={t("dateFrom")}
+                  value={query.dateFrom}
+                  max={query.dateTo === "" ? undefined : query.dateTo}
+                  onChange={(next) => commitFilter({ ...query, dateFrom: dayFromInput(next) })}
+                  echo={
+                    query.dateFrom === "" ? undefined : (
+                      <Isolate>{formatDay(query.dateFrom, locale)}</Isolate>
+                    )
+                  }
+                />
+              </div>
+
+              <div className="w-full sm:w-44">
+                <DateField
+                  label={t("dateTo")}
+                  value={query.dateTo}
+                  min={query.dateFrom === "" ? undefined : query.dateFrom}
+                  onChange={(next) => commitFilter({ ...query, dateTo: dayFromInput(next) })}
+                  echo={
+                    query.dateTo === "" ? undefined : (
+                      <Isolate>{formatDay(query.dateTo, locale)}</Isolate>
+                    )
+                  }
+                />
+              </div>
+
+              {/*
+                **Not rendered when nothing is filtered**, per §3.3: a control that
+                cannot act is absent rather than disabled, and "clear" with nothing
+                to clear cannot act.
+              */}
+              {filtered ? (
+                <Button variant="ghost" size="sm" icon="close" onClick={clearAll}>
+                  {t("empty.clear")}
+                </Button>
+              ) : null}
+
+              <div className="ms-auto">
+                <TableControls
+                  columns={columns}
+                  visible={preferences.visible}
+                  onVisibleChange={preferences.setVisible}
+                  density={preferences.density}
+                  onDensityChange={preferences.setDensity}
+                />
+              </div>
+            </FilterRow>
+
+            {/* The two dimensions no control above restates. `onClearAll` is not
+                passed: the clear button in the row above is that control, and a
+                second one inside the chip strip would be the duplication the chips
+                themselves are here to avoid. */}
+            <FilterChips chips={chips} />
           </div>
+        }
+      />
+
+      <PageBody width="full">
+        {stale ? (
+          /* The cause, not just the age. This screen is the first to reach the
+             marker with the interface still up, so `offline` would have been the
+             banner stating something it has not established. */
+          <StaleBanner
+            time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale, now)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1">
-          <p aria-live="polite" className="text-footnote text-label-secondary" data-testid="notifications-count">
-            <Isolate numeric>{t("count", { total })}</Isolate>
-          </p>
-          {/*
-            **A page summary, and the label says so.** There is no `meta.summary`
-            on this route — the pending/sent/failed counts exist only on the CLI
-            drain's `--summary` — so a queue-wide breakdown would cost one request
-            per state. Counting what is on screen and calling it that is the
-            honest version; calling it "the queue" would not be.
-          */}
-          {notifications.length > 0 ? (
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-label-tertiary">
-              {QUEUE_STATES.filter((state) => counts[state] > 0).map((state) => (
-                <span key={state} className="flex items-center gap-1">
-                  <Dot tone={STATE_TONE[state]} />
-                  <Isolate numeric>
-                    {t(`pageSummary.${state}`, { count: counts[state] })}
-                  </Isolate>
-                </span>
-              ))}
-            </p>
-          ) : null}
-        </div>
+        {/* A live region, so a filter that changes the result count announces it.
+            Its own testid: `notifications-count` above is the *visible* count and
+            is what the suite asserts on, and two elements sharing one testid is a
+            strict-mode violation the moment either is queried. */}
+        <p aria-live="polite" className="sr-only" data-testid="notifications-live">
+          {tA11y("listUpdated", { total })}
+        </p>
 
         {isPending && notifications.length === 0 ? (
-          <RowSkeleton rows={6} />
-        ) : isError ? (
+          <>
+            <div className="hidden md:block">
+              <TableSkeleton rows={8} cols={6} label={t("loading")} />
+            </div>
+            {/* The card and its 8px padding are `DataTable`'s below `md`, so the
+                skeleton wears them too or the rows step inward when data lands. */}
+            <div className="ui-card p-2 md:hidden">
+              <RecordListSkeleton rows={6} label={t("loading")} />
+            </div>
+          </>
+        ) : isError && notifications.length === 0 ? (
+          /*
+           * **The error state and the empty state print different strings**, which
+           * is the inventory #2 defect: a failed request and an empty queue are
+           * not the same fact, and only one of them is fixed by pressing retry.
+           *
+           * Reached only when there is nothing on screen. A refetch that fails
+           * over rows already rendered keeps them — §3.6's third mechanism — and
+           * says so through the stale marker above, because replacing live content
+           * with a full-page error is how a poll turns a blip into a blank screen.
+           */
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : notifications.length === 0 ? (
           <EmptyState
-            message={filtered ? t("empty.noResults") : t("empty.none")}
+            icon={filtered || overPaged ? "search" : "mail"}
+            /*
+             * **Three empty states, and telling them apart is the point.** Past the
+             * last page is the most specific fact and wins the one action this
+             * state gets — `?page=999` answers a 200 with an empty array, so the
+             * table is not drawn and with it goes the only control that could page
+             * back. No results for these filters offers to clear them; `status=sent`,
+             * `status=failed` and either date bound can each empty this list, so the
+             * second half has real producers. Nothing queued at all offers nothing,
+             * and that is correct: a notification is written by an order or a
+             * payment, and a button here would name an action this panel does not
+             * have.
+             */
+            message={
+              overPaged
+                ? t("empty.pastEnd")
+                : filtered
+                  ? t("empty.noResults")
+                  : t("empty.none")
+            }
             action={
-              filtered
-                ? {
-                    label: t("empty.clear"),
-                    onClick: () => {
-                      setDates({ from: "", to: "" });
-                      commit({
-                        ...query,
-                        status: "",
-                        channel: "",
-                        dedupeKey: "",
-                        subjectId: 0,
-                        dateFrom: "",
-                        dateTo: "",
-                      });
-                    },
-                  }
-                : undefined
+              overPaged
+                ? { label: t("empty.firstPage"), onClick: () => commit({ ...query, page: 1 }) }
+                : filtered
+                  ? { label: t("empty.clear"), onClick: clearAll }
+                  : undefined
             }
           />
         ) : (
-          <>
-            <ListGroup>
-              {notifications.map((notification) => (
-                <ListLinkRow
-                  key={notification.id}
-                  href={`/${locale}/notifications/${notification.id}`}
-                  ariaLabel={notification.dedupe_key}
-                >
-                  <NotificationRow notification={notification} locale={locale} now={now} />
-                </ListLinkRow>
-              ))}
-            </ListGroup>
-
-            {total > PER_PAGE ? (
-              <nav className="mb-8 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  disabled={query.page <= 1}
-                  onClick={() =>
-                    commit({ ...query, page: Math.max(1, query.page - 1) }, { resetPage: false })
-                  }
-                  aria-label={t("previousPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="back" flipInRtl className="size-5" />
-                </button>
-                <span className="text-footnote text-label-secondary">
-                  <Ltr numeric>
-                    {query.page} / {pageCount}
-                  </Ltr>
-                </span>
-                <button
-                  type="button"
-                  disabled={query.page >= pageCount}
-                  onClick={() => commit({ ...query, page: query.page + 1 }, { resetPage: false })}
-                  aria-label={t("nextPage")}
-                  className="press min-h-11 rounded-md bg-surface px-4 text-body text-accent disabled:opacity-40"
-                >
-                  <Icon name="chevron" flipInRtl className="size-5" />
-                </button>
-              </nav>
-            ) : null}
-          </>
+          <DataTable
+            preferences={preferences}
+            rows={notifications}
+            columns={columns}
+            rowKey={(notification) => String(notification.id)}
+            /*
+             * Named by its date as well as its event, because the queue holds one
+             * row per event per order — seven rows reading "Commande confirmée" is
+             * the ordinary case, and read out of a links list they would be seven
+             * identical names pointing at seven different records. The customer
+             * section learned this first.
+             */
+            rowLabel={(notification) =>
+              tA11y("notification", {
+                event: isNotificationEvent(notification.event)
+                  ? t(`event.${eventMessageKey(notification.event)}`)
+                  : notification.event,
+                date: formatDate(notification.created_at, locale),
+              })
+            }
+            record={(notification) => notificationRecord(notification, ctx)}
+            /*
+             * Navigates rather than previewing — see `columns.tsx`. The event cell
+             * is a real anchor on top of this, for the keyboard and the middle
+             * click; it stops propagation so only one push happens. **No
+             * `rowOpenerId`**: §3.2 says to omit it when that cell is already a
+             * link and following it is what clicking the row does.
+             */
+            onRowClick={(notification) =>
+              router.push(`/${locale}/notifications/${notification.id}`)
+            }
+            footer={
+              <TableFooter
+                page={query.page}
+                perPage={query.perPage}
+                total={total}
+                onPageChange={(page) => commit({ ...query, page })}
+                onPerPageChange={(perPage) => commit({ ...query, perPage, page: 1 })}
+              />
+            }
+          />
         )}
-      </div>
-    </Scaffold>
+      </PageBody>
+    </div>
   );
-
-  /**
-   * The date range.
-   *
-   * Two native date inputs rather than the analytics branch's `RangeControl`:
-   * that control offers presets over a *report* period and commits both ends at
-   * once, while this filter is `Y-m-d` in **UTC** with each end covering its
-   * whole day — `date_from` alone is a legal, useful request and the preset
-   * grammar has no way to express it.
-   *
-   * Held as a draft and committed on change of either end, so a half-entered
-   * range never reaches the API as a 400: the pattern is enforced server-side
-   * (`?date_from=yesterday` is a 400) and `queryFromParams` drops anything that
-   * is not `Y-m-d`, so the two agree.
-   */
-  function DateRange() {
-    const apply = (next: { from: string; to: string }) => {
-      setDates(next);
-      commit({ ...query, dateFrom: next.from, dateTo: next.to });
-    };
-
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-2 px-3">
-          <Icon name="clock" className="size-4 shrink-0 text-label-secondary" />
-          <input
-            type="date"
-            value={dates.from}
-            max={dates.to || undefined}
-            onChange={(event) => apply({ ...dates, from: event.target.value })}
-            aria-label={t("dateFrom")}
-            className="min-h-11 min-w-0 flex-1 bg-transparent text-footnote text-label outline-none"
-          />
-          <span aria-hidden="true" className="shrink-0 text-footnote text-label-tertiary">
-            –
-          </span>
-          <input
-            type="date"
-            value={dates.to}
-            min={dates.from || undefined}
-            onChange={(event) => apply({ ...dates, to: event.target.value })}
-            aria-label={t("dateTo")}
-            className="min-h-11 min-w-0 flex-1 bg-transparent text-footnote text-label outline-none"
-          />
-        </div>
-        {dates.from !== "" || dates.to !== "" ? (
-          <button
-            type="button"
-            onClick={() => apply({ from: "", to: "" })}
-            className="press min-h-11 shrink-0 rounded-md px-2 text-footnote text-accent"
-          >
-            {t("clearDates")}
-          </button>
-        ) : null}
-        {/*
-          The range is UTC and the panel says so once, here, rather than beside
-          every date on the screen. `formatDay` renders these in UTC for the same
-          reason the analytics boundaries are — they are calendar days the server
-          drew, not instants in the shop's clock.
-        */}
-        {query.dateFrom !== "" || query.dateTo !== "" ? (
-          <p className="w-full text-caption text-label-tertiary">
-            <Isolate>
-              {t("dateScope", {
-                from: query.dateFrom === "" ? "…" : formatDay(query.dateFrom, locale),
-                to: query.dateTo === "" ? "…" : formatDay(query.dateTo, locale),
-              })}
-            </Isolate>
-          </p>
-        ) : null}
-      </div>
-    );
-  }
 }

@@ -160,8 +160,27 @@ export function ErrorState({
 /**
  * 5. Stale — a visible marker carrying the age of the data. Never silent
  * staleness, and every write control is disabled with this same reason.
+ *
+ * **`reason` exists because the notifications branch gave this banner a second
+ * cause, and the sentence it already had was only true of the first.** Every
+ * caller before it gated on `!useOnline()`, so "hors ligne" was a fact. §3.7-4's
+ * amendment adds *the last refetch failed* — which happens with the interface
+ * perfectly online, one dropped request among many — and the banner went on
+ * telling the reader they were offline. That is a marker naming a cause it has
+ * not established, which is the same defect class as a label naming an action
+ * that does not exist.
+ *
+ * It defaults to `offline`, so the twenty-two callers that really do mean it are
+ * unchanged and were not touched. The age is the load-bearing half either way;
+ * the cause is what the reader does something about.
  */
-export function StaleBanner({ time }: { time: string }) {
+export function StaleBanner({
+  time,
+  reason = "offline",
+}: {
+  time: string;
+  reason?: "offline" | "refreshFailed";
+}) {
   const t = useTranslations("states");
   return (
     <div
@@ -169,7 +188,7 @@ export function StaleBanner({ time }: { time: string }) {
       className="mb-3 flex items-center gap-2 rounded-ui-lg border border-ui-line bg-ui-warning-bg px-3 py-2 text-ui-warning-fg"
     >
       <Icon name="clock" className="size-4 shrink-0" />
-      <span className="text-ui-label">{t("offline", { time })}</span>
+      <span className="text-ui-label">{t(reason, { time })}</span>
     </div>
   );
 }
