@@ -58,6 +58,30 @@
  * there is no request that reaches it. It empties `MediaPicker` inside the banner
  * sheet too, which is the only way to photograph a picker with nothing to pick.
  *
+ * **`MOCK_SEND_PROGRESS` is the fourth, and it is the first one with a form this
+ * script must never be run under.**
+ *
+ *     node scripts/capture.mjs /marketing/campaigns/321       2 of 6 — the resting seed
+ *     MOCK_SEND_PROGRESS=1 node scripts/capture.mjs …         3 sent, 3 queued
+ *     MOCK_SEND_PROGRESS=2 node scripts/capture.mjs …         3 sent, 1 **failed**, 2 queued
+ *     MOCK_SEND_PROGRESS=3 node scripts/capture.mjs …         4 sent, 1 failed, 1 queued
+ *     MOCK_SEND_PROGRESS=4 node scripts/capture.mjs …         the drain finishes: `sent`
+ *
+ * Campaign 321 is the fixture's only `sending` row and its counts were static, so
+ * a screen showing progress had exactly one state to be photographed in. **A
+ * number is a seed offset** — applied once when the mock builds its baseline and
+ * then frozen — so each line above is as byte-stable as the default, and two runs
+ * at the same number produce identical PNGs. `2` is the interesting one: a
+ * `failed` recipient *during* a send exists nowhere else, since the only other
+ * failures in the fixture sit on a campaign that has already finished.
+ *
+ * **`MOCK_SEND_PROGRESS=tick` is the form to keep away from here.** It advances
+ * the drain by one recipient on every read of the campaign, which is what lets an
+ * e2e test watch a poll move — and which makes every capture under it differ from
+ * the last. It is for `e2e/`, not for this script. Like the three switches above
+ * it is read at module load and writes no filename suffix, so capture one number
+ * at a time and move the output to hold two side by side.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale
@@ -584,6 +608,13 @@ const DEFAULT_ROUTES = [
    * exists and the only cancellable non-draft:
    *
    *     node scripts/capture.mjs /marketing/campaigns/321
+   *
+   * **and it has four more states than it used to**, each a fixed seed offset
+   * rather than a live counter — see `MOCK_SEND_PROGRESS` in the header. It is
+   * still one route, so it is not listed four times below; the progress states are
+   * captured one at a time when a screen needs them:
+   *
+   *     MOCK_SEND_PROGRESS=2 node scripts/capture.mjs /marketing/campaigns/321
    */
   "/marketing/campaigns/322",
   /*

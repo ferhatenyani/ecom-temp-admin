@@ -4791,14 +4791,53 @@ describe("the consent record", () => {
     expect(source).toBe("seed");
     expect(CONSENT_SOURCES as readonly string[]).not.toContain(source);
 
-    // The common case, and the majority of the shop: no record at all, which is
-    // the one that changes what a shop should do next.
+    // Still the largest single group, and the one that changes what a shop
+    // should do next: no record at all.
     expect(consentOf(21)).toEqual({ state: "never" });
     const never = everyCustomer().filter(
       (row) => consentRecord(row).state === "never",
     );
-    expect(never).toHaveLength(14);
+    expect(never).toHaveLength(8);
     expect(never.every((row) => row.marketing_consent_at === null)).toBe(true);
+  });
+
+  /**
+   * ── The count has to reconcile with the audience this same file publishes ───
+   *
+   * It did not until 2026-08-28. Two customers carried a grant while
+   * `GET /campaigns/319/preview` answered `audience_count: 8` — and an `all`
+   * audience *is* the consented customers, so the fixture promised eight
+   * recipients it could name two of. A customer picker reads the first and is
+   * built beside the second, which is what made it worth fixing rather than
+   * recording. Live on the same day: 16 customers, 8 granted, 8 not.
+   */
+  it("grants consent to exactly the number the all-audience preview promises", () => {
+    const granted = everyCustomer().filter((row) => consentRecord(row).state === "granted");
+    expect(granted).toHaveLength(8);
+    expect(parse(campaignPreview, get("/campaigns/319/preview")).data.audience_count).toBe(
+      granted.length,
+    );
+
+    /*
+     * **And most of them have no name**, which is the live shape and the reason
+     * this matters to a picker: 12 of the 17 customers here are nameless, as 12
+     * of the 16 live ones are, so the row a picker draws for a consented customer
+     * is ordinarily identified by its *email*. Putting the consent on the four
+     * named rows would have let a picker ship that draws a blank label for the
+     * common case and never once render it in a capture.
+     */
+    expect(granted.filter((row) => !row.first_name && !row.last_name).length).toBeGreaterThan(
+      granted.filter((row) => row.first_name || row.last_name).length,
+    );
+
+    // One shared stamp on the seeded grants, the tie the live shop has because
+    // one seeding pass wrote them — not a date per row.
+    const stamps = new Set(
+      granted
+        .filter((row) => row.marketing_consent_source === "seed")
+        .map((row) => row.marketing_consent_at),
+    );
+    expect(stamps.size).toBeLessThan(granted.length);
   });
 
   /**
@@ -4851,6 +4890,74 @@ describe("GET /customers/{id}/orders", () => {
     // book's own orphan orders are keyed to.
     expect(get("/customers/900/orders").status).toBe(404);
     expect(get("/customers/999999/orders").status).toBe(404);
+    // …and it carries the collection's own sentence, one level down.
+    expect(apiError(get("/customers/999999/orders")).apiMessage).toBe("No customer with that id.");
+  });
+
+  /**
+   * ── The collection's own 404, and the 400 beside it ─────────────────────────
+   *
+   * Both measured 2026-08-28, and both were the *routing* 404 here until then:
+   * `rest_no_route` / "No route was found matching the URL and request method."
+   * where the wire distinguishes "that customer is gone" from "the panel called a
+   * URL that does not exist". `/campaigns`, `/segments` and `/media` each had
+   * their own sentence already; this collection was the gap.
+   *
+   * It is load-bearing now because **there is no batch route**: `?include=`,
+   * `?ids=`, `?id=`, `?post__in=` and `?exclude=` are each a silent 200 answering
+   * the whole collection, byte-identical to `?bogus_param=1`. So resolving a saved
+   * `audience.customer_ids` to names walks `GET /customers/{id}` one at a time,
+   * and a deleted customer in a stored audience is the ordinary case.
+   */
+  it("answers its own 404 for a missing customer and a 400 for id zero", () => {
+    const missing = get("/customers/99999");
+    expect(missing.status).toBe(404);
+    expect(apiError(missing).code).toBe("not_found");
+    expect(apiError(missing).apiMessage).toBe("No customer with that id.");
+
+    // `idArg()`'s `minimum: 1`, the same refusal `/campaigns/0` answers.
+    const zero = get("/customers/0");
+    expect(zero.status).toBe(400);
+    expect(apiError(zero).code).toBe("invalid_request");
+    expect(apiError(zero).apiMessage).toBe("Invalid parameter(s): id");
+    expect(apiError(zero).params?.id).toBe("id must be greater than or equal to 1");
+
+    // `\d+` never matched `abc`, so that one stays the routing 404 — the request
+    // reaches no controller and there is nothing to have a sentence about.
+    expect(get("/customers/abc").status).toBe(404);
+    expect(apiError(get("/customers/abc")).apiMessage).toBe(
+      "No route was found matching the URL and request method.",
+    );
+
+    // The sub-resource name is checked before the id, measured on both:
+    // `/customers/{any}/nonsense` is the routing 404 whether the id exists or not.
+    for (const path of ["/customers/24/nonsense", "/customers/99999/nonsense"]) {
+      expect(apiError(get(path)).apiMessage, path).toBe(
+        "No route was found matching the URL and request method.",
+      );
+    }
+  });
+
+  /**
+   * **No batch route, reproduced as the silent 200 it is.** Every shape a picker
+   * would reach for is accepted and ignored — the same answer `?bogus_param=1`
+   * gets — so a screen cannot be built here against a batch the shop lacks and
+   * then ship it.
+   */
+  it("ignores every batch parameter a picker would try", () => {
+    const all = parseList(customerList, get("/customers", "per_page=100")).data.map((r) => r.id);
+    for (const query of [
+      "include=20,21",
+      "include[]=20&include[]=21",
+      "ids=20,21",
+      "id=20",
+      "post__in=20,21",
+      "exclude=20",
+      "bogus_param=1",
+    ]) {
+      const rows = parseList(customerList, get("/customers", `per_page=100&${query}`)).data;
+      expect(rows.map((r) => r.id), query).toEqual(all);
+    }
   });
 
   it("takes one status, and a comma list is a 400", () => {
@@ -8726,6 +8833,210 @@ describe("GET /campaigns/{id}/recipients", () => {
     const { data, meta } = parse(recipientList, get("/campaigns/318/recipients"));
     expect(data).toEqual([]);
     expect(recipientMeta.parse(meta)).toMatchObject({ total: 0, total_pages: 0, purged: false });
+  });
+});
+
+/**
+ * ── `MOCK_SEND_PROGRESS`, the fourth harness switch and the first with a form a
+ *    capture must not use ─────────────────────────────────────────────────────
+ *
+ * Campaign 321's counts were static, so a poll returned identical numbers forever
+ * and nothing could observe a send moving. The switch has two forms because the
+ * two requirements are in tension: a **number** is a seed offset, applied once in
+ * `resetState()` and then frozen, which is what keeps a capture reproducible;
+ * **`tick`** advances one recipient per read of the campaign, which is what lets
+ * an e2e test watch a poll move.
+ *
+ * The default is the fixture every existing capture was taken against, and the
+ * first test here is the one that says so.
+ */
+describe("MOCK_SEND_PROGRESS", () => {
+  const freshMock = async () => {
+    vi.resetModules();
+    return import("@/scripts/mock-api.mjs");
+  };
+
+  /** The campaign and its recipient rows, read through one module instance. */
+  const readSend = (mock: typeof import("@/scripts/mock-api.mjs")) => {
+    const row = unwrap(campaignSchema, mock.respond("GET", `${mock.BASE_PATH}/campaigns/321`).body, 200)
+      .data;
+    const rows = unwrap(
+      recipientList,
+      mock.respond("GET", `${mock.BASE_PATH}/campaigns/321/recipients`).body,
+      200,
+    ).data;
+    return { row, rows };
+  };
+
+  const withEnv = async (value: string, run: (mock: Awaited<ReturnType<typeof freshMock>>) => void) => {
+    vi.stubEnv("MOCK_SEND_PROGRESS", value);
+    try {
+      run(await freshMock());
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  };
+
+  /**
+   * **The stability claim, asserted rather than trusted.** Every marketing
+   * capture on disk was taken with this unset, so if the default ever moved, each
+   * of them would silently be a photograph of a different shop.
+   */
+  it("leaves the resting fixture exactly where it was when unset", () => {
+    const { data: row } = parse(campaignSchema, get("/campaigns/321"));
+    expect(row.recipients).toMatchObject({ total: 6, sent: 2, failed: 0, purged: false });
+    expect(row.status).toBe("sending");
+    expect(row.completed_at).toBeNull();
+    expect(row.allowed_transitions).toEqual(["cancelled"]);
+    expect(
+      parse(recipientList, get("/campaigns/321/recipients", "status=pending")).data,
+    ).toHaveLength(4);
+  });
+
+  /**
+   * A number is a *seed offset*: it is applied when the baseline is built, so
+   * every read in that process answers the same thing. That is what makes
+   * `MOCK_SEND_PROGRESS=2 node scripts/capture.mjs` reproducible.
+   */
+  it("advances the drain by a fixed number of recipients and then holds still", async () => {
+    await withEnv("2", (mock) => {
+      const first = readSend(mock);
+      expect(first.row.recipients).toMatchObject({ total: 6, sent: 3, failed: 1 });
+      expect(first.row.status).toBe("sending");
+
+      // Read it twice: a seed offset does not move under reading, which is the
+      // whole difference between this form and `tick`.
+      const second = readSend(mock);
+      expect(second.row.recipients).toEqual(first.row.recipients);
+      expect(second.rows.map((row) => row.status)).toEqual(first.rows.map((row) => row.status));
+    });
+  });
+
+  /**
+   * **A `failed` recipient during a send exists nowhere else.** The only other
+   * failures in the fixture sit on 322, which has already finished — so a screen
+   * showing failures *while* a campaign drains had no fixture before this.
+   */
+  it("fails one of the four, with the attempts and the sentence a failure carries", async () => {
+    await withEnv("2", (mock) => {
+      const { rows } = readSend(mock);
+      const failed = rows.filter((row) => row.status === "failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0].attempts).toBe(3);
+      expect(failed[0].last_error).toBe("wp_mail() did not accept the message.");
+      // The two conventions this route has: empty strings, never null.
+      expect(failed[0].sent_at).toBe("");
+    });
+  });
+
+  /**
+   * **The invariants a drain cannot break**, checked at every step rather than at
+   * the end — `total` is a frozen column, a row only ever leaves `pending`, and
+   * the recipient list is served from the rows the counts are computed from. The
+   * panel reads both, so a screen must not be able to show four queued over a
+   * campaign claiming six of six done.
+   */
+  it("keeps total frozen and the recipient list in step with the counts", async () => {
+    for (const step of ["0", "1", "2", "3", "4"]) {
+      await withEnv(step, (mock) => {
+        const { row, rows } = readSend(mock);
+        const { recipients } = row;
+
+        expect(recipients.total, step).toBe(6);
+        expect(recipients.sent + recipients.failed, step).toBeLessThanOrEqual(recipients.total);
+
+        // The counts are the rows, counted — not a number kept alongside them.
+        const counted = (status: string) => rows.filter((one) => one.status === status).length;
+        expect(counted("sent"), step).toBe(recipients.sent);
+        expect(counted("failed"), step).toBe(recipients.failed);
+        expect(counted("pending"), step).toBe(
+          recipients.total - recipients.sent - recipients.failed,
+        );
+
+        // And the filtered read the panel actually makes agrees with all of it.
+        const pending = unwrap(
+          recipientList,
+          mock.respond(
+            "GET",
+            `${mock.BASE_PATH}/campaigns/321/recipients`,
+            new URLSearchParams("status=pending"),
+          ).body,
+          200,
+        ).data;
+        expect(pending.length, step).toBe(counted("pending"));
+      });
+    }
+  });
+
+  /**
+   * The last step completes the campaign, and that transition is **inferred
+   * rather than measured** — flagged here as well as in the mock, because nobody
+   * has watched this shop finish a send. Leaving it `sending` with nothing left to
+   * send would be a state the drain cannot produce either, so there was no honest
+   * third option.
+   */
+  it("completes the campaign on the last step, in the shape a sent one has", async () => {
+    await withEnv("4", (mock) => {
+      const { row, rows } = readSend(mock);
+      expect(row.status).toBe("sent");
+      expect(row.completed_at).not.toBeNull();
+      expect(row.allowed_transitions).toEqual([]);
+      expect(row.is_editable).toBe(false);
+      expect(row.recipients).toMatchObject({ total: 6, sent: 5, failed: 1 });
+      expect(rows.some((one) => one.status === "pending")).toBe(false);
+    });
+  });
+
+  /**
+   * **`tick` is the form an e2e test uses and a capture must never see.** It moves
+   * the drain on every read of the campaign, so two reads differ — which is the
+   * point, and which is exactly why a screenshot taken under it would not be
+   * reproducible.
+   */
+  it("moves on every read under tick, and stops when the drain is done", async () => {
+    await withEnv("tick", (mock) => {
+      const seen = Array.from({ length: 6 }, () => readSend(mock));
+      const resolved = seen.map((one) => one.row.recipients.sent + one.row.recipients.failed);
+
+      // It moved — the assertion the static fixture could not support. Measured
+      // on *resolved* rather than on `sent`, because the second step is the one
+      // that fails: `sent` holds at 3 across the first two reads while `failed`
+      // goes 0 → 1, and an assertion on `sent` alone would call that standing
+      // still.
+      expect(resolved[0]).not.toBe(resolved[1]);
+      expect(resolved).toEqual([3, 4, 5, 6, 6, 6]);
+      expect(seen.map((one) => one.row.recipients.sent)).toEqual([3, 3, 4, 5, 5, 5]);
+      expect(seen.map((one) => one.row.recipients.failed)).toEqual([0, 1, 1, 1, 1, 1]);
+
+      // Never backwards, and never past the total.
+      for (const [index, one] of seen.entries()) {
+        const { recipients } = one.row;
+        expect(recipients.total, String(index)).toBe(6);
+        expect(recipients.sent + recipients.failed, String(index)).toBeLessThanOrEqual(6);
+        // Each read is internally consistent, which is why the advance lands
+        // before the answer is built rather than after it.
+        expect(
+          one.rows.filter((row) => row.status === "sent").length,
+          String(index),
+        ).toBe(recipients.sent);
+      }
+
+      // It settles rather than running off the end.
+      expect(seen.at(-1)!.row.status).toBe("sent");
+    });
+  });
+
+  it("refuses a value outside its range, naming what was allowed", async () => {
+    for (const bad of ["9", "zzz", "-1", "tickk"]) {
+      vi.stubEnv("MOCK_SEND_PROGRESS", bad);
+      try {
+        await expect(freshMock(), bad).rejects.toThrow(/MOCK_SEND_PROGRESS/);
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    }
   });
 });
 
