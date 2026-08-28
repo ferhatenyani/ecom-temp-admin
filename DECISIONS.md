@@ -2384,12 +2384,85 @@ Chromium beyond the captures: the failed-refetch behaviour, one focusable per
 row, no `aria-sort` on 26 headers, one POST per retry, and zero horizontal
 overflow at 340 across six route/locale pairs.
 
+## 16.1 The refetch sweep, and the nav entry it uncovered
+
+Not a screen. The notifications branch amended DESIGN.md §3.7-4 and fixed one
+list to it; this applies the rule to the sixteen shipped screens that were
+already wrong against it, and closes two harness entries. No page was redesigned.
+
+**Sixteen screens, two lines each**: `isError ?` becomes
+`isError && <rows>.length === 0 ?`, and the stale gate becomes
+`(!online || isError)` with `reason={online ? "refreshFailed" : "offline"}`.
+
+**Keeping the rows is only half of it, and shipping only that half would have
+been worse than the defect.** Rows that survive a failed refetch with nothing
+saying so are silently stale — the loud wrong state traded for a quiet one. Every
+one of these screens gates `StaleBanner` on `!useOnline()` alone, so all sixteen
+needed the marker widened in the same edit. That is what `reason` was added for
+on the notifications branch, and this is the change it was added in anticipation
+of.
+
+**`/orders` had no stale marker at all**, which §3.7 has required since the
+redesign began. It is the one list that *polls*, so it is the screen where the
+gap cost most: a 30-second poll that starts failing leaves rows ageing with
+nothing on screen to say so. The gap survived because orders was the run's first
+screen (item 1, inherited) and the rule was proved on later ones — the same shape
+as `DataTable`'s row opener, which orders and products also predated.
+
+**Three exclusions, each a judgement rather than a miss:**
+
+- **`content/menus/MenuEditor.tsx`** reaches its `isError` inside an early return
+  where nothing has been rendered yet. That is the "no content" case by
+  construction, which is precisely when the error state is right.
+- **`RestrictionPicker` and `CustomerPicker` keep the old behaviour, and this is
+  the interesting one.** Both hold `keepPreviousData` over a submit-gated search,
+  so mechanically they match. But the amendment's argument is that the rows are
+  *the same data, older* — and in a picker they are not: search "Benali", the
+  request fails, and what stays on screen is the result set for "Alger". Those
+  rows answer a different question, so replacing them is the honest act. **The
+  test is whether the stale rows still answer the question that is on screen**,
+  not whether the query re-runs.
+- **`users` and `audit` are unmigrated**, and are checklist items 16 and 19. They
+  will be rebuilt to the amended rule rather than patched and thrown away.
+
+**The mock's `/customers` gate was hiding a live defect.** Closing that
+carried-forward entry — one line, `gatedOn("ac_manage_customers")` before the
+depth check, where the wire puts it — made `MOCK_IDENTITY=no_customers` render
+the customers screen's forbidden state for the first time. Which is when the
+capture showed **`Notifications` still in the sidebar**: `nav-tree.ts:55` was the
+one entry in that file carrying no `capability`, while its route refuses without
+`ac_manage_customers`. A nav item whose only possible outcome for that session is
+the forbidden screen — the `/dashboard` defect §11 fixed, recurring one row down,
+and it survived the notifications branch's own forbidden captures because the
+sidebar is a closed drawer at the width they were judged at.
+
+**The lesson is about the harness rather than the nav.** A mock more permissive
+than the wire does not merely fail to catch a defect: it *manufactures a passing
+screenshot* of the broken state. Nobody looked at that sidebar and mis-read it —
+it could not be photographed. §0 says the honesty audit runs in both directions;
+this is the first time the permissive direction cost a live defect rather than a
+missed refusal.
+
+**Verified**: `tsc` silent · lint 0/10 · `test:design` 14/14 · `test:unit`
+884/884 · clean build · **252 captures clean** over five runs (96 + 72 + 24 + 36
++ 24) across the sixteen screens and both identities, the last three runs being
+re-captures after the mock gate and the nav entry. Driven in Chromium with every
+API read aborted mid-session, on a
+poller, two filtered lists and a grid: rows 20 → 20 on all four, pager intact,
+and the marker reading *"la dernière actualisation a échoué"* rather than
+claiming offline.
+
 ---
 
 ## Carried forward — teardown owns these
 
-- **Seventeen shipped screens still blank their rows on a failed *refetch*, and
-  two of them poll.** DESIGN.md §3.7-4 was amended on the notifications branch to
+- ~~**Seventeen shipped screens still blank their rows on a failed *refetch*, and
+  two of them poll.**~~ **Closed 2026-08-29 on `fix/stale-over-rows` — see §16.1.**
+  Sixteen fixed; the two drawer pickers were deliberately left, and `users` and
+  `audit` are unmigrated and are checklist items 16 and 19. The entry as written
+  follows, because its *heuristic* is the reusable part:
+
+  DESIGN.md §3.7-4 was amended on the notifications branch to
   say that the error state replaces content only when there is no content; every
   screen written before it branches `isPending ? skeleton : isError ?
   <ErrorState> : …`, which is correct for a one-shot list and wrong for anything
@@ -2422,10 +2495,9 @@ overflow at 340 across six route/locale pairs.
   calendar, and the panel does not get to be stricter than the API it is a client
   of. A native date control cannot produce the value; only a hand-edited URL can.
   It is the backend's to fix, and it is the only one of these entries that is.
-- **The mock does not gate `/customers` on `ac_manage_customers`** while the wire
-  answers 403. Found by the notifications harness audit, which gated its own three
-  routes; one line at that collection's own `case`, and out of scope for a branch
-  that does not own the screen.
+- ~~**The mock does not gate `/customers` on `ac_manage_customers`** while the
+  wire answers 403.~~ **Closed 2026-08-29 — and it was hiding a live defect, which
+  is why it was worth doing rather than deferring.** See §16.1.
 
 - **Every parameter refusal in the mock puts the enum sentence in the top-level
   `message`, and the wire puts `"Invalid parameter(s): <name>"` there.** Found by

@@ -269,8 +269,10 @@ export function ParcelsList({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         {/* A live region, so a filter that changes the result count announces it.
@@ -292,7 +294,7 @@ export function ParcelsList({
               <RecordListSkeleton rows={6} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && parcels.length === 0 ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : parcels.length === 0 ? (
           <EmptyState

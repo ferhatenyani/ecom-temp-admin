@@ -178,13 +178,15 @@ export function CategoriesScreen({
 
       <PageBody width="detail">
         <div className="flex flex-col gap-4">
-          {!online && dataUpdatedAt > 0 ? (
-            <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+          {(!online || isError) && dataUpdatedAt > 0 ? (
+            <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+              reason={online ? "refreshFailed" : "offline"}
+            />
           ) : null}
 
           {isPending && categories.length === 0 ? (
             <CardSkeleton rows={4} label={t("loading")} />
-          ) : isError ? (
+          ) : isError && categories.length === 0 ? (
             <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
           ) : categories.length === 0 ? (
             /* This list takes no filters, so it has exactly one empty state and

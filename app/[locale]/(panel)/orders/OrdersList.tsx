@@ -15,7 +15,9 @@ import {
   useTablePreferences,
 } from "@/components/ui/DataTable";
 import { FilterTabs, SearchField, FilterChips, FilterRow } from "@/components/ui/FilterBar";
-import { EmptyState, ErrorState } from "@/components/ui/States";
+import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { useOnline } from "@/lib/use-online";
+import { formatWhen } from "@/lib/format/date";
 import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { Menu } from "@/components/ui/Menu";
@@ -92,7 +94,8 @@ export function OrdersList({
    * Nothing below 30 s — reads are 600/min per credential and shared across
    * every tab this person has open.
    */
-  const { data, isPending, isError, error, refetch, isFetching } = useQuery({
+  const online = useOnline();
+  const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ordersKey(query),
     queryFn: () => fetchOrders(query),
     refetchInterval: 30_000,
@@ -285,6 +288,22 @@ export function OrdersList({
           {tA11y("listUpdated", { total })}
         </p>
 
+        {/*
+          **The one list that polls had no stale marker at all**, which §3.7 has
+          required since the redesign began — the gap survived because this was
+          the first screen of the run and the rule was proved on later ones. It
+          matters more here than anywhere: a 30-second poll that starts failing
+          leaves rows ageing on screen with nothing saying so, and after the
+          §3.7-4 amendment those rows now *stay* instead of being replaced by an
+          error. Keeping them is only honest if the screen reports their age.
+        */}
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner
+            time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
+        ) : null}
+
         {isPending && orders.length === 0 ? (
           <>
             <div className="hidden md:block">
@@ -294,7 +313,7 @@ export function OrdersList({
               <RecordListSkeleton rows={6} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && orders.length === 0 ? (
           <ErrorState
             message={(error as Error).message}
             onRetry={() => void refetch()}

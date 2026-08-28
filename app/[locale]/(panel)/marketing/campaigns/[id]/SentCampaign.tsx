@@ -218,7 +218,12 @@ export function SentCampaign({
 
   const online = useOnline();
 
-  const { data: campaign, refetch, dataUpdatedAt } = useQuery({
+  const {
+    data: campaign,
+    refetch,
+    dataUpdatedAt,
+    isError: campaignFailed,
+  } = useQuery({
     queryKey: ["campaigns", initial.id],
     queryFn: async () => {
       const { data } = await acRead<unknown>(`/campaigns/${initial.id}`);
@@ -374,8 +379,14 @@ export function SentCampaign({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {/* Either query failing means what is on screen is ageing: both poll
+            while the campaign is `sending`, and the counts and the rows are
+            computed from the same recipients. */}
+        {(!online || campaignFailed || recipients.isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner
+            time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         <div className="flex flex-col gap-6">
@@ -586,7 +597,7 @@ export function SentCampaign({
               <RecordListSkeleton rows={5} label={t("loading")} />
             </div>
           </>
-        ) : recipients.isError ? (
+        ) : recipients.isError && rows.length === 0 ? (
           <ErrorState
             message={(recipients.error as Error).message}
             onRetry={() => void recipients.refetch()}

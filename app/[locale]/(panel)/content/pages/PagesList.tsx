@@ -215,8 +215,10 @@ export function PagesList({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         {/* A live region, so a filter that changes the result count announces it.
@@ -238,7 +240,7 @@ export function PagesList({
               <RecordListSkeleton rows={6} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && pages.length === 0 ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : pages.length === 0 ? (
           <EmptyState

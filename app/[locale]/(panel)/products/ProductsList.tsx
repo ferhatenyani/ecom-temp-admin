@@ -486,9 +486,10 @@ export function ProductsList({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
+        {(!online || isError) && dataUpdatedAt > 0 ? (
           <StaleBanner
             time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
           />
         ) : null}
 
@@ -510,7 +511,7 @@ export function ProductsList({
               <RecordListSkeleton rows={6} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && products.length === 0 ? (
           <ErrorState
             message={(error as Error).message}
             onRetry={() => void refetch()}

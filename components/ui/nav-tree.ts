@@ -52,7 +52,13 @@ export const NAV: NavGroup[] = [
     key: "engage",
     items: [
       { key: "marketing", href: "/marketing", icon: "mail", capability: "ac_manage_marketing" },
-      { key: "notifications", href: "/notifications", icon: "mail" },
+      /* `ac_manage_customers`, which is what `/notifications` refuses without —
+         the queue is customer correspondence and shares the capability rather
+         than holding one of its own. It had none, so for a session without it
+         this entry's only possible outcome was the forbidden screen: the
+         `/dashboard` defect the dashboard branch fixed, one row down and
+         invisible until the mock started gating the capability it shares. */
+      { key: "notifications", href: "/notifications", icon: "mail", capability: "ac_manage_customers" },
       { key: "content", href: "/content", icon: "list", capability: "ac_manage_content" },
     ],
   },

@@ -264,8 +264,10 @@ export function BannersList({
       />
 
       <PageBody width="detail">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         <p aria-live="polite" className="sr-only" data-testid="banners-live">
@@ -274,7 +276,7 @@ export function BannersList({
 
         {isPending && fetched === 0 ? (
           <BannerRowsSkeleton label={t("loading")} />
-        ) : isError ? (
+        ) : isError && fetched === 0 ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : fetched === 0 ? (
           /* No banners at all offers the create action; no banners *for this
