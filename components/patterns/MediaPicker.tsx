@@ -76,7 +76,11 @@ export function MediaPicker({
           ))}
         </div>
       ) : items.length === 0 ? (
-        <EmptyState message={t("empty")} />
+        // `empty.none`: `media.empty` became two states on 2026-08-28. This file
+        // has had no importer since the content branch and teardown owns it, but
+        // DECISIONS.md keeps its keys alive so no source file reads one that does
+        // not exist — and an object where a string was is exactly that.
+        <EmptyState message={t("empty.none")} />
       ) : (
         <>
           <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">

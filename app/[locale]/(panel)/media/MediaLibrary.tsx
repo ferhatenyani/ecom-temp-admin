@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,11 +11,22 @@ import { formatWhen } from "@/lib/format/date";
 import { useOnline } from "@/lib/use-online";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { MediaGrid, MediaGridSkeleton } from "@/components/ui/MediaGrid";
+import { FilterRow, FilterTabs, SearchField } from "@/components/ui/FilterBar";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Isolate } from "@/components/primitives/Ltr";
 import { MEDIA_SCOPE, MediaDrawer } from "./MediaDrawer";
 import { UploadModal } from "./UploadModal";
+import {
+  MEDIA_ORDERS,
+  isFiltered,
+  listParams,
+  mediaKey,
+  queryFromParams,
+  toUrlParams,
+  type MediaOrder,
+  type MediaQuery,
+} from "./query";
 
 /**
  * The media library.
@@ -44,11 +55,6 @@ import { UploadModal } from "./UploadModal";
  * this break?". An irreversible action a screen cannot explain is worse than one
  * it does not offer, so it is **not rendered**, not disabled.
  *
- * **No sorting, and no `aria-sort` anywhere.** `orderby` is `date|title|id` and
- * the only control anyone has taken is *negative* — `rand` answers 400, backend
- * suite `:373`. DECISIONS.md's standing rule wants a positive control that is
- * not the collection's resting order, and `date desc` is the resting order.
- *
  * **No `type` filter**, though the parameter demonstrably works — four positive
  * controls at `:337-361`. Two reasons, either sufficient. There is no allowlisted
  * enumeration of what a library can *hold*: `ACCEPTED_MIME` is what the panel can
@@ -57,20 +63,46 @@ import { UploadModal } from "./UploadModal";
  * the 41 rows is `image/*`, so the filter has exactly one non-empty value. A
  * control that can only answer "all of them" cannot act.
  *
- * **No search box.** `search` is honoured in backend code and has **no control at
- * all**, here or in the backend suite; the harness's own note says which fields it
- * would match is a guess. Unmeasured is treated as broken.
- *
  * **No bulk and no export** — media is not in `EXPORT_SUBJECTS`, so an export
  * control would point at a route that does not exist.
  *
- * ## One empty state, and the missing half has no producer
+ * ## Two controls that this screen shipped without, and the record that was wrong
  *
- * §3.7 wants *nothing yet* told apart from *nothing matching this filter*. This
- * screen ships no filter, no search and no sort, and its pager is bounded by the
- * total it renders — so there is no control a reader can operate that produces an
- * empty result. A second state for it would be unreachable code standing in for a
- * control that does not exist, which is the same thing as a dead control.
+ * It shipped with no search and no sort, and DECISIONS.md §14 recorded both as
+ * "unmeasured, therefore treated as broken". **Both were measured on 2026-08-28
+ * against the live API and both work**, so the recorded reason was false and the
+ * controls ship. The standing rule is not that an unmeasured parameter is broken;
+ * it is that it is *treated* as broken until somebody goes and takes the control,
+ * which is what happened. `query.ts` carries every request and its answer.
+ *
+ * What ships is a **date** sort in two directions and a **submit-gated** search.
+ * `id` sorts and is refused anyway — on this collection id order and date order
+ * are the same fact, so two controls would do one job. `title` is unprovable on
+ * the only fixture that exists, 42 of 43 rows being titled "Tapis"; `query.ts`
+ * names the measurement it still needs.
+ *
+ * **The sort is `FilterTabs` in its `chips` shape, and that is the panel-wide
+ * rule rather than a choice made here** — DECISIONS.md §12: a full-bleed
+ * underlined strip under the header always means *which view*, and a labelled
+ * chip group always means a filter over it. This screen has no views, so the
+ * strip variant would claim an axis it does not have. **No `aria-sort`**: that
+ * attribute belongs to a table header and there is no table here. The chips are a
+ * filter control, announce as one through `aria-current`, and the `nav` carries
+ * the same visible label the sighted reader sees.
+ *
+ * **The search is submit-gated**, on the coupons pattern: `SearchField` fires on
+ * Enter or on the clear button and never on a keystroke.
+ *
+ * ## Both empty states, and the second one now has a producer
+ *
+ * §3.7 wants *nothing yet* told apart from *nothing matching this search*. Until
+ * this branch this screen could only ever have the first — no filter, no search,
+ * no sort, and a pager bounded by the total it renders — and DESIGN.md §3.7
+ * carries the amendment that was written about exactly that. **The amendment's
+ * principle stands and its example is now stale**: the search can return nothing,
+ * so the second state exists, offers to clear the search, and names what the
+ * search covers. The sort cannot produce it — re-ordering 43 rows returns 43 rows
+ * — so clearing does not touch it.
  *
  * ## The stale marker stays
  *
@@ -81,10 +113,12 @@ import { UploadModal } from "./UploadModal";
  */
 export function MediaLibrary({
   locale,
+  initialQuery,
   initialItems,
   initialTotal,
 }: {
   locale: string;
+  initialQuery: MediaQuery;
   initialItems: MediaItem[] | null;
   initialTotal: number | null;
 }) {
@@ -94,9 +128,15 @@ export function MediaLibrary({
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
 
-  /* The page is local state and the peek is a URL parameter, which is the split
-     `/orders` uses: the peek is worth sharing and worth a back button, and a
-     page number on a screen with no filters is not a view anybody links to. */
+  /* The search term and the sort live in the URL, on the shape every other list
+     uses; the page is local state and the peek is a URL parameter, which is the
+     split `/orders` uses. A peek is worth sharing and worth a back button, and a
+     page number on this screen is still not a view anybody links to — both
+     controls send it back to 1, so it never outlives the list it counted into. */
+  const query = useMemo(
+    () => queryFromParams(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
   const peekId = searchParams.get("peek");
@@ -104,15 +144,19 @@ export function MediaLibrary({
   const online = useOnline();
 
   const { data, isPending, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ["media", "library", page],
+    queryKey: mediaKey(query, page),
     queryFn: async () => {
       const { data: items, total } = await acRead<MediaItem[]>(
-        `/media?per_page=${MEDIA_PER_PAGE}&page=${page}`,
+        `/media?${listParams(query, page)}`,
       );
       return { items, total };
     },
+    /* Only where the server's own request was this one. It fetches page 1 of
+       whatever the URL asked for, so the two agree on arrival — and the guard is
+       what keeps them from disagreeing during a client navigation that has
+       committed a new URL against a page number the reader was already on. */
     initialData:
-      initialItems !== null && page === 1
+      initialItems !== null && page === 1 && mediaKey(query, 1)[2] === mediaKey(initialQuery, 1)[2]
         ? { items: initialItems, total: initialTotal ?? initialItems.length }
         : undefined,
     /* Keeps the previous page on screen while the next loads, so paging never
@@ -123,6 +167,7 @@ export function MediaLibrary({
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const filtered = isFiltered(query);
 
   const inPage = peekId === null ? null : (items.find((item) => String(item.id) === peekId) ?? null);
 
@@ -167,6 +212,25 @@ export function MediaLibrary({
     else params.set("peek", String(id));
     /* `push`, not `replace` — closing a preview with the back button is half of
        what putting it in the URL is for. */
+    router.push(`/${locale}/media${params.size > 0 ? `?${params}` : ""}`, { scroll: false });
+  }
+
+  /*
+   * A control moved. Both of them reset the page: page 3 of a re-sorted or
+   * re-searched library is a different set of rows, not the same ones
+   * rearranged, so keeping the number would keep a position that no longer
+   * refers to anything.
+   *
+   * `push`, not `replace` — filter state in the URL is only half the promise and
+   * the other half is that the back button undoes it.
+   *
+   * `?peek=` is deliberately not carried across. The drawer traps focus, so no
+   * control in this toolbar is reachable while one is open; a branch preserving
+   * it would be code for a path nobody can walk.
+   */
+  function commit(next: MediaQuery) {
+    setPage(1);
+    const params = toUrlParams(next);
     router.push(`/${locale}/media${params.size > 0 ? `?${params}` : ""}`, { scroll: false });
   }
 
@@ -215,6 +279,58 @@ export function MediaLibrary({
             </Button>
           </>
         }
+        toolbar={
+          <div className="flex flex-col gap-3">
+            {/*
+              **`chips`, and it is the panel's rule rather than this screen's
+              taste** — DECISIONS.md §12. A full-bleed underlined strip in this
+              slot means *which view* everywhere else in the panel, and this
+              screen has no views; a labelled chip group means a filter over what
+              is on screen, which is what a sort is. The visible label is half of
+              that distinction.
+
+              Two options, and the first is the resting order — so the third
+              press of this control is a return to rest and the URL goes back to
+              clean, the same third state a sortable table header has.
+
+              No `aria-sort` anywhere near it: that attribute belongs to a table
+              header and there is no table on this screen. `FilterTabs` announces
+              the selection with `aria-current` and names the group on its `nav`.
+            */}
+            <FilterTabs<MediaOrder>
+              variant="chips"
+              label={t("sortLabel")}
+              value={query.order}
+              onChange={(order) => commit({ ...query, order })}
+              tabs={MEDIA_ORDERS.map((order) => ({
+                value: order,
+                label: t(`sort.${order}`),
+              }))}
+            />
+
+            {/*
+              Submit-gated, on the coupons pattern: `SearchField` fires on Enter
+              and on its own clear button, never on a keystroke.
+
+              **The placeholder names its own scope**, which matters more here
+              than on any list in the panel. A tile whose title is empty is
+              labelled with its *filename*, and the filename is measured **not**
+              to be searchable — so a reader typing what a tile says would get
+              nothing back with nothing on screen to say why. `empty.noResults`
+              repeats it, because that is where the reader who needs the sentence
+              is standing.
+            */}
+            <FilterRow>
+              <SearchField
+                value={query.search}
+                onSubmit={(search) => commit({ ...query, search })}
+                placeholder={t("searchPlaceholder")}
+                label={t("searchLabel")}
+                clearLabel={t("clearSearch")}
+              />
+            </FilterRow>
+          </div>
+        }
       />
 
       <PageBody width="full">
@@ -230,17 +346,40 @@ export function MediaLibrary({
              only one of them is worth pressing a button about. */
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : items.length === 0 ? (
-          <EmptyState
-            icon="image"
-            message={t("empty")}
-            /* Absent while offline rather than dimmed: the banner above says why,
-               and §3.3 removes a control that cannot act. */
-            action={
-              blocked === null
-                ? { label: t("upload"), onClick: () => setUploadOpen(true) }
-                : undefined
-            }
-          />
+          /*
+           * **Both halves of §3.7's second state, and the second half has a
+           * producer now.** A shop with no files at all and a search that matched
+           * nothing are different situations: the first offers the upload, the
+           * second offers to clear the search and says what the search covers.
+           *
+           * Only the search can empty this list — re-ordering 43 rows returns 43
+           * rows — so clearing is the search alone and the sort is left where the
+           * reader put it.
+           */
+          filtered ? (
+            <EmptyState
+              icon="search"
+              message={t("empty.noResults")}
+              /* Always offered, offline included: clearing a search is a
+                 navigation, not a write. */
+              action={{
+                label: t("clearSearch"),
+                onClick: () => commit({ ...query, search: "" }),
+              }}
+            />
+          ) : (
+            <EmptyState
+              icon="image"
+              message={t("empty.none")}
+              /* Absent while offline rather than dimmed: the banner above says
+                 why, and §3.3 removes a control that cannot act. */
+              action={
+                blocked === null
+                  ? { label: t("upload"), onClick: () => setUploadOpen(true) }
+                  : undefined
+              }
+            />
+          )
         ) : (
           <MediaGrid
             items={items}
@@ -271,8 +410,17 @@ export function MediaLibrary({
         onOpenChange={setUploadOpen}
         onUploaded={() => {
           invalidate();
-          /* The new file is the newest, and the collection rests newest-first —
-             so page one is where it landed. */
+          /*
+           * The new file is the newest, and at rest the collection is
+           * newest-first — so page one is where it landed.
+           *
+           * **Under a search or an oldest-first sort it is not**, and the upload
+           * deliberately does not clear either to go and find it: a control that
+           * threw away the state a reader had set, in order to show them
+           * something, is worse than one that leaves them where they were. The
+           * toast says the file was saved; the library they are looking at is
+           * still the library they asked for.
+           */
           setPage(1);
         }}
       />

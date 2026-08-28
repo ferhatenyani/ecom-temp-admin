@@ -749,18 +749,37 @@ system, restyled per §1.
    > **Amended on the media branch: the distinction is required wherever a
    > control can produce the second state, which is not every screen.**
    >
-   > §8's checklist asks for both halves unconditionally, and the media library
-   > is the first screen in the run that can only ever have one. It ships no
-   > filter, no search and no sort — each absence measured and argued — and its
-   > pager is bounded by the total it renders, so there is no control a reader
-   > can operate that returns an empty result. A second state for it would be
-   > unreachable code standing in for a control that does not exist, which is the
-   > same defect as a dead control wearing a live one's clothes.
+   > §8's checklist asks for both halves unconditionally. A second state on a
+   > screen that cannot reach it is unreachable code standing in for a control
+   > that does not exist, which is the same defect as a dead control wearing a
+   > live one's clothes — and it is also a promise: an empty state offering to
+   > clear a filter tells the reader a filter exists.
    >
    > So: a screen whose controls can empty the list ships both, and each offers
    > the right action. A screen whose controls cannot ships one and **says so in
    > its own docblock**, pointing at this sentence — the same shape §3.7's stale
    > amendment already uses two items below.
+   >
+   > **The example this was written about is now the counter-example, and it is
+   > corrected here rather than quietly dropped.** The amendment named the media
+   > library as the first screen in the run that could only ever have one half:
+   > no filter, no search, no sort, and a pager bounded by the total it renders.
+   > A fortnight later that screen **grew the controls**. The two parameters it
+   > had recorded as unmeasured were measured against the live API — `search`
+   > discriminates and `orderby=date&order=asc` sorts against a positive control
+   > — so the search box shipped, the search can return nothing, and `/media`
+   > ships both halves like every other list. Nothing about the rule moved; what
+   > moved is which screens it exempts.
+   >
+   > Which is the sharper lesson of the two, and the reason the example stays on
+   > the page instead of being replaced by a tidier one. **"This screen has no
+   > control that can empty the list" is a fact about today's controls, not a
+   > property of the screen.** It has to be re-read whenever one is added, and
+   > the docblock the rule demands is what makes that re-reading possible — the
+   > sentence is in the file the new control lands in. The exemption is real and
+   > still in use: `components/ui/MediaPicker.tsx` is a panel with no controls of
+   > its own, so it ships `empty.none` and no second half, and says so where a
+   > reader adding a search box to it would see.
 3. **Forbidden** — names the capability required and who to ask. Never a blank
    page, never a logout, never a disappearing toast.
 4. **Error** — one line, a retry, and the API's own message only where it is
