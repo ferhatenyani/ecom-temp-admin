@@ -15015,6 +15015,19 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     case "customers": {
+      /*
+       * **`ac_manage_customers`, and the mock did not check it for three
+       * branches.** The wire answers 403 on every one of these; the harness
+       * served them to any identity, so `MOCK_IDENTITY=no_customers` captured a
+       * customer list nobody holding that credential can see. Found by the
+       * notifications harness audit, which gated its own three routes and then
+       * asked which neighbour shares the capability. The gate goes before the
+       * depth check for the same reason the wire's does: a refusal is about the
+       * credential, not about whether the path resolves.
+       */
+      const denied = gatedOn("ac_manage_customers");
+      if (denied) return denied;
+
       // Depth is stated here, the way `/products` and `/orders` state theirs.
       if (segments.length > 3) return notFound();
 

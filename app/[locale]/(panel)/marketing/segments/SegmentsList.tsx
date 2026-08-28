@@ -236,8 +236,10 @@ export function SegmentsList({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         <p aria-live="polite" className="sr-only" data-testid="segments-live">
@@ -275,7 +277,7 @@ export function SegmentsList({
               <RecordListSkeleton rows={4} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && segments.length === 0 ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : segments.length === 0 ? (
           <EmptyState

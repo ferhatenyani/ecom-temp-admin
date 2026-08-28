@@ -366,13 +366,15 @@ export function MediaLibrary({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         {isPending && items.length === 0 ? (
           <MediaGridSkeleton label={t("loading")} count={MEDIA_PER_PAGE} />
-        ) : isError ? (
+        ) : isError && items.length === 0 ? (
           /* The API's own sentence and a retry — never the empty state's words. A
              failed request and a shop with no files are different situations and
              only one of them is worth pressing a button about. */

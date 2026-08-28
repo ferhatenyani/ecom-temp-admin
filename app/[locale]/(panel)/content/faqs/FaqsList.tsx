@@ -227,9 +227,10 @@ export function FaqsList({
       />
 
       <PageBody width="detail">
-        {!online && faqsQuery.dataUpdatedAt > 0 ? (
+        {(!online || faqsQuery.isError) && faqsQuery.dataUpdatedAt > 0 ? (
           <StaleBanner
             time={formatWhen(new Date(faqsQuery.dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
           />
         ) : null}
 
@@ -239,7 +240,7 @@ export function FaqsList({
 
         {faqsQuery.isPending && fetched === 0 ? (
           <FaqRowsSkeleton label={t("loading")} />
-        ) : faqsQuery.isError ? (
+        ) : faqsQuery.isError && fetched === 0 ? (
           <ErrorState
             message={(faqsQuery.error as Error).message}
             onRetry={() => void faqsQuery.refetch()}

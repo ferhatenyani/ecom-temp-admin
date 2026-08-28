@@ -215,9 +215,10 @@ export function MovementsScreen({ locale, meId }: { locale: string; meId: number
       />
 
       <PageBody width="full">
-        {!online && movements.dataUpdatedAt > 0 ? (
+        {(!online || movements.isError) && movements.dataUpdatedAt > 0 ? (
           <StaleBanner
             time={formatWhen(new Date(movements.dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
           />
         ) : null}
 
@@ -241,7 +242,7 @@ export function MovementsScreen({ locale, meId }: { locale: string; meId: number
                 <RecordListSkeleton rows={6} label={t("loading")} />
               </div>
             </>
-          ) : movements.isError ? (
+          ) : movements.isError && rows.length === 0 ? (
             <ErrorState
               message={(movements.error as Error).message}
               onRetry={() => void movements.refetch()}

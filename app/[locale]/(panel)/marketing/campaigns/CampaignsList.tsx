@@ -381,8 +381,10 @@ export function CampaignsList({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         {/* A live region, so a filter that changes the result count announces it.
@@ -404,7 +406,7 @@ export function CampaignsList({
               <RecordListSkeleton rows={5} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && campaigns.length === 0 ? (
           <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
         ) : campaigns.length === 0 ? (
           <EmptyState

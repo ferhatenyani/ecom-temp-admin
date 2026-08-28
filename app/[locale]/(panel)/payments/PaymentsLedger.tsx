@@ -381,8 +381,10 @@ export function PaymentsLedger({
       />
 
       <PageBody width="full">
-        {!online && dataUpdatedAt > 0 ? (
-          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        {(!online || isError) && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
+            reason={online ? "refreshFailed" : "offline"}
+          />
         ) : null}
 
         {/* A live region, so a filter that changes the result count announces it.
@@ -404,7 +406,7 @@ export function PaymentsLedger({
               <RecordListSkeleton rows={6} label={t("loading")} />
             </div>
           </>
-        ) : isError ? (
+        ) : isError && payments.length === 0 ? (
           /*
            * **The error and the empty state no longer print the same string**,
            * which they did on the screen this replaces — a failed request and a
