@@ -45,15 +45,20 @@ import {
  * `PageBody width="full"` — §2.3's table/list row, capped at 1600. The screen
  * this replaces used `max-w-3xl`, which §0 retires by name.
  *
- * ## What this screen deliberately does not ship
+ * ## Delete ships, and the reason it did not is the reason it does
  *
- * **No delete.** `DELETE /media/{id}` exists and `ac_manage_content` allows it,
- * and `lib/api/allowlist.ts` refuses it deliberately with `tests/boundary.test.ts`
- * pinning it shut. Nothing in this API tells the panel what an attachment is used
- * by — a banner's `image`, a page thumbnail and a homepage section all reference
- * one with no back-reference anywhere — so the library cannot answer "what would
- * this break?". An irreversible action a screen cannot explain is worse than one
- * it does not offer, so it is **not rendered**, not disabled.
+ * This screen recorded "no delete" for a fortnight, and the recorded reason was
+ * good: nothing in the API told the panel what an attachment was *used by*, so
+ * the library could not answer "what would this break?" and an irreversible
+ * action a screen cannot explain is worse than one it does not offer.
+ *
+ * `GET /media/{id}/usage` is the answer, added to the API for exactly this. It
+ * lives in `MediaDrawer` — a header `Menu` into a `ConfirmDialog` that reads the
+ * endpoint when it opens — and the whole argument for its wording is there.
+ * `onDeleted` below is this screen's half: the count drops, the tile goes, and
+ * `?peek=` is cleared by the one writer that owns it.
+ *
+ * ## What this screen deliberately does not ship
  *
  * **No `type` filter**, though the parameter demonstrably works — four positive
  * controls at `:337-361`. Two reasons, either sufficient. There is no allowlisted
@@ -75,11 +80,18 @@ import {
  * it is that it is *treated* as broken until somebody goes and takes the control,
  * which is what happened. `query.ts` carries every request and its answer.
  *
- * What ships is a **date** sort in two directions and a **submit-gated** search.
- * `id` sorts and is refused anyway — on this collection id order and date order
- * are the same fact, so two controls would do one job. `title` is unprovable on
- * the only fixture that exists, 42 of 43 rows being titled "Tapis"; `query.ts`
- * names the measurement it still needs.
+ * What ships is a **submit-gated** search and **four** sort chips: newest,
+ * oldest, A→Z, Z→A. The title half arrived second — `orderby=title` was
+ * unprovable while 42 of the 43 rows shared the title "Tapis", and shipped on
+ * 2026-08-28 once somebody built the fixture `query.ts` had asked for and took
+ * the control in both directions. `id` sorts and is refused anyway: on this
+ * collection id order and date order are the same fact, so a fifth chip would do
+ * the first chip's job.
+ *
+ * **Four flat chips rather than a field selector and a direction toggle.** Each
+ * is a complete answer to "in what order", and one of the four combinations a
+ * two-control version would offer (`id`) does not ship — so the pair would be a
+ * composer for a space that is not a product.
  *
  * **The sort is `FilterTabs` in its `chips` shape, and that is the panel-wide
  * rule rather than a choice made here** — DECISIONS.md §12: a full-bleed
@@ -139,6 +151,8 @@ export function MediaLibrary({
   );
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
+  /** Attachments this session has permanently deleted — see `peeked` below. */
+  const [deleted, setDeleted] = useState<ReadonlySet<number>>(new Set());
   const peekId = searchParams.get("peek");
 
   const online = useOnline();
@@ -196,12 +210,28 @@ export function MediaLibrary({
    */
   const peekQuery = useQuery({
     queryKey: ["media", "item", peekId],
-    enabled: peekId !== null && inPage === null,
+    enabled: peekId !== null && inPage === null && !deleted.has(Number(peekId)),
     queryFn: async () => (await acRead<MediaItem>(`/media/${peekId}`)).data,
     retry: false,
   });
 
-  const peeked = inPage ?? peekQuery.data ?? null;
+  /*
+   * **An id this session deleted resolves to nothing, cache or no cache**, and
+   * both halves of that were measured in Chromium rather than reasoned about.
+   *
+   * The query above is still mounted for the render in which a successful delete
+   * clears `?peek=` — `enabled` cannot go false until React has re-rendered — so
+   * the invalidation that follows re-asked `GET /media/{id}` for the row that had
+   * just stopped existing and took a 404 in the console. And `setPeek` uses
+   * `push`, so **back** lands on the `?peek=` the delete navigated away from:
+   * with the answer still in cache and `retry: false` keeping the last successful
+   * `data` through the 404, that re-opened a drawer on a deleted file.
+   *
+   * One set closes both. `removeQueries` closes neither — removing a query with a
+   * live observer makes it fetch again, which is the 404 above.
+   */
+  const peeked =
+    peekId !== null && deleted.has(Number(peekId)) ? null : (inPage ?? peekQuery.data ?? null);
 
   /* Not wrapped in `useCallback`: the React Compiler is on in this project and
      memoizes this already; a manual dependency list disagreeing with the
@@ -289,9 +319,11 @@ export function MediaLibrary({
               is on screen, which is what a sort is. The visible label is half of
               that distinction.
 
-              Two options, and the first is the resting order — so the third
-              press of this control is a return to rest and the URL goes back to
-              clean, the same third state a sortable table header has.
+              Four options, and the first is the resting order — so pressing
+              "newest" again returns to rest and the URL goes back to clean. The
+              group scrolls rather than wraps at 340px (`ui-tabs-scroll`), which
+              is what keeps the toolbar one band tall at every width and is why
+              `loading.tsx` still matches first paint after this grew from two.
 
               No `aria-sort` anywhere near it: that attribute belongs to a table
               header and there is no table on this screen. `FilterTabs` announces
@@ -402,6 +434,41 @@ export function MediaLibrary({
           if (!next) setPeek(null);
         }}
         onSaved={invalidate}
+        /*
+         * The file is gone. **Clearing `?peek=` is what closes the drawer**, and
+         * it is the only thing that may: the URL is this drawer's open state, so
+         * calling `onOpenChange(false)` from inside as well would push twice and
+         * put a dead `?peek=` in the history for the back button to land on.
+         *
+         * The invalidation is what drops the count in the header and removes the
+         * tile, and it reaches `["media","item",id]` too — the deleted row is
+         * cached there whenever the peek came from a URL rather than from a
+         * click, and the whole `media` prefix is invalidated for that reason.
+         *
+         * **`["media","library"]` and not the whole prefix**, which is the one
+         * place on this screen where the difference is load-bearing. The record's
+         * own entry must not be *refreshed* — the row is gone, so the refresh is
+         * a `GET /media/{id}` that can only 404 — and it must not be *read* on the
+         * way back either. `deleted` is what answers the second; leaving the
+         * sweep off its key is what answers the first, because a `setState` here
+         * has not re-rendered by the time an invalidation on the same line runs
+         * and the query is still live. Both driven in Chromium. `peeked` above
+         * carries the argument.
+         *
+         * **Deleting the last row of a page has to move the page**, and it does
+         * not recover on its own. `MediaGrid` renders no pager at all when the
+         * page it is handed is empty — this screen swaps in the empty state
+         * before the grid is reached — so a reader who deleted row 41 of 41 from
+         * page 3 would land on "no files yet", offering an upload, on a library
+         * of forty. One step back, and only when this page held exactly one row:
+         * anything less specific would move a reader who did not need moving.
+         */
+        onDeleted={(id) => {
+          setDeleted((current) => new Set(current).add(id));
+          void queryClient.invalidateQueries({ queryKey: ["media", "library"] });
+          if (items.length === 1 && page > 1) setPage(page - 1);
+          setPeek(null);
+        }}
       />
 
       <UploadModal

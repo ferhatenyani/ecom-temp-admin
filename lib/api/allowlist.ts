@@ -263,16 +263,39 @@ const RULES: readonly Rule[] = [
    * Media. `POST` is the upload and is the only `multipart/form-data` request
    * the panel makes — every other write here is JSON.
    *
-   * **`DELETE /media/{id}` is deliberately absent.** The route exists and the
-   * capability allows it, but nothing on this branch deletes a file: an
-   * attachment referenced by a banner, a page thumbnail or a homepage section
-   * has no back-reference anywhere in this API, so the panel cannot tell a
-   * person what a delete would break. A library that offers an irreversible
-   * action it cannot explain is worse than one that does not offer it, and the
-   * route stays unreachable until a screen can answer "used by what?".
+   * **`DELETE /media/{id}` was deliberately absent until 2026-08-28, and the
+   * reason it was absent is the reason it is here now.** The entry this replaces
+   * read: the route exists and `ac_manage_content` allows it, but an attachment
+   * referenced by a banner, a page thumbnail or a homepage section has **no
+   * back-reference anywhere in this API**, so the panel could not tell a person
+   * what a delete would break — and a library offering an irreversible action it
+   * cannot explain is worse than one that does not offer it. The route stays
+   * unreachable, it said, "until a screen can answer *used by what?*".
+   *
+   * The API grew the answer. **`GET /media/{id}/usage`** — `MediaUsageRepository`
+   * — reads the five stores this codebase can put an attachment id in
+   * (`featured_image`, `gallery`, `option_choice_image`, `seo_image`,
+   * `store_logo`) and returns what holds it, alongside `checked` and
+   * `incomplete`: the places it looked and the two documents no query can search,
+   * a homepage section's untyped `data` and any `<img>` inside content HTML. So
+   * `total: 0` means *nothing known uses this* and never *nothing uses this*, and
+   * the panel can now write exactly that sentence.
+   *
+   * Both routes are allowlisted together and neither is useful alone. `DELETE` is
+   * `wp_delete_attachment($id, true)` — trash bypassed, file unlinked from disk —
+   * and the API deliberately does **not** refuse it for an image in use: a hard
+   * refusal would make a deliberately-unused picture undeletable, so the endpoint
+   * informs and the operator decides. That is only true if the panel asks; the
+   * delete without the usage read would be the unexplained irreversible action
+   * the old comment refused, wearing an allowlist entry.
+   *
+   * `/media/\d+/usage` is a third segment, so it needs its own rule —
+   * `/media/\d+` does not match it — and it is `GET` only. Nothing else under an
+   * attachment is reachable.
    */
   rule("/media", "GET", "POST"),
-  rule("/media/\\d+", "GET", "PATCH"),
+  rule("/media/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/media/\\d+/usage", "GET"),
 
   /*
    * Notifications. **`ac_manage_customers`, not `ac_manage_content`** — which is

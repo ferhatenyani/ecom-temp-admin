@@ -463,6 +463,18 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["media"], "POST").allowed).toBe(true);
     expect(checkAllowed(["media", "4234"], "GET").allowed).toBe(true);
     expect(checkAllowed(["media", "4234"], "PATCH").allowed).toBe(true);
+
+    /*
+     * **The two that were pinned shut below until 2026-08-28.** `DELETE` was
+     * refused because no route told the panel what an attachment was used by;
+     * `GET /media/{id}/usage` is that route, so the pair is allowlisted
+     * together. Neither is useful alone — the delete is
+     * `wp_delete_attachment($id, true)` and the API deliberately does not refuse
+     * it for an image in use, so the panel asking is the only thing standing
+     * between a shopkeeper and an unexplained permanent delete.
+     */
+    expect(checkAllowed(["media", "4234"], "DELETE").allowed).toBe(true);
+    expect(checkAllowed(["media", "4234", "usage"], "GET").allowed).toBe(true);
   });
 
   it("refuses the CMS routes no content screen calls", () => {
@@ -477,14 +489,23 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["cms", "menus", "mobile"], "GET").allowed).toBe(false);
 
     /*
-     * **`DELETE /media/{id}` is absent on purpose.** The route exists and
-     * `ac_manage_content` allows it. Nothing in this API tells the panel what an
-     * attachment is used by — a banner's `image`, a page thumbnail and a
-     * homepage section all reference it with no back-reference anywhere — so the
-     * library cannot say what a delete would break. An irreversible action a
-     * screen cannot explain is worse than one it does not offer.
+     * **`DELETE /media/{id}` was pinned shut here until 2026-08-28** and the
+     * assertion is now the opposite one, above: the route was refused because
+     * nothing in this API told the panel what an attachment was used by, and
+     * `GET /media/{id}/usage` answers that.
+     *
+     * What is asserted here instead is the shape of what was added, which is
+     * the half a widened rule can get wrong. `/media/\d+/usage` is a `GET` and
+     * nothing else — a `DELETE` on the usage read would be a delete at a URL the
+     * API has no route for — and no other third segment under an attachment is
+     * reachable, which is what keeps the new rule from becoming `/media/\d+/.+`
+     * by habit the next time a sub-resource is wanted.
      */
-    expect(checkAllowed(["media", "4234"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["media", "4234", "usage"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["media", "4234", "usage"], "PATCH").allowed).toBe(false);
+    expect(checkAllowed(["media", "4234", "references"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["media", "usage"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["media", "4234", "usage", "1"], "GET").allowed).toBe(false);
 
     // The homepage is replaced whole. There is no section-level route, and PUT
     // is the only write — a PATCH would imply a merge the API does not do.

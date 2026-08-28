@@ -60,6 +60,12 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * handed `tapis-1.jpg` by this file's `wp_unique_filename()` counterpart, and the
  * measured collision trio would stop meaning what it says.
  *
+ * **`DELETE /media/{id}` made that symmetric on 2026-08-28**: a delete destroys
+ * a row *and* unlinks a file, so both sets it writes are rebuilt here. Without
+ * that, the first test to delete an attachment would leave every later one
+ * reading a library one row short — and the 41-item count the media assertions
+ * are written against is the kind of number a whole file quietly depends on.
+ *
  * **Content is where this matters most on the read side, not the write side.**
  * `GET /cms/homepage` carries `meta.problems` only while the stored document
  * still holds the three malformed sections the seed put there — and a successful

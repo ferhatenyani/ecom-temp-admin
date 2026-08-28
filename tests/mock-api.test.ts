@@ -155,7 +155,7 @@ import {
   pageList,
   pageSeo,
 } from "@/lib/api/schemas/cms";
-import { mediaItem, mediaList, mediaSizes } from "@/lib/api/schemas/media";
+import { mediaItem, mediaList, mediaSizes, mediaUsage } from "@/lib/api/schemas/media";
 import {
   ACCEPTED_MIME,
   MAX_BYTES,
@@ -3546,6 +3546,11 @@ describe("MOCK_IDENTITY", () => {
         "/cms/menus/primary",
         "/media",
         "/media/5001",
+        // The usage read is behind the same `$guard` as every other media route,
+        // which matters more here than on the four beside it: it is the one the
+        // delete dialog fires, and a Manager reaching it would be reading which
+        // products and pages a shop has out of a route they cannot list.
+        "/media/5001/usage",
       ]) {
         const response = ask(path);
         expect(response.status, path).toBe(403);
@@ -7714,20 +7719,218 @@ describe("PATCH /media/{id}", () => {
       expect(rawError(response).message).toBe("No media item with that id.");
     }
     expect(rawError(get("/media/abc")).code).toBe("rest_no_route");
+
+    /*
+     * **And `/media/0` from both**, which this file answered `not_found` to
+     * until the delete branch. `\d+` matches `0`, so the request reaches
+     * `idArg()` — `'minimum' => 1` — and is refused as a *parameter* before any
+     * row is looked for. Measured on the usage route; the same `idArg()` guards
+     * all four verbs.
+     */
+    expect(get("/media/0").status).toBe(400);
+    expect(rawError(get("/media/0")).code).toBe("invalid_request");
+    expect(apiError(get("/media/0")).params?.id).toBe("id must be greater than or equal to 1");
+    expect(get("/media/0/usage").status).toBe(400);
+    expect(write("DELETE", "/media/0").status).toBe(400);
+  });
+});
+
+/**
+ * ── `GET /media/{id}/usage`, the read that made the delete explicable ────────
+ *
+ * `DELETE /media/{id}` was off the panel's allowlist and unserved here until
+ * 2026-08-28, for one recorded reason: nothing told a client what an attachment
+ * was *used by*, so the library could not answer "what would this break?". This
+ * route is that answer, and the two shipped together.
+ *
+ * The assertions below are the response's **contract**, not its contents:
+ * `total` counting `references`, `checked` naming all five scopes whatever the
+ * answer is, and `incomplete` naming the two documents no query can search. That
+ * last pair is the load-bearing one — the panel's whole sentence rests on it, and
+ * a `total: 0` without it reads as "safe" rather than as "nothing known".
+ */
+describe("GET /media/{id}/usage", () => {
+  const usage = (id: number) => parse(mediaUsage, get(`/media/${id}/usage`)).data;
+
+  it("answers both states from a cold start, with the two lists on each", () => {
+    const inUse = usage(5001);
+    expect(inUse.total).toBe(inUse.references.length);
+    expect(inUse.total).toBeGreaterThan(0);
+
+    const unused = usage(5002);
+    expect(unused.total).toBe(0);
+    expect(unused.references).toEqual([]);
+
+    /*
+     * **Identical on both**, which is the point: `checked` and `incomplete` are
+     * the qualification on `total`, so they cannot be something a busy answer
+     * carries and an empty one drops. `MediaPresenter::usage()` puts them in
+     * `data` rather than `meta` for exactly that reason.
+     */
+    for (const body of [inUse, unused]) {
+      expect(body.checked).toEqual([
+        "featured_image",
+        "gallery",
+        "option_choice_image",
+        "seo_image",
+        "store_logo",
+      ]);
+      expect(body.incomplete).toEqual(["homepage_section_data", "content_html"]);
+    }
   });
 
   /**
-   * `DELETE /media/{id}` exists at the API and `ac_manage_content` allows it. It
-   * is off the panel's allowlist and unserved here for one reason: nothing tells
-   * a client what an attachment is *used by* — a banner's `image`, a page
-   * thumbnail and a homepage section all reference one with no back-reference
-   * anywhere — so the library cannot answer "what would this break?", and an
-   * irreversible action a screen cannot explain is worse than one it does not
-   * offer.
+   * The seeded reference is the shop's logo, which is **invented** — there is no
+   * settings document in this file to read one out of — and it is what keeps
+   * `store_logo` from being a scope the harness can never demonstrate. `id: 0` is
+   * the API's own spelling for a settings row, and the title is a name rather
+   * than a key, so the panel has something a shopkeeper recognises.
    */
-  it("leaves the delete unreachable", () => {
-    expect(write("DELETE", "/media/5001").status).toBe(404);
-    expect(write("PUT", "/media/5001", { alt: "x" }).status).toBe(404);
+  it("names the settings row with id 0 and a name, never a table", () => {
+    const [reference] = usage(5001).references;
+    expect(reference).toMatchObject({ kind: "settings", id: 0, slot: "store_logo" });
+    expect(reference.title.trim()).not.toBe("");
+  });
+
+  /**
+   * **The answer is scanned, not tabulated**, so it moves when something writes.
+   * `PATCH /cms/banners/{id} {"image_id": …}` is a path the panel really takes,
+   * and a fixture table would have let this file report a reference that
+   * `GET /cms/banners` contradicts.
+   */
+  it("reports a banner that a write has just pointed at the attachment", () => {
+    expect(usage(5003).total).toBe(0);
+    expect(write("PATCH", "/cms/banners/7301", { image_id: 5003 }).status).toBe(200);
+
+    const after = usage(5003);
+    expect(after.total).toBe(1);
+    expect(after.references[0]).toMatchObject({
+      kind: "banner",
+      id: 7301,
+      slot: "featured_image",
+    });
+    /*
+     * **The title arrives texturized**, because it is `post_title` read straight
+     * out of the database — the same reason `MediaDrawer` decodes an
+     * attachment's own title. Asserted here so the panel cannot quietly stop
+     * decoding it and render `Soldes d&#8217;été` in a delete warning.
+     */
+    expect(after.references[0].title).toContain("&#8217;");
+  });
+
+  /**
+   * Both refusals, and the second is the interesting one: a page id is a post id
+   * this endpoint happily reports as a *reference* and must refuse as a
+   * *subject*. The media library is not a way to read the posts table.
+   */
+  it("refuses an unknown id and a post id that is not an attachment", () => {
+    for (const path of ["/media/99999999/usage", "/media/7301/usage"]) {
+      const response = get(path);
+      expect(response.status, path).toBe(404);
+      expect(rawError(response).code).toBe("not_found");
+      expect(rawError(response).message).toBe("No media item with that id.");
+    }
+  });
+
+  it("is a GET at that address and nothing else is an address at all", () => {
+    expect(write("DELETE", "/media/5001/usage").status).toBe(404);
+    expect(write("POST", "/media/5001/usage").status).toBe(404);
+    expect(get("/media/5001/references").status).toBe(404);
+    expect(get("/media/5001/usage/1").status).toBe(404);
+  });
+});
+
+/**
+ * ── `DELETE /media/{id}` — permanent, and deliberately unconditional ─────────
+ *
+ * `MediaRepository::delete()` is `wp_delete_attachment($id, true)`: the trash is
+ * bypassed, the row goes, and the file and every generated size are unlinked from
+ * disk.
+ *
+ * **It is not refused for an image in use**, and that is the contract rather than
+ * an omission — a hard refusal would make a deliberately-unused picture
+ * undeletable. `usage()` is where the check lives, the panel asks once when a
+ * person opens the dialog, and the operator decides. A mock that refused would be
+ * the stricter direction and would teach a screen to render a 409 this API never
+ * sends.
+ */
+describe("DELETE /media/{id}", () => {
+  it("answers {id, deleted} and takes the row out of the collection", () => {
+    const before = parseList(mediaList, get("/media", "per_page=1")).meta.total;
+
+    const response = write("DELETE", "/media/5002");
+    expect(response.status).toBe(200);
+    expect((response.body as { data: unknown }).data).toEqual({ id: 5002, deleted: true });
+
+    expect(parseList(mediaList, get("/media", "per_page=1")).meta.total).toBe(before - 1);
+    // Nothing is recoverable and nothing is at the same URL, so "deleted" would
+    // not be true of the only thing anyone can reach.
+    expect(get("/media/5002").status).toBe(404);
+    expect(write("DELETE", "/media/5002").status).toBe(404);
+  });
+
+  it("deletes an attachment the shop is using, because the API does", () => {
+    expect(parse(mediaUsage, get("/media/5001/usage")).data.total).toBeGreaterThan(0);
+    expect(write("DELETE", "/media/5001").status).toBe(200);
+    expect(get("/media/5001").status).toBe(404);
+  });
+
+  /**
+   * **`wp_delete_attachment()` deletes the `_thumbnail_id` rows pointing at the
+   * attachment, and only those**, so a banner whose picture is deleted reads back
+   * `image: null` rather than an object whose URL now answers 404. Core does not
+   * clean `_product_image_gallery`, `_ac_option_set` or `_ac_seo_image_id`, and a
+   * dangling id in those is what the shop really has — so nothing here cleans
+   * them either.
+   */
+  it("clears the featured image of anything that pointed at it", () => {
+    expect(write("PATCH", "/cms/banners/7301", { image_id: 5003 }).status).toBe(200);
+    const withImage = parseList(bannerList, get("/cms/banners", "per_page=100")).data;
+    expect(withImage.find((banner) => banner.id === 7301)?.image?.id).toBe(5003);
+
+    expect(write("DELETE", "/media/5003").status).toBe(200);
+    const after = parseList(bannerList, get("/cms/banners", "per_page=100")).data;
+    expect(after.find((banner) => banner.id === 7301)?.image).toBeNull();
+  });
+
+  /**
+   * **The file goes too.** A mock that dropped the row and kept serving the bytes
+   * would be the more forgiving direction, and a grid still showing the picture
+   * would look exactly like a screen that was working.
+   */
+  it("unlinks the file, and frees its name for the next upload", async () => {
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", () => done()));
+    const port = (server.address() as { port: number }).port;
+    const fetchTile = (url: string) => fetch(`http://127.0.0.1:${port}${new URL(url).pathname}`);
+
+    try {
+      // Row 0 of the measured collision trio: `real.jpg`, which is also the name
+      // `wp_unique_filename()` hands back once nothing holds it.
+      const { data } = parse(mediaItem, get("/media/5001"));
+      expect(data.filename).toBe("real.jpg");
+      expect((await fetchTile(data.url)).status).toBe(200);
+
+      expect(write("DELETE", "/media/5001").status).toBe(200);
+      expect((await fetchTile(data.url)).status).toBe(404);
+
+      /*
+       * And the name is free. `wp_unique_filename()` asks the filesystem, not
+       * the posts table, and the delete unlinked the file — so uploading
+       * `real.jpg` into this shop now stores `real.jpg` rather than `real-3.jpg`.
+       * Read out of `wp_delete_attachment()` rather than measured, and flagged
+       * as such at `uniqueMediaFilename`.
+       */
+      const created = parse(mediaItem, uploadFile("real.jpg", REAL_JPEG));
+      expect(created.data.filename).toBe("real.jpg");
+      // Which means the URL answers again, with the new bytes rather than a 404
+      // left over from the row that used to own the name.
+      const reused = await fetchTile(created.data.url);
+      expect(reused.status).toBe(200);
+      expect(Buffer.from(await reused.arrayBuffer())).toEqual(REAL_JPEG);
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
   });
 });
 

@@ -68,3 +68,68 @@ export const mediaItem = z.looseObject({
 export type MediaItem = z.infer<typeof mediaItem>;
 
 export const mediaList = z.array(mediaItem);
+
+/**
+ * One thing that holds an attachment id, from `GET /media/{id}/usage`.
+ *
+ * **Every string in here is an open vocabulary and none of them is an enum**,
+ * which is the whole reason this is written out rather than tightened:
+ *
+ *   `kind`  `MediaUsageRepository::KINDS` maps four post types onto a word and
+ *           falls through to **the raw post type** for anything else — the
+ *           repository deliberately does not filter by type, because
+ *           `_thumbnail_id` is WordPress's own key and `_ac_seo_image_id` is
+ *           written for any post id, so restricting the query would silently
+ *           miss a fifth kind. An enum of the five words measured today would
+ *           throw the day a plugin sets a featured image on a post type nobody
+ *           here has heard of, which is precisely the case the endpoint was
+ *           built to surface.
+ *
+ *   `slot`  the five `SCOPES` today, and the docblock above them says the list
+ *           is what the repository "actually searches" — a sixth store is a
+ *           backend change, not a breaking one.
+ *
+ * The panel translates what it recognises and prints what it does not, which is
+ * the `providerLabel` rule (DECISIONS.md's standing table) reaching a slot name.
+ */
+export const mediaReference = z.looseObject({
+  kind: z.string(),
+  /** `0` for the shop's logo: settings live in an option and have no row id. */
+  id: z.number(),
+  /** Never empty — the API substitutes `#{id}` for an untitled draft. */
+  title: z.string(),
+  slot: z.string(),
+});
+export type MediaReference = z.infer<typeof mediaReference>;
+
+/**
+ * `GET /media/{id}/usage` — measured 2026-08-28.
+ *
+ * ```jsonc
+ * {"total": 1,
+ *  "references":[{"kind":"product","id":4849,"title":"Imported Lamp","slot":"featured_image"}],
+ *  "checked":["featured_image","gallery","option_choice_image","seo_image","store_logo"],
+ *  "incomplete":["homepage_section_data","content_html"]}
+ * ```
+ *
+ * **`checked` and `incomplete` are the qualification on `total`, not
+ * decoration**, and a client that dropped them would turn "no *known* uses" into
+ * "no uses". `MediaPresenter::usage()` puts them in `data` rather than `meta` for
+ * exactly that reason.
+ *
+ * `incomplete` is **not** a fixed pair. It starts as `UNSEARCHABLE` —
+ * `homepage_section_data` and `content_html`, the two documents no query can
+ * search — and `MediaUsageRepository::find()` *appends a scope name* to it when
+ * that scope's query hits `MAX_MATCHES` (100). So a value already in `checked`
+ * can appear in `incomplete` too, meaning "searched, and the answer is
+ * truncated". `z.array(z.string())` is what lets both facts through; a union of
+ * the two literals measured today would throw on an attachment held by 100
+ * products, which is the one case where being wrong about `total` matters most.
+ */
+export const mediaUsage = z.looseObject({
+  total: z.number(),
+  references: z.array(mediaReference),
+  checked: z.array(z.string()),
+  incomplete: z.array(z.string()),
+});
+export type MediaUsage = z.infer<typeof mediaUsage>;

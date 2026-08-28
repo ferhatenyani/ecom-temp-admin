@@ -7,6 +7,13 @@ import {
   formatBytes,
   precheck,
 } from "@/lib/media";
+import {
+  MEDIA_ORDERS,
+  listParams,
+  queryFromParams,
+  toUrlParams,
+  type MediaOrder,
+} from "@/app/[locale]/(panel)/media/query";
 
 /**
  * The upload taxonomy, and the correction that produced it.
@@ -158,5 +165,59 @@ describe("byte counts for a person", () => {
     // The digits are whatever the locale asks for; the assertion is that a
     // locale the panel actually ships does not fall over.
     expect(formatBytes(1_572_864, "ar-DZ")).toMatch(/Mo$/);
+  });
+});
+
+/**
+ * ── The library's URL state, and the four orders that ship ───────────────────
+ *
+ * `orderby` measured 2026-08-28 against the live API: `date asc` differs from
+ * the resting order, `date desc` is byte-identical to the bare listing, and
+ * `title` — unprovable in August while 42 of 43 rows shared the title "Tapis" —
+ * was proved in both directions once five rows spread across the id range were
+ * renamed to titles whose alphabetical order matches neither their ids nor their
+ * dates.
+ *
+ * What these pin is the panel's half: that the chip a reader sees, the URL they
+ * can share and the request that is sent are three views of one value. That is
+ * the property `mediaKey` depends on, and a screen whose chip disagrees with its
+ * own request is a screen that lies about the state it is in.
+ */
+describe("the media library's sort", () => {
+  it("round-trips every order through the URL", () => {
+    for (const order of MEDIA_ORDERS) {
+      const query = { search: "tapis", order };
+      expect(queryFromParams(toUrlParams(query))).toEqual(query);
+    }
+  });
+
+  it("asks for the pair the chip means, and asks for nothing at rest", () => {
+    const read = (order: MediaOrder) => {
+      const params = listParams({ search: "", order }, 1);
+      return [params.get("orderby"), params.get("order")];
+    };
+
+    // The resting order sends no `orderby` at all: `date desc` was measured
+    // byte-identical to the bare listing, so asking for it explicitly is a
+    // parameter that changes nothing in every URL for ever.
+    expect(read("newest")).toEqual([null, null]);
+    expect(read("oldest")).toEqual(["date", "asc"]);
+    expect(read("az")).toEqual(["title", "asc"]);
+    expect(read("za")).toEqual(["title", "desc"]);
+  });
+
+  it("falls back to resting for a sort the chips could not show", () => {
+    // `id` sorts at the API and is deliberately not offered — id order and date
+    // order are the same fact on this collection. A hand-edited `?orderby=id` is
+    // a legal 200 no chip could represent afterwards, so it resolves to rest
+    // rather than leaving the group with nothing highlighted.
+    expect(queryFromParams(new URLSearchParams("orderby=id&order=asc")).order).toBe("newest");
+    // And `?orderby=zzz` is a measured 400, which a URL must not be able to
+    // provoke into an error screen.
+    expect(queryFromParams(new URLSearchParams("orderby=zzz")).order).toBe("newest");
+    // A missing `order` is `desc`, which is `MediaController::indexArgs()`' own
+    // default — so `?orderby=title` alone is Z→A rather than half a state.
+    expect(queryFromParams(new URLSearchParams("orderby=title")).order).toBe("za");
+    expect(queryFromParams(new URLSearchParams("order=asc")).order).toBe("oldest");
   });
 });
