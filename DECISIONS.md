@@ -1525,10 +1525,11 @@ to press.
 
 ### Not shipped, each absence recorded
 
-- **No delete.** The route exists and the capability allows it;
+- ~~**No delete.** The route exists and the capability allows it;
   `lib/api/allowlist.ts:266-273` refuses it and `tests/boundary.test.ts:487` pins
   it shut, because an attachment has no back-reference anywhere in this API and
-  the panel cannot say what a delete would break. Not rendered, not disabled.
+  the panel cannot say what a delete would break. Not rendered, not disabled.~~
+  **Corrected 2026-08-28 — the API grew the back-reference; see below.**
 - ~~**No sorting, no `aria-sort` anywhere.** The only control taken on `orderby`
   is negative (`rand` → 400) and `date desc` is the resting order, so the
   standing rule's positive control does not exist.~~ **Corrected 2026-08-28 —
@@ -1570,14 +1571,16 @@ search=""                       43 of 43     absence
 search + per_page=1             200, meta.total 1   combines with paging
 ```
 
-- **Sort ships on `date` only, two directions.** Not `id`: it sorts, and on this
+- **Sort ships on `date`, two directions.** Not `id`: it sorts, and on this
   collection id order and date order are the same fact, so a second control would
   be two spellings of one answer — chrome on a band that costs the same as a
-  control which means something. Not `title`: unprovable on the only fixture that
-  exists, and unmeasured stays broken. **The measurement `title` still needs** is
-  a fixture with distinct titles — three or more rows sorting differently from
-  both their ids and their dates — then `orderby=title&order=asc` against the bare
-  listing. Recorded in `media/query.ts`, which carries every request above.
+  control which means something. ~~Not `title`: unprovable on the only fixture
+  that exists, and unmeasured stays broken. **The measurement `title` still
+  needs** is a fixture with distinct titles — three or more rows sorting
+  differently from both their ids and their dates — then `orderby=title&order=asc`
+  against the bare listing.~~ **Corrected 2026-08-28 — the fixture was built and
+  the measurement taken; see below.** Recorded in `media/query.ts`, which carries
+  every request above.
 - **The resting order sends no `orderby` at all**, the way every other list's
   first tab sends nothing. `date desc` was measured byte-identical to the bare
   listing, so asking for it explicitly is a parameter that changes nothing in
@@ -1618,6 +1621,104 @@ search + per_page=1             200, meta.total 1   combines with paging
 - **`loading.tsx` grew the band**, drawn from `.ui-chip` and `.ui-field`'s own
   utilities so it matches at 36px on a pointer and 44px on touch rather than only
   on a laptop.
+
+### A→Z and delete, both shipped 2026-08-28 against a ledger that was stale
+
+Two entries above are struck. Neither was wrong when it was written; both stopped
+being true, one because somebody built the fixture and one because the API grew a
+route. That is the same lesson §3.7's amendment carries: *"unmeasured is treated
+as broken" is a holding position, and so is "the API cannot answer this".*
+
+**Four sort chips, extended from two.** `title` was unprovable while 42 of 43 rows
+were titled "Tapis". Five rows spread across the id range were renamed to titles
+whose alphabetical order matches neither their ids nor their dates, measured, and
+the originals restored:
+
+```
+title asc  -> 761, 3035, 1658, 4234, 4    exactly alphabetical, differs from the
+                                          bare listing
+title desc -> 4, 4234, 1658, 3035, 761    the exact reverse
+```
+
+That is a positive control on the axis itself in both directions, which is more
+than `date` has — `date desc` **is** the resting order and can only be proved by
+its opposite differing. So: newest · oldest · A→Z · Z→A, four flat chips in the
+existing labelled group, because each is a complete answer to "in what order" and
+one of the four combinations a field-plus-direction pair would offer (`id`) does
+not ship. Resting is still **no `orderby` at all**. The toolbar band does not
+change height — the group scrolls rather than wraps — so `loading.tsx` grew two
+pills and a scroll container and nothing else. Measured: 86px at 1440, both
+before and after; page overflow 0 at 340 in `fr` and `ar`.
+
+**Delete, and `GET /media/{id}/usage` is the reason it is now explicable.**
+`MediaUsageRepository` reads the five stores this codebase can put an attachment
+id in and reports `checked` and `incomplete` beside `total`:
+
+```jsonc
+{"total": 1,
+ "references":[{"kind":"product","id":4849,"title":"Imported Lamp","slot":"featured_image"}],
+ "checked":["featured_image","gallery","option_choice_image","seo_image","store_logo"],
+ "incomplete":["homepage_section_data","content_html"]}
+// 404 not_found for an unknown id **and for a post id that is not an attachment**
+// 400 invalid_request on id=0; 401; ac_manage_content
+```
+
+- **`DELETE` is permanent** — `wp_delete_attachment($id, true)` — and is
+  deliberately **not** refused for an image in use: a hard refusal would make a
+  deliberately-unused picture undeletable, so the endpoint informs and the
+  operator decides. The mock reproduces that rather than inventing a 409.
+- **Header `Menu` → `ConfirmDialog`, the coupons shape**, with the **filename**
+  typed. §3.1's identifier rule, and unlike the content branch's texturized titles
+  a filename is typeable — `UploadPolicy::storedFilename()` emits `[a-z0-9-]` and
+  a dot. Driven: disabled before typing, disabled on a wrong string, live on the
+  filename; Cancel takes initial focus; Escape returns focus to the menu trigger
+  and leaves the drawer open.
+- **The dialog fetches usage when it opens**, with all four states on screen —
+  checking, could-not-check, none known, and a list. A failed read renders a
+  `role="alert"` `Notice` carrying the API's own sentence and **leaves the confirm
+  live**, because the API does not refuse either.
+- **The copy says *known*.** `total: 0` reads "no known use of this file", never
+  "safe", and one line beside every state says that a picture placed inside page
+  content or inside a homepage section cannot be seen from here — `ContentHtml`
+  permits `<img>`, so an embedded image is a URL and not an id. `kind` and `slot`
+  are translated where the panel has a word and printed raw where it does not:
+  `MediaUsageRepository::KINDS` falls through to the raw post type on purpose, so
+  an enum at the boundary would throw on the fifth kind the endpoint exists to
+  surface.
+- **A reference `title` is `post_title` read straight out of the database**, so it
+  arrives texturized and goes through `decodeEntities` like every other title in
+  this drawer. Found in the harness, not reasoned about.
+- **Three defects the browser found and the code did not.** The invalidation after
+  a delete re-asked `GET /media/{id}` and `GET /media/{id}/usage` for the row that
+  had just stopped existing — two 404s in the console, every time — because a
+  `setState` has not re-rendered when an invalidation on the next line runs.
+  Pressing **back** onto the `?peek=` the delete navigated away from re-opened a
+  drawer on the deleted file out of cache. And deleting the only row on a page
+  left the reader on "no files yet" over a library of forty. A `deleted` set, a
+  library-only invalidation and a one-step page-back close all three; the usage
+  query's key sits outside the `media` prefix for the same reason.
+- **The mock's honesty audit found one of its own.** `wp_delete_attachment()`
+  deletes the `_thumbnail_id` rows pointing at the attachment and **only** those,
+  so a banner whose picture is deleted reads back `image: null`; the mock froze the
+  resolved object at write time and kept serving a thumbnail URL that now 404s.
+  Fixed, and the gallery and option-set ids are deliberately left dangling because
+  that is what the shop really has. `MEDIA_LOGO_ID` and the shop name beside it are
+  **invented** and flagged at their site — there is no settings document in the
+  mock to read a logo from, and without one `store_logo` is a scope the harness
+  could never demonstrate.
+
+Verified in Chromium against the harness: 12/12 captures clean on `/media`; the
+whole delete flow with **zero** console errors and zero failed requests; the count
+41 → 40; `?peek=` cleared; a `Toast`, not a banner; `ar` renders the dialog in
+Arabic with no key on screen. i18n **1 902 keys in each file, exact parity** —
+27 added, `sort.asc` and `sort.desc` removed for losing their last caller.
+
+**Where the brief was wrong, and it is small.** It gives `kind` as a five-value
+enum; `MediaUsageRepository::KINDS` falls through to the raw post type for
+anything else, and `incomplete` is not the fixed pair either — `find()` appends a
+*scope* name to it when that scope hits `MAX_MATCHES` (100), so a value in
+`checked` can appear in `incomplete` too. Both are parsed as open vocabularies.
+The brief also omits the delete's own body, `{"id": <id>, "deleted": true}`.
 
 ### Two boundary defects the harness audit surfaced, both `MediaPresenter`
 

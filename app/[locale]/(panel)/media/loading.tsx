@@ -24,6 +24,12 @@ import { Skeleton } from "@/components/ui/Skeleton";
  * short and push the entire grid down the moment the real header landed — which
  * is precisely the failure `loading.tsx` exists to prevent.
  *
+ * The sort group went from two pills to four on 2026-08-28, when `orderby=title`
+ * got the fixture it needed. **The band's height did not move**, because the
+ * chip group scrolls rather than wraps — so what changed here is the number of
+ * pills and the scroll container that keeps them from widening the page, not any
+ * measurement below them.
+ *
  * The two bands are drawn from the real controls' own utilities rather than from
  * heights that happen to look close: `min-h-9 ui-chip` is what `FilterTabs`
  * gives a pill and `ui-field` is what `SearchField` gives its box, so both match
@@ -54,14 +60,26 @@ export default async function MediaLoading() {
         toolbar={
           <div className="flex flex-col gap-3">
             {/* The sort group: its visible label at `--text-label`'s own line
-                box, then the two pills at the height `.ui-chip` gives them. */}
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-4.5 w-8" />
-              {/* `gap-1` between the pills and `gap-2` after the label, which is
-                  `FilterTabs`'s own pair of gaps in its `chips` shape. */}
-              <div className="flex items-center gap-1">
-                <Skeleton className="ui-chip min-h-9 w-28 rounded-ui-md" />
-                <Skeleton className="ui-chip min-h-9 w-28 rounded-ui-md" />
+                box, then the four pills at the height `.ui-chip` gives them. */}
+            <div className="flex min-w-0 items-center gap-2">
+              <Skeleton className="h-4.5 shrink-0 w-8" />
+              {/*
+                `gap-1` between the pills and `gap-2` after the label, which is
+                `FilterTabs`'s own pair of gaps in its `chips` shape.
+
+                **`overflow-x-auto` and `shrink-0` are load-bearing now that
+                there are four.** Four 112px pills plus their gaps is 460px, well
+                past the 340px floor, and a plain flex row would push the page
+                itself sideways — the one thing §8 forbids outright. The real
+                control scrolls instead of wrapping, for the same reason, so
+                copying its `ui-tabs-scroll` here keeps the band exactly one row
+                tall at every width and keeps this file matching first paint.
+              */}
+              <div className="ui-tabs-scroll flex min-w-0 items-center gap-1 overflow-x-auto">
+                <Skeleton className="ui-chip min-h-9 w-28 shrink-0 rounded-ui-md" />
+                <Skeleton className="ui-chip min-h-9 w-28 shrink-0 rounded-ui-md" />
+                <Skeleton className="ui-chip min-h-9 w-20 shrink-0 rounded-ui-md" />
+                <Skeleton className="ui-chip min-h-9 w-20 shrink-0 rounded-ui-md" />
               </div>
             </div>
             {/*

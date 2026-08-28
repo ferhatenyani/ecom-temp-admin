@@ -1528,13 +1528,44 @@
     "clearSearch": "Effacer la recherche",
     "sortLabel": "Tri",
     "sort": {
-      "desc": "Plus récents",
-      "asc": "Plus anciens"
+      "newest": "Plus récents",
+      "oldest": "Plus anciens",
+      "az": "A → Z",
+      "za": "Z → A"
     },
     "loading": "Chargement",
     "refresh": "Actualiser",
     "save": "Enregistrer",
     "saved": "Fichier enregistré.",
+    "delete": {
+      "menuLabel": "Actions sur le fichier",
+      "action": "Supprimer le fichier",
+      "title": "Supprimer ce fichier ?",
+      "permanent": "La suppression est définitive : le fichier est retiré du serveur et ne peut pas être restauré.",
+      "checking": "Vérification des utilisations connues…",
+      "checkFailedTitle": "Utilisations non vérifiées",
+      "checkFailed": "Impossible de vérifier ce qui utilise ce fichier. La suppression reste possible, mais rien ici ne dit ce qu’elle casserait.",
+      "noKnownUses": "Aucune utilisation connue de ce fichier.",
+      "knownUses": "{count, plural, one {# utilisation connue :} other {# utilisations connues :}}",
+      "unsearchable": "Une image placée dans le contenu d’une page ou dans une section de la page d’accueil ne peut pas être vue d’ici.",
+      "typeFilename": "Saisissez « {filename} » pour confirmer.",
+      "done": "Fichier supprimé.",
+      "failed": "La suppression a échoué.",
+      "kind": {
+        "product": "Produit",
+        "variation": "Déclinaison",
+        "page": "Page",
+        "banner": "Bannière",
+        "settings": "Réglages de la boutique"
+      },
+      "slot": {
+        "featured_image": "Image principale",
+        "gallery": "Galerie",
+        "option_choice_image": "Image d’une option",
+        "seo_image": "Image de partage",
+        "store_logo": "Logo de la boutique"
+      }
+    },
     "upload": "Téléverser",
     "uploaded": "Fichier téléversé.",
     "uploadTitle": "Téléverser une image",

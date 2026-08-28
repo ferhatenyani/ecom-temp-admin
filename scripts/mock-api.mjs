@@ -5906,6 +5906,19 @@ const state = {
   createdMedia: [],
   nextMediaId: 0,
   /**
+   * The ids `DELETE /media/{id}` has removed, and the filenames it took with
+   * them.
+   *
+   * Two sets rather than one, because the delete is `wp_delete_attachment($id,
+   * true)` and it destroys **two** things: the row, which `mediaRows()` stops
+   * listing, and the file on disk, which `/wp-content/uploads/…` must stop
+   * answering for. A mock that dropped only the row would keep serving the bytes
+   * of a picture the shop has unlinked — the *more forgiving* direction, and the
+   * one a screen showing a stale tile would look correct against.
+   */
+  deletedMedia: new Set(),
+  deletedFiles: new Set(),
+  /**
    * `filename` → the bytes an upload sent, so `/wp-content/uploads/…` can answer
    * with them. Without this a freshly uploaded tile is the one broken box in a
    * grid of working ones, which is the state a screen is least likely to be
@@ -5975,6 +5988,8 @@ export function resetState() {
   state.nextMenuItemId = 4400;
   state.media = new Map();
   state.createdMedia = [];
+  state.deletedMedia = new Set();
+  state.deletedFiles = new Set();
   // Clear of the 41 seeded ids (5001-5041) and fixed rather than derived, which
   // is what keeps a screenshot of a just-uploaded tile byte-stable.
   state.nextMediaId = 5120;
@@ -11302,11 +11317,12 @@ function putMenu(location, body) {
  *                  suffix (`real.jpg`, `real-1.jpg`, `real-2.jpg`) with the
  *                  extension from the *sniffed* type; `ac_manage_content` guards
  *                  the **reads** as well as the writes, so a Manager is 403 on
- *                  `GET /media`; `DELETE /media/{id}` exists at the API and is
- *                  deliberately off the panel's allowlist; and the five upload
- *                  refusals recorded in lib/media.ts:18-23 with their codes and
- *                  their `details` keys, the size floor firing **before** the
- *                  sniffer.
+ *                  `GET /media`; the five upload refusals recorded in
+ *                  lib/media.ts:18-23 with their codes and their `details` keys,
+ *                  the size floor firing **before** the sniffer; and, on
+ *                  2026-08-28, the whole of `GET /media/{id}/usage` — its body,
+ *                  both its lists, its two 404s and its 400 on `id=0`. See the
+ *                  usage block below.
  *
  *   **read out of the backend, not measured over the wire** every status,
  *                  sentence and enum below traces to a file in
@@ -11322,12 +11338,16 @@ function putMenu(location, body) {
  *                  shared `paginate()` because both callers send `per_page` and
  *                  `page` and read `total`.
  *
- *   **invented**   flagged at each site, and there are four: the `detected` mime
+ *   **invented**   flagged at each site, and there are six: the `detected` mime
  *                  for every non-image (only `application/pdf` is measured); the
- *                  fields `?search=` matches; the tie-break inside a sort; and
- *                  the resting order, which is newest first here and is what
+ *                  fields `?search=` matches; the tie-break inside a sort; the
+ *                  resting order, which is newest first here and is what
  *                  `orderby=date&order=desc` implies rather than something
- *                  anyone watched.
+ *                  anyone watched; and, on the delete branch, `MEDIA_LOGO_ID`
+ *                  with the shop name beside it — there is no settings document
+ *                  in this file to read a logo out of, and without it
+ *                  `store_logo` would be a scope nothing here could ever
+ *                  demonstrate.
  *
  * **Two fallbacks in the backend are unreachable and are reproduced as
  * unreachable.** `MediaRepository::paginate()` silently falls back to `date` for
@@ -11338,11 +11358,12 @@ function putMenu(location, body) {
  * exactly what the coupons branch got wrong in reverse.
  */
 
-/** Every attachment this process can see, seeded and uploaded. */
-const mediaRows = () => [
-  ...state.createdMedia.map((id) => state.media.get(id)),
-  ...MEDIA_SEED.map((row) => state.media.get(row.id) ?? row),
-];
+/** Every attachment this process can see, seeded and uploaded, minus the deleted. */
+const mediaRows = () =>
+  [
+    ...state.createdMedia.map((id) => state.media.get(id)),
+    ...MEDIA_SEED.map((row) => state.media.get(row.id) ?? row),
+  ].filter((row) => row !== undefined && !state.deletedMedia.has(row.id));
 
 /** `MediaRepository::ORDERBY`. `order` is the file-wide `SORT_DIRECTIONS`. */
 const MEDIA_ORDERBY = ["date", "title", "id"];
@@ -11568,6 +11589,213 @@ function patchMedia(current, body) {
   return ok(next);
 }
 
+/* ------------------------------------------------------------ media usage --- */
+
+/**
+ * ── `GET /media/{id}/usage`, and what this file can and cannot answer ────────
+ *
+ * `MediaUsageRepository` reads five stores and reports what holds an attachment
+ * id, so the panel's delete dialog can say what a permanent delete would break.
+ * Its two lists are the contract: `checked` names where it looked, `incomplete`
+ * names where nothing can look, and together they are what stops `total: 0`
+ * being read as "safe".
+ *
+ *   **measured** the response shape, the two lists' contents, `kind` ∈
+ *                `product · variation · page · banner · settings`, `slot` ∈ the
+ *                five `SCOPES`, `settings` carrying `id: 0`, and both refusals:
+ *                404 `not_found` for an unknown id **and for a post id that is
+ *                not an attachment**, 400 `invalid_request` on `id=0`.
+ *
+ *   **read out of the backend** that the repository decides a gallery by
+ *                splitting the comma list and an option set by decoding the
+ *                document — the SQL `LIKE` only narrows — so `12` never reports
+ *                `120`. Reproduced below by comparing values rather than
+ *                substrings, which is the same property from the other side.
+ *
+ *   **invented, and flagged at each site**: `MEDIA_LOGO_ID` (this shop has no
+ *                settings document here to read a logo out of); and the *order*
+ *                of `references`, which the repository leaves to `ORDER BY
+ *                pm.post_id` per scope and which is therefore per-store here
+ *                rather than globally sorted.
+ *
+ * **Two of the five scopes have no store in this file and cannot be found by
+ * scanning**: `seo_image` is a post meta key this mock does not model — the
+ * `seo` block it serves on a page and a product is derived text with no image id
+ * in it — and `store_logo` lives in a settings document no route here serves.
+ * `checked` still names all five, because that is what the API reports and the
+ * panel's sentence is built on it; what changes is only that no scan can produce
+ * a hit in those two. The seeded logo below is what keeps `store_logo` from
+ * being a scope this file can never demonstrate at all.
+ */
+
+/**
+ * **Invented.** The shop's logo is `ac_client_settings['store']['logo_id']` and
+ * there is no settings route in this file to read it from — so one attachment is
+ * declared to be it, and that is the fixture the delete dialog's *in use* state
+ * is built on.
+ *
+ * Everything else in the library is genuinely unused, so 5002 and its forty
+ * neighbours are the *not in use* fixture without anyone declaring anything.
+ * Both states exist from a cold start, which is what the panel needs; the
+ * scanned stores below then make the answer move when something writes.
+ */
+const MEDIA_LOGO_ID = 5001;
+
+/**
+ * **Invented, and it is the reference's `title`.**
+ *
+ * `MediaUsageRepository::storeLogo()` titles the settings reference with
+ * `SettingsRepository::storeName()` so the panel can write "the logo of <shop>"
+ * rather than naming a table, and falls back to the English `'Store settings'`
+ * for a shop that has not set one. There is **no settings route in this file**,
+ * so there is no name to read: this is a plausible one for the shop the rest of
+ * these fixtures describe. It is a name, never a key — the fallback string would
+ * put English chrome on a French screen and hide that this was made up.
+ */
+const MOCK_STORE_NAME = "Boutique artisanale";
+
+/** `MediaUsageRepository::SCOPES`, verbatim and in its own order. */
+const MEDIA_USAGE_SCOPES = [
+  "featured_image",
+  "gallery",
+  "option_choice_image",
+  "seo_image",
+  "store_logo",
+];
+
+/**
+ * `MediaUsageRepository::UNSEARCHABLE`, verbatim.
+ *
+ * `homepage_section_data` is the homepage document — a section's `data` has no
+ * schema per type, so `{"type":"hero","data":{"image_id":5001}}` is a valid,
+ * stored, unfindable reference, and this file's own `HOMEPAGE_SEED` contains
+ * exactly that shape. `content_html` is the same problem one level down:
+ * `ContentHtml::ALLOWED` permits `<img>`, so an image in body text is a URL.
+ *
+ * **Both are unconditional**, and `find()` *appends* a scope name to this list
+ * when that scope's query hits `MAX_MATCHES` (100). Nothing in this shop is held
+ * by a hundred products, so the append is unreachable here — reproduced as
+ * unreachable rather than dropped, the same way the two backend fallbacks above
+ * `mediaListing` are.
+ */
+const MEDIA_UNSEARCHABLE = ["homepage_section_data", "content_html"];
+
+/** `MediaUsageRepository::reference()` — four keys, in its own order. */
+const usageRef = (kind, id, title, slot) => ({
+  kind,
+  id,
+  // A variation and a draft can both have an empty title, and "" is not
+  // something a shopkeeper can identify in a warning.
+  title: String(title ?? "").trim() || `#${id}`,
+  slot,
+});
+
+/**
+ * Every place in *this* file that holds an attachment id, scanned.
+ *
+ * Scanned rather than tabulated, deliberately: a table would let the mock report
+ * a reference that `GET /products/{id}` contradicts, which is the one failure a
+ * fixture for this endpoint must not have. `PATCH /cms/banners/{id}
+ * {"image_id": 5001}` is a path the panel really takes, and the answer here moves
+ * when it does.
+ */
+function mediaUsageOf(id) {
+  const references = [];
+
+  for (const product of catalogue()) {
+    if (product.image_id === id) {
+      references.push(usageRef("product", product.id, product.name, "featured_image"));
+    }
+    // Compared as ids, never as a substring of the joined list — `12` must not
+    // report `120`, which is what the repository's split is for.
+    if ((product.gallery_image_ids ?? []).includes(id)) {
+      references.push(usageRef("product", product.id, product.name, "gallery"));
+    }
+    const groups = product.options?.groups ?? [];
+    const inChoice = groups.some((group) =>
+      (group.choices ?? []).some((choice) => choice.image_id === id),
+    );
+    if (inChoice) {
+      references.push(usageRef("product", product.id, product.name, "option_choice_image"));
+    }
+  }
+
+  for (const variation of variationRows()) {
+    if (variation.image_id === id) {
+      references.push(usageRef("variation", variation.id, variation.name, "featured_image"));
+    }
+  }
+
+  for (const page of allPages()) {
+    if (page.image?.id === id) {
+      references.push(usageRef("page", page.id, page.title, "featured_image"));
+    }
+  }
+
+  for (const banner of bannerRows()) {
+    if (banner.image?.id === id) {
+      references.push(usageRef("banner", banner.id, banner.title, "featured_image"));
+    }
+  }
+
+  // `id: 0` — settings live in an option and have no row id, which is the same
+  // spelling the audit trail uses for them.
+  if (id === MEDIA_LOGO_ID) {
+    references.push(usageRef("settings", 0, MOCK_STORE_NAME, "store_logo"));
+  }
+
+  return {
+    total: references.length,
+    references,
+    checked: MEDIA_USAGE_SCOPES,
+    incomplete: MEDIA_UNSEARCHABLE,
+  };
+}
+
+/**
+ * `MediaService::delete()` — permanent and **unconditional**.
+ *
+ * It does not consult `usage()`, and that is the contract rather than an
+ * omission: a hard refusal would make a deliberately-unused picture undeletable,
+ * so the endpoint informs through `/usage` and the operator decides. A mock that
+ * refused a delete for an image in use would be the *stricter* direction and
+ * would teach a screen to render a 409 this API never sends.
+ *
+ * The filename goes with the row because `wp_delete_attachment($id, true)`
+ * unlinks the file: the bytes stop being served, and — read out of
+ * `wp_unique_filename()`, not measured — the name becomes free again, so the next
+ * upload of `real.jpg` into a shop that has deleted `real.jpg` gets that name
+ * back rather than `real-3.jpg`.
+ */
+function deleteMedia(item) {
+  state.deletedMedia.add(item.id);
+  state.deletedFiles.add(item.filename);
+
+  /*
+   * **`wp_delete_attachment()` deletes `_thumbnail_id` rows pointing at the
+   * attachment, and only those.** Core walks `postmeta` for that one key and
+   * removes every reference; it does *not* touch `_product_image_gallery`,
+   * `_ac_option_set` or `_ac_seo_image_id`, which is why an id can outlive its
+   * file in three of the five scopes.
+   *
+   * Reproduced exactly, and it was found by auditing this file against the shop
+   * rather than by reasoning: a banner keeps its `image` object here — the write
+   * resolves it once and freezes it — so without this, deleting a picture left
+   * `/cms/banners` reporting a banner whose thumbnail URL answers 404, where the
+   * shop reports `image: null`. A screen built against that would look correct
+   * and be wrong. The gallery and the option set are deliberately **not** cleaned
+   * for the same reason: a dangling id there is what the shop really has.
+   */
+  for (const banner of bannerRows()) {
+    if (banner.image?.id === item.id) state.banners.set(banner.id, { ...banner, image: null });
+  }
+  for (const page of allPages()) {
+    if (page.image?.id === item.id) state.pages.set(page.id, { ...page, image: null });
+  }
+
+  return ok({ id: item.id, deleted: true });
+}
+
 /* ----------------------------------------------------------- media upload --- */
 
 /**
@@ -11784,11 +12012,22 @@ function storedMediaStem(clientName) {
 /**
  * `wp_unique_filename()`, which is the thing the measured trio proves: `real.jpg`
  * uploaded three times stored `real.jpg`, `real-1.jpg`, `real-2.jpg`.
+ *
+ * **A deleted name is free again**, which is read out of `wp_delete_attachment()`
+ * rather than measured: it unlinks the file, and `wp_unique_filename()` asks the
+ * *filesystem*, not the posts table. So this asks the same question this file
+ * can answer — which files exist — and a deleted one does not. The alternative,
+ * treating a gone name as taken for ever, would be the stricter direction and
+ * would hand `real-3.jpg` to the first upload into a shop that had just deleted
+ * `real.jpg`.
  */
 function uniqueMediaFilename(stem, extension) {
+  const taken = (name) =>
+    !state.deletedFiles.has(name) && (state.uploads.has(name) || MEDIA_FIXTURE_BYTES.has(name));
+
   let candidate = `${stem}.${extension}`;
   let suffix = 0;
-  while (state.uploads.has(candidate) || MEDIA_FIXTURE_BYTES.has(candidate)) {
+  while (taken(candidate)) {
     suffix += 1;
     candidate = `${stem}-${suffix}.${extension}`;
   }
@@ -11881,6 +12120,10 @@ function uploadMedia(body) {
 
   const stem = storedMediaStem(file.name);
   const filename = uniqueMediaFilename(stem, MEDIA_ACCEPTED_TYPES[detected]);
+  /* Re-taking a name a delete freed: the file exists again, so it must stop
+     being one `/wp-content/uploads/…` refuses. Without this the upload would 201
+     with a `url` answering 404 — a row whose tile is a broken box. */
+  state.deletedFiles.delete(filename);
   state.uploads.set(filename, { mime: detected, bytes: file.bytes });
 
   const id = state.nextMediaId;
@@ -11969,10 +12212,11 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     // one carrying a `PUT`: the homepage and a menu are both documents replaced
     // whole rather than collections of addressable rows.
     "cms",
-    // `PATCH /media/{id}` is the alt-text edit and `POST /media` is the upload —
+    // `PATCH /media/{id}` is the alt-text edit, `POST /media` is the upload —
     // the one `multipart/form-data` request the panel makes, which the shell
-    // parses since the media branch. `DELETE` is still refused by the case below
-    // rather than by this list.
+    // parses since the media branch — and `DELETE /media/{id}` is the permanent
+    // delete, served since 2026-08-28 alongside the usage read that makes it
+    // explicable.
     "media",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
@@ -12827,14 +13071,17 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * line between what was measured and what this file assumed, so item 13 does
      * not inherit a guess as a measurement.
      *
-     * **`POST /media` is served on this branch**, and it is the only
+     * **`POST /media` is served on the media branch**, and it is the only
      * `multipart/form-data` request the panel makes — the shell parses one now,
      * so all five measured refusals are reachable instead of arriving
-     * indistinguishable from an empty upload. **`DELETE /media/{id}` is still
-     * deliberately not allowlisted and still unserved**: it exists at the API and
-     * `ac_manage_content` allows it, but nothing here tells a client what an
-     * attachment is *used by*, so the library cannot answer "what would this
-     * break?" and the route stays unreachable until a screen can.
+     * indistinguishable from an empty upload.
+     *
+     * **`DELETE /media/{id}` and `GET /media/{id}/usage` joined on 2026-08-28.**
+     * The entry this replaces said the delete stayed unserved because "nothing
+     * here tells a client what an attachment is *used by*", which was true of the
+     * API and not only of this file. The API grew the answer; both routes are
+     * served, and the delete is deliberately **not** refused for an image in use
+     * — see `deleteMedia`.
      */
     case "media": {
       const denied = gatedOn("ac_manage_content");
@@ -12844,7 +13091,14 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         if (method === "GET") return mediaListing(searchParams);
         return method === "POST" ? uploadMedia(body) : notFound();
       }
-      if (segments.length !== 2) return notFound();
+      /*
+       * Two depths now: the attachment, and the one sub-resource it has.
+       * `/media/{id}/anything-else` is a route nobody registered, so it is a
+       * `rest_no_route` rather than this collection's own `not_found` — the same
+       * distinction the id below draws, one segment further in.
+       */
+      if (segments.length > 3) return notFound();
+      if (segments.length === 3 && segments[2] !== "usage") return notFound();
       const id = numericId(second);
       /*
        * `/media/abc` is a `rest_no_route` — the route pattern is `(?P<id>\d+)`
@@ -12853,10 +13107,34 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
        * file answered `rest_no_route` to both until this branch.
        */
       if (id === null) return notFound();
+      /*
+       * **`/media/0` is a 400, not a 404**, and this file answered `not_found`
+       * to it until the delete branch. `\d+` matches `0`, so the request reaches
+       * the controller's `idArg()` — `'minimum' => 1` — and is refused as a
+       * parameter before any row is looked for. Measured on `/media/0/usage`;
+       * the same `idArg()` guards GET, PATCH and DELETE, so the guard sits above
+       * all four rather than on the one that was measured.
+       */
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
       const item = mediaRows().find((row) => row.id === id);
       if (item === undefined) return mediaNotFound();
+
+      /*
+       * `GET /media/{id}/usage` — and the 404 above is the whole of its
+       * refusal contract. `MediaService::usage()` calls the same `require()`
+       * `show()` does, so an unknown id **and a post id that is not an
+       * attachment** answer the same `not_found` with the same sentence: the
+       * media library is not a way to read the posts table. This file has no
+       * posts table to read, so the second case is the first case here — a
+       * page id is simply not in `mediaRows()`.
+       */
+      if (segments.length === 3) {
+        return method === "GET" ? ok(mediaUsageOf(id)) : notFound();
+      }
+
       if (method === "GET") return ok(item);
-      return method === "PATCH" ? patchMedia(item, body) : notFound();
+      if (method === "PATCH") return patchMedia(item, body);
+      return method === "DELETE" ? deleteMedia(item) : notFound();
     }
 
     default:
@@ -12997,7 +13275,13 @@ export function createServer() {
      */
     if (url.pathname.startsWith(`${MEDIA_UPLOAD_PATH}/`)) {
       const filename = url.pathname.slice(MEDIA_UPLOAD_PATH.length + 1);
-      const file = state.uploads.get(filename) ?? MEDIA_FIXTURE_BYTES.get(filename);
+      /* A deleted attachment took its file with it — `wp_delete_attachment($id,
+         true)` unlinks it — so the bytes stop being served rather than outliving
+         the row. A grid still showing the picture would be the harness telling a
+         screen that a permanent delete was not one. */
+      const file = state.deletedFiles.has(filename)
+        ? undefined
+        : (state.uploads.get(filename) ?? MEDIA_FIXTURE_BYTES.get(filename));
       if (file === undefined) {
         response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
         response.end("No such file.\n");

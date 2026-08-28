@@ -1,7 +1,7 @@
 import { MEDIA_PER_PAGE } from "@/lib/media";
 
 /**
- * The media library's URL state: a search term and a sort direction.
+ * The media library's URL state: a search term and a sort.
  *
  * This file exists because DECISIONS.md §14 recorded both controls as absent,
  * and the recorded reason was **false**. It said `search` "is honoured in
@@ -18,7 +18,7 @@ import { MEDIA_PER_PAGE } from "@/lib/media";
  *   id   asc        sorts, differs from the bare listing            positive control
  *   date desc       byte-identical to the bare listing              proves nothing alone
  *   id   desc       byte-identical to the bare listing              proves nothing alone
- *   title           **unprovable** — 42 of the 43 rows are titled "Tapis"
+ *   title           **unprovable that day** — 42 of the 43 rows are titled "Tapis"
  *   ?orderby=zzz    400 invalid_request                             validated, not ignored
  *   ?bogus_param=1  = the bare listing                              the control holds
  *
@@ -28,33 +28,48 @@ import { MEDIA_PER_PAGE } from "@/lib/media";
  * does ignore what it does not know, so `date asc` differing is the parameter
  * working rather than the shop changing underneath.
  *
- * ## What ships is `date`, two directions, and the other two are refused
+ * ## `title`, measured 2026-08-28 — the fixture this file asked for was built
+ *
+ * The entry above recorded `title` as unprovable and named the measurement it
+ * still needed: *a fixture with distinct titles, three or more rows sorting
+ * differently from both their ids and their dates*. Somebody went and made one —
+ * five of the 43 rows, spread across the id range, renamed to titles whose
+ * alphabetical order matches neither their ids nor their dates, then restored:
+ *
+ *   title asc   ->  761, 3035, 1658, 4234, 4    exactly alphabetical, and it
+ *                                               differs from the bare listing
+ *   title desc  ->  4, 4234, 1658, 3035, 761    the exact reverse
+ *
+ * That is the positive control in both directions on the axis itself, which is
+ * strictly more than `date` has: `date desc` can only ever be proved by its
+ * *opposite* differing, because it **is** the resting order.
+ *
+ * ## Four chips, and they are four answers rather than a field and a direction
+ *
+ * newest · oldest · A→Z · Z→A. Each is a complete answer to "in what order",
+ * which is why they are four flat chips in one labelled group and not a field
+ * selector beside a direction toggle: two controls would make the reader compose
+ * an answer out of two halves, and one of the four compositions (`id`) is not
+ * offered at all. `FilterTabs` in `chips` is single-select over complete values,
+ * which is exactly the shape of the question.
  *
  * **Not `id`.** It sorts, and the measurement is good. But on this collection an
  * attachment's id order and its upload order are the same fact — the ids are
  * issued in upload sequence and `date_created` records that same moment — so a
- * second control would offer a reader a choice between two spellings of one
- * answer. §3.3's "one primary per view" reaching a filter: two controls doing one
- * job is chrome, and chrome on a toolbar costs the same 36px band as a control
- * that means something.
- *
- * **Not `title`.** It is not refused for want of trying: it is *unprovable on the
- * only fixture that exists*. 42 of 43 rows carry the title "Tapis", so every
- * comparison ties and both directions fall back to the tie-break — which is
- * exactly the trap that had coupons' working sort recorded as dead for a week
- * (§7). **The measurement it still needs is a fixture with distinct titles**:
- * three or more attachments whose titles sort differently from both their ids and
- * their dates, then `orderby=title&order=asc` compared against the bare listing.
- * Until somebody has that shop, the standing rule holds and `title` stays off.
+ * fifth chip would offer a reader a choice between two spellings of one answer.
+ * §3.3's "one primary per view" reaching a filter: a control doing another
+ * control's job is chrome, and chrome on a toolbar costs the same band as a
+ * control that means something.
  *
  * ## The resting order sends no `orderby` at all
  *
  * `date desc` **is** the resting order — measured byte-identical to the bare
  * listing — so asking for it explicitly is a parameter that changes nothing, in
- * every URL, for ever. `listParams` sends the pair only for `asc`, which is the
- * same shape every other list's first tab has: the default is the absence of the
- * parameter, not a value. It also makes the second chip's third state honest —
- * pressing "newest first" again is a return to resting, not a re-request.
+ * every URL, for ever. `listParams` sends the pair for the other three only,
+ * which is the same shape every other list's first tab has: the default is the
+ * absence of the parameter, not a value. It also makes the first chip's second
+ * press honest — pressing "newest first" again is a return to resting, not a
+ * re-request.
  *
  * ## `search`, measured 2026-08-28
  *
@@ -85,6 +100,16 @@ import { MEDIA_PER_PAGE } from "@/lib/media";
  * whose title is empty is labelled with its **filename**, so a reader typing what
  * the tile says would get nothing back and have no way to know why.
  *
+ * **That same tile is what A→Z cannot draw honestly, and it is recorded rather
+ * than worked around.** The sort is on `post_title`, and a row with no title
+ * sorts as the empty string — first ascending, last descending — while the tile
+ * under it shows a *filename* starting with some other letter. The alternative
+ * would be sorting the page in the browser on whatever each tile happens to
+ * display, which is a second, disagreeing order over one page of three and is
+ * worse in every way. The API sorts; the grid labels; on a row where the two
+ * fields differ they visibly differ. WordPress derives the title from the
+ * filename at upload, so this is the rare row rather than the common one.
+ *
  * ## The page is not in here, and that is unchanged
  *
  * `?peek=` is shareable; a page number on this screen is not. Both controls reset
@@ -94,48 +119,82 @@ import { MEDIA_PER_PAGE } from "@/lib/media";
  */
 
 /**
- * The two directions, and the axis is fixed at `date` — see the docblock.
+ * The four orders, in the order the chips are drawn.
  *
- * `desc` first, because it is the resting order and the first value of every
- * filter strip in this panel is the one that sends nothing.
+ * `newest` first, because it is the resting order and the first value of every
+ * filter group in this panel is the one that sends nothing. The two date chips
+ * lead the two title chips because the collection's own default is a date and a
+ * reader arriving with no opinion is already in the first of them.
  */
-export const MEDIA_ORDERS = ["desc", "asc"] as const;
+export const MEDIA_ORDERS = ["newest", "oldest", "az", "za"] as const;
 export type MediaOrder = (typeof MEDIA_ORDERS)[number];
+
+/**
+ * Each order as the pair of parameters it *is*, and `null` for the one that is
+ * the absence of both.
+ *
+ * One table, read by `toUrlParams`, `listParams` and `queryFromParams` alike, so
+ * the URL the panel shows and the request it makes cannot drift from the value
+ * the chip is highlighting. That drift is the whole failure `mediaKey` guards
+ * against at the other end.
+ */
+const ORDER_PARAMS: Record<MediaOrder, { orderby: "date" | "title"; order: "asc" | "desc" } | null> =
+  {
+    newest: null,
+    oldest: { orderby: "date", order: "asc" },
+    az: { orderby: "title", order: "asc" },
+    za: { orderby: "title", order: "desc" },
+  };
 
 export type MediaQuery = {
   search: string;
   order: MediaOrder;
 };
 
-export const EMPTY_QUERY: MediaQuery = { search: "", order: "desc" };
+export const EMPTY_QUERY: MediaQuery = { search: "", order: "newest" };
 
 /**
  * The URL, read.
  *
- * `orderby` is honoured only when it names the one axis this screen ships. A
- * stale `?orderby=title` is a legal 200 the control could not represent
- * afterwards — coupons' `?per_page=37` rule, that a control unable to show the
- * state it is in is a control that lies about it — and `?orderby=zzz` is a
- * measured **400**, which a hand-edited URL must not be able to provoke into an
- * error screen. Both fall back to resting.
+ * `orderby` is honoured only where it names an axis this screen ships, which is
+ * `date` and `title` and not `id`. A stale `?orderby=id` is a legal 200 the chip
+ * group could not represent afterwards — coupons' `?per_page=37` rule, that a
+ * control unable to show the state it is in is a control that lies about it —
+ * and `?orderby=zzz` is a measured **400**, which a hand-edited URL must not be
+ * able to provoke into an error screen. Both fall back to resting.
+ *
+ * **A missing `order` is `desc`, because that is the API's own default**
+ * (`MediaController::indexArgs()`, `'order' => ['default' => 'desc']`). So
+ * `?orderby=title` alone is Z→A and is representable, rather than being thrown
+ * away as half a state.
  */
 export function queryFromParams(params: URLSearchParams): MediaQuery {
   const orderby = params.get("orderby");
-  const sortable = orderby === null || orderby === "date";
+  const ascending = params.get("order") === "asc";
 
-  return {
-    search: params.get("search") ?? "",
-    order: sortable && params.get("order") === "asc" ? "asc" : "desc",
-  };
+  const order: MediaOrder =
+    orderby === "title"
+      ? ascending
+        ? "az"
+        : "za"
+      : orderby === null || orderby === "date"
+        ? ascending
+          ? "oldest"
+          : "newest"
+        : "newest";
+
+  return { search: params.get("search") ?? "", order };
 }
 
 /** The URL the panel shows: only what differs from resting. */
 export function toUrlParams(query: MediaQuery): URLSearchParams {
   const params = new URLSearchParams();
   if (query.search !== "") params.set("search", query.search);
-  if (query.order !== EMPTY_QUERY.order) {
-    params.set("orderby", "date");
-    params.set("order", query.order);
+
+  const sort = ORDER_PARAMS[query.order];
+  if (sort !== null) {
+    params.set("orderby", sort.orderby);
+    params.set("order", sort.order);
   }
   return params;
 }
@@ -148,9 +207,11 @@ export function listParams(query: MediaQuery, page: number): URLSearchParams {
   });
 
   if (query.search !== "") params.set("search", query.search);
-  if (query.order === "asc") {
-    params.set("orderby", "date");
-    params.set("order", "asc");
+
+  const sort = ORDER_PARAMS[query.order];
+  if (sort !== null) {
+    params.set("orderby", sort.orderby);
+    params.set("order", sort.order);
   }
   return params;
 }
