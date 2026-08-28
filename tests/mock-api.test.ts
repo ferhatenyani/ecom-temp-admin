@@ -112,8 +112,21 @@ import {
   unavailableLines,
   wilayaSlices,
 } from "@/lib/analytics";
-import { notificationList } from "@/lib/api/schemas/notification";
-import { QUEUE_STATES, stateCounts } from "@/lib/notifications";
+import {
+  notificationDetail,
+  notificationList,
+  retryMeta,
+  retryResponse,
+  sentConflictDetails,
+} from "@/lib/api/schemas/notification";
+import {
+  QUEUE_STATES,
+  messageParagraphs,
+  queueState,
+  retryOutcome,
+  sentConflict,
+  stateCounts,
+} from "@/lib/notifications";
 import {
   adjustResult,
   inventoryItem,
@@ -5069,9 +5082,46 @@ describe("GET /notifications", () => {
     // does not validate it as one, and `seed-notifications.mjs` writes a phone.
     expect(new Set(data.map((row) => row.channel))).toEqual(new Set(["email", "sms"]));
     expect(data.some((row) => !row.recipient.includes("@"))).toBe(true);
-    // Nullable and never 0.
-    expect(data.some((row) => row.subject_id === null)).toBe(true);
+    // Nullable and never 0. **And its `dedupe_key` falls back to the recipient**
+    // — `Notification::dedupeKey()` is `event:subjectId ?: recipient`, read
+    // rather than inferred, and this file used to carry the event alone. It
+    // matters because `?dedupe_key=` is exact-match and is a filter the screen
+    // offers: the old key would have answered a request the shop answers with
+    // nothing.
+    const subjectless = data.find((row) => row.subject_id === null)!;
+    expect(subjectless.dedupe_key).toBe(`${subjectless.event}:${subjectless.recipient}`);
     expect(data.every((row) => row.subject_id !== 0)).toBe(true);
+    expect(
+      data.every((row) =>
+        row.subject_id === null
+          ? true
+          : row.dedupe_key === `${row.event}:${row.subject_id}`,
+      ),
+    ).toBe(true);
+
+    /*
+     * **`attempts` spans both ends and the middle**, and the middle is the one a
+     * fixture usually lacks. 5 is `MAX_ATTEMPTS` — exhaustion, five *retryable*
+     * failures, so the last error is the drain's own sentence — while a
+     * **permanent** refusal parks the row on the spot at whatever the counter had
+     * reached, which is where a 2 comes from. This file used to pair the
+     * exhaustion count with the permanent-refusal sentence, a state
+     * `markFailed()` cannot produce.
+     */
+    const attempts = new Set(data.map((row) => row.attempts));
+    expect(attempts).toContain(0);
+    expect(attempts).toContain(5);
+    expect([...attempts].some((value) => value > 1 && value < 5)).toBe(true);
+    expect(
+      data.every((row) =>
+        row.attempts === 5 ? row.last_error === "wp_mail() did not accept the message." : true,
+      ),
+    ).toBe(true);
+
+    // The 340px overflow fixture: an unbroken address in the widest free-text
+    // cell on both the list and the detail. `recipient` is `maxLength: 191` and
+    // is deliberately not validated as an email.
+    expect(data.some((row) => row.recipient.length > 60)).toBe(true);
     // Newest first, and nothing can change it.
     expect(data.map((row) => row.created_at)).toEqual(
       [...data.map((row) => row.created_at)].sort().reverse(),
@@ -5124,6 +5174,16 @@ describe("GET /notifications", () => {
     expect(refused.details).toMatchObject({
       params: { status: "status is not one of pending, sent, and failed." },
     });
+    /*
+     * **And the top-level `message` is the parameter's *name*, not the
+     * sentence.** This assertion is new on 2026-08-28 and it is why the
+     * divergence survived: every notification assertion here compared
+     * `details.params` and none compared `message`, so a mock putting the enum
+     * sentence in both places looked identical to a shop that puts it in one.
+     * `ErrorNormalizer` passes WordPress's own `"Invalid parameter(s): <name>"`
+     * through untouched — measured live on every refusal this route can answer.
+     */
+    expect(refused.apiMessage).toBe("Invalid parameter(s): status");
 
     // `dedupe_key` is exact-match only — the left half alone answers 0 rows.
     const one = rows("").data.find((row) => row.subject_id !== null)!;
@@ -5158,9 +5218,353 @@ describe("GET /notifications", () => {
     expect(rows("wilaya=16").meta.total).toBe(all);
   });
 
-  it("serves the list and nothing else on the collection", () => {
-    expect(get("/notifications/1").status).toBe(404);
-    expect(write("POST", "/notifications/1/retry").status).toBe(404);
+  /**
+   * ── The empty string is a refusal on four of these six ──────────────────────
+   *
+   * Measured live 2026-08-28, one parameter at a time. This file read all six as
+   * "absent" and was therefore **more forgiving than the shop** on four of them,
+   * which is the `orderby=""`/`order=""` finding from the coupons audit arriving
+   * on a collection that has no sort to get it wrong.
+   *
+   * The two that really are 200s are the two declared with `maxLength` and
+   * nothing else: `''` is a legal string, and the repository's `!== ''` guard is
+   * what turns it into "no filter" one layer down. That asymmetry is the whole
+   * value of the assertion — it is not "empty is always a 400".
+   */
+  it("refuses an empty status, channel, subject_id and date, and accepts two", () => {
+    for (const [query, name, sentence] of [
+      ["status=", "status", "status is not one of pending, sent, and failed."],
+      ["channel=", "channel", "channel does not match pattern ^[a-z0-9_-]{1,32}$."],
+      ["subject_id=", "subject_id", "subject_id is not of type integer."],
+      ["date_from=", "date_from", "date_from does not match pattern ^\\d{4}-\\d{2}-\\d{2}$."],
+      ["date_to=", "date_to", "date_to does not match pattern ^\\d{4}-\\d{2}-\\d{2}$."],
+    ]) {
+      const refused = apiError(get("/notifications", query));
+      expect(refused.status, query).toBe(400);
+      expect(refused.code, query).toBe("invalid_request");
+      expect(refused.apiMessage, query).toBe(`Invalid parameter(s): ${name}`);
+      expect(refused.details, query).toMatchObject({ params: { [name]: sentence } });
+    }
+
+    // `dedupe_key` and `recipient` carry a length and no pattern, so `''` is a
+    // legal value the repository then ignores.
+    expect(rows("dedupe_key=").meta.total).toBe(rows("").meta.total);
+    expect(rows("recipient=").meta.total).toBe(rows("").meta.total);
+  });
+
+  /**
+   * **`channel` refuses a non-key and serves an unknown key**, which is the
+   * asymmetry the whole channel column is built on: `lib/notifications.ts:95-110`
+   * argues that the panel must label the channels it knows and render an unknown
+   * one as itself, and it can only argue that while an unknown channel is a row
+   * the API will actually hand over.
+   */
+  it("validates channel as a key pattern and never as an enum", () => {
+    // A legal key that matches nothing — 200, and this is the one the panel's
+    // `queryFromParams()` normalisation exists for.
+    expect(get("/notifications", "channel=nonsense").status).toBe(200);
+    expect(rows("channel=nonsense").meta.total).toBe(0);
+
+    for (const value of ["NOT-A-KEY!!", "EMAIL", "e".repeat(33)]) {
+      const refused = apiError(get("/notifications", `channel=${encodeURIComponent(value)}`));
+      expect(refused.status, value).toBe(400);
+      expect(refused.details, value).toMatchObject({
+        params: { channel: "channel does not match pattern ^[a-z0-9_-]{1,32}$." },
+      });
+    }
+  });
+
+  /**
+   * `subject_id=abc` is the **type** sentence and `subject_id=0` is the range
+   * one, and this file answered the range sentence to both — a message a form
+   * could quote back at somebody who had typed a word. Same two families
+   * `pagingNumber()` already distinguishes for `per_page`.
+   */
+  it("separates the type refusal from the bound on subject_id, and caps two lengths", () => {
+    expect(apiError(get("/notifications", "subject_id=abc")).details).toMatchObject({
+      params: { subject_id: "subject_id is not of type integer." },
+    });
+    for (const value of ["0", "-1"]) {
+      expect(apiError(get("/notifications", `subject_id=${value}`)).details, value).toMatchObject({
+        params: { subject_id: "subject_id must be greater than or equal to 1" },
+      });
+    }
+
+    // `maxLength: 191` on both, matching the columns. A fifth sentence family.
+    for (const name of ["dedupe_key", "recipient"]) {
+      const refused = apiError(get("/notifications", `${name}=${"a".repeat(192)}`));
+      expect(refused.status, name).toBe(400);
+      expect(refused.details, name).toMatchObject({
+        params: { [name]: `${name} must be at most 191 characters long.` },
+      });
+      // 191 exactly is fine — the bound is inclusive.
+      expect(get("/notifications", `${name}=${"a".repeat(191)}`).status, name).toBe(200);
+    }
+  });
+
+  /**
+   * **Two things the comparison happens in MySQL for, and both bit.**
+   *
+   * The filters are case-**in**sensitive, because they are `WHERE col = %s`
+   * against a `_ci` collation — measured live, `?recipient=AMINA@EXAMPLE.TEST`
+   * answers the same three rows as the lowercase form. This file compared with
+   * `===`, so it was *stricter* than the shop.
+   *
+   * And a date that passes the pattern without being a date matches **nothing**:
+   * `?date_from=2026-13-45` reaches MySQL as an invalid `DATETIME`, logs an error
+   * twice server-side and answers `total: 0`. A string comparison — which is what
+   * this file did — gets that right on `date_from` by luck and inverts it on
+   * `date_to`, where `"2026-08-21" <= "2026-13-45"` is true and the filter
+   * silently returns the **whole queue**. A filter that widens is the shape
+   * nobody notices.
+   */
+  it("matches case-insensitively and answers nothing for an impossible date", () => {
+    const one = rows("").data.find((row) => row.subject_id !== null)!;
+    expect(rows(`recipient=${encodeURIComponent(one.recipient.toUpperCase())}`).meta.total).toBe(
+      rows(`recipient=${encodeURIComponent(one.recipient)}`).meta.total,
+    );
+    expect(rows(`dedupe_key=${one.dedupe_key.toUpperCase()}`).data.map((r) => r.id)).toContain(
+      one.id,
+    );
+    expect(rows(`channel=${one.channel}`).meta.total).toBeGreaterThan(0);
+
+    for (const query of ["date_from=2026-13-45", "date_to=2026-13-45", "date_to=2026-02-31"]) {
+      expect(get("/notifications", query).status, query).toBe(200);
+      expect(rows(query).meta.total, query).toBe(0);
+    }
+  });
+
+  /**
+   * ── The single read: the list row plus the message, and nothing else ────────
+   *
+   * `NotificationPresenter::full()` is `self::row($row) + ['message' => …]`, and
+   * this asserts the consequence rather than the line: the detail is **value-
+   * identical** to its own entry in the listing once `message` is removed.
+   * Verified request-for-request against the live shop on 2026-08-28, where the
+   * keys also came back in the same order with `message` fourteenth.
+   */
+  it("serves a detail that is the list row plus the frozen message", () => {
+    const row = rows("").data.find((item) => item.event === "order.placed")!;
+    const response = get(`/notifications/${row.id}`);
+    const { data, meta } = parse(notificationDetail, response);
+
+    // **No `meta`.** `show()` passes none and the envelope omits an empty one,
+    // so a detail is `{success, data}` — the shape `parseList` would not catch.
+    expect(meta).toBeNull();
+
+    const { message, ...rest } = data;
+    expect(rest).toEqual(row);
+    expect(message.readable).toBe(true);
+
+    /*
+     * The body is a **record, not panel copy**, and it is bilingual by accident:
+     * a French salutation over English sentences, straight out of
+     * `NotificationMessages`. It renders verbatim — a panel that translated it
+     * would be showing something the customer never received.
+     */
+    expect(message.subject).toContain(String(row.subject_id));
+    expect(message.body.startsWith("Bonjour")).toBe(true);
+    // Split on the blank line, which is what lets the quote have structure
+    // without a character of it being touched.
+    expect(messageParagraphs(message.body).length).toBeGreaterThan(2);
+    expect(message.context).toMatchObject({ order_number: String(row.subject_id) });
+  });
+
+  /**
+   * **`readable: false` is what the drain saw, not an empty message**, and it
+   * arrives with three empty fields and `context` as a JSON **array** — PHP's
+   * empty array serialising, which is why `notificationMessage` is a union and
+   * not a `z.record()`.
+   *
+   * It comes only ever with `status: "failed"` and the drain's own sentence,
+   * because `drain()` calls `markFailed($id, …, false)` on it **without
+   * attempting a send** — so `attempts` is the single increment that call makes.
+   */
+  it("serves the unreadable payload as the drain reports it", () => {
+    const row = rows("").data.find(
+      (item) => item.last_error === "The stored payload is not readable.",
+    )!;
+    expect(row.status).toBe("failed");
+    expect(row.attempts).toBe(1);
+    expect(queueState(row)).toBe("failed");
+
+    const { message } = parse(notificationDetail, get(`/notifications/${row.id}`)).data;
+    expect(message).toEqual({ readable: false, subject: "", body: "", context: [] });
+    expect(Array.isArray(message.context)).toBe(true);
+  });
+
+  /**
+   * **The two 404s are both `not_found` and only the sentence differs**, which is
+   * the correction this branch made to its own brief. The route regex is `\d+`,
+   * so a non-numeric id never reaches the controller and WordPress raises
+   * `rest_no_route` — and `ErrorNormalizer::CODE_MAP` rewrites that to
+   * `not_found` before it leaves, so `rest_no_route` is a code no client of this
+   * API can receive. Measured live 2026-08-28 through the normalizer.
+   *
+   * The distinction is load-bearing here and nowhere else: the detail page
+   * guards `/^\d+$/` itself before fetching, precisely so a non-numeric id
+   * renders "no such notification" rather than an error.
+   */
+  it("answers two different 404s under one code, and a 400 for id 0", () => {
+    const missing = apiError(get("/notifications/999999"));
+    expect(missing.status).toBe(404);
+    expect(missing.code).toBe("not_found");
+    expect(missing.apiMessage).toBe("No notification with that id.");
+
+    const unrouted = apiError(get("/notifications/abc"));
+    expect(unrouted.status).toBe(404);
+    expect(unrouted.code).toBe("not_found");
+    expect(unrouted.apiMessage).toBe("No route was found matching the URL and request method.");
+
+    // `0` matches `\d+`, reaches `idArg()`'s `minimum: 1` and is a 400.
+    const zero = apiError(get("/notifications/0"));
+    expect(zero.status).toBe(400);
+    expect(zero.details).toMatchObject({ params: { id: "id must be greater than or equal to 1" } });
+
+    // Nothing else on the collection. A `GET` on the retry path is not the
+    // route either — it is registered POST-only.
+    expect(get("/notifications/4100/retry").status).toBe(404);
+    expect(get("/notifications/4100/anything").status).toBe(404);
+    expect(write("POST", "/notifications").status).toBe(404);
+    expect(write("PATCH", "/notifications/4100").status).toBe(404);
+  });
+
+  /**
+   * ── The retry: a 202 that mails nothing, and the answer is in `meta` ────────
+   *
+   * `already_pending` is the status **before** the request, and it is the
+   * difference between "this went back in the queue" and "it was already there"
+   * — both 202, both successes. `retryOutcome()` reads it and the panel writes
+   * two different sentences from it.
+   */
+  it("requeues a failed row, answers 202 with a list row, and says what it did", () => {
+    const before = rows("").data.find((row) => row.status === "failed")!;
+    expect(before.attempts).toBeGreaterThan(0);
+    expect(before.last_error).not.toBeNull();
+
+    const response = write("POST", `/notifications/${before.id}/retry`);
+    expect(response.status).toBe(202);
+    const { data, meta } = parse(retryResponse, response);
+
+    /*
+     * **The body is a list row and carries no `message`.** The obvious
+     * implementation hands this straight back to the detail screen and silently
+     * loses the quoted record — `lib/api/schemas/notification.ts:112-120` pins
+     * it, and `NotificationDetail.tsx` re-reads instead of rebinding.
+     */
+    expect(data).not.toHaveProperty("message");
+
+    // `requeue()`'s three columns and no more.
+    expect(data).toEqual({ ...before, status: "pending", attempts: 0, last_error: null });
+    expect(queueState(data)).toBe("queued");
+
+    const parsedMeta = retryMeta.parse(meta);
+    expect(parsedMeta.queued).toBe(true);
+    expect(parsedMeta.already_pending).toBe(false);
+    expect(retryOutcome(parsedMeta)).toEqual({
+      requeued: true,
+      drain: "wp algerian-commerce send-notifications",
+    });
+
+    // Stateful: the row reads back requeued, on the detail and in the listing.
+    expect(parse(notificationDetail, get(`/notifications/${before.id}`)).data.status).toBe(
+      "pending",
+    );
+    expect(rows("").data.find((row) => row.id === before.id)!.attempts).toBe(0);
+  });
+
+  /**
+   * **A row that was already `pending` answers 202 `already_pending: true`**, not
+   * a 409 — and it is worth knowing that this once shipped the other way. The
+   * §90 zero-affected-rows fix is what makes it a success: MySQL reports rows it
+   * *changed*, so a requeue of an untouched row affects none and the naive read
+   * of that count answered "already sent" about a row that had never been sent.
+   *
+   * The panel leans on it: `retrying` is painted warning rather than danger
+   * partly because retry on an already-pending row does nothing, and a screen
+   * that treated this as a failure would be teaching a gesture that lies.
+   */
+  it("answers 202 already_pending for a row that was in the queue", () => {
+    const retrying = rows("").data.find(
+      (row) => row.status === "pending" && row.attempts > 0,
+    )!;
+    expect(queueState(retrying)).toBe("retrying");
+
+    const meta = retryMeta.parse(
+      parse(retryResponse, write("POST", `/notifications/${retrying.id}/retry`)).meta,
+    );
+    expect(meta.already_pending).toBe(true);
+    expect(meta.queued).toBe(true);
+    expect(retryOutcome(meta).requeued).toBe(false);
+
+    // A never-attempted row is the same answer — `already_pending` is about the
+    // status, not about the attempts.
+    const queued = rows("").data.find((row) => row.status === "pending" && row.attempts === 0)!;
+    const second = retryMeta.parse(
+      parse(retryResponse, write("POST", `/notifications/${queued.id}/retry`)).meta,
+    );
+    expect(second.already_pending).toBe(true);
+  });
+
+  /**
+   * **A `sent` row refuses with a 409 that names when it sent.** The panel does
+   * not offer retry on a sent row at all, but it renders this if it arrives:
+   * a row that sends between the render and the tap is exactly the race the
+   * conditional `UPDATE` exists for, and reading the 409 body rather than
+   * hard-coding what a conflict means is a house rule.
+   */
+  it("refuses to re-send a sent row, and the body says when it went", () => {
+    const sent = rows("").data.find((row) => row.status === "sent")!;
+    expect(sent.sent_at).not.toBeNull();
+
+    const refused = apiError(write("POST", `/notifications/${sent.id}/retry`));
+    expect(refused.status).toBe(409);
+    expect(refused.code).toBe("conflict");
+    expect(refused.apiMessage).toBe(
+      "That notification has already been sent. Re-sending would deliver a message frozen when it was queued.",
+    );
+
+    const details = sentConflictDetails.parse(refused.details);
+    expect(details.status).toBe("sent");
+    expect(sentConflict(details)).toBe(sent.sent_at);
+    // And nothing moved: the refusal is the `UPDATE`'s own `WHERE`.
+    expect(rows("").data.find((row) => row.id === sent.id)).toEqual(sent);
+  });
+
+  /**
+   * **All three routes are `ac_manage_customers` and this file gated none of
+   * them.** Measured live 2026-08-28 with a credential holding no
+   * `ac_manage_customers`: `/notifications` and `/notifications/{id}` are both
+   * 403 `forbidden` with no `details`. The mock answered 200 — the *more
+   * capable* direction — while the `no_customers` identity that reaches it has
+   * existed since the marketing branch, so the refusal was a path something
+   * could already take.
+   */
+  it("refuses every notification route without ac_manage_customers", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_customers");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      for (const [method, path] of [
+        ["GET", "/notifications"],
+        ["GET", "/notifications/4100"],
+        ["POST", "/notifications/4100/retry"],
+      ]) {
+        const response = mock.respond(method, `${mock.BASE_PATH}${path}`);
+        expect(response.status, path).toBe(403);
+        try {
+          unwrap(notificationList, response.body, response.status);
+          expect.unreachable("a 403 must throw at the panel's boundary");
+        } catch (error) {
+          expect(error).toBeInstanceOf(ApiError);
+          expect((error as ApiError).code, path).toBe("forbidden");
+          expect((error as ApiError).isForbidden, path).toBe(true);
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });
 
@@ -8435,9 +8839,24 @@ const COVERED = [
   // exercises is named below rather than left implied.
   "shipping",
   "payment",
-  // Moved out with the customers redesign: `GET /notifications` is served, and
-  // the customer detail's section reads it. The two routes this module still
-  // carries schemas for are named below, for the same reason.
+  /*
+   * **Now covered by every schema in the module**, which is the standard
+   * `analytics`, `cms` and `campaign` set — and it took two branches to get
+   * there. It moved out of UNCOVERED with the customers redesign on the *list*
+   * alone, and this entry said so beside a note that `/notifications/{id}` and
+   * its retry were still 404s: real routes a screen already called on load, so
+   * the notification detail was the one screen in the panel that could not be
+   * captured at all.
+   *
+   * Both are served since 2026-08-28. `notification`/`notificationList` on the
+   * listing and every filter it honours and ignores; `notificationDetail` and
+   * `notificationMessage` on the single read in **both** of its arms — a
+   * rendered message, and the `readable: false` one whose `context` is a JSON
+   * array; `retryResponse` and `retryMeta` on the 202 in both of its outcomes;
+   * and `sentConflictDetails` on the 409 a `sent` row answers.
+   *
+   * What the module cannot express is named below rather than left implied.
+   */
   "notification",
   /*
    * **Covered by all seven of its reports**, and it is the first module on this
@@ -9576,18 +9995,40 @@ describe("what the newly-covered modules still do not serve", () => {
   });
 
   /**
-   * **`notification` is covered by its list and by nothing else**, and the gap is
-   * larger than the two above: `/notifications/{id}` and its retry are routes a
-   * screen that already exists calls on load, not schemas waiting for a branch.
-   * `notificationMessage`, `notificationDetail`, `retryResponse`, `retryMeta` and
-   * `sentConflictDetails` all describe answers this file cannot give, so the
-   * notification detail is the one screen in the panel that cannot be captured at
-   * all. Named here so "covered" does not quietly come to mean "finished".
+   * **The notification gap closed on 2026-08-28**, and the three assertions that
+   * pinned the detail and the retry at 404 are gone rather than deleted quietly:
+   * every one of them is replaced above by an assertion on what the route now
+   * answers. `notificationDetail`, `notificationMessage`, `retryResponse`,
+   * `retryMeta` and `sentConflictDetails` are all exercised, so the notification
+   * detail has stopped being the one screen in the panel that cannot be captured.
+   *
+   * **What is left is a shape rather than a route, and it is the same class as
+   * `mediaSizes`.** `message.readable: false` cannot be produced by anything
+   * running: `notify()` writes the payload with `wp_json_encode()` and no route
+   * on this API writes a payload at all, so the unreadable row is constructed
+   * here exactly as `seed-notifications.mjs` constructs it on the live shop. The
+   * subjectless row is the same kind of fixture — every `Notification::to*` call
+   * site in the plugin passes a subject, so a null `subject_id` is a column state
+   * with no producer. Both are asserted above; neither is reachable through a
+   * write, and inventing a route that made them so would be the invitation this
+   * file exists to refuse.
+   *
+   * **`meta.summary` is the one real absence.** `NotificationService::summary()`
+   * exists and counts the queue by status, and it is published by the CLI drain's
+   * `--summary` and by no endpoint — which is why `stateCounts()` in
+   * `lib/notifications.ts` is scoped to the page and the label has to say so
+   * rather than implying it counted the queue.
    */
-  it("leaves the notification detail and its retry unmocked", () => {
-    expect(get("/notifications/1").status).toBe(404);
-    expect(get("/notifications/4100").status).toBe(404);
-    expect(write("POST", "/notifications/4100/retry").status).toBe(404);
+  it("leaves the queue's own summary unanswerable, as the API does", () => {
+    // There is no route that counts the queue. A total per state would cost one
+    // request per state, which is the argument the list's summary strip makes.
+    expect(get("/notifications/summary").status).toBe(404);
+    expect(get("/notifications/stats").status).toBe(404);
+
+    // And a queue row is written by the system, never by a person — so the
+    // collection has exactly one write and it is the retry.
+    expect(write("POST", "/notifications", { event: "order.placed" }).status).toBe(404);
+    expect(write("DELETE", "/notifications/4100").status).toBe(404);
   });
 
   /**

@@ -1853,10 +1853,27 @@ const seededOrdersOf = (customerId) =>
  * boolean, and lib/api/schemas/notification.ts:61-75 records that the field's own
  * docblock on the backend is wrong about it.
  *
- * **The one inference in this block**: the subjectless row's `dedupe_key`. The key
- * is `event:subject_id` by construction and nobody measured what the right half
- * is when there is no subject, so it is the event alone. Flagged rather than
- * presented as measured.
+ * **The inference in this block was wrong, and it is now read rather than
+ * guessed.** This said the subjectless row's `dedupe_key` was "the event alone,
+ * flagged rather than presented as measured". `Notification::dedupeKey()` is
+ *
+ *     substr($event . ':' . ($subjectId !== null ? $subjectId : $recipient), 0, 191)
+ *
+ * — so the right half falls back to the **recipient**, never to nothing, and
+ * `NotificationController`'s own docblock says so beside the `dedupe_key`
+ * argument ("a recipient can end up in the key when a notification has no
+ * subject id"). The row below carries `stock.low:admin@example.test`. It matters
+ * because `?dedupe_key=` is exact-match and is a filter the screen offers: a row
+ * keyed `stock.low` here would answer a request the shop answers with nothing.
+ *
+ * **And the parked row paired a count with a sentence `markFailed()` cannot put
+ * together.** It read `attempts: 5` with `"Not a deliverable email address."`,
+ * which is a *permanent* refusal — `markFailed($id, $error, false)` takes a row
+ * to `failed` on the call it is made, at whatever `attempts + 1` then is. Five is
+ * the *exhaustion* count (`MAX_ATTEMPTS`), and a row only reaches it through five
+ * **retryable** failures, whose last error is the drain's own sentence. So the
+ * two are split below, and the split is what puts an `attempts` strictly between
+ * 1 and 5 in the fixture rather than a number invented to fill the gap.
  */
 const NOTIFICATION_STATES = [
   { status: "sent", attempts: 1, error: null, sent: true },
@@ -1869,25 +1886,168 @@ const NOTIFICATION_STATES = [
     error: "wp_mail() did not accept the message.",
     sent: false,
   },
-  // Parked: a permanent refusal rather than five attempts.
+  /*
+   * Parked by **exhaustion**: five retryable failures, so the count is
+   * `MAX_ATTEMPTS` and the sentence is the one the drain writes every time
+   * `wp_mail()` answers false.
+   */
   {
     status: "failed",
     attempts: 5,
+    error: "wp_mail() did not accept the message.",
+    sent: false,
+  },
+  /*
+   * Parked by a **permanent refusal**, on a row the drain had already tried once
+   * — so `attempts` is 2 and not 5, and that is the only honest way to get a
+   * count strictly between the two ends: `markFailed(…, false)` parks the row on
+   * the spot at whatever the counter had reached. `seed-notifications.mjs`'s
+   * `karim-shipped` is this row, one shop over.
+   */
+  {
+    status: "failed",
+    attempts: 2,
     error: "Not a deliverable email address.",
     sent: false,
   },
 ];
 
+/**
+ * The shop's own name, as `NotificationSubscriber::shopName()` hands it to
+ * `NotificationMessages::render()`. It is the first token of every subject and
+ * the last line of every customer body, so it is a constant here rather than
+ * eight copies.
+ */
+const SHOP_NAME = "Algerian Commerce";
+
+/**
+ * **`NotificationMessages::render()`, reproduced** — the eight templates behind
+ * `message.subject` and `message.body` on `GET /notifications/{id}`.
+ *
+ * Reproduced rather than stored per row, because the pairing is the thing a
+ * screen can be wrong about: the body has to be the body *for that event with
+ * that context*, and a fixture holding both independently drifts the moment one
+ * is edited. `lib/notifications.ts:290-296` quotes one of these verbatim from
+ * the live shop and this file has to keep agreeing with it.
+ *
+ * Measured 2026-08-28 against the live queue, one detail read per distinct
+ * event, and the five that exist in that shop came back character-identical to
+ * these — including `"Bonjour,"` with no name, which is what
+ * `trim($first . ' ' . $last)` leaves on a guest order.
+ *
+ * **Plain text with `\n\n` between paragraphs, never HTML.** The class is text
+ * by design; `messageParagraphs()` splits on the blank line.
+ */
+function renderNotificationMessage(event, context) {
+  const number = String(context.order_number ?? "");
+  const money = `${context.total ?? ""} ${context.currency ?? ""}`.trim();
+  const name = String(context.customer_name ?? "").trim();
+  // `Bonjour,` on a guest order. A French salutation over an English sentence,
+  // and it renders verbatim — see lib/notifications.ts:288-310.
+  const greeting = name === "" ? "Bonjour," : `Bonjour ${name},`;
+
+  switch (event) {
+    case "order.placed":
+      return {
+        subject: `${SHOP_NAME} — order ${number} received`,
+        body: `${greeting}\n\nWe have received your order ${number}.\n\nTotal: ${money}\n\nWe will contact you to confirm it before dispatch.\n\n${SHOP_NAME}`,
+      };
+    case "payment.received":
+      return {
+        subject: `${SHOP_NAME} — payment received for order ${number}`,
+        body: `${greeting}\n\nWe have received your payment of ${money} for order ${number}.\n\n${SHOP_NAME}`,
+      };
+    case "shipment.shipped": {
+      /*
+       * The one template with conditional paragraphs, and both conditions are
+       * real states rather than decoration: §57 records that a parcel exists
+       * before its tracking number is readable, and the link is empty whenever
+       * §71's `store.storefront_url` is unset — this backend refuses to guess
+       * one, so a message with no link is worth sending and one pointing at a
+       * login screen is not.
+       */
+      const courier = String(context.provider ?? "");
+      const tracking = String(context.tracking_number ?? "").trim();
+      const url = String(context.tracking_url ?? "").trim();
+      let line =
+        courier !== ""
+          ? `Order ${number} has been handed to ${courier}.`
+          : `Order ${number} has been dispatched.`;
+      if (tracking !== "") line += `\n\nTracking number: ${tracking}`;
+      if (url !== "") line += `\n\nFollow it here:\n${url}`;
+      return {
+        subject: `${SHOP_NAME} — order ${number} is on its way`,
+        body: `${greeting}\n\n${line}\n\n${SHOP_NAME}`,
+      };
+    }
+    case "shipment.delivered":
+      return {
+        subject: `${SHOP_NAME} — order ${number} delivered`,
+        body: `${greeting}\n\nOrder ${number} has been delivered. Thank you for shopping with us.\n\n${SHOP_NAME}`,
+      };
+    case "order.cancelled":
+      return {
+        subject: `${SHOP_NAME} — order ${number} cancelled`,
+        body: `${greeting}\n\nOrder ${number} has been cancelled. If this is unexpected, reply to this message.\n\n${SHOP_NAME}`,
+      };
+    case "order.refunded":
+      return {
+        subject: `${SHOP_NAME} — order ${number} refunded`,
+        body: `${greeting}\n\nOrder ${number} has been refunded.\n\n${SHOP_NAME}`,
+      };
+    // The two admin messages: short, factual, and never sent to a customer.
+    // Note there is no greeting on either — `NotificationEvent::ADMIN_EVENTS`
+    // keeps them apart and the templates are written for a shop, not a person.
+    case "admin.new_order":
+      return {
+        subject: `${SHOP_NAME} — new order ${number}`,
+        body: `Order ${number} was placed for ${money}.`,
+      };
+    case "stock.low":
+      return {
+        subject: `${SHOP_NAME} — low stock: ${String(context.product_name ?? "")}`,
+        body: `${String(context.product_name ?? "")} (SKU ${
+          context.sku === undefined ? "—" : String(context.sku)
+        }) is down to ${String(context.stock ?? "?")} in stock.`,
+      };
+    default:
+      // `render()`'s own fallback, and `queueOrderEvent()` refuses to queue a
+      // row whose subject came back empty — so this is unreachable through the
+      // shop and is reproduced only so the switch is total.
+      return { subject: "", body: "" };
+  }
+}
+
+/**
+ * The queue's **payload column**, which the list must never publish.
+ *
+ * A separate map rather than a key on the row, because that is exactly the shape
+ * the API has: `NotificationRepository::search()` does not select `payload` at
+ * all, so on the list side those bytes do not exist in the process. A `payload`
+ * key hanging off a row here would be one `...row` away from being served on
+ * every list, and §90's whole line is that a support agent scanning a queue does
+ * not pull five hundred customers' order contents into one response.
+ *
+ * `null` is the row whose payload will not `json_decode` — see the push below.
+ */
+const NOTIFICATION_PAYLOADS = new Map();
+
 const NOTIFICATIONS = (() => {
   const rows = [];
 
-  const push = ({ channel, event, audience, recipient, order, slot }) => {
-    const state = NOTIFICATION_STATES[slot % NOTIFICATION_STATES.length];
+  const push = ({ channel, event, audience, recipient, order, slot, state: forced, context }) => {
+    const state = forced ?? NOTIFICATION_STATES[slot % NOTIFICATION_STATES.length];
+    const id = 4100 + rows.length;
     rows.push({
-      id: 4100 + rows.length,
+      id,
       channel,
       event,
-      dedupe_key: order === null ? event : `${event}:${order.id}`,
+      /*
+       * `event:subject_id`, and **`event:recipient` when there is no subject** —
+       * `Notification::dedupeKey()`, read rather than inferred. See the block
+       * above for what this used to say.
+       */
+      dedupe_key: `${event}:${order === null ? recipient : order.id}`.slice(0, 191),
       audience,
       recipient,
       subject_type: order === null ? "" : "order",
@@ -1901,7 +2061,22 @@ const NOTIFICATIONS = (() => {
       created_at: order === null ? iso(120) : order.date_created,
       sent_at: state.sent ? (order === null ? iso(118) : order.date_modified) : null,
     });
+    NOTIFICATION_PAYLOADS.set(id, context);
   };
+
+  /**
+   * The four keys `NotificationSubscriber::queueOrderEvent()` puts in every
+   * order event's context, in its order. `customer_name` is
+   * `trim($first . ' ' . $last)`, so it is `""` on a guest order and the
+   * template's `Bonjour,` branch is reachable from the fixture rather than only
+   * from the code.
+   */
+  const orderContext = (order) => ({
+    order_number: order.number,
+    total: order.total,
+    currency: order.currency,
+    customer_name: `${order.billing.first_name} ${order.billing.last_name}`.trim(),
+  });
 
   let slot = 0;
   for (const [customerId] of CUSTOMER_ORDER_PLAN) {
@@ -1914,6 +2089,7 @@ const NOTIFICATIONS = (() => {
         recipient: customer.email,
         order,
         slot: slot++,
+        context: orderContext(order),
       });
       // The shop's own alert about the same order, addressed to the shop. Not in
       // the customer's section, by construction, and that is the point of it.
@@ -1924,11 +2100,14 @@ const NOTIFICATIONS = (() => {
         recipient: "admin@example.test",
         order,
         slot: slot++,
+        context: orderContext(order),
       });
     }
   }
 
-  // The second channel, addressed to a phone rather than to a mailbox.
+  // The second channel, addressed to a phone rather than to a mailbox. Its
+  // context carries the two `queueOrderEvent()` passes as `$extra` for a
+  // shipment, so the template's tracking paragraph has something to render.
   push({
     channel: "sms",
     event: "shipment.shipped",
@@ -1936,9 +2115,32 @@ const NOTIFICATIONS = (() => {
     recipient: "+213551000024",
     order: seededOrdersOf(24)[0],
     slot: slot++,
+    context: {
+      ...orderContext(seededOrdersOf(24)[0]),
+      provider: "Yalidine",
+      // Derived from the order it is about, not written out: a tracking number
+      // naming a different order than the sentence beside it is the kind of
+      // fixture inconsistency a screenshot makes look deliberate.
+      tracking_number: `YAL-${seededOrdersOf(24)[0].id}-DZ`,
+      // Empty, which is the ordinary state: §71's `store.storefront_url` is
+      // unset on this shop, so the template's link paragraph is absent and the
+      // absence is what a screen has to render.
+      tracking_url: "",
+    },
   });
 
-  // The row with no subject at all.
+  /*
+   * The row with no subject at all.
+   *
+   * **Nothing running in this shop writes one** — every `Notification::to*`
+   * call site in the plugin passes a `subject_type` and a `subject_id`, and
+   * `stock.low` passes `product` plus the product id. The column is nullable,
+   * the presenter publishes `null` rather than 0, and the schema declares it, so
+   * the state is real and unreachable at once. It is constructed here for the
+   * reason `seed-notifications.mjs` constructs its unreadable payload and its
+   * `sms` row: the shape exists and only a fixture can produce it. Named rather
+   * than left to read as something the shop queues.
+   */
   push({
     channel: "email",
     event: "stock.low",
@@ -1946,6 +2148,63 @@ const NOTIFICATIONS = (() => {
     recipient: "admin@example.test",
     order: null,
     slot: slot++,
+    context: { product_name: "Tapis berbère fait main", sku: "AC-TAPIS-004", stock: "2" },
+  });
+
+  /*
+   * **The unreadable payload**, and it is the one row here whose `message` is
+   * not rendered from a context at all.
+   *
+   * `NotificationPresenter::message()` answers `{readable: false, subject: "",
+   * body: "", context: []}` — three empty fields and `context` as a JSON
+   * **array**, which is PHP's empty array serialising — whenever the payload
+   * will not `json_decode`. It arrives only ever with `status: "failed"` and
+   * `last_error: "The stored payload is not readable."`, because `drain()` calls
+   * `markFailed($id, …, false)` on it **without attempting a send**: so
+   * `attempts` is exactly 1, the increment `markFailed()` makes, and not 0 and
+   * not 5.
+   *
+   * It cannot be produced through the API — `notify()` writes the payload with
+   * `wp_json_encode()` and no route writes a payload at all — which is why
+   * `seed-notifications.mjs` writes one underneath on the live shop and why this
+   * one is a `null` in the payload map here.
+   */
+  push({
+    channel: "email",
+    event: "shipment.delivered",
+    audience: "customer",
+    recipient: CUSTOMERS.find((row) => row.id === 24).email,
+    order: seededOrdersOf(24)[1] ?? seededOrdersOf(24)[0],
+    slot: slot++,
+    state: {
+      status: "failed",
+      attempts: 1,
+      error: "The stored payload is not readable.",
+      sent: false,
+    },
+    context: null,
+  });
+
+  /*
+   * The 340px overflow row, and the string is the file's own `LONG_EMAIL` rather
+   * than a new one — 81 characters with no break opportunity, the same constant
+   * one order in 47 already carries as its billing address.
+   *
+   * `recipient` is the right column to put it in: it is `maxLength: 191` at the
+   * API, it is deliberately **not** validated as an email (§29's other four
+   * channels would put a phone number here, and the `sms` row above does), and
+   * it is the widest free-text cell on both the list and the detail. A queue of
+   * tidy `client{id}@example.test` addresses proves nothing about the one that
+   * is not.
+   */
+  push({
+    channel: "email",
+    event: "order.cancelled",
+    audience: "customer",
+    recipient: LONG_EMAIL,
+    order: seededOrdersOf(21)[0],
+    slot: slot++,
+    context: { ...orderContext(seededOrdersOf(21)[0]), customer_name: "" },
   });
 
   /*
@@ -6752,6 +7011,19 @@ const state = {
    * built for and most likely to reach.
    */
   uploads: new Map(),
+  /**
+   * Notification id → the row as it reads now, written only by
+   * `POST /notifications/{id}/retry`.
+   *
+   * **The one write in this file that cannot create, delete or reorder
+   * anything.** `requeue()` is a single conditional `UPDATE` touching three
+   * columns — `status`, `attempts`, `last_error` — so a retried row keeps its id
+   * and its `created_at` and therefore its position in a listing that is
+   * `created_at DESC, id DESC` and nothing else. That is why this is a patch map
+   * over the seeds rather than a rebuilt array: there is no ordering to
+   * recompute and no head of a list to prepend to.
+   */
+  notifications: new Map(),
 };
 
 export function resetState() {
@@ -6836,6 +7108,15 @@ export function resetState() {
   // is what keeps a screenshot of a just-uploaded tile byte-stable.
   state.nextMediaId = 5120;
   state.uploads = new Map();
+  /*
+   * A retry is the only thing that writes here, and it is genuinely destructive
+   * of a state the fixture exists for: it takes a `failed` or `retrying` row to
+   * `queued` — attempts 0, no error — so the first test to retry the fixture's
+   * only unreadable row would leave every later one with no `readable: false`
+   * fixture at all, and the same for the exhausted row and the `attempts: 2`
+   * one. No ids are handed out, because a retry creates nothing.
+   */
+  state.notifications = new Map();
 
   // Last, because it writes `state.campaigns` and `state.recipients` and every
   // line above has just cleared them. A no-op unless `MOCK_SEND_PROGRESS` is a
@@ -9250,8 +9531,32 @@ function customerOrders(customer, params) {
  */
 const NOTIFICATION_STATUSES = ["pending", "sent", "failed"];
 
-/** `Y-m-d`, UTC, whole days at both ends. `?date_from=yesterday` is a 400. */
-const YMD = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * `Y-m-d`, UTC, whole days at both ends. `?date_from=yesterday` is a 400, and so
+ * is `?date_from=` — the pattern is what refuses both, so the empty string is a
+ * refusal here rather than the absence this file used to read it as.
+ *
+ * The literal is carried beside the regex because the refusal **prints the regex
+ * at the person**: `notMatching()`'s docblock records that the pattern family is
+ * the only one that names neither the legal set nor the offending value, and a
+ * screen rendering it verbatim shows `^\d{4}-\d{2}-\d{2}$` to a shopkeeper. A
+ * date control is what keeps it unreachable.
+ */
+const YMD_PATTERN = "^\\d{4}-\\d{2}-\\d{2}$";
+const YMD = new RegExp(YMD_PATTERN);
+
+/**
+ * **`channel` is declared as a key pattern and not as an enum**, and
+ * `NotificationController` says why in as many words: §29's other four channels
+ * are one class plus one `add()` away, and a filter that had to be edited to see
+ * them would be found the hard way.
+ *
+ * So an unknown *key* is a 200 with 0 rows and a non-key is a 400 — the
+ * asymmetry `lib/notifications.ts:95-110` is built on, and the reason the panel
+ * labels the channels it knows and renders an unknown one as itself.
+ */
+const CHANNEL_KEY_PATTERN = "^[a-z0-9_-]{1,32}$";
+const CHANNEL_KEY = new RegExp(CHANNEL_KEY_PATTERN);
 
 /**
  * `GET /notifications`.
@@ -9286,51 +9591,286 @@ const YMD = /^\d{4}-\d{2}-\d{2}$/;
  * ship and watch them work.
  */
 function notificationsListing(params) {
+  /*
+   * **`""` is a refusal on four of these six and this file read all six as
+   * absence.** Measured live 2026-08-28, one parameter at a time, and it is the
+   * `orderby=""`/`order=""` finding from the coupons audit arriving on a
+   * collection with no sort at all:
+   *
+   *   ?status=       400  "status is not one of pending, sent, and failed."
+   *   ?channel=      400  "channel does not match pattern ^[a-z0-9_-]{1,32}$."
+   *   ?subject_id=   400  "subject_id is not of type integer."
+   *   ?date_from=    400  the pattern sentence
+   *   ?dedupe_key=   200  every row — `maxLength` only, and `''` is a legal
+   *                       string the repository then treats as no filter
+   *   ?recipient=    200  likewise
+   *
+   * Only a parameter that is **not sent at all** reaches the default, which is
+   * exactly what `pagingNumber()`'s docblock already records for `per_page`.
+   * `listParams()` in the screen's own `query.ts` never sends an empty one, so
+   * nothing reaches these from the panel today — the mock being the more
+   * forgiving of the two is the whole reason to say so.
+   */
   const status = params.get("status");
-  if (status !== null && status !== "" && !NOTIFICATION_STATUSES.includes(status)) {
-    const message = notOneOf("status", NOTIFICATION_STATUSES);
-    return fail(400, "invalid_request", message, { params: { status: message } });
+  if (status !== null && !NOTIFICATION_STATUSES.includes(status)) {
+    return invalidParam("status", notOneOf("status", NOTIFICATION_STATUSES));
   }
 
-  const subjectId = params.get("subject_id");
-  if (subjectId !== null && subjectId !== "") {
-    const parsed = Number(subjectId);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-      const message = "subject_id must be greater than or equal to 1";
-      return fail(400, "invalid_request", message, { params: { subject_id: message } });
-    }
+  /*
+   * **`channel` is a key pattern, not an enum, and the two refuse differently.**
+   * `?channel=nonsense` is a **200 with 0 rows** because `nonsense` is a legal
+   * key that matches nothing; `?channel=NOT-A-KEY!!`, `?channel=EMAIL` and
+   * `?channel=` are **400s** because none of the three is a key at all.
+   *
+   * This file honoured the filter and validated nothing, so the second row above
+   * was a 200 here and a 400 on the wire — the divergence the notifications
+   * honesty audit was handed. The uppercase case is the one worth knowing:
+   * `sanitize_key` would lowercase it, but `validate_callback` runs first, so
+   * `EMAIL` never reaches the sanitiser.
+   */
+  const channel = params.get("channel");
+  if (channel !== null && !CHANNEL_KEY.test(channel)) {
+    return invalidParam("channel", notMatching("channel", CHANNEL_KEY_PATTERN));
   }
+
+  /*
+   * `minimum: 1`, so `?subject_id=0` is a 400 rather than the unset value it
+   * looks like — and `?subject_id=abc` is the **type** sentence, not the range
+   * one. This file answered the range sentence to both, which is a message a
+   * form could quote back at somebody who had typed a word.
+   */
+  const subjectRead = pagingNumber(params, "subject_id", null, (value) =>
+    value >= 1 ? null : "subject_id must be greater than or equal to 1",
+  );
+  if (subjectRead.error) return subjectRead.error;
 
   for (const name of ["date_from", "date_to"]) {
     const raw = params.get(name);
-    if (raw !== null && raw !== "" && !YMD.test(raw)) {
-      const message = `${name} is not a valid date`;
-      return fail(400, "invalid_request", message, { params: { [name]: message } });
+    if (raw !== null && !YMD.test(raw)) {
+      return invalidParam(name, notMatching(name, YMD_PATTERN));
     }
   }
 
+  /*
+   * **191 on both, and this file capped neither.** The columns are `varchar(191)`
+   * and the route declares the length; a 192-character value is a 400 in the
+   * `rest_too_long` family, which is a fifth sentence shape and is written out
+   * here rather than folded into one of the four.
+   */
+  for (const name of ["dedupe_key", "recipient"]) {
+    const raw = params.get(name);
+    if (raw !== null && raw.length > 191) {
+      return invalidParam(name, `${name} must be at most 191 characters long.`);
+    }
+  }
+
+  /*
+   * **Case-insensitive, because the comparison happens in MySQL.** Every filter
+   * below is a `WHERE col = %s` against a `utf8mb4_unicode_520_ci` column, so
+   * `?recipient=AMINA@EXAMPLE.TEST` answers the same three rows as the lowercase
+   * form — measured live 2026-08-28 — and `?dedupe_key=ORDER.PLACED:4775`
+   * answers the one row too. This file compared with `===` and was therefore
+   * **stricter than the shop**, which §0 names as the quieter direction and not
+   * the safer one: a screen linking a `dedupe_key` out of a row it had upcased
+   * would find nothing here and work in production, or the reverse.
+   *
+   * Still exact and never a substring: it is `=` and not `LIKE`, so a customer
+   * whose address is a prefix of another's must not collect their queue.
+   */
   const equals = (name, key) => {
     const value = params.get(name);
-    return value === null || value === "" ? null : (row) => String(row[key]) === value;
+    if (value === null || value === "") return null;
+    const wanted = value.toLowerCase();
+    return (row) => String(row[key]).toLowerCase() === wanted;
   };
 
-  const from = params.get("date_from");
-  const to = params.get("date_to");
+  /*
+   * **A date that passes the pattern and is not a date matches nothing**, and
+   * that is measured rather than assumed. `?date_from=2026-13-45` satisfies
+   * `^\d{4}-\d{2}-\d{2}$`, reaches MySQL as `'2026-13-45 00:00:00'`, and the
+   * comparison against a `DATETIME` column is never true — the server logs
+   * *Incorrect DATETIME value* twice, once for the page and once for the count,
+   * and answers **200 with `total: 0`**. Measured live 2026-08-28 on both bounds.
+   *
+   * A plain string comparison would have answered 0 rows on `date_from` by
+   * accident and **every row** on `date_to`, since `"2026-08-21" <= "2026-13-45"`
+   * is true — a filter that widens instead of narrowing, which is the shape a
+   * screen never notices.
+   */
+  const realDate = (value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return (
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() === month - 1 &&
+      parsed.getUTCDate() === day
+    );
+  };
+  const bound = (name, compare) => {
+    const value = params.get(name);
+    if (value === null || value === "") return null;
+    return realDate(value) ? (row) => compare(row.created_at.slice(0, 10), value) : () => false;
+  };
+
+  const subjectId = subjectRead.value;
   const tests = [
     equals("channel", "channel"),
     equals("status", "status"),
     equals("dedupe_key", "dedupe_key"),
-    // Exact, not a substring: this is a `WHERE recipient = %s` and a customer
-    // whose address is a prefix of another's must not collect their queue.
     equals("recipient", "recipient"),
-    equals("subject_id", "subject_id"),
-    from === null || from === "" ? null : (row) => row.created_at.slice(0, 10) >= from,
-    to === null || to === "" ? null : (row) => row.created_at.slice(0, 10) <= to,
+    subjectId === null ? null : (row) => row.subject_id === subjectId,
+    bound("date_from", (created, value) => created >= value),
+    bound("date_to", (created, value) => created <= value),
   ].filter((test) => test !== null);
 
-  const rows = NOTIFICATIONS.filter((row) => tests.every((test) => test(row)));
+  const rows = notificationRows().filter((row) => tests.every((test) => test(row)));
   const page = paginate(rows, params);
   return page.error ?? ok(page.rows, page.meta);
+}
+
+/* ------------------------------------------------- notification single read --- */
+
+/**
+ * The queue as it reads **now**: the seeds, with any row a retry has requeued
+ * replaced by what it wrote. Order is untouched — see `state.notifications`.
+ */
+const notificationRows = () =>
+  NOTIFICATIONS.map((row) => state.notifications.get(row.id) ?? row);
+
+const notificationRow = (id) => notificationRows().find((row) => row.id === id);
+
+const notificationNotFound = () => fail(404, "not_found", "No notification with that id.");
+
+/**
+ * ── The collection's *routing* 404, and it is NOT this file's `notFound()` ────
+ *
+ * Measured live 2026-08-28, both 404s read through `ErrorNormalizer` the way
+ * `serve_request()` applies it:
+ *
+ *   GET /notifications/999999   404 {"code":"not_found",
+ *                                    "message":"No notification with that id."}
+ *   GET /notifications/abc      404 {"code":"not_found",
+ *                                    "message":"No route was found matching the
+ *                                               URL and request method."}
+ *
+ * **Both are `not_found`. Only the sentence differs.** The route regex is
+ * `(?P<id>\d+)`, so `abc` never reaches the controller and WordPress raises
+ * `rest_no_route` — and `ErrorNormalizer::CODE_MAP` rewrites that to `not_found`
+ * on the way out, so `rest_no_route` is a code no client of this API can
+ * receive. This file's shared `notFound()` emits it anyway, which is the
+ * carried-forward entry DECISIONS.md already records as cross-collection
+ * (`/campaigns`, `/products`, `/coupons`). Fixed **here only**, because the
+ * shared helper answers for eighteen other collections and changing it is not
+ * this branch's to make; the ledger entry narrows rather than closes.
+ *
+ * The distinction is load-bearing for this screen and for no other: the detail
+ * page's `page.tsx` guards `/^\d+$/` itself and calls `notFound()` before
+ * fetching, precisely so a non-numeric id renders "no such notification" instead
+ * of an error — a guard that can only be justified while the two 404s really are
+ * two different facts.
+ */
+const notificationNoRoute = () =>
+  fail(404, "not_found", "No route was found matching the URL and request method.");
+
+/**
+ * `GET /notifications/{id}` — **the list row plus `message`, and nothing else.**
+ *
+ * `NotificationPresenter::full()` is literally `self::row($row) + ['message' =>
+ * …]`, and the fact was verified request-for-request on 2026-08-28 rather than
+ * read off that line: a live detail's keys are the list row's thirteen in the
+ * same order with `message` fourteenth, and the row is **value-identical** to
+ * its own entry in the listing once `message` is removed. So this reuses the row
+ * object rather than rebuilding one, which is the only way the two cannot drift.
+ *
+ * **There is no `meta` on the response.** `show()` passes none and
+ * `Response::successPayload()` omits an empty one, so a detail body is
+ * `{success, data}` — checked, because `parseList()` in the unit suite would
+ * accept a `meta` that should not be there.
+ */
+function notificationDetail(id) {
+  const row = notificationRow(id);
+  if (row === undefined) return notificationNotFound();
+
+  const context = NOTIFICATION_PAYLOADS.get(id);
+
+  /*
+   * `readable: false` is three empty fields and `context` as a JSON **array**,
+   * not an object — PHP's empty array serialising — which is why
+   * `notificationMessage` in the schemas is a union rather than a `z.record()`.
+   */
+  const message =
+    context === null || context === undefined
+      ? { readable: false, subject: "", body: "", context: [] }
+      : { readable: true, ...renderNotificationMessage(row.event, context), context };
+
+  return ok({ ...row, message });
+}
+
+/**
+ * `POST /notifications/{id}/retry` — **a 202 that mails nothing.**
+ *
+ * The three things this reproduces, each of which a screen can be wrong about:
+ *
+ *   **The body is a list row, with no `message` key.** `retry()` calls
+ *   `NotificationPresenter::row()` where `show()` calls `full()`, so the obvious
+ *   implementation — hand the response straight back to the detail screen — would
+ *   silently blank the quoted record. `lib/api/schemas/notification.ts:112-120`
+ *   pins it and says why, and `NotificationDetail.tsx` re-reads rather than
+ *   rebinding.
+ *
+ *   **The whole answer is in `meta`.** `already_pending` is the difference
+ *   between "this went back in the queue" and "it was already there", both 202
+ *   and both successes, and `drain` names the command that will actually send —
+ *   the reason the status is 202 and not 200.
+ *
+ *   **`already_pending` is the status *before* the request**, read off `$before`
+ *   in `NotificationService::retry()`. Not the status after, which is `pending`
+ *   either way, and not the `UPDATE`'s affected-row count: `requeue()`'s own
+ *   docblock records that reading the count as if it could answer this shipped a
+ *   bug once, because MySQL reports rows it *changed*, so an already-queued row
+ *   answered "already sent" about a row that had never been sent.
+ *
+ * The write itself is `requeue()`'s three columns and no more: `status` to
+ * `pending`, `attempts` to 0, `last_error` to NULL. `sent_at` is untouched, and
+ * on every row that can reach here it is already null.
+ */
+function retryNotification(id) {
+  const row = notificationRow(id);
+  if (row === undefined) return notificationNotFound();
+
+  /*
+   * **The one refusal in §90**, and the sentence is quoted from
+   * `NotificationService::retry()` rather than written here —
+   * `lib/notifications.ts:250-262` records the same string from the live shop.
+   * It cannot be provoked against that shop today (all 25 rows are `pending`),
+   * so this is a fixture for a measured refusal rather than an invented one.
+   *
+   * `details` carries both keys because the panel renders the date, and reading
+   * the 409 body rather than hard-coding what a conflict means is a house rule.
+   */
+  if (row.status === "sent") {
+    return conflict(
+      "That notification has already been sent. Re-sending would deliver a message frozen when it was queued.",
+      { status: row.status, sent_at: row.sent_at },
+    );
+  }
+
+  const alreadyPending = row.status === "pending";
+  const next = { ...row, status: "pending", attempts: 0, last_error: null };
+  state.notifications.set(id, next);
+
+  return {
+    status: 202,
+    body: {
+      success: true,
+      data: next,
+      meta: {
+        queued: true,
+        already_pending: alreadyPending,
+        drain: "wp algerian-commerce send-notifications",
+      },
+    },
+  };
 }
 
 /* ------------------------------------------------------ inventory queries --- */
@@ -13963,6 +14503,16 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     // at all, so neither is here and a `POST` to either falls to the 404.
     "campaigns",
     "segments",
+    /*
+     * **The only collection on this list whose write creates nothing.**
+     * `POST /notifications/{id}/retry` puts one row back in a queue — three
+     * columns, no id handed out, no ordering moved — and it is the *whole* of
+     * what writes here: `POST /notifications` is absent because it does not
+     * exist, a queue row being written by the system rather than by a person
+     * (lib/api/allowlist.ts:314). The `case` below refuses every other verb and
+     * path on the collection rather than letting this list decide it.
+     */
+    "notifications",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -14542,15 +15092,61 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     }
 
     /*
-     * The queue's list, and **nothing else on this collection yet**.
-     * `GET /notifications/{id}` and `POST /notifications/{id}/retry` are both real
-     * routes the notifications screen calls, and both are still 404s here — named
-     * in the unit suite rather than left implied, because "covered" must not come
-     * to mean "finished". The list is what the customer detail's section needs and
-     * it is what this branch serves.
+     * ── The queue: all three routes, and the gate that was missing ───────────
+     *
+     * This served the list alone until 2026-08-28 and said so — "`GET
+     * /notifications/{id}` and `POST /notifications/{id}/retry` are both real
+     * routes the notifications screen calls, and both are still 404s here". Both
+     * are served now, which is what makes the detail screen capturable at all.
+     *
+     * **The gate is new and it is the honesty audit's find, not the brief's.**
+     * All three routes are `Permissions::callback(Capabilities::MANAGE_CUSTOMERS)`
+     * and every service method asserts it again; measured 2026-08-28 with a
+     * credential holding no `ac_manage_customers`, `/notifications` and
+     * `/notifications/{id}` are both **403 `forbidden`** with no `details`. This
+     * file answered 200, which is the *more capable* direction — and the
+     * `no_customers` identity that reaches it has existed since the marketing
+     * branch, so the refusal was a path something could already take. The
+     * screen's own `page.tsx` renders `ForbiddenState` on the same capability,
+     * and until now that state could not be photographed against a mock that
+     * agreed with it.
+     *
+     * `/customers` is 403 for the same credential and this file does not gate it
+     * either. Left alone: that collection is not this branch's, and the fix is
+     * one line at its own `case`.
+     *
+     * Depth is stated here, the way `/products` and `/orders` state theirs.
      */
-    case "notifications":
-      return segments.length === 1 ? notificationsListing(searchParams) : notFound();
+    case "notifications": {
+      const refused = gatedOn("ac_manage_customers");
+      if (refused !== null) return refused;
+
+      if (segments.length === 1) {
+        return method === "GET" ? notificationsListing(searchParams) : notificationNoRoute();
+      }
+      if (segments.length > 3) return notificationNoRoute();
+
+      /*
+       * `(?P<id>\d+)` on both routes, so a non-numeric id never reaches the
+       * controller and answers the *routing* sentence — while `0` matches the
+       * regex, reaches `idArg()`'s `minimum: 1` and is a **400**, not a 404.
+       * Measured live: `/notifications/0` is `Invalid parameter(s): id`. The
+       * customers branch already answers its own `/customers/0` this way.
+       */
+      const id = numericId(second);
+      if (id === null) return notificationNoRoute();
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
+
+      if (segments.length === 2) {
+        return method === "GET" ? notificationDetail(id) : notificationNoRoute();
+      }
+      // Named rather than matched loosely, so `/notifications/{id}/anything`
+      // falls to the routing 404 instead of being served the row — and so a
+      // `GET` on the retry path does too, since the route is POST-only.
+      return segments[2] === "retry" && method === "POST"
+        ? retryNotification(id)
+        : notificationNoRoute();
+    }
 
     case "inventory": {
       // Measured 403 for the Support Agent credential, alongside `/orders`.

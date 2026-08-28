@@ -184,9 +184,16 @@ const LOCALES = ["fr", "ar"];
  * And **this captures the profile tab only.** The orders list and the customer's
  * notification queue are the detail's other two tabs, both client-fetched on
  * selection, and this harness never interacts with the page — so neither
- * `/customers/{id}/orders` nor `/notifications` is requested by a capture run of
- * this route, whatever the mock serves. `tests/mock-api.test.ts` is what holds
- * those two, and a screenshot of either would need a harness that can click.
+ * `/customers/{id}/orders` nor `?recipient=` on the queue is requested by a
+ * capture run of **this route**, whatever the mock serves. `tests/mock-api.test.ts`
+ * is what holds those two, and a screenshot of either would need a harness that
+ * can click.
+ *
+ * This block used to say `/notifications` was never requested by a capture run
+ * at all, which stopped being true on 2026-08-28: the collection has its own two
+ * routes at the end of this list. The sentence above is the narrower claim that
+ * survives — the customer's *tab* is still unreachable here, and the request it
+ * would make (`?recipient=`) is still made by nothing.
  *
  * **`/products/208` is deliberately not here, and it is the one worth knowing
  * about.** It is the only product carrying a broken option set, so it is the only
@@ -637,6 +644,96 @@ const DEFAULT_ROUTES = [
    * actually see rather than an edge case.
    */
   "/marketing/config",
+  /*
+   * ── Notifications: two screens, and the detail had never existed here ──────
+   *
+   * Not an oversight in this list. `GET /notifications/{id}` and its retry were
+   * **404s in the mock until 2026-08-28** — the list alone was served, for the
+   * customer detail's section — so `/notifications/{id}` was the one route in
+   * the panel that could not be photographed at all, at any width, theme or
+   * locale. `/notifications` itself was capturable and was not on this list.
+   *
+   * The list first. Page 1 is built so that the default view is the discriminating
+   * one, and it carries **all four states the panel derives from three fields**:
+   * `sent`, `queued` (pending, never attempted), `retrying` (pending with the
+   * attempt counted and an error on it — the state `status` alone hides) and
+   * `failed`. Both failure sentences are on it and both failure *counts*:
+   * `attempts: 5` is exhaustion and carries the drain's own sentence, while
+   * `attempts: 2` is a permanent refusal that parked a row the drain had already
+   * tried. A page showing one failure shape would photograph the same badge twice.
+   *
+   * The 340px risk here is row **4145's recipient** — 81 characters with no break
+   * opportunity, the file's `LONG_EMAIL`, in the widest free-text cell on the
+   * screen. It is on page 1 by construction.
+   *
+   * **There is no sort control and that is measured, not missing.** `?orderby=`
+   * ×14 spellings returns the identical id sequence and `?orderby=zzz` is a 200 —
+   * the parameter never reaches a validator. So this capture is the only ordering
+   * the screen has.
+   */
+  "/notifications",
+  /*
+   * The detail, and 4102 is chosen the way `/coupons/303` and `/products/104`
+   * were: **the richest row rather than the tidiest.**
+   *
+   * It is `retrying` — pending with `attempts: 1` and the drain's error on it —
+   * so it is the only state where *every* section of this screen has something
+   * in it at once: the warning-toned state badge, the attempt count, the quoted
+   * `last_error`, the retry control **live** with its already-queued footnote,
+   * and a `subject_id` that links back to an order that exists. It is
+   * `order.placed`, which is the longest of the eight templates: five paragraphs,
+   * so `messageParagraphs()`'s structure is visible rather than inferred.
+   *
+   * And its `customer_name` is **Arabic inside an otherwise-English body** —
+   * `Bonjour محمد بن علي,` over `We have received your order 1016.` That is the
+   * one thing a screenshot can check here and an assertion cannot: the message is
+   * a *record*, rendered verbatim with its own direction, so an Arabic name in a
+   * French salutation over an English sentence has to sit inside the quote
+   * without the quote leaking its direction into the chrome around it. Both
+   * locales × both themes is the matrix that catches it.
+   *
+   * **Four states are NOT on this route and are therefore captured by name.**
+   * Each is a state of this one screen rather than a screen of its own:
+   *
+   *     node scripts/capture.mjs /notifications/4144
+   *         `readable: false` — the row whose payload will not decode. The quote
+   *         is replaced by what the drain saw, and it is the only row where the
+   *         message block renders its other arm. It is `failed` with `attempts:
+   *         1`, because `drain()` marks it without ever attempting a send
+   *
+   *     node scripts/capture.mjs /notifications/4142
+   *         the `sms` row — a recipient that is a phone number rather than a
+   *         mailbox, and the only place the channel label is not `email`. Its
+   *         message carries the tracking paragraph and **no link**, which is the
+   *         ordinary state: `store.storefront_url` is unset on this shop
+   *
+   *     node scripts/capture.mjs /notifications/4143
+   *         the row with **no subject at all** — `subject_id: null`, so the
+   *         order link is absent rather than broken, and `dedupe_key` falls back
+   *         to the recipient. It is also the only `stock.low` row, whose message
+   *         is the one template that is not about an order
+   *
+   *     node scripts/capture.mjs /notifications/4100
+   *         a `sent` row, which is a different screen rather than a state: the
+   *         retry section is **not rendered at all** — `RetrySection` returns
+   *         null — and `sent_at` is the only place in this collection a second
+   *         timestamp appears
+   *
+   * The 409 a `sent` row answers cannot be photographed from any of them: the
+   * panel never offers retry on one, so reaching it needs a row that sends
+   * between the render and the tap. It is asserted in `tests/mock-api.test.ts`.
+   *
+   * ── And the collection's forbidden state, which needs its own run ──────────
+   *
+   * All three routes are `ac_manage_customers`, and the mock refuses them on it
+   * since 2026-08-28 — measured live, and answering 200 here until then was the
+   * *more capable* direction. `no_customers` is the identity that reaches it, and
+   * it exists already:
+   *
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /notifications
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /notifications/4102
+   */
+  "/notifications/4102",
   /*
    * ── And the section's forbidden state, which needs its own run ─────────────
    *

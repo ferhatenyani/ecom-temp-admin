@@ -105,6 +105,21 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * form is not applied here: it advances per request, by design, and a capture must
  * never be taken under it.
  *
+ * **The notification queue joined on 2026-08-28, and it is the only write here
+ * that creates, deletes and reorders nothing.** `POST /notifications/{id}/retry`
+ * is `requeue()`'s single conditional `UPDATE` over three columns — `status`,
+ * `attempts`, `last_error` — so a retried row keeps its id and its `created_at`
+ * and therefore its place in a listing ordered by nothing else. There is no id
+ * counter to reset beside it.
+ *
+ * It still has to be rebuilt, and for the reason that has nothing to do with
+ * ordering: a retry is **destructive of the states the fixture exists for**. It
+ * takes a `failed` or `retrying` row to `queued` — attempts 0, no error — so the
+ * first test to retry the queue's only unreadable row would leave every later one
+ * with no `readable: false` fixture at all, and the same for the exhausted row at
+ * `attempts: 5` and the permanently-refused one at 2. Three of the six states the
+ * list assertions are written against are one request from being gone.
+ *
  * Coupons, shipping rules, campaigns and segments are the collections where a
  * *create* is undone by this, which is what keeps `nextCouponId`, `nextRuleId`,
  * `nextCampaignId` and `nextSegmentId` handing out the same ids in every process
