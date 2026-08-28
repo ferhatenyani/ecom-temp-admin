@@ -55,7 +55,7 @@ Apply these to every remaining screen unless something measured says otherwise.
 
 | Rule | Why |
 | --- | --- |
-| **Sorting ships only with a positive control** — and the control must not be the collection's *default* ordering. Products and coupons. | Two values agreeing *with each other* proves nothing, and a value that is already the resting order proves nothing either — `date` on coupons tied on every row and answered the bare listing, which is how "validated then ignored" got recorded for a working sort. Absence of a positive control is not evidence of absence: go and take one. Orders, customers and inventory still ship none. |
+| **Sorting ships only with a positive control** — and the control must not be the collection's *default* ordering. Products, coupons and media. | Two values agreeing *with each other* proves nothing, and a value that is already the resting order proves nothing either — `date` on coupons tied on every row and answered the bare listing, which is how "validated then ignored" got recorded for a working sort. Absence of a positive control is not evidence of absence: go and take one. **Media is what that last sentence costs when nobody acts on it** — §14 recorded a working sort *and* a working search as broken for a fortnight, and both took one request each to disprove. "Treated as broken" is a holding position, not a verdict. Orders, customers and inventory still ship none. |
 | **A peek drawer is a judgement, not a default.** | Free only when `GET /{id}` returns the list row exactly. Orders and products yes; customers, inventory, coupons no. |
 | **A detail screen's primary action goes in `PageHeader`.** | Below `lg` the aside drops beneath a variable-length list. |
 | **A long form's save is a sticky bar that appears when dirty.** | §3.4 legislates it separately from the header rule. |
@@ -1529,20 +1529,95 @@ to press.
   `lib/api/allowlist.ts:266-273` refuses it and `tests/boundary.test.ts:487` pins
   it shut, because an attachment has no back-reference anywhere in this API and
   the panel cannot say what a delete would break. Not rendered, not disabled.
-- **No sorting, no `aria-sort` anywhere.** The only control taken on `orderby` is
-  negative (`rand` → 400) and `date desc` is the resting order, so the standing
-  rule's positive control does not exist.
+- ~~**No sorting, no `aria-sort` anywhere.** The only control taken on `orderby`
+  is negative (`rand` → 400) and `date desc` is the resting order, so the
+  standing rule's positive control does not exist.~~ **Corrected 2026-08-28 —
+  both controls now ship; see below.**
 - **No `type` filter**, though the parameter works. No allowlisted enumeration of
   what a library can *hold* exists — `ACCEPTED_MIME` is what the panel can
   upload, definitionally a subset — and all 41 rows are `image/*`, so the control
   has one non-empty value. A control that can only answer "all of them" cannot
   act.
-- **No search box.** `search` is honoured in backend code and has no control at
-  all, here or in the backend suite. Unmeasured is treated as broken.
+- ~~**No search box.** `search` is honoured in backend code and has no control at
+  all, here or in the backend suite. Unmeasured is treated as broken.~~
+  **Corrected 2026-08-28.**
 - **No bulk, no export** — media is not in `EXPORT_SUBJECTS`.
-- **One empty state, and the missing half has no producer.** With no filter, no
-  search, no sort and a bounded pager, there is no control a reader can operate
-  that returns nothing. DESIGN.md §3.7 carries the amendment.
+- ~~**One empty state, and the missing half has no producer.**~~ **Corrected
+  2026-08-28: the search is its producer, and both halves now ship.** DESIGN.md
+  §3.7's amendment keeps its force and its example is corrected in place.
+
+### The two absences that were wrong, measured and shipped 2026-08-28
+
+**Neither parameter was broken; neither had been asked.** The entries above read
+"unmeasured, therefore treated as broken", which is the standing rule doing its
+job — and the rule's other half, which those entries did not act on, is that the
+absence of a positive control is not evidence of absence: go and take one. Taken,
+against the live API, 43 rows:
+
+```
+orderby=date&order=asc    sorts, and DIFFERS from the resting order   positive control
+orderby=id&order=asc      sorts, differs from the bare listing        positive control
+date desc / id desc       byte-identical to the bare listing          prove nothing alone
+orderby=title             UNPROVABLE — 42 of 43 rows are titled "Tapis"
+?orderby=zzz              400 invalid_request                         validated, not ignored
+?bogus_param=1            = the bare listing                          the control holds
+
+search=woocommerce-placeholder   1 of 43     discriminating positive control
+search=zzzqqq                    0 of 43
+search=<filename stem>           0 of 43     search does NOT reach filenames
+search=<slug>                    0 of 43     nor slugs
+search=""                       43 of 43     absence
+search + per_page=1             200, meta.total 1   combines with paging
+```
+
+- **Sort ships on `date` only, two directions.** Not `id`: it sorts, and on this
+  collection id order and date order are the same fact, so a second control would
+  be two spellings of one answer — chrome on a band that costs the same as a
+  control which means something. Not `title`: unprovable on the only fixture that
+  exists, and unmeasured stays broken. **The measurement `title` still needs** is
+  a fixture with distinct titles — three or more rows sorting differently from
+  both their ids and their dates — then `orderby=title&order=asc` against the bare
+  listing. Recorded in `media/query.ts`, which carries every request above.
+- **The resting order sends no `orderby` at all**, the way every other list's
+  first tab sends nothing. `date desc` was measured byte-identical to the bare
+  listing, so asking for it explicitly is a parameter that changes nothing in
+  every URL for ever — and the second press of the "newest first" chip is then a
+  genuine return to rest rather than a re-request.
+- **The sort control is `FilterTabs` in `chips`, not the strip** — §12's rule
+  applied without an exception: a full-bleed underlined strip under the header
+  always means *which view*, and this screen has none. **No `aria-sort`**: it is a
+  table-header attribute and there is no table here. `aria-current` on a labelled
+  `nav` is what these are.
+- **Search is submit-gated**, on §7's coupons pattern, and **the placeholder names
+  its own scope** — which matters more here than on any list in the panel, because
+  a tile whose title is empty is labelled with its *filename* and the filename is
+  measured **not** to be searchable. A reader typing what a tile says would get
+  nothing back with nothing on screen to say why. `empty.noResults` repeats it.
+- **The copy states the measured negative and not an unmeasured exclusion.** It
+  says the search covers the title and not the filename — both directions
+  measured. It does *not* say "the title only": `WP_Query`'s `s` is a LIKE over
+  `post_title`, `post_excerpt` and `post_content`, so the caption is plausibly
+  matched and nobody has run that request. Coupons' "porte sur le code, pas sur
+  la description" is the sentence's shape, not a licence to claim an exclusion
+  this collection has not answered.
+- **What search reaches is worth more than "titles".** WordPress derives
+  `post_title` from the uploaded filename, and the one fixture row nobody has
+  renamed has `title === filename stem` — so searching by title does reach what a
+  person typed when they uploaded the file, until somebody edits the title in the
+  drawer.
+- **Both live in the URL and both reset paging.** `page` stays local state, as it
+  was: `?peek=` is worth sharing and a page number on this screen still is not,
+  and page 3 of a re-sorted library is a different set of rows rather than the
+  same ones rearranged. `page.tsx` now reads `searchParams`, so a shared
+  `/media?search=…` paints the searched library instead of painting the whole one
+  and flipping.
+- **`MediaPicker` grew neither**, and the shared grid needed no new props to keep
+  it that way — the toolbar lives in `MediaLibrary`'s `PageHeader`, not inside
+  `MediaGrid`. A search box and a sort strip in 520px of a drawer somebody opened
+  to attach one picture is a filter UI inside a picker.
+- **`loading.tsx` grew the band**, drawn from `.ui-chip` and `.ui-field`'s own
+  utilities so it matches at 36px on a pointer and 44px on touch rather than only
+  on a laptop.
 
 ### Two boundary defects the harness audit surfaced, both `MediaPresenter`
 
@@ -1715,7 +1790,11 @@ either way.
   and are deliberately still in the files**: `content.moveUp`/`moveDown` have
   exactly one caller left — `MoveControls.tsx` — so removing the keys would leave
   a source file reading a key that does not exist. Teardown deletes the three
-  files and those two keys in one edit. `patterns/TabBar.tsx` has had none since
+  files and those two keys in one edit. **`patterns/MediaPicker.tsx` read
+  `media.empty` and that key became an object on 2026-08-28**, when the library
+  grew a no-results state; its one call is repointed to `media.empty.none` for
+  the same reason the keys stayed — a dead file must still be a *correct* dead
+  file, or the next reader cannot tell a retirement from a bug. `patterns/TabBar.tsx` has had none since
   the shell landed, and it is the only thing that still links `/more`, which two
   `e2e/content.spec.ts` tests were asserting against until this branch.
   **`tests/cms.test.ts` was importing `moveItem` from the retired copy**, so the

@@ -44,6 +44,19 @@ import { MediaGrid, MediaGridSkeleton } from "@/components/ui/MediaGrid";
  * one move DESIGN.md §3 forbids by name. What is left here is what is actually
  * the *picker's*: the request, the four states, and `onPick`.
  *
+ * ## It does **not** grow the library's search or sort, and the grid stayed shared
+ *
+ * `/media` gained both on the branch that measured them, and neither belongs
+ * here. This is 520px of a `Drawer` that a person opened to attach one picture to
+ * a banner: a search box and a sort strip inside it is a filter UI inside a
+ * picker, and the three controls it would then hold are two more than the task
+ * has. The library's toolbar lives in `MediaLibrary`'s `PageHeader` rather than
+ * inside `MediaGrid` for exactly that reason — the grid took no new props, so
+ * there was nothing here to make optional and nothing to fork.
+ *
+ * The library's own request now carries `search` and `orderby`; this one still
+ * sends neither, so the picker keeps showing the collection at rest.
+ *
  * ## It can be forbidden to somebody who can use the screen around it
  *
  * That is the gap the specification documents rather than a bug here. A Product
@@ -96,7 +109,9 @@ export function MediaPicker({
     );
   }
 
-  if (items.length === 0) return <EmptyState message={t("empty")} icon="image" />;
+  /* `empty.none` and there is no `empty.noResults` branch, because this panel has
+     no control that could produce one — see the docblock. */
+  if (items.length === 0) return <EmptyState message={t("empty.none")} icon="image" />;
 
   return (
     <MediaGrid

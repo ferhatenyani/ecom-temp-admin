@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { acRead } from "@/lib/api/browser";
 import type {
   AttributeTerm,
   Facets,
@@ -241,9 +242,33 @@ export function ProductsList({
 
   /* Resolved against the page already in memory — `GET /products/{id}` returns
      the same object as the list row, so opening a preview costs no request. */
-  const peeked = peekId
+  const inPage = peekId
     ? (products.find((p) => String(p.id) === peekId) ?? null)
     : null;
+
+  /**
+   * **And fetched when it is not, because otherwise the URL is a dead link.**
+   *
+   * The in-memory lookup is right for the way the id usually arrives — a click on
+   * a visible row — and wrong for the reason the id is in the URL at all. This
+   * list opens at 20 of 38 with nine filter dimensions above it, so a shared peek
+   * link is more likely to miss than to hit: page two, or anybody else's filter,
+   * opened nothing and said nothing. Found on the media branch and latent here
+   * since this screen shipped, which is why the ledger's own lesson applies —
+   * a defect nobody has reproduced is not a defect nobody has.
+   *
+   * `enabled` only on a miss, so the free path stays free. `retry: false`, and a
+   * failure opens nothing: the catalogue behind it is intact and readable, which
+   * is the honest answer to an id naming no product.
+   */
+  const peekQuery = useQuery({
+    queryKey: ["products", "item", peekId],
+    enabled: peekId !== null && inPage === null,
+    queryFn: async () => (await acRead<Product>(`/products/${peekId}`)).data,
+    retry: false,
+  });
+
+  const peeked = inPage ?? peekQuery.data ?? null;
 
   /* Four statuses plus All. `trash` is absent because `?status=trash` is a 400. */
   const tabs = [

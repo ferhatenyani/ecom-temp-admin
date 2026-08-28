@@ -10,8 +10,34 @@
  */
 export const SHOP_TIMEZONE = process.env.NEXT_PUBLIC_SHOP_TIMEZONE ?? "Africa/Algiers";
 
+/**
+ * **`-u-hc-h23` on the French entry, and it is a bug fix.**
+ *
+ * `fr-DZ` is deliberate and right — `lib/format/money.ts` picks it for the same
+ * reason, and it is what writes `4 août 2026` rather than `Aug 4, 2026`. What
+ * came with it was not chosen: CLDR resolves `fr-DZ` to `hourCycle: h12` with
+ * the **English** `AM`/`PM` day-period names, while `fr` and `fr-FR` are both
+ * `h23`. So every timestamp on every French screen in this panel has been
+ * reading `6:32 AM` — an English marker in a French UI, on a convention French
+ * does not use.
+ *
+ *   fr      h23   4 août 2026, 06:32     ← what French should render
+ *   fr-DZ   h12   4 août 2026, 6:32 AM   ← what the panel rendered
+ *   ar-DZ   h12   04‏/08‏/2026، 6:32 ص     ← correct, and deliberately untouched
+ *
+ * **Arabic keeps h12 and must.** `ص`/`م` are the Arabic day-period names and
+ * 12-hour is the Arabic convention; the defect was never that h12 exists, only
+ * that French inherited it along with the region.
+ *
+ * Found on the media drawer's `Téléversé` row and measured in the built panel
+ * rather than reasoned about: the page's own `Intl`, given
+ * `document.documentElement.lang`, returned `06:32` while the panel printed
+ * `6:32 AM` on the same instant — so it was the locale string and nothing else.
+ * The extension subtag is the whole fix, because it changes the hour cycle
+ * without touching the region that decides the date's own shape.
+ */
 const DATE_LOCALE: Record<string, string> = {
-  fr: "fr-DZ",
+  fr: "fr-DZ-u-hc-h23",
   ar: "ar-DZ-u-nu-latn",
 };
 
