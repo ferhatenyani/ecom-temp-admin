@@ -758,6 +758,107 @@ const DEFAULT_ROUTES = [
    * with one section refused inside it, which is the shape `/orders/1023` under
    * `reduced` established and the only other place in the panel it occurs.
    */
+  /*
+   * ── Staff: three screens, and none of them has ever been photographed ──────
+   *
+   * Not an oversight in this list, and the reason is the strongest version of
+   * the one `/content` and `/marketing` gave: `/users` and `/roles` were
+   * **completely unmocked** until 2026-08-29 — `tests/mock-api.test.ts` declared
+   * the whole `staff` module `UNCOVERED` — so every request this section makes
+   * fell to `notFound()`. A capture would have photographed an error state at
+   * every width, theme and locale, which is why the mock is the prerequisite for
+   * verifying the screen at all rather than a convenience.
+   *
+   * The list first. 69 accounts at the default `per_page` of 20 is **four
+   * pages**, so `TableFooter` renders a real "1 / 4" and the Arabic capture can
+   * catch a reordered page indicator — "1 / 1" is symmetric and proves nothing,
+   * which is the lesson shipping paid for and payments wrote down.
+   *
+   * Page one is built to be the discriminating one. It carries the 340px
+   * overflow fixture (row 413: a 56-character login and an 81-character address,
+   * the two widest free-text cells on the screen), both accounts whose role the
+   * `/roles` matrix does **not** describe — `is_administrator`, where
+   * `roleLabel()` falls through to the bare slug — the four accounts whose
+   * display name is not their login, and the acting user's own row.
+   *
+   * **The sort is the reason this screen is worth photographing rather than
+   * asserting.** It is the run's strongest measured control: five fields, both
+   * directions, seven distinct sequences and a real 400 for anything else. A
+   * header that sorts and a header that does not look identical in a unit test.
+   */
+  "/users",
+  /*
+   * The detail, and 774 is chosen the way `/coupons/303`, `/products/104` and
+   * `/notifications/4102` were: **the richest row rather than the tidiest.**
+   *
+   * It is the only account in the shop where every section of this screen has
+   * something in it at once — a first and last name *and* a display name that is
+   * neither (`Karim B.`, so `staffName()` renders something the username column
+   * beside it does not repeat), an **assignable** role so the role control is
+   * live rather than disabled with a retirement note, `active` so the suspend
+   * action reads forward rather than back, and **two application passwords, one
+   * of which has never been used** — the only place `neverUsed()`'s other arm is
+   * on screen. It owns no orders and is not the acting user, so its delete is the
+   * one that actually offers to delete.
+   *
+   * **Three states are NOT on this route and are therefore captured by name.**
+   * Each is a state of this one screen rather than a screen of its own, and each
+   * is a refusal `lib/staff.ts` calls the security model:
+   *
+   *     node scripts/capture.mjs /users/514
+   *         **the acting user's own account**, and the only row where three
+   *         controls are disabled-with-a-reason rather than live: the role
+   *         picker, the suspend action and the delete. The panel refuses all
+   *         three locally because it knows who it is, so this is the capture that
+   *         proves the reasons are rendered rather than the controls hidden. The
+   *         id is `MOCK_IDENTITY`'s own — 515 under `reduced`, 516 under
+   *         `support`, and so on
+   *
+   *     node scripts/capture.mjs /users/770
+   *         the **suspended** account — the danger-toned badge, the reactivate
+   *         action in place of suspend, and the one account whose credential
+   *         section cannot mint: `POST …/application-passwords` is a 409 with no
+   *         `details`, which is a fact about the account rather than about the
+   *         name and belongs at the top of the section
+   *
+   *     node scripts/capture.mjs /users/778
+   *         the account that **owns orders**, whose delete answers 409 with
+   *         `details.orders`. The panel cannot predict it — nothing on a user row
+   *         says whether they own orders — so it asks and renders the count, and
+   *         this is the only row where that path is taken
+   */
+  "/users/774",
+  /*
+   * The create form, which is a **different screen** rather than a state of the
+   * detail — the precedent `/coupons/new` and `/content/pages/new` set. No id, a
+   * username field that is editable exactly once in an account's life, no status
+   * control at all (`status` is "Unknown field." on a `POST`), and no credential
+   * section, because an account has to exist before it can be issued one.
+   *
+   * The role picker is the discriminating part and it is why this route is worth
+   * its own capture: `/roles` publishes **seven** rows and only **two** are
+   * assignable, so the control offers two options over a matrix of seven — and a
+   * picker built from the whole list would offer five roles the API refuses by
+   * name.
+   */
+  "/users/new",
+  /*
+   * ── And the section's forbidden state, which needs its own run ─────────────
+   *
+   * Every route above is `ac_manage_users`, and **all six identities that
+   * existed before this branch held it** — so DESIGN.md §3.7's forbidden state
+   * was unreachable for the whole section, which is `no_content`,
+   * `no_customers` and `no_marketing` for the fourth time:
+   *
+   *     MOCK_IDENTITY=no_users node scripts/capture.mjs /users /users/774 /users/new
+   *
+   * The refusal was measured on 2026-08-29 with three real credentials — a
+   * Manager, a Support Agent and a Marketing Manager — all 403 on `/users`,
+   * `/users/{id}`, `/roles` and the credential collection alike. `ac_manage_users`
+   * is Super Admin's alone and is the capability that makes Super Admin
+   * different from Admin, so this is the one section of the panel most staff
+   * accounts can never open.
+   */
 ];
 
 /* -------------------------------------------------------------- the cookie --- */

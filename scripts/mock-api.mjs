@@ -766,6 +766,46 @@ const IDENTITIES = {
    * makes the section's refusal unambiguous, which is what a forbidden-state
    * fixture is for. Nothing here claims the shop has a role shaped like this.
    */
+  /*
+   * ── The seventh, and the one the other six made impossible ────────────────
+   *
+   * **All six identities above hold `ac_manage_users`**, because every one of
+   * them is `CAPABILITIES` minus one or two entries and none of those entries
+   * was this. So the staff section — the list, the detail, the create form and
+   * `/roles` behind all three — had no capturable forbidden state, which
+   * DESIGN.md §3.7 requires of every screen. This is `no_content` again, one
+   * section over, and it is the fourth time the same hole has been found.
+   *
+   * Measured 2026-08-29, three credentials at once, one request each:
+   *
+   *     ac_panel_manager (Manager)                     403 on all four routes
+   *     ac_panel_support_agent (Support Agent)         403 on all four routes
+   *     ac_panel_marketing_manager (Marketing Manager) 403 on all four routes
+   *     ac_panel_super_admin, ac_panel_admin           200 on all four
+   *
+   * with `{"code":"forbidden","message":"You are not allowed to perform this
+   * action."}` and **no `details` key** — the shape `forbidden()` already emits.
+   * The four routes were `/users`, `/users/{id}`, `/roles` and
+   * `/users/{id}/application-passwords`; the write verbs were not fired and are
+   * gated by the same `permission_callback` in the same `register_rest_route`
+   * call, which is read from the source rather than measured.
+   *
+   * **A credential with a measured shape, not a claim about the shop's roles.**
+   * The delta from `full` is exactly the one capability the measured 403s turn
+   * on — the rule `reduced` set and every identity since has followed. It is
+   * also the only identity that can reach `guardAssignable()`'s 403 without
+   * being able to reach the route it guards, which is why that refusal's own
+   * fixture is `no_content` rather than this one.
+   */
+  no_users: {
+    id: 520,
+    username: "harness-no-users",
+    display_name: "Harness No-Users",
+    email: "harness-no-users@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_users"),
+    auth_method: "application_password",
+  },
   no_marketing: {
     id: 519,
     username: "harness-no-marketing",
@@ -4772,6 +4812,387 @@ const MARKETING_CONFIG = {
   server_events: ["Purchase", "InitiateCheckout"],
 };
 
+/* ------------------------------------------------------------------ staff --- */
+
+/**
+ * ── `GET /roles`: seven rows, and the eighth role is deliberately absent ─────
+ *
+ * Measured live 2026-08-29 with `ac_panel_super_admin`, byte-for-byte against
+ * `RolePresenter::all()` — which reads `Capabilities::roles()` on every request,
+ * so this table is the *matrix* rather than what WordPress happens to have
+ * stored.
+ *
+ * **`administrator` is not here and `?role=administrator` returns two accounts.**
+ * That asymmetry is load-bearing and must not be tidied: `UserRoles::staff()` is
+ * the seven **plus** `administrator`, so the role *filter* reaches a role the
+ * role *list* does not describe. `roleLabel()` (lib/staff.ts:63) exists for
+ * exactly that gap — it falls through to the row's own `role_name`, which is the
+ * bare slug `"administrator"` on those two. A mock that helpfully added an eighth
+ * row here would make that fallback unreachable and let a screen ship having
+ * never rendered it.
+ *
+ * **Two of the seven are `assignable` and five are retired.** Not deleted:
+ * `UserRoles::assignable()` narrows what may be *granted* while `managed()` stays
+ * §45's seven, because 50 of the 69 accounts below still hold one of the five.
+ * A picker filters on the flag; a label reads the whole list.
+ *
+ * The envelope is `enumeration()` — **no `meta` key at all**, measured on the
+ * same request. `UserController::roles()` calls `Response::success()` with no
+ * pagination, and `Response::successPayload()` omits an empty `meta`. This file
+ * has been wrong about exactly this before (see `list()`'s docblock), so it was
+ * diffed rather than assumed.
+ */
+const ROLE_MATRIX = [
+  ["ac_super_admin", "Super Admin", true, [
+    "ac_manage_products", "ac_manage_inventory", "ac_manage_orders", "ac_manage_customers",
+    "ac_manage_coupons", "ac_manage_content", "ac_manage_marketing", "ac_view_analytics",
+    "ac_manage_shipping", "ac_manage_payments", "ac_manage_settings", "ac_manage_users",
+    "ac_view_audit_logs",
+  ]],
+  ["ac_admin", "Admin", false, [
+    "ac_manage_products", "ac_manage_inventory", "ac_manage_orders", "ac_manage_customers",
+    "ac_manage_coupons", "ac_manage_content", "ac_manage_marketing", "ac_view_analytics",
+    "ac_manage_shipping", "ac_manage_payments", "ac_view_audit_logs",
+  ]],
+  ["ac_manager", "Manager", true, [
+    "ac_manage_products", "ac_manage_inventory", "ac_manage_orders", "ac_manage_customers",
+    "ac_manage_coupons", "ac_manage_shipping", "ac_view_analytics",
+  ]],
+  ["ac_product_manager", "Product Manager", false, [
+    "ac_manage_products", "ac_manage_inventory", "ac_view_analytics",
+  ]],
+  ["ac_order_manager", "Order Manager", false, [
+    "ac_manage_orders", "ac_manage_customers", "ac_manage_shipping", "ac_view_analytics",
+  ]],
+  ["ac_marketing_manager", "Marketing Manager", false, [
+    "ac_manage_marketing", "ac_manage_content", "ac_manage_coupons", "ac_view_analytics",
+  ]],
+  ["ac_support_agent", "Support Agent", false, [
+    "ac_manage_customers", "ac_view_analytics",
+  ]],
+];
+
+const ROLES = ROLE_MATRIX.map(([role, name, assignable, capabilities]) => ({
+  role,
+  name,
+  capabilities,
+  assignable,
+}));
+
+const ROLE_NAMES = new Map(ROLE_MATRIX.map(([role, name]) => [role, name]));
+
+/** `UserRoles::assignable()` — the two this API still hands out, in order. */
+const ASSIGNABLE_ROLES = ROLE_MATRIX.filter(([, , yes]) => yes).map(([role]) => role);
+
+/** `UserRoles::managed()` — §45's seven, retired ones included. */
+const MANAGED_ROLES = ROLE_MATRIX.map(([role]) => role);
+
+/** `UserRoles::retired()` — recognised, reported, no longer granted. */
+const RETIRED_ROLES = MANAGED_ROLES.filter((role) => !ASSIGNABLE_ROLES.includes(role));
+
+/**
+ * `UserRoles::staff()` and therefore the `?role=` enum — **the seven plus
+ * `administrator`**, in this order. Measured: `?role=nonsense` names all eight
+ * and `?role=` (empty) is refused by the same sentence, because `""` is not a
+ * member of the enum the router validates against.
+ */
+const STAFF_ROLES = [...MANAGED_ROLES, "administrator"];
+
+/** `UserRoles::CORE_ROLES` — WordPress's own, each refused with its own message. */
+const CORE_ROLES = [
+  "administrator",
+  "editor",
+  "author",
+  "contributor",
+  "subscriber",
+  "shop_manager",
+  "customer",
+];
+
+/** `UserStatus::ALL`. `""` is **not** a member, so `?status=` is a 400. */
+const STAFF_STATUSES = ["active", "suspended"];
+
+/** `UserRepository::ORDERBY`, and it is a real enum the router refuses outside of. */
+const STAFF_ORDERBY = ["registered", "ID", "display_name", "user_email", "user_login"];
+
+/**
+ * ── 68 real staff accounts, and the harness identity is the 69th ─────────────
+ *
+ * `[id, login, role, minutesAgo]`, newest first, taken from the live shop on
+ * 2026-08-29 (`GET /users?per_page=100`, 73 rows). Every login, id and role is
+ * the shop's own; only the **absolute** registration stamps are the fixture's,
+ * because the live install seeded 73 accounts inside five days and several were
+ * created in the same second. The *order* is the live order and the intervals
+ * are the live intervals, fanned out to a whole minute apart so nothing here
+ * ties — a fixture that ties on every row is the thing DECISIONS.md's standing
+ * rule says cannot prove a sort.
+ *
+ * **The ids 514-520 are held out, and five of them exist live.** Those are
+ * `IDENTITIES`' own ids, and the acting user is appended below as exactly one
+ * row under every `MOCK_IDENTITY` — so the collection is 69 under all seven of
+ * them rather than 68 under two and 69 under five. It is 69 where the shop's is
+ * 73, and the difference is the reservation rather than a fixture that ran
+ * short. Role histogram, therefore: support_agent 19, admin 14,
+ * super_admin 12, order_manager 7, product_manager 6, manager 5,
+ * marketing_manager 4, administrator 2.
+ *
+ * **`registered` and `ID` do not agree**, which is what makes both worth
+ * offering: 776 registered after 778 while 778 has the higher id, and the same
+ * inversion recurs at 762/763. Two sorts that produce one sequence prove
+ * nothing, and this file has now recorded that error five times.
+ *
+ * `email` is `{login}@example.test` and `display_name` is the login on every row
+ * the shop has, bar the four named below — measured, not assumed: the whole list
+ * was checked for exceptions and there are exactly four.
+ */
+const STAFF_SEED = [
+  [776, "ac_usr_promote", "ac_manager", 66],
+  [778, "ac_usr_ordered", "ac_support_agent", 73],
+  [774, "ac_usr_new", "ac_manager", 80],
+  [770, "ac_panel_suspended", "ac_manager", 134],
+  [762, "ac_audit_super", "ac_super_admin", 150],
+  [763, "ac_audit_manager", "ac_manager", 157],
+  [536, "ac_coupon_marketing", "ac_marketing_manager", 4194],
+  [475, "ac_panel_super_admin", "ac_super_admin", 5259],
+  [474, "ac_panel_support_agent", "ac_support_agent", 5389],
+  [473, "ac_paneldev", "ac_super_admin", 5482],
+  [415, "ac_notif_auditor", "ac_admin", 5791],
+  [414, "ac_notif_product", "ac_product_manager", 5798],
+  [413, "ac_notif_support", "ac_support_agent", 5805],
+  [346, "ac_cms_auditor", "ac_admin", 5838],
+  [288, "ac_attr_auditor", "ac_admin", 5977],
+  [286, "ac_attr_manager", "ac_product_manager", 5984],
+  [287, "ac_attr_denied", "ac_support_agent", 5991],
+  [240, "ac_usr_suspend", "ac_order_manager", 6019],
+  [237, "ac_usr_escalator", "ac_admin", 6026],
+  [234, "ac_usr_agent", "ac_support_agent", 6033],
+  [233, "ac_usr_admin", "ac_admin", 6040],
+  [231, "ac_usr_super", "ac_super_admin", 6047],
+  [232, "ac_usr_boss", "ac_super_admin", 6054],
+  [108, "ac_opt_admin", "ac_super_admin", 6855],
+  [69, "ac_settings_admin", "ac_admin", 7056],
+  [68, "ac_settings_super", "ac_super_admin", 7063],
+  [60, "ac_apitest_support", "ac_support_agent", 7171],
+  [59, "ac_apitest", "ac_admin", 7178],
+  [58, "ac_ship_support", "ac_support_agent", 7185],
+  [57, "ac_ship_manager", "ac_order_manager", 7192],
+  [56, "ac_rules_support", "ac_support_agent", 7199],
+  [55, "ac_rules_manager", "ac_order_manager", 7206],
+  [54, "ac_seo_admin", "ac_admin", 7213],
+  [53, "ac_seed_admin", "administrator", 7220],
+  [50, "ac_sec_admin", "ac_super_admin", 7227],
+  [51, "ac_sec_support", "ac_support_agent", 7234],
+  [48, "ac_prod_admin", "ac_super_admin", 7241],
+  [49, "ac_prod_support", "ac_support_agent", 7248],
+  [46, "ac_pay_support", "ac_support_agent", 7255],
+  [44, "ac_pay_admin", "ac_admin", 7262],
+  [45, "ac_pay_manager", "ac_manager", 7269],
+  [43, "ac_ord_auditor", "ac_admin", 7276],
+  [40, "ac_ord_manager", "ac_order_manager", 7283],
+  [41, "ac_ord_support", "ac_support_agent", 7290],
+  [38, "ac_media_product", "ac_product_manager", 7297],
+  [39, "ac_media_support", "ac_support_agent", 7304],
+  [37, "ac_media_marketing", "ac_marketing_manager", 7311],
+  [35, "ac_mkt_admin", "ac_admin", 7318],
+  [34, "ac_mkt_orders", "ac_order_manager", 7325],
+  [33, "ac_mkt_marketing", "ac_marketing_manager", 7332],
+  [32, "ac_inv_admin", "ac_super_admin", 7339],
+  [31, "ac_inv_support", "ac_support_agent", 7346],
+  [30, "ac_inv_manager", "ac_product_manager", 7353],
+  [29, "ac_ie_support", "ac_support_agent", 7360],
+  [28, "ac_ie_admin", "ac_admin", 7367],
+  [27, "ac_cus_auditor", "ac_admin", 7374],
+  [23, "ac_cus_denied", "ac_product_manager", 7381],
+  [22, "ac_cus_manager", "ac_order_manager", 7388],
+  [20, "ac_coupon_admin", "ac_super_admin", 7395],
+  [21, "ac_coupon_support", "ac_support_agent", 7402],
+  [18, "ac_cod_support", "ac_support_agent", 7409],
+  [17, "ac_cod_manager", "ac_order_manager", 7416],
+  [14, "ac_cms_marketing", "ac_marketing_manager", 7423],
+  [15, "ac_cms_product", "ac_product_manager", 7430],
+  [16, "ac_cms_support", "ac_support_agent", 7437],
+  [12, "ac_an_support", "ac_support_agent", 7444],
+  [11, "ac_an_manager", "ac_admin", 7451],
+  [1, "admin", "administrator", 7458],
+];
+
+/**
+ * The four accounts whose `display_name` is not their login, and the two that
+ * carry a first and last name at all.
+ *
+ * **67 of 69 have neither**, which is the shop as it is, and it is why
+ * `staffName()` matters less here than on `/customers` and the *username* column
+ * matters more. The two that do are the search control below.
+ */
+const STAFF_NAMED = new Map([
+  [776, { display_name: "Now staff" }],
+  [774, { display_name: "Karim B.", first_name: "Karim", last_name: "Benali" }],
+  [770, { display_name: "Nadia Cherif", first_name: "Nadia", last_name: "Cherif" }],
+  [231, { display_name: "Le patron" }],
+]);
+
+/**
+ * The one suspended account. **All 73 live accounts were `active`** until
+ * `scripts/seed-staff.mjs` created and suspended one through the production
+ * writers, which is the same shape as the notifications queue's "every row is
+ * pending". Measured: `?status=suspended` is one row, `?status=active` is 72 of
+ * 73 (68 of 69 here).
+ *
+ * It is also the fixture for the credential route's *second* 409 — a suspended
+ * account cannot be minted an application password — so removing it would make
+ * `credentialConflict()`'s `{kind: "suspended"}` arm unreachable.
+ */
+const SUSPENDED_STAFF = new Set([770]);
+
+/**
+ * ── The 340px overflow fixture, and it is the harness's own ─────────────────
+ *
+ * Measured on the live shop: the longest `user_login` is **27** characters and
+ * the longest `user_email` is **39**, so nothing the shop holds can push this
+ * table past a 340px viewport and a fixture built only from real rows would
+ * assert nothing. Written onto one seeded row rather than added as a
+ * sixty-ninth, which is exactly what `SPECIAL_EMAILS` does on `/customers`.
+ *
+ * 413 is a plain Support Agent inside the newest twenty, so the string lands on
+ * **page one of the default listing** — an overflow fixture on page four is one
+ * no capture ever photographs.
+ */
+const LONG_STAFF_ID = 413;
+const LONG_STAFF_LOGIN = "responsable-notifications-et-alertes-boutique-artisanale";
+
+/**
+ * ── The delete conflict, and there is no live account that can produce it ────
+ *
+ * `guardNoOrders()` counts `customerOrderSummaries($id)` and refuses at one.
+ * Measured 2026-08-29 over every staff account on the shop: **not one of them
+ * owns a single order**, so the 409 has no live fixture and cannot be given one
+ * without placing an order against a staff account — a write, and one this
+ * brief forbids.
+ *
+ * So the count is a fixture and the sentence is the source's, verbatim from
+ * `UserService.php:387-390`. Three, because that is the number
+ * `lib/api/schemas/staff.ts:126` and `lib/staff.ts:181` both quote, so the panel
+ * and the harness disagree about nothing.
+ *
+ * `ac_usr_ordered` is the row, and its login is the shop's own — the account was
+ * created for exactly this measurement and then never given an order.
+ */
+const STAFF_ORDER_COUNTS = new Map([[778, 3]]);
+
+/**
+ * ── Application passwords: two seeded accounts, and one of them has two ──────
+ *
+ * `[uuid, name, createdMinutesAgo, lastUsedMinutesAgo]`, and a `null` last-used
+ * is a credential that has never authenticated.
+ *
+ * 475's row is the live one, uuid included — measured, and it is the shape every
+ * account on the shop has: exactly one credential, used within seconds of being
+ * minted. **No live account has a never-used credential**, because every one was
+ * minted by a script that immediately authenticated with it; `last_used: null` is
+ * what `WP_Application_Passwords::create_new_application_password()` stores and
+ * what the mint below returns, so the state is the source's rather than a
+ * measurement's, and it is named here rather than left to look measured.
+ *
+ * 774 carries **two**, which is the state the revoke list exists for: one device
+ * cannot be told apart from another by anything but its name, which is the whole
+ * argument for the duplicate-name 409.
+ *
+ * Every other account has **none**, and the empty array is a state too — it is
+ * what `/users/{id}` answers for 67 of the 69 rows.
+ */
+const APPLICATION_PASSWORD_SEED = new Map([
+  [475, [["c18156a7-cdf3-4827-a7bd-5bd0eb30d1c7", "panel-e2e", 5258, 5256]]],
+  [
+    774,
+    [
+      ["3f2d18b0-6c41-4a9e-8f77-2b5c0a91d4e6", "Ordinateur portable", 79, 61],
+      ["9a4c7e12-51db-4f30-b8a6-7c3e5d0f2b98", "Téléphone de service", 70, null],
+    ],
+  ],
+]);
+
+const applicationPasswordRow = ([uuid, name, created, lastUsed]) => ({
+  uuid,
+  name,
+  created: iso(created),
+  // Null until the credential authenticates once. `last_ip` is stored by
+  // WordPress on the same record and is deliberately **not** published — the one
+  // field here describing a person rather than a credential.
+  last_used: lastUsed === null ? null : iso(lastUsed),
+});
+
+/**
+ * The acting user, as a staff row.
+ *
+ * **The three self-refusals are unreachable without it.** `PATCH /users/{me}`
+ * with a role, `PATCH /users/{me}` with `status: suspended` and `DELETE
+ * /users/{me}` are 403s keyed on `get_current_user_id()`, so a fixture that did
+ * not contain the caller would leave all three as paths nothing could take —
+ * which is the same failure `no_customers` was added to fix one section over.
+ *
+ * **The role is `ac_super_admin` whatever `IDENTITY.roles` says**, and that is a
+ * correction rather than a shortcut: `IDENTITIES` gives its reduced credentials
+ * the invented role `ac_staff`, which is not in the matrix, and an account whose
+ * only role is outside `UserRoles::staff()` is **not staff** — it would be absent
+ * from this collection and `GET /users/{me}` would 404. Every route here is
+ * `ac_manage_users`, which is Super Admin's alone (`UserController.php:19-22`,
+ * and measured today: a Manager, a Support Agent and a Marketing Manager are all
+ * 403), so a credential that can read this list holds that role by construction.
+ */
+const ACTING_STAFF = {
+  id: IDENTITY.id,
+  username: IDENTITY.username,
+  email: IDENTITY.email,
+  first_name: "",
+  last_name: "",
+  display_name: IDENTITY.display_name,
+  role: "ac_super_admin",
+  role_name: "Super Admin",
+  is_administrator: false,
+  status: "active",
+  /*
+   * Between 474 and 475 in registration order while holding a **higher id than
+   * either**, which is one more `registered`-vs-`ID` inversion and is also the
+   * only placement that is not a lie: `admin` is user 1 on every WordPress
+   * install and nothing can predate it, so an acting account seeded older than
+   * the oldest seeded row would be a shop this API could not produce.
+   */
+  date_created: iso(5320),
+};
+
+/**
+ * One seeded row.
+ *
+ * `role_name` resolves through the matrix and **falls back to the slug**, which
+ * is what puts the bare string `"administrator"` on the two WordPress admins —
+ * measured, and the fallback `roleLabel()` is written against.
+ *
+ * `display_name` is never blank. That is not an assumption: every user row on the
+ * install was counted, staff and shopper alike, and **zero** have a blank one.
+ * `wp_insert_user()` substitutes the login when the field is empty, so the API
+ * cannot emit one even through `PATCH {"display_name": ""}` — which is why
+ * `lib/staff.ts:312-320` is right and why no fixture here invents the state.
+ */
+const staffRow = ([id, login, role, minutesAgo]) => {
+  const named = STAFF_NAMED.get(id) ?? {};
+  const username = id === LONG_STAFF_ID ? LONG_STAFF_LOGIN : login;
+  return {
+    id,
+    username,
+    email: id === LONG_STAFF_ID ? LONG_EMAIL : `${login}@example.test`,
+    first_name: named.first_name ?? "",
+    last_name: named.last_name ?? "",
+    display_name: named.display_name ?? username,
+    role,
+    role_name: ROLE_NAMES.get(role) ?? role,
+    is_administrator: role === "administrator",
+    status: SUSPENDED_STAFF.has(id) ? "suspended" : "active",
+    date_created: iso(minutesAgo),
+  };
+};
+
+const STAFF = [...STAFF_SEED.map(staffRow), ACTING_STAFF];
+
 /* ------------------------------------------ the order detail's sub-resources --- */
 
 /**
@@ -7024,6 +7445,37 @@ const state = {
    * recompute and no head of a list to prepend to.
    */
   notifications: new Map(),
+  /**
+   * Staff id → the row as it reads now, holding both the seeded accounts a
+   * `PATCH` has rewritten **and** the accounts `POST /users` created — the shape
+   * coupons, pages and campaigns already use, so one lookup answers for either.
+   *
+   * **A staff account has no trash.** `wp_delete_user()` removes the row
+   * outright, so `staffGone` is the whole of the delete's memory. Unlike a
+   * coupon, a deleted account frees its username *and* its email address for
+   * immediate reuse, which is what `usernameExists`/`emailExists` are read
+   * through rather than off the seed.
+   */
+  staff: new Map(),
+  /** Ids created in this process, newest first — the `registered desc` head. */
+  createdStaff: [],
+  staffGone: new Set(),
+  nextStaffId: 0,
+  /**
+   * Staff id → its application passwords as they read now, written by the mint
+   * and by the revoke. Falls through to `APPLICATION_PASSWORD_SEED`, so the two
+   * seeded accounts need no entry here and the resting fixture writes none.
+   */
+  appPasswords: new Map(),
+  /**
+   * How many credentials this process has minted, which is the whole of the
+   * randomness the mint needs. A uuid and a 24-character secret are both derived
+   * from it, so a screenshot of a freshly minted credential is byte-stable — and
+   * that matters more here than anywhere else in this file, because the sheet
+   * showing the secret is the one screen in the panel whose entire content is a
+   * value nobody can fetch a second time.
+   */
+  mintedCredentials: 0,
 };
 
 export function resetState() {
@@ -7117,6 +7569,19 @@ export function resetState() {
    * one. No ids are handed out, because a retry creates nothing.
    */
   state.notifications = new Map();
+  state.staff = new Map();
+  state.createdStaff = [];
+  state.staffGone = new Set();
+  /*
+   * Clear of every seeded id — the shop's own run to 778 — and clear of the
+   * seven `IDENTITIES` ids this fixture holds out (514-520), so a created
+   * account can never collide with the acting user under any `MOCK_IDENTITY`.
+   * Fixed rather than derived, which is what keeps
+   * a screenshot of a created account byte-stable.
+   */
+  state.nextStaffId = 810;
+  state.appPasswords = new Map();
+  state.mintedCredentials = 0;
 
   // Last, because it writes `state.campaigns` and `state.recipients` and every
   // line above has just cleared them. A no-op unless `MOCK_SEND_PROGRESS` is a
@@ -14446,6 +14911,781 @@ function deleteSegment(row) {
   return ok({ deleted: true });
 }
 
+/* ------------------------------------------------------------------ staff --- */
+
+const staffRows = () =>
+  [
+    ...state.createdStaff.map((id) => state.staff.get(id)),
+    ...STAFF.map((row) => state.staff.get(row.id) ?? row),
+  ].filter((row) => row !== undefined && !state.staffGone.has(row.id));
+
+const staffById = (id) =>
+  id === null ? undefined : staffRows().find((row) => row.id === id);
+
+/**
+ * `UserService::requireStaff()`'s sentence, and it answers for three different
+ * facts: an id that belongs to nobody, an id that belongs to a **shopper**, and
+ * an id whose account was deleted a moment ago. Measured on all three —
+ * `/users/9999` and `/users/13` (a real `customer`) are byte-identical, which is
+ * the property `lib/staff.ts:8-11` turns on: `/users` is staff and `/customers`
+ * is shoppers, no account is in both, and neither route tells you the other
+ * exists.
+ */
+const staffNotFound = () => fail(404, "not_found", "No staff account with that id.");
+
+/** `UserInput`'s envelope. Every field refusal on this subject wears it. */
+const userInvalid = (fields) =>
+  fail(400, "invalid_request", "The user data is invalid.", { fields });
+
+/**
+ * ── One measured collation difference, and it is the `@` ────────────────────
+ *
+ * Every other sort in this file folds and compares with `<`, which is right
+ * because MySQL's collation is accent-insensitive and case-insensitive. It is
+ * also **UCA-ordered**, and JavaScript's `<` is code-point ordered, so the two
+ * disagree wherever ASCII punctuation decides a comparison.
+ *
+ * Exactly one such pair exists on this collection and it was measured:
+ *
+ *   ?orderby=user_email&order=asc   live  [11, 12, **60, 59**, 288]
+ *
+ * `ac_apitest_support@example.test` before `ac_apitest@example.test` — `_`
+ * (0x5F) sorting *before* `@` (0x40), which is the reverse of code-point order
+ * and would have put 59 first here. Mapping `@` to U+0060 puts it after `_` and
+ * before every letter, which reproduces that one sequence.
+ *
+ * **Nothing else about MySQL's ordering is claimed.** This is one substitution
+ * for one measurement, not a collation: the shop's logins and addresses use
+ * `-`, `.`, `_` and `@` and no pair of them turns on any boundary but this one,
+ * which was checked across all 69 rows rather than assumed.
+ */
+const collate = (value) => fold(value).replaceAll("@", "`");
+
+/**
+ * The credential route's own path constraint, copied from
+ * `UserController.php:85` character for character.
+ *
+ * **It checks the hyphenation and nothing else** — not the version nibble, not
+ * the variant — so `00000000-0000-0000-0000-000000000000` routes and answers
+ * "No application password with that identifier.", while `not-a-uuid` is a
+ * routing 404 that never reaches a lookup. Two different facts, and only the
+ * first tells a caller the account exists.
+ */
+const UUID4 = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+const STAFF_SORTS = new Map([
+  ["registered", (row) => row.date_created],
+  ["ID", (row) => row.id],
+  ["display_name", (row) => fold(row.display_name)],
+  ["user_email", (row) => collate(row.email)],
+  ["user_login", (row) => fold(row.username)],
+]);
+
+/**
+ * `GET /users`, and **this is the run's strongest measured sort.**
+ *
+ * `UserController.php:137-142` declares `'enum' => UserRepository::ORDERBY` with
+ * `rest_validate_request_arg`, `UserRepository.php:89` is the `in_array` that
+ * applies it and `:90` the direction. So unlike `/notifications` — accepted and
+ * ignored — and unlike `/products` for five values, this one both **refuses and
+ * reorders**, and a mock that ignored it would let somebody ship a dead control.
+ * Re-measured 2026-08-29, `per_page=5`, against the bare listing rather than
+ * against a sibling value:
+ *
+ *   bare / registered desc / ID desc   [778, 776, 774, 770, 763]   (*)
+ *   registered asc                     [  1,  11,  12,  14,  16]
+ *   ID asc                             [  1,  11,  12,  14,  15]
+ *   display_name asc / user_login asc  [ 11,  12,  59,  60, 288]
+ *   display_name desc                  [776, 770, 231, 774,   1]
+ *   user_email asc                     [ 11,  12,  60,  59, 288]
+ *   user_email desc / user_login desc  [  1, 240, 231, 776, 778]
+ *   ?orderby=zzz  ?orderby=  ?order=zzz  ?order=      **400**
+ *
+ * Seven distinct sequences over ten spellings, and `registered` differs from
+ * `ID` — which is the check DECISIONS.md's standing rule asks for and which four
+ * earlier collections failed by comparing two values against each other.
+ *
+ * **Three of the seven are reproduced here byte-for-byte** — `display_name asc`,
+ * `user_login asc` and `user_email asc`, all three heads identical to the live
+ * response, which is what makes `collate()` above a verified rule rather than a
+ * plausible one. The other four cannot be and the reason is the fixture rather
+ * than the sort:
+ *
+ *   · every **descending** head is displaced by the two rows the shop does not
+ *     have — the acting user (`harness@…`, `h`) and the 340px overflow login
+ *     (`responsable-…`, `r`), both of which outrank every `ac_*` login and
+ *     address on the shop. They are the newest facts about this collection, not
+ *     noise: a harness identity that were *not* in its own staff list is the
+ *     defect this fixture exists to avoid.
+ *   · `registered asc` differs because **the live rows tie**. Fourteen accounts
+ *     share a registration second on the shop and MySQL breaks that however it
+ *     likes; this fixture is a whole minute apart on every row, which is
+ *     strictly the better fixture and is why no tie-break is invented below.
+ *
+ *  (*) The live default and `ID desc` agree only because the shop's ids and
+ * registration order happen to. This fixture inverts 776/778 and 762/763
+ * deliberately so they do not — a fixture where the default answers the same
+ * sequence as a named value cannot tell a working sort from an ignored one.
+ *
+ * **`sort=user_login` is accepted and ignored**, because it is not a registered
+ * argument — measured, byte-identical to the bare listing. So is `?bogus_param=1`.
+ * That half matters as much as the sort: a screen that emitted the wrong
+ * parameter name would look like it worked.
+ */
+function usersListing(params) {
+  const orderby = params.get("orderby");
+  if (orderby !== null && !STAFF_ORDERBY.includes(orderby)) {
+    return invalidParam("orderby", notOneOf("orderby", STAFF_ORDERBY));
+  }
+  const order = params.get("order");
+  if (order !== null && !SORT_DIRECTIONS.includes(order)) {
+    return invalidParam("order", notOneOf("order", SORT_DIRECTIONS));
+  }
+
+  /*
+   * `""` is a member of neither enum, so `?status=` and `?role=` are 400s and
+   * not "no filter" — measured on both, and the reason is the router's rather
+   * than a convention: each is `'enum' => …` with `rest_validate_request_arg`,
+   * exactly as the sort pair is. `?search=` is not an enum at all and `""` is
+   * absence there.
+   */
+  const status = params.get("status");
+  if (status !== null && !STAFF_STATUSES.includes(status)) {
+    return invalidParam("status", notOneOf("status", STAFF_STATUSES));
+  }
+
+  const role = params.get("role");
+  if (role !== null && !STAFF_ROLES.includes(role)) {
+    return invalidParam("role", notOneOf("role", STAFF_ROLES));
+  }
+
+  let rows = staffRows();
+  if (status !== null) rows = rows.filter((row) => row.status === status);
+  if (role !== null) rows = rows.filter((row) => row.role === role);
+
+  /*
+   * `UserRepository::paginate()` sets `search_columns` to `user_login`,
+   * `user_email`, `user_nicename` and `display_name` — **never `first_name` or
+   * `last_name`**, which is the one way this differs from what a person expects
+   * and the reason `lib/staff.ts:277-288` says the field needs no note while
+   * `/customers`' does.
+   *
+   * Measured with a control on each side: `?search=Karim` returns 774 — its
+   * *display name* is "Karim B." — and `?search=Benali`, which is that same
+   * account's **last name and nothing else**, returns **0 rows**. Without a row
+   * shaped like 774 the claim is unfalsifiable here, which is the trap
+   * `CONTROL_CUSTOMER` exists for one collection over.
+   *
+   * `user_nicename` is not published on the payload and is not searched here.
+   * It is derived from the login on every row this shop has, so no term can
+   * match it without matching `user_login` first — checked, not assumed.
+   */
+  rows = searchRows(rows, params, (row) => [row.username, row.email, row.display_name]);
+
+  const key = STAFF_SORTS.get(orderby ?? "registered");
+  const direction = (order ?? "desc") === "asc" ? 1 : -1;
+  // No tie-break, because nothing ties: all 69 rows carry a distinct login,
+  // address, display name and registration minute. A fixture that tied would
+  // need a measured secondary order and there is none to have.
+  rows = [...rows].sort((a, b) => {
+    const left = key(a);
+    const right = key(b);
+    return left < right ? -direction : left > right ? direction : 0;
+  });
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+const applicationPasswordsOf = (id) =>
+  state.appPasswords.get(id) ??
+  (APPLICATION_PASSWORD_SEED.get(id) ?? []).map(applicationPasswordRow);
+
+/**
+ * `GET /users/{id}` — **the list row plus exactly one key.**
+ *
+ * Measured by diffing the key sets: `application_passwords` and nothing else, so
+ * a peek drawer would *not* be free on this collection under §0's rule, and a
+ * detail screen renders in one request rather than two. The list must not carry
+ * the key — `UserPresenter::toArray()` omits it when the argument is null, which
+ * is the `CustomerPresenter` statistics decision one collection over.
+ */
+const staffDetail = (row) => ({
+  ...row,
+  application_passwords: applicationPasswordsOf(row.id),
+});
+
+const STAFF_READ_ONLY = [
+  "id",
+  "username",
+  "role_name",
+  "is_administrator",
+  "date_created",
+  "application_passwords",
+];
+
+/**
+ * Refused **by name** rather than as "Unknown field.", each with the reason
+ * `UserInput.php:54-60` gives verbatim.
+ *
+ * None of the five is ever emitted, so nobody arrives at one by round-tripping a
+ * response — they are only typed on purpose. The panel offers a control for none
+ * of them and cannot provoke any of these, which is exactly why they are here:
+ * `user_login` is what decides the shape of the **edit** form. A username is set
+ * once at creation and is read-only after, and a field that looked editable and
+ * 400d would be a bug report.
+ *
+ * **`username` is not on this list and that is not an oversight.** It is
+ * `READ_ONLY`, so a `PATCH` carrying it has the key *stripped* rather than
+ * refused — which means `PATCH {"username": "x"}` reaches the empty-payload 400
+ * `"No supported fields were provided."` instead. Measured through
+ * `UserInput::forUpdate()` directly. That asymmetry is what lets a client GET an
+ * account, change one field and PATCH the whole object back.
+ */
+const STAFF_REFUSED_FIELDS = {
+  password:
+    "A password set by somebody else is one its owner cannot trust. Onboard with POST /users/{id}/application-passwords.",
+  user_pass:
+    "A password set by somebody else is one its owner cannot trust. Onboard with POST /users/{id}/application-passwords.",
+  capabilities: "Capabilities come from the role. Assign a role and GET /roles to see what it holds.",
+  roles: 'An account holds exactly one role here. Use "role".',
+  user_login: "A login is an identity, not a field. Create the account with the username you want.",
+};
+
+const STAFF_STRING_FIELDS = ["first_name", "last_name", "display_name"];
+const STAFF_CREATE_FIELDS = ["username", "email", "role", ...STAFF_STRING_FIELDS];
+const STAFF_UPDATE_FIELDS = ["email", "role", "status", ...STAFF_STRING_FIELDS];
+
+const STAFF_MAX_LENGTH = 200;
+const USERNAME_MIN = 3;
+const USERNAME_MAX = 60;
+/** `sanitize_user()`'s strict vocabulary, minus what only survives strict-off. */
+const USERNAME_PATTERN = /^[A-Za-z0-9_.\-@ ]+$/;
+
+/**
+ * `UserRoles::assignmentError()` — **three refusals, not two**, and the third is
+ * the interesting one.
+ *
+ * A retired role is not unknown: it exists, it is defined, and 50 of the 69
+ * accounts here still hold one. Telling an operator `Unknown role
+ * "ac_support_agent"` while the account in front of them visibly holds it is a
+ * message that reads "no such thing" when the truth is "it exists and you may
+ * not have it". All four sentences taken verbatim by calling the pure class
+ * itself (2026-08-29) rather than transcribed by eye — the coupons branch is why
+ * that distinction is worth the trouble.
+ */
+function roleAssignmentError(role) {
+  if (role === "") {
+    return "A role is required. An account with no role is a customer, and customers are managed at /customers.";
+  }
+  if (ASSIGNABLE_ROLES.includes(role)) return null;
+  if (RETIRED_ROLES.includes(role)) {
+    return `The role "${role}" is retired and is no longer assigned. Accounts already holding it keep it and are unaffected; new assignments choose one of: ${ASSIGNABLE_ROLES.join(", ")}.`;
+  }
+  if (CORE_ROLES.includes(role)) {
+    return `This API manages commerce roles and does not grant "${role}". A WordPress role carries platform access — installing plugins, editing files — that no capability in this matrix models.`;
+  }
+  return `Unknown role "${role}". Choose one of: ${ASSIGNABLE_ROLES.join(", ")}.`;
+}
+
+/**
+ * `UserInput::common()` plus the half that belongs to the verb.
+ *
+ * **The order the errors are collected in is the order they are reported in**,
+ * and it is not the order the fields are listed in: unknown and refused names
+ * first, then the three string fields, then `email`, then `role`, then `status`
+ * — and only then, on a create, the three "Required." checks. Measured by
+ * calling `UserInput::forCreate()` and `::forUpdate()` directly, which is the
+ * only way to see it without a write: `{password, role: "editor", email: "nope"}`
+ * reports `password`, `email`, `role`, in that order.
+ *
+ * One response names **every** bad field. A validator that stopped at the first
+ * would make a form with three mistakes take three round trips.
+ */
+/**
+ * PHP's `is_scalar($v) ? trim((string) $v) : ''`, which is what every field in
+ * `UserInput` is read through.
+ *
+ * The booleans are the only place a naive `String()` would disagree: PHP casts
+ * `true` to `"1"` and `false` to `""`, JavaScript to `"true"` and `"false"`. No
+ * screen sends a boolean into a name field, which is exactly why it is worth two
+ * characters here — a divergence nothing reaches is one nobody notices until
+ * something does.
+ */
+const scalarString = (value) => {
+  if (value === null || typeof value === "object" || value === undefined) return "";
+  if (value === true) return "1";
+  if (value === false) return "";
+  return String(value).trim();
+};
+
+function readStaffBody(body, creating) {
+  const payload = body !== null && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const allowed = creating ? STAFF_CREATE_FIELDS : STAFF_UPDATE_FIELDS;
+  const fields = {};
+  const clean = {};
+
+  // Read-only keys are *dropped*, never refused — which is what makes a GET →
+  // edit one field → PATCH the whole object round trip work.
+  const supplied = Object.keys(payload).filter((name) => !STAFF_READ_ONLY.includes(name));
+
+  for (const name of supplied) {
+    if (!allowed.includes(name)) {
+      fields[name] = STAFF_REFUSED_FIELDS[name] ?? "Unknown field.";
+    }
+  }
+
+  for (const name of STAFF_STRING_FIELDS) {
+    if (!Object.hasOwn(payload, name)) continue;
+    const value = payload[name];
+    // `null` is a real erasure and becomes `""`, which is why the schema's
+    // three name fields are strings rather than nullable ones.
+    if (value === null) {
+      clean[name] = "";
+      continue;
+    }
+    if (typeof value === "object") {
+      fields[name] = "Must be a string.";
+      continue;
+    }
+    const text = scalarString(value);
+    if ([...text].length > STAFF_MAX_LENGTH) {
+      fields[name] = `Must be at most ${STAFF_MAX_LENGTH} characters.`;
+      continue;
+    }
+    clean[name] = text;
+  }
+
+  if (Object.hasOwn(payload, "email")) {
+    const email = scalarString(payload.email);
+    // **Not emptiable**, for the reason `UserInput.php:221-223` gives: a
+    // WordPress user with no address cannot be sent a reset, and the account
+    // becomes unrecoverable. So `""` is "Must be a valid email address." and
+    // never an erasure — unlike the three name fields directly above.
+    // Borrowed from the coupon restriction reader, which is the same shape
+    // `filter_var(FILTER_VALIDATE_EMAIL)` accepts for every address this shop
+    // holds. The two agree on the whole fixture set; nothing here turns on the
+    // exotic corners where RFC 5322 and a regex part company.
+    if (email === "" || !EMAIL_OR_WILDCARD.test(email)) {
+      fields.email = "Must be a valid email address.";
+    } else {
+      clean.email = email;
+    }
+  }
+
+  if (Object.hasOwn(payload, "role")) {
+    const role = scalarString(payload.role);
+    const problem = roleAssignmentError(role);
+    if (problem !== null) {
+      fields.role = problem;
+    } else {
+      clean.role = role;
+    }
+  }
+
+  if (Object.hasOwn(payload, "status")) {
+    const status = scalarString(payload.status);
+    if (!STAFF_STATUSES.includes(status)) {
+      // Family 2 of the four refusal families: a **body field** enum names no
+      // parameter and punctuates with a colon, where the query-string enum
+      // above writes "status is not one of active and suspended.".
+      fields.status = oneOf(STAFF_STATUSES);
+    } else {
+      clean.status = status;
+    }
+  }
+
+  if (creating) {
+    if (!Object.hasOwn(payload, "username")) {
+      fields.username = "Required.";
+    } else {
+      const username = scalarString(payload.username);
+      const length = [...username].length;
+      if (length < USERNAME_MIN || length > USERNAME_MAX) {
+        fields.username = `Must be between ${USERNAME_MIN} and ${USERNAME_MAX} characters.`;
+      } else if (!USERNAME_PATTERN.test(username)) {
+        fields.username = "May contain letters, digits, spaces and _ . - @ only.";
+      } else {
+        clean.username = username;
+      }
+    }
+    if (!Object.hasOwn(payload, "email")) fields.email = "Required.";
+    if (!Object.hasOwn(payload, "role")) {
+      // **Not the same sentence as `role: ""`.** A missing role is "Required."
+      // and an empty one is "A role is required." — two messages for two
+      // different mistakes, and a form quoting the wrong one back would be
+      // telling somebody to fill in a field they did fill in.
+      fields.role = "Required. An account with no role is a customer, and customers are managed at /customers.";
+    }
+  }
+
+  return Object.keys(fields).length > 0 ? { error: userInvalid(fields) } : { writes: clean };
+}
+
+/**
+ * `UserService::guardAssignable()` — a caller may not create an account able to
+ * do something they cannot.
+ *
+ * **Inert for every credential this shop can issue, and that is the point.**
+ * `ac_manage_users` is Super Admin's alone and Super Admin holds
+ * `Capabilities::ALL`, so `capabilitiesBeyond()` is empty for anybody who got
+ * past the gate — the rule exists against the *eighth* role and against a
+ * capability granted to one account by hand, neither of which the shop has
+ * today. It is reproduced rather than skipped because a guard that is unreachable
+ * on the wire and absent from the harness is a guard nobody re-checks.
+ *
+ * It **is** reachable here, and only here: the harness's reduced identities are
+ * constructed rather than measured, so `MOCK_IDENTITY=no_content` holds
+ * `ac_manage_users` without `ac_manage_content` and granting `ac_super_admin`
+ * from it answers the 403. That is a fixture, not a claim about the shop's
+ * roles — the rule `reduced` set and every identity since has followed.
+ */
+function guardAssignable(role) {
+  const capabilities = ROLES.find((row) => row.role === role)?.capabilities ?? [];
+  const beyond = capabilities.filter((capability) => !IDENTITY.capabilities.includes(capability));
+  return beyond.length === 0
+    ? null
+    : fail(
+        403,
+        "forbidden",
+        `You cannot grant "${role}": it holds capabilities you do not have (${beyond.join(", ")}).`,
+      );
+}
+
+/**
+ * `POST /users` — **201**, and the row it answers with carries no
+ * `application_passwords` key.
+ *
+ * A create goes through the row's own presenter with the argument omitted, so
+ * the create's shape is the *list* row and not the detail's. A screen that
+ * rebound its detail state to this response would find the key gone.
+ *
+ * The order the guards run in is `UserService::create()`'s and is observable:
+ * every field refusal (400) precedes the escalation refusal (403), which
+ * precedes the duplicate username (409), which precedes the duplicate email
+ * (409). A payload wrong in two ways answers the first of those, not both.
+ *
+ * **`validate_username()` is not reproduced and cannot be reached.** It is
+ * WordPress's own second gate, and its allowlist is byte-identical to the
+ * pattern above, so the only thing it adds is an install-specific blocklist this
+ * shop does not have. Named rather than mocked: inventing a refusal is the
+ * `"Read-only."` mistake the coupons branch paid for.
+ */
+function createStaff(body) {
+  const read = readStaffBody(body, true);
+  if (read.error) return read.error;
+
+  const refused = guardAssignable(read.writes.role);
+  if (refused !== null) return refused;
+
+  const rows = staffRows();
+  const taken = (field, value) =>
+    rows.some((row) => fold(row[field]) === fold(value));
+
+  if (taken("username", read.writes.username)) {
+    return fail(409, "conflict", "That username is already taken.", {
+      username: read.writes.username,
+    });
+  }
+  if (taken("email", read.writes.email)) {
+    return fail(409, "conflict", "That email address is already in use.", {
+      email: read.writes.email,
+    });
+  }
+
+  const id = state.nextStaffId;
+  state.nextStaffId += 1;
+  const row = {
+    id,
+    username: read.writes.username,
+    email: read.writes.email,
+    first_name: read.writes.first_name ?? "",
+    last_name: read.writes.last_name ?? "",
+    /*
+     * `wp_insert_user()` substitutes the login when `display_name` is empty,
+     * which is why this collection has no blank one anywhere — checked against
+     * every user row on the install, staff and shopper alike, and zero were
+     * blank. `lib/staff.ts:312-320` is right and no fixture here invents the
+     * state it says cannot exist.
+     */
+    display_name:
+      (read.writes.display_name ?? "") === "" ? read.writes.username : read.writes.display_name,
+    role: read.writes.role,
+    role_name: ROLE_NAMES.get(read.writes.role) ?? read.writes.role,
+    is_administrator: false,
+    // A new account is active, because `UserStatus` stores only the suspension
+    // and absence means active. `status` is not a create field at all — it is
+    // "Unknown field." on a POST and a real one on a PATCH.
+    status: "active",
+    date_created: iso(0),
+  };
+  state.staff.set(id, row);
+  state.createdStaff.unshift(id);
+  return created(row);
+}
+
+/**
+ * `PATCH /users/{id}` — 200, and **three of the five refusals live here.**
+ *
+ * The order is `UserService::update()`'s, and it is observable at every step:
+ *
+ *   1. field validation                400   `UserInput::forUpdate()`
+ *   2. nothing left to write           400   "No supported fields were provided."
+ *   3. the account is not staff        404
+ *   4. changing your own role          403
+ *   5. granting beyond yourself        403
+ *   6. suspending your own account     403
+ *   7. an address already in use       409
+ *
+ * Step 4 before step 5 matters: `PATCH /users/{me} {"role": "ac_manager"}` is
+ * "You cannot change your own role." and not an escalation refusal. And step 1
+ * before step 4 matters as much — `{"role": "administrator"}` on your own
+ * account is the **400** vocabulary refusal, because `UserInput` never learns
+ * whose account it is.
+ *
+ * **Promotion is not reproduced.** On the wire, a `PATCH` carrying a role
+ * against a *shopper's* id promotes them and answers 200 with
+ * `meta.promoted_from_customer: true`; here it is the 404 above. Named rather
+ * than mocked: a customer row in this file has no `display_name` and no role, so
+ * promoting one means inventing both, and no screen in the panel can reach the
+ * route — the staff list is the only place a `/users/{id}` comes from and every
+ * id on it is already staff. Recorded so it is an absence rather than a gap.
+ */
+function patchStaff(id, body) {
+  const read = readStaffBody(body, false);
+  if (read.error) return read.error;
+
+  const writes = read.writes;
+  if (Object.keys(writes).length === 0) {
+    // No `details` key at all, not an empty one — the shape `PATCH /products`
+    // already answers with and the reason `bareFail` exists.
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const row = staffById(id);
+  if (row === undefined) return staffNotFound();
+
+  const self = id === IDENTITY.id;
+
+  if (Object.hasOwn(writes, "role")) {
+    if (self) {
+      return fail(
+        403,
+        "forbidden",
+        "You cannot change your own role. Ask another Super Admin.",
+      );
+    }
+    const refused = guardAssignable(writes.role);
+    if (refused !== null) return refused;
+  }
+
+  if (writes.status === "suspended" && self) {
+    return fail(403, "forbidden", "You cannot suspend your own account.");
+  }
+
+  if (Object.hasOwn(writes, "email")) {
+    const clash = staffRows().some(
+      (other) => other.id !== id && fold(other.email) === fold(writes.email),
+    );
+    if (clash) {
+      return fail(409, "conflict", "That email address is already in use.", {
+        email: writes.email,
+      });
+    }
+  }
+
+  const next = { ...row, ...writes };
+  if (Object.hasOwn(writes, "role")) {
+    next.role_name = ROLE_NAMES.get(writes.role) ?? writes.role;
+    // `set_role()`, not `add_role()`: this API models exactly one role, so a
+    // demotion that left the old capabilities in place would demote nothing.
+    // A WordPress administrator given a managed role stops being one.
+    next.is_administrator = writes.role === "administrator";
+  }
+  if (next.display_name === "") next.display_name = next.username;
+  state.staff.set(id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /users/{id}` — `{id, deleted: true}`, and **not the row.**
+ *
+ * Worth pinning, because the obvious implementation rebinds the detail screen to
+ * the response and finds a two-key object where an account was.
+ *
+ * **`guardNotSelf()` runs before the id is resolved** (`UserService.php:170`
+ * ahead of `:172`), which is not a detail: deleting your own id answers 403 even
+ * when that id is not a staff account, so the refusal is about who you are and
+ * never about what exists. A screen that read the 404 as "already deleted" would
+ * be wrong about the one case it matters in.
+ */
+function deleteStaff(id) {
+  if (id === IDENTITY.id) {
+    return fail(403, "forbidden", "You cannot delete your own account.");
+  }
+
+  const row = staffById(id);
+  if (row === undefined) return staffNotFound();
+
+  const orders = STAFF_ORDER_COUNTS.get(id) ?? 0;
+  if (orders > 0) {
+    /*
+     * `wp_delete_user()` reassigns *posts* and knows nothing about HPOS, so an
+     * order keyed to the deleted `customer_id` becomes a row no report can
+     * attribute. The refusal names the alternative, and `details.orders` is a
+     * **count** rather than a list — `deleteConflictCount()` reads it and the
+     * panel offers the suspension as a button instead of repeating the sentence.
+     */
+    return fail(
+      409,
+      "conflict",
+      'That account owns orders and cannot be deleted. Suspend it instead: PATCH /users/{id} with {"status":"suspended"}.',
+      { orders },
+    );
+  }
+
+  state.staffGone.add(id);
+  state.staff.delete(id);
+  state.appPasswords.delete(id);
+  return ok({ id, deleted: true });
+}
+
+/**
+ * A uuid and a 24-character secret, both derived from a counter.
+ *
+ * `WP_Application_Passwords::PW_LENGTH` is **24** and
+ * `wp_generate_password(24, false)` draws from letters and digits only — no
+ * spaces, which is what `lib/staff.ts:234-237` records and why the panel renders
+ * whatever arrived instead of re-grouping it into wp-admin's six spaced blocks.
+ *
+ * Derived rather than random because **the mint response is the one screen in
+ * this panel whose entire content is a value nobody can fetch twice**. A
+ * screenshot of it has to be byte-stable or the capture suite cannot compare
+ * two runs at all.
+ */
+const PASSWORD_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+function mintedFrom(counter) {
+  // splitmix32 rather than the linear congruential generator this started as:
+  // the low bits of an LCG cycle short enough that the uuid visibly repeated its
+  // own middle, and a credential a person is asked to copy must not *look*
+  // broken even though nothing reads it.
+  let x = (counter + 1) * 0x9e37_79b9;
+  const next = () => {
+    x = (x + 0x9e37_79b9) >>> 0;
+    let z = x;
+    z = Math.imul(z ^ (z >>> 16), 0x21f0_aaad) >>> 0;
+    z = Math.imul(z ^ (z >>> 15), 0x735a_2d97) >>> 0;
+    return (z ^ (z >>> 15)) >>> 0;
+  };
+  let secret = "";
+  for (let i = 0; i < 24; i += 1) secret += PASSWORD_ALPHABET[next() % PASSWORD_ALPHABET.length];
+  let hex = "";
+  for (let i = 0; i < 32; i += 1) hex += (next() % 16).toString(16);
+  // `wp_generate_uuid4()`'s shape: version 4 and the RFC 4122 variant nibble,
+  // both fixed. The route pattern only checks the hyphenation, but a uuid that
+  // was not a v4 would be one this API cannot have produced.
+  const uuid = [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `a${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join("-");
+  return { uuid, secret };
+}
+
+/**
+ * `POST /users/{id}/application-passwords` — **201, and the only response in
+ * this API that carries a usable credential.**
+ *
+ * `password` appears here and nowhere else: not on the collection, not on
+ * `GET /users/{id}`, not in the audit row — which was checked for the secret
+ * rather than assumed clean. So the panel shows it once and offers no reveal
+ * affordance anywhere, because there is nothing to reveal.
+ *
+ * Four refusals in this order, and the first two are the ones a reading of the
+ * service alone would get backwards:
+ *
+ *   1. a blank or missing name   400  — raised by the **controller**
+ *      (`UserController.php:257-261`), so it precedes `requireStaff()`: a
+ *      nameless mint against an id that does not exist is a 400 and not a 404.
+ *      Its message has **no full stop** — "The application password data is
+ *      invalid" — where every `UserInput` refusal beside it does. Reproduced
+ *      rather than tidied.
+ *   2. the account is not staff  404
+ *   3. the account is suspended  409, **no details** — a fact about the account
+ *      rather than about the name, which is why the panel puts it at the top of
+ *      the section with the reactivate action beside it.
+ *   4. a duplicate name          409, `details.name` — case-insensitive
+ *      (`strcasecmp`), and it is a validation error on the field.
+ *
+ * **A fifth exists and is not reproduced**: `canIssueApplicationPasswords()`
+ * answers 503 `application_passwords_unavailable` on an install without HTTPS.
+ * Measured on this shop — `wp_is_application_passwords_supported()` is true and
+ * `WP_ENVIRONMENT_TYPE` is `local` — so it cannot be provoked here, and a
+ * fixture for it would be a status this shop never sends.
+ */
+function mintCredential(id, body) {
+  const raw = body !== null && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const name = scalarString(raw.name);
+  if (name === "") {
+    return fail(400, "invalid_request", "The application password data is invalid", {
+      fields: { name: "Required. Name the device or client this credential is for." },
+    });
+  }
+
+  const row = staffById(id);
+  if (row === undefined) return staffNotFound();
+
+  if (row.status === "suspended") {
+    return fail(
+      409,
+      "conflict",
+      "That account is suspended. Reactivate it before issuing a credential.",
+    );
+  }
+
+  const existing = applicationPasswordsOf(id);
+  if (existing.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+    return fail(409, "conflict", "That account already has an application password with this name.", {
+      name,
+    });
+  }
+
+  const { uuid, secret } = mintedFrom(state.mintedCredentials);
+  state.mintedCredentials += 1;
+  const item = { uuid, name, created: iso(0), last_used: null };
+  state.appPasswords.set(id, [...existing, item]);
+  return created({ ...item, password: secret });
+}
+
+/**
+ * `DELETE /users/{id}/application-passwords/{uuid}` — `{uuid, revoked: true}`.
+ *
+ * The uuid is constrained **in the route pattern**, so a malformed identifier is
+ * a routing 404 rather than a lookup — measured, and the comment at
+ * `UserController.php:77-82` says why: it is one fewer place a caller can learn
+ * whether an account exists. A well-formed uuid that belongs to nobody gets the
+ * credential's own sentence, which is not the account's.
+ */
+function revokeCredential(id, uuid) {
+  const row = staffById(id);
+  if (row === undefined) return staffNotFound();
+
+  const existing = applicationPasswordsOf(id);
+  const item = existing.find((candidate) => candidate.uuid.toLowerCase() === uuid.toLowerCase());
+  if (item === undefined) {
+    return fail(404, "not_found", "No application password with that identifier.");
+  }
+
+  state.appPasswords.set(
+    id,
+    existing.filter((candidate) => candidate !== item),
+  );
+  return ok({ uuid, revoked: true });
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -14513,6 +15753,14 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * path on the collection rather than letting this list decide it.
      */
     "notifications",
+    /*
+     * **The collection with the most writes in this file and the fewest screens
+     * that can reach them**: `POST /users`, `PATCH`, `DELETE`, and the two on
+     * the credential sub-resource. `/roles` is deliberately *not* here — it has
+     * no write at all, and a `POST` to it falls to the 404 rather than being
+     * decided by this list.
+     */
+    "users",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -15159,6 +16407,104 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       return segments[2] === "retry" && method === "POST"
         ? retryNotification(id)
         : notificationNoRoute();
+    }
+
+    /*
+     * ── Staff: eight routes on one capability, and five of them write ────────
+     *
+     * **`ac_manage_users` is Super Admin's alone** — `UserController.php:19-22`
+     * says so and it was measured on 2026-08-29 rather than trusted: a Manager,
+     * a Support Agent and a Marketing Manager credential each answered **403
+     * `forbidden`, "You are not allowed to perform this action.", no `details`**
+     * on `/users`, `/users/{id}`, `/roles` and the credential collection alike.
+     * The gate goes before the depth check, where the wire's
+     * `permission_callback` is: a refusal is about the credential, not about
+     * whether the path resolves.
+     *
+     * §16.1 is why this is not optional. An ungated mock does not merely fail to
+     * catch a defect — it *manufactures a passing screenshot* of a screen the
+     * credential cannot see, which is what the `/customers` gate was doing until
+     * it was closed on 2026-08-28.
+     *
+     * `MOCK_IDENTITY=no_users` is the credential that reaches the refusal, and
+     * it had to be added: all six identities held `ac_manage_users`, so this
+     * gate would have been a path nothing in the harness could take — the same
+     * hole `no_content`, `no_customers` and `no_marketing` were each added to
+     * close one section over.
+     *
+     * ── The routing shapes, all measured on the same day ─────────────────────
+     *
+     *   /users/abc                      404 routing   `\d+` never matched
+     *   /users/0                        **400**       `idArg()`'s `minimum: 1`
+     *   /users/9999                     404 not_found "No staff account with that id."
+     *   /users/13   (a real shopper)    404 not_found the same sentence exactly
+     *   /users/778/nonsense             404 routing   the sub-resource name goes first
+     *   /users/9999/nonsense            404 routing   …even for an id nobody holds
+     *   /users/0/application-passwords  **400**       the id arg again, one level down
+     *   /users/9999/application-passwords 404 not_found the account's sentence
+     *   /users/778/application-passwords/not-a-uuid  404 routing — the uuid is
+     *                                   constrained in the route pattern
+     */
+    case "users": {
+      const refused = gatedOn("ac_manage_users");
+      if (refused !== null) return refused;
+
+      // Depth is stated here, the way `/products` and `/orders` state theirs.
+      // Four, because the credential revoke is `/users/{id}/…/{uuid}`.
+      if (segments.length > 4) return notFound();
+
+      if (second === undefined) {
+        if (method === "GET") return usersListing(searchParams);
+        return method === "POST" ? createStaff(body) : notFound();
+      }
+
+      const id = numericId(second);
+      if (id === null) return notFound();
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
+
+      if (segments.length === 2) {
+        if (method === "GET") {
+          const row = staffById(id);
+          return row === undefined ? staffNotFound() : ok(staffDetail(row));
+        }
+        if (method === "PATCH") return patchStaff(id, body);
+        if (method === "DELETE") return deleteStaff(id);
+        return notFound();
+      }
+
+      // Named rather than matched loosely, so `/users/{id}/anything` falls to the
+      // routing 404 instead of being served the account.
+      if (segments[2] !== "application-passwords") return notFound();
+
+      if (segments.length === 3) {
+        if (method === "GET") {
+          const row = staffById(id);
+          /*
+           * `enumeration()` — **no `meta` key**, measured. The controller calls
+           * `Response::success()` with no pagination and this collection pages
+           * nothing; a screen that read `meta.total` off it would get a number
+           * the shop does not send.
+           */
+          return row === undefined ? staffNotFound() : enumeration(applicationPasswordsOf(id));
+        }
+        return method === "POST" ? mintCredential(id, body) : notFound();
+      }
+
+      const uuid = segments[3];
+      if (!UUID4.test(uuid) || method !== "DELETE") return notFound();
+      return revokeCredential(id, uuid);
+    }
+
+    /*
+     * `GET /roles` and nothing else — there is no write, because a role invented
+     * at runtime would be a capability set no test enumerates and no review has
+     * seen. `UserRoles`' own docblock argues it.
+     */
+    case "roles": {
+      const denied = gatedOn("ac_manage_users");
+      if (denied !== null) return denied;
+      if (method !== "GET" || segments.length > 1) return notFound();
+      return enumeration(ROLES);
     }
 
     case "inventory": {
