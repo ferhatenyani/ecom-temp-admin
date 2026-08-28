@@ -2388,14 +2388,31 @@ overflow at 340 across six route/locale pairs.
 
 ## Carried forward — teardown owns these
 
-- **Four shipped lists still blank their rows on a failed *refetch*.** DESIGN.md
-  §3.7-4 was amended on the notifications branch to say that the error state
-  replaces content only when there is no content; every list written before it
-  branches `isPending ? skeleton : isError ? <ErrorState> : …`, which is correct
-  for a one-shot list and wrong for one that polls or offers a refresh. They are
-  not wrong against the text they were written to — they are untouched by that
-  branch, and each is a two-line change in its own screen. **The tell is a
-  refresh control or a `refetchInterval`**, not the list's age.
+- **Seventeen shipped screens still blank their rows on a failed *refetch*, and
+  two of them poll.** DESIGN.md §3.7-4 was amended on the notifications branch to
+  say that the error state replaces content only when there is no content; every
+  screen written before it branches `isPending ? skeleton : isError ?
+  <ErrorState> : …`, which is correct for a one-shot list and wrong for anything
+  that can fetch twice. They are not wrong against the text they were written to.
+  Each is a two-line change in its own screen.
+
+  The two that **poll** are the ones that will reach it unattended, on a dropped
+  request thirty seconds after a good one: `orders/OrdersList.tsx` and
+  `marketing/campaigns/[id]/SentCampaign.tsx`. The other fifteen need somebody to
+  press refresh while the network is down — the same defect, waiting on a gesture.
+
+  ```sh
+  # the heuristic, so the next reader re-derives rather than trusting this count
+  grep -rln 'refetchInterval\|refetch()\|icon="refresh"' app/ --include=*.tsx \
+    | xargs grep -ln 'isError ?' | xargs grep -ln ErrorState
+  ```
+
+  **This entry said "four" for one commit.** That figure came from the branch's
+  build report and was written down without being run — the same defect as the
+  capture count corrected in §16, in the same afternoon, from the same cause:
+  a number arriving in prose and being treated as measured. Two in one branch is
+  a pattern rather than a slip, and the cheap defence is the one above — carry the
+  command, not the count.
 - **`?date_from=2026-13-45` is a 200 with 0 rows and a database error nobody can
   see.** It passes `NotificationController`'s `^\d{4}-\d{2}-\d{2}$`, reaches
   MySQL as `'2026-13-45 00:00:00'`, and logs `Incorrect DATETIME value` twice —
