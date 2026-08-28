@@ -2322,8 +2322,9 @@ rows, pager intact.
 
 **And the amendment broke the marker's own sentence, which is the defect the
 branch nearly shipped.** `StaleBanner` renders `states.offline` — "Données de
-{time} — hors ligne" — and every one of its twenty-two callers gated on
-`!useOnline()`, so that was a fact. Gating it additionally on *the last refetch
+{time} — hors ligne" — and every call site that existed before this branch gated
+on `!useOnline()`, so that was a fact. There are 24 now; the 22 this branch does
+not own are byte-identical. Gating it additionally on *the last refetch
 failed* made it say "offline" with the interface perfectly up, which is a marker
 naming a cause it has not established: the same class as a label naming an action
 that does not exist, arriving in a state instead of in copy. `StaleBanner` gained
@@ -2362,9 +2363,23 @@ customers branch retired `Segmented`.
 
 **Verified**: `tsc` silent · lint 0 errors, 10 warnings · `test:design` 14/14,
 floor 308 → **315** against 317 scanned · `test:unit` 884/884 · clean
-`rm -rf .next && npm run build` · **156 captures clean** across the two routes,
-five record states, two empty states, the `no_customers` forbidden pair and three
-screens this branch does not own but whose `StaleBanner` it extended. Driven in
+`rm -rf .next && npm run build` · **120 captures clean** in the three runs after
+the final build — six route-states (the list, three records, a filtered-empty
+list and a page past the end), the `no_customers` forbidden pair, and 24 on
+`/coupons` and `/media`, which this branch does not own but whose `StaleBanner`
+it extended. 108 PNGs for this screen's six route-states sit under
+`.impeccable/harness/`, the difference being the identity runs taken before the
+marker fix.
+
+> **This line said "156 captures" for one commit, and the number was carried in
+> from §15 rather than counted.** Corrected the same day, by listing the
+> directories. It is worth leaving visible because it is precisely the defect this
+> file legislates against everywhere else — a figure that reads like a
+> measurement and is a recollection — and it got past the branch's own author
+> into a ledger entry arguing for measurement. The check is thirty seconds:
+> `ls .impeccable/harness/<route>/ | wc -l`.
+
+Driven in
 Chromium beyond the captures: the failed-refetch behaviour, one focusable per
 row, no `aria-sort` on 26 headers, one POST per retry, and zero horizontal
 overflow at 340 across six route/locale pairs.
