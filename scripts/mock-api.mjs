@@ -558,6 +558,8 @@ const CAPABILITIES = [
  *   MOCK_IDENTITY=reduced node scripts/capture.mjs /orders/1023  eleven of them
  *   MOCK_IDENTITY=support node scripts/capture.mjs /dashboard    eleven others
  *   MOCK_IDENTITY=no_content node scripts/capture.mjs /content   twelve
+ *   MOCK_IDENTITY=no_customers … /marketing/campaigns/318        twelve others
+ *   MOCK_IDENTITY=no_marketing … /marketing                      eleven
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
@@ -573,6 +575,11 @@ const CAPABILITIES = [
  * identities above hold `ac_manage_content` — so the whole Content section and
  * the media library had no capturable forbidden state at all. Its own block says
  * what was measured.
+ *
+ * `no_customers` and `no_marketing` are the Marketing pair, and they are the
+ * same two arguments one section over: the first is the fixture for the panel's
+ * only **compound** capability rule, the second is the section's forbidden
+ * state. Their own blocks say what was measured and what was not.
  *
  * Read **once, at module load**, so `respond()` stays pure and a capture run is
  * one identity from beginning to end. An unrecognised value throws rather than
@@ -676,6 +683,91 @@ const IDENTITIES = {
     email: "harness-no-content@example.test",
     roles: ["ac_staff"],
     capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_content"),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The fifth identity, and it is the panel's ONLY compound capability ─────
+   *
+   * `canSendCampaigns()` — lib/capabilities.ts:61-62 — is
+   * `ac_manage_marketing` **and** `ac_manage_customers`, and it is the second of
+   * exactly two compound rules in the panel. The first, `canSeeMoney()`, got its
+   * fixture when `support` was added; this one had **none**, because all four
+   * identities above hold both halves. So the state the rule exists to describe
+   * — a person who can draft, preview and test a campaign and cannot send it —
+   * could not be reached here at all, and three routes' refusals were paths
+   * nothing could take.
+   *
+   * Measured 2026-08-28 with the `ac_marketing_manager` credential
+   * `scripts/mint-credential.sh` already mints, one request at a time:
+   *
+   *     GET /campaigns                 200
+   *     GET /campaigns/322             200
+   *     GET /campaigns/318/preview     200 — and `audience_count` **null**
+   *     GET /campaigns/322/recipients  403
+   *     GET /segments                  200
+   *     GET /segments/43               200
+   *     GET /segments/43/preview       403
+   *     GET /email-templates           200
+   *     GET /marketing/config          200
+   *
+   * `POST /campaigns/{id}/send` is the third route the compound rule gates and
+   * **it was not measured**, because provoking it mails a shop's customers and
+   * nothing un-mails them. lib/api/allowlist.ts:322-333 records it 403 from an
+   * earlier pass and the gate below enforces it on the same capability as the
+   * two that were seen today — named here rather than left to read as measured.
+   *
+   * The null `audience_count` is the half that makes this more than a 403
+   * fixture: counting an audience means counting customers, so the preview comes
+   * back whole with one number missing, and the composer has to render that
+   * rather than print a zero that would read as "nobody".
+   *
+   * **A credential with a measured shape, not a claim about the shop's roles.**
+   * The two-tier collapse retired `ac_marketing_manager`, so the delta from
+   * `full` is exactly the one capability the measured 403s turn on and nothing
+   * else — the rule `reduced` set, `support` followed and `no_content`
+   * inherited.
+   */
+  no_customers: {
+    id: 518,
+    username: "harness-no-customers",
+    display_name: "Harness Marketing",
+    email: "harness-no-customers@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_customers"),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The sixth, and the Marketing section's forbidden state ────────────────
+   *
+   * Every route under `/campaigns`, `/segments`, `/email-templates` and
+   * `/marketing` is `ac_manage_marketing`, and all five identities above hold
+   * it. So the whole section — the hub, the campaign list, the composer, the
+   * sent view, segments, templates and config — had **no capturable forbidden
+   * state**, which DESIGN.md §3.7 requires of every screen and which every prior
+   * branch photographed. This is `no_content` again, one section over.
+   *
+   * `no_customers` could not be widened into it: it exists to be a person who
+   * *can* reach these screens, and taking marketing off it would destroy the
+   * only fixture the compound rule has.
+   *
+   * **It drops `ac_manage_customers` as well**, and the reason is that the
+   * refusal must not depend on which of the two capabilities is missing. With
+   * marketing alone removed, a screen that gated on `canSendCampaigns()` rather
+   * than on `has(me, "ac_manage_marketing")` would still refuse — for the wrong
+   * reason — and the capture would look identical either way. Holding neither
+   * makes the section's refusal unambiguous, which is what a forbidden-state
+   * fixture is for. Nothing here claims the shop has a role shaped like this.
+   */
+  no_marketing: {
+    id: 519,
+    username: "harness-no-marketing",
+    display_name: "Harness No-Marketing",
+    email: "harness-no-marketing@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter(
+      (capability) =>
+        capability !== "ac_manage_marketing" && capability !== "ac_manage_customers",
+    ),
     auth_method: "application_password",
   },
 };
@@ -3711,6 +3803,510 @@ for (const filename of [...MEDIA_FIXTURE_BYTES.keys()]) {
   if (!MEDIA_SEED.some((row) => row.filename === filename)) MEDIA_FIXTURE_BYTES.delete(filename);
 }
 
+/* ------------------------------------------------------------- marketing --- */
+
+/**
+ * ── Five campaigns: four measured verbatim, one constructed and said so ──────
+ *
+ * Measured against the live shop 2026-08-28 with `ac_super_admin`. Names,
+ * subjects, bodies, audiences, statuses, the counts and the relative order of
+ * every stamp are the shop's; the stamps themselves are rebased onto this file's
+ * `EPOCH`, since every other fixture here is relative to it and a screenshot of
+ * "il y a 3 jours" has to stay stable.
+ *
+ * **The stamps are the whole sort control, so they are written out rather than
+ * derived.** `/campaigns` is the strongest sort in the panel — four fields, both
+ * directions, and a validator that refuses garbage — and DECISIONS.md's rule is
+ * that a sort ships only against a sequence the *default* ordering cannot
+ * produce. These five ids answer five distinct sequences:
+ *
+ *   default / created_at desc / id desc   [322, 321, 320, 319, 318]
+ *   created_at asc                        [319, 318, 320, 321, 322]
+ *   updated_at asc                        [320, 322, 321, 318, 319]
+ *   updated_at desc                       [319, 318, 321, 322, 320]
+ *   name asc                              [321, 320, 319, 322, 318]
+ *   name desc                             [318, 322, 319, 320, 321]
+ *   id asc                                [318, 319, 320, 321, 322]
+ *
+ * `created_at desc` and `id desc` agreeing with the bare listing is the live
+ * shop's own property and is reproduced deliberately: it is exactly the coupons
+ * `date` trap, and a screen that proves its sort with either of those two has
+ * proved nothing. `name` and `updated_at` are the fields that can discriminate.
+ *
+ * **318 and 319 tie on `created_at`**, as they do live — both were seeded in the
+ * same second — and the measured tie-break is **id descending** in *both*
+ * directions (`created_at asc` answers 319 before 318, and so does `desc`). That
+ * is the opposite of what `/segments` does with its own ties, which is why
+ * neither collection's tie-break is written as a shared rule below.
+ *
+ * **321 is constructed, not measured.** No live campaign is in `sending`: the
+ * status exists for the window between `send` and the drain finishing, and the
+ * seeded shop has never been caught inside one. Every value on it is read off
+ * rules the API publishes rather than invented — `is_editable: false` because
+ * only a draft is editable, `allowed_transitions: ["cancelled"]` because the
+ * state machine is draft → sending → sent with `cancelled` reachable from the
+ * first two, `claimed_at` set because `send` claimed it and `completed_at` null
+ * because nothing has finished. It exists because the status filter offers a
+ * `sending` tab, `CAMPAIGN_TONE.sending` is the panel's only accent-toned status,
+ * and `pending` recipients live nowhere else — all three were unphotographable
+ * without it.
+ */
+const CAMPAIGN_AUTHOR = 475; // a colleague, not the harness identity — measured
+
+const campaignRow = ({
+  id,
+  name,
+  subject,
+  body_html,
+  body_text,
+  audience,
+  status,
+  is_editable,
+  allowed_transitions,
+  recipients,
+  created,
+  updated,
+  claimed = null,
+  completed = null,
+}) => ({
+  id,
+  name,
+  subject,
+  /** 0 on every seeded campaign: each carries its own body rather than a template. */
+  template_id: 0,
+  body_html,
+  body_text,
+  audience,
+  status,
+  is_editable,
+  allowed_transitions,
+  recipients: { ...recipients, purged: false },
+  created_by: CAMPAIGN_AUTHOR,
+  created_at: iso(created),
+  updated_at: iso(updated),
+  claimed_at: claimed === null ? null : iso(claimed),
+  completed_at: completed === null ? null : iso(completed),
+});
+
+const CAMPAIGN_SEED = [
+  campaignRow({
+    id: 318,
+    name: "Soldes d'août — brouillon",
+    subject: "{{shop_name}} — test du composeur, {{first_name}}",
+    body_html: "<p>Bonjour {{first_name}},</p>\n<p>Nos soldes commencent aujourd'hui.</p>",
+    body_text: "Bonjour {{first_name}},\n\nNos soldes commencent aujourd'hui.",
+    audience: { type: "segment", segment_id: 43, customer_ids: [] },
+    status: "draft",
+    is_editable: true,
+    allowed_transitions: ["sending", "cancelled"],
+    recipients: { total: 0, sent: 0, failed: 0 },
+    created: 4320,
+    updated: 1440,
+  }),
+  /*
+   * **The typo row, and the reason the composer has a preview step.**
+   * `{{firstname}}` is not `{{first_name}}`, an unknown token renders *empty*,
+   * and `<p>Bonjour ,</p>` is easy to skim past — lib/campaigns.ts:160-173. Its
+   * preview below carries `unknown_tokens: ["firstname"]`, measured on this
+   * exact campaign.
+   */
+  campaignRow({
+    id: 319,
+    name: "Relance panier — brouillon",
+    subject: "{{shop_name}} — votre panier",
+    body_html: "<p>Bonjour {{firstname}},</p>\n<p>Votre panier vous attend.</p>",
+    body_text: "Bonjour {{firstname}},\n\nVotre panier vous attend.",
+    audience: { type: "all", segment_id: 0, customer_ids: [] },
+    status: "draft",
+    is_editable: true,
+    allowed_transitions: ["sending", "cancelled"],
+    recipients: { total: 0, sent: 0, failed: 0 },
+    created: 4320,
+    updated: 1400,
+  }),
+  /*
+   * Cancelled, and it **never sent anything** — `claimed_at` null with a
+   * `completed_at` equal to its `updated_at`, which is the shape the live row
+   * has. A cancelled campaign is neutral-toned rather than danger-toned
+   * (lib/campaigns.ts:33-49): somebody chose it.
+   */
+  campaignRow({
+    id: 320,
+    name: "Ramadan — annulée",
+    subject: "{{shop_name}}",
+    body_html: "<p>Bonjour {{first_name}},</p>",
+    body_text: "Bonjour {{first_name}},",
+    audience: { type: "segment", segment_id: 44, customer_ids: [] },
+    status: "cancelled",
+    is_editable: false,
+    allowed_transitions: [],
+    recipients: { total: 0, sent: 0, failed: 0 },
+    created: 4319,
+    updated: 4319,
+    completed: 4319,
+  }),
+  campaignRow({
+    id: 321,
+    name: "Nouveautés — en cours d'envoi",
+    subject: "{{shop_name}} — les nouveautés, {{first_name}}",
+    body_html: "<p>Bonjour {{first_name}},</p>\n<p>Nos nouveautés sont en ligne.</p>",
+    body_text: "Bonjour {{first_name}},\n\nNos nouveautés sont en ligne.",
+    audience: { type: "segment", segment_id: 45, customer_ids: [] },
+    status: "sending",
+    is_editable: false,
+    allowed_transitions: ["cancelled"],
+    recipients: { total: 6, sent: 2, failed: 0 },
+    created: 2880,
+    updated: 2870,
+    claimed: 2870,
+  }),
+  /*
+   * The sent one, and **the counts are stored columns rather than a query** —
+   * §85 keeps them so they survive the purge. 9 = 5 + 4 exactly, which is what
+   * the recipient rows below add up to; they are allowed to disagree only after
+   * a purge, and `purged` is false on every row here.
+   */
+  campaignRow({
+    id: 322,
+    name: "Rentrée — envoyée",
+    subject: "{{shop_name}} — la rentrée, {{first_name}}",
+    body_html: "<p>Bonjour {{first_name}},</p>\n<p>Notre sélection de rentrée est en ligne.</p>",
+    body_text: "Bonjour {{first_name}},\n\nNotre sélection de rentrée est en ligne.",
+    audience: { type: "all", segment_id: 0, customer_ids: [] },
+    status: "sent",
+    is_editable: false,
+    allowed_transitions: [],
+    recipients: { total: 9, sent: 5, failed: 4 },
+    created: 2875,
+    updated: 2874,
+    claimed: 2875,
+    completed: 2874,
+  }),
+];
+
+/**
+ * ── The four segments, and the tie that has to stay ─────────────────────────
+ *
+ * All four share **one** `created_at` and **one** `updated_at`, exactly as the
+ * live shop does — they were seeded in a single pass. So `?orderby=created_at`
+ * and `?orderby=updated_at` are accepted, validated, honoured, and **answer the
+ * same sequence in both directions**, which is the coupons `date` trap made
+ * permanent: two of this collection's four sort values cannot discriminate at
+ * all, and a screen that proved its sort with one of them proved nothing.
+ *
+ * Do not give these rows distinct stamps to "make the sort testable". The
+ * untestability is the fixture.
+ *
+ * **And the measured tie-break here is id *ascending*** — `created_at asc` and
+ * `created_at desc` both answer [43, 44, 45, 46] — where `/campaigns` breaks its
+ * own tie by id *descending*. Two collections, two behaviours, both measured on
+ * the same day; neither is written as a shared rule because neither is one.
+ *
+ * `name asc` is the default and is the one sequence that discriminates:
+ * [46, 44, 43, 45]. Note 44 "Clients à plus…" before 43 "Clients avec…" — the
+ * collation is accent-insensitive, so `à` folds to `a` and sorts before `v`.
+ */
+const SEGMENT_AUTHOR = CAMPAIGN_AUTHOR;
+const SEGMENT_CREATED = 4321;
+const SEGMENT_UPDATED = 4318;
+
+const segmentRow = (id, name, criteria) => ({
+  id,
+  name,
+  /** Empty on all four, live. The panel must render a segment with no description. */
+  description: "",
+  criteria,
+  is_resolvable: true,
+  created_by: SEGMENT_AUTHOR,
+  created_at: iso(SEGMENT_CREATED),
+  updated_at: iso(SEGMENT_UPDATED),
+});
+
+const SEGMENT_SEED = [
+  segmentRow(43, "Clients avec commande", { min_orders: 1 }),
+  segmentRow(44, "Clients à plus de 10 000 DA", { min_spent: "10000.00" }),
+  segmentRow(45, "Inscrits depuis 2026", { registered_after: "2026-01-01" }),
+  segmentRow(46, "Alger, expédiés", { wilaya_id: 16 }),
+];
+
+/**
+ * `GET /segments/{id}/preview` — the counts, measured on the live shop.
+ *
+ * **46 matches 0 and that is correct behaviour, not a broken filter.**
+ * `wilaya_id` comes off the *shipment* rather than off the address, so an order
+ * nobody has shipped has no wilaya and cannot match — lib/campaigns.ts:336-345
+ * records the measurement and says the criteria form has to explain it beside
+ * the field. A fixture where every segment matched somebody would leave that
+ * sentence with nothing to be about.
+ *
+ * **These are the live shop's numbers and are not recomputed from this file's
+ * customers.** `min_spent` needs order totals and `registered_after` needs
+ * registration dates, and inventing a resolver here would be this file
+ * answering a question only the server can answer. The one relationship that is
+ * load-bearing — a segment that matches nobody, beside three that match
+ * somebody — is preserved.
+ */
+const SEGMENT_MATCHES = new Map([
+  [43, 7],
+  [44, 7],
+  [45, 8],
+  [46, 0],
+]);
+
+/**
+ * The API's own English, never rendered. Measured verbatim; the panel shows a
+ * translated sentence of its own, which is the rule the analytics branch set for
+ * every English string this API sends.
+ */
+const SEGMENT_PREVIEW_NOTE = "Only customers who have given marketing consent are counted.";
+
+/**
+ * ── The frozen recipients, and the two conventions on one row ───────────────
+ *
+ * **`last_error` and `sent_at` are empty strings here, never null.**
+ * `CampaignService::recipientList()` stringifies both where the notification
+ * queue nulls them, so `row.sent_at !== null` is true on every row in this list
+ * and only emptiness tells a sent one from a pending one — lib/campaigns.ts:
+ * 216-227.
+ *
+ * **And `sent_at` has no offset** — `"2026-08-15 03:04:22"`, no `T` — where the
+ * campaign's own `created_at` has one. That is `stamp()`, the third route in
+ * this file to use that notation, and it is the `notes[].created_at` trap one
+ * table over: `new Date()` reads it as local time and is silently wrong by the
+ * host's offset.
+ *
+ * The addresses are **this file's own customers** rather than the live shop's,
+ * so a `customer_id` on a recipient row resolves to a row `/customers` really
+ * serves. 25 carries `LONG_EMAIL` — the 80-character unbroken address the 340px
+ * overflow assertion needs — and it is on a **failed** row, so the widest string
+ * in the list sits in the same cell as the error text.
+ */
+const MAIL_ERROR = "wp_mail() did not accept the message.";
+
+const recipientRow = (id, customerIndex, status, minutesAgo) => {
+  const customer = CUSTOMERS[customerIndex];
+  return {
+    id,
+    customer_id: customer.id,
+    email: customer.email,
+    status,
+    // Measured: a sent row carries 0 attempts and a failed one carries 3.
+    attempts: status === "failed" ? 3 : 0,
+    last_error: status === "failed" ? MAIL_ERROR : "",
+    sent_at: status === "sent" ? stamp(minutesAgo) : "",
+  };
+};
+
+const RECIPIENT_SEED = new Map([
+  [
+    322,
+    [
+      recipientRow(348, 0, "sent", 2874),
+      recipientRow(349, 1, "sent", 2874),
+      recipientRow(350, 2, "sent", 2874),
+      recipientRow(351, 3, "sent", 2874),
+      recipientRow(352, 4, "sent", 2874),
+      recipientRow(353, 5, "failed", 0),
+      recipientRow(354, 6, "failed", 0),
+      recipientRow(355, 7, "failed", 0),
+      recipientRow(356, 8, "failed", 0),
+    ],
+  ],
+  /*
+   * The campaign still draining: two addresses taken, four still queued. This is
+   * the only place a `pending` recipient exists, and `RECIPIENT_TONE.pending` is
+   * unphotographable without it.
+   */
+  [
+    321,
+    [
+      recipientRow(360, 9, "sent", 2870),
+      recipientRow(361, 10, "sent", 2870),
+      recipientRow(362, 11, "pending", 0),
+      recipientRow(363, 12, "pending", 0),
+      recipientRow(364, 13, "pending", 0),
+      recipientRow(365, 14, "pending", 0),
+    ],
+  ],
+]);
+
+/**
+ * `GET /campaigns/{id}/preview`, measured on 318 and 319.
+ *
+ * Three things this reproduces and one it cannot. `subject`, `html` and `text`
+ * come back with the tokens **resolved**; `unsubscribe_appended` is true on
+ * every seeded body because none of them writes `{{unsubscribe_url}}`, and that
+ * is the API adding one rather than a body missing one — lib/campaigns.ts:
+ * 188-198 says the screen must read it as "we added one".
+ *
+ * **`audience_count` is null for a caller who cannot count customers**, which is
+ * `canSendCampaigns()` showing through on a route that is otherwise a Marketing
+ * Manager's. Measured 2026-08-28 with an `ac_marketing_manager` credential: the
+ * HTML and the text come back, `audience_count` is `null`, and it is null rather
+ * than absent or zero. `MOCK_IDENTITY=no_customers` is the credential that
+ * reaches it here.
+ *
+ * What it cannot reproduce: the *rendering*. These strings are the live shop's
+ * output for these exact bodies rather than a token renderer written here — a
+ * second renderer would be a second contract, and it would drift.
+ */
+const UNSUBSCRIBE_URL =
+  "http://127.0.0.1:8099/wp-json/algerian-commerce/v1/marketing/unsubscribe?token=sample";
+
+const SAMPLE_RECIPIENT = {
+  customer_name: "Amina Belkacem",
+  first_name: "Amina",
+  shop_name: "Algerian Commerce",
+  order_number: "1234",
+  unsubscribe_url: UNSUBSCRIBE_URL,
+};
+
+const appendedHtml = (html) =>
+  `${html}\n<p style="font-size:12px;color:#666"><a href="${UNSUBSCRIBE_URL}">Unsubscribe</a></p>\n`;
+
+const appendedText = (text) => `${text}\n\nUnsubscribe: ${UNSUBSCRIBE_URL}\n`;
+
+const CAMPAIGN_PREVIEW_SEED = new Map([
+  [
+    318,
+    {
+      subject: "Algerian Commerce — test du composeur, Amina",
+      html: appendedHtml("<p>Bonjour Amina,</p>\n<p>Nos soldes commencent aujourd'hui.</p>"),
+      text: appendedText("Bonjour Amina,\n\nNos soldes commencent aujourd'hui."),
+      unknown_tokens: [],
+      audience_count: 7,
+    },
+  ],
+  [
+    319,
+    {
+      subject: "Algerian Commerce — votre panier",
+      // `{{firstname}}` rendered empty, which is the whole point of the row.
+      html: appendedHtml("<p>Bonjour ,</p>\n<p>Votre panier vous attend.</p>"),
+      text: appendedText("Bonjour ,\n\nVotre panier vous attend."),
+      unknown_tokens: ["firstname"],
+      audience_count: 8,
+    },
+  ],
+  [
+    321,
+    {
+      subject: "Algerian Commerce — les nouveautés, Amina",
+      html: appendedHtml("<p>Bonjour Amina,</p>\n<p>Nos nouveautés sont en ligne.</p>"),
+      text: appendedText("Bonjour Amina,\n\nNos nouveautés sont en ligne."),
+      unknown_tokens: [],
+      audience_count: 6,
+    },
+  ],
+  [
+    320,
+    {
+      subject: "Algerian Commerce",
+      html: appendedHtml("<p>Bonjour Amina,</p>"),
+      text: appendedText("Bonjour Amina,"),
+      unknown_tokens: [],
+      audience_count: 7,
+    },
+  ],
+  [
+    322,
+    {
+      subject: "Algerian Commerce — la rentrée, Amina",
+      html: appendedHtml("<p>Bonjour Amina,</p>\n<p>Notre sélection de rentrée est en ligne.</p>"),
+      text: appendedText("Bonjour Amina,\n\nNotre sélection de rentrée est en ligne."),
+      unknown_tokens: [],
+      audience_count: 8,
+    },
+  ],
+]);
+
+/**
+ * ── Three email templates, and the one that makes the screen worth having ────
+ *
+ * Read-only through this API: §85 makes a template an `ac_email_template` post
+ * authored in wp-admin, where the revisions and the media library already are,
+ * so there is no write of any kind and lib/api/allowlist.ts:361-362 carries only
+ * the two GETs.
+ *
+ * **4652 is the row the screen exists for.** It carries `unknown_tokens:
+ * ["firstname", "prenom"]` — two typos in one body, one of them a French word a
+ * person would reasonably expect to work — *and* `has_unsubscribe_token: false`.
+ * The second is **not** a warning: the API appends an unsubscribe link when the
+ * body has none, so a screen that flagged it as missing would be inventing a
+ * problem. 4650 is the control, carrying the token itself. 4651 carries neither
+ * a typo nor the token, which is the ordinary case.
+ *
+ * The order is the live shop's — `name` ascending, so 4652 sits between 4650 and
+ * 4651 — and it is a fixed order rather than a sort, because the route takes no
+ * `orderby` at all.
+ */
+const EMAIL_TEMPLATE_SEED = [
+  {
+    id: 4650,
+    name: "Bienvenue",
+    subject: "{{shop_name}} — bienvenue {{first_name}}",
+    status: "publish",
+    body_html:
+      "<p>Bonjour {{first_name}},</p>\n<p>Merci d'avoir créé un compte chez {{shop_name}}.</p>\n" +
+      '<p><a href="{{unsubscribe_url}}">Se désabonner</a></p>',
+    body_text:
+      "Bonjour {{first_name}},\n\nMerci d'avoir créé un compte chez {{shop_name}}.\n\n" +
+      "Se désabonner : {{unsubscribe_url}}",
+    unknown_tokens: [],
+    has_unsubscribe_token: true,
+    modified_at: iso(4318),
+  },
+  {
+    id: 4652,
+    name: "Relance panier (avec une coquille)",
+    subject: "{{shop_name}} — votre panier vous attend",
+    status: "publish",
+    body_html: "<p>Bonjour {{firstname}},</p>\n<p>Votre panier vous attend, {{prenom}}.</p>",
+    body_text: "Bonjour {{firstname}},\n\nVotre panier vous attend, {{prenom}}.",
+    unknown_tokens: ["firstname", "prenom"],
+    has_unsubscribe_token: false,
+    modified_at: iso(4318),
+  },
+  {
+    id: 4651,
+    name: "Soldes",
+    subject: "{{shop_name}} — nos soldes commencent",
+    status: "publish",
+    body_html: "<p>Bonjour {{first_name}},</p>\n<p>Nos soldes commencent aujourd'hui.</p>",
+    body_text: "Bonjour {{first_name}},\n\nNos soldes commencent aujourd'hui.",
+    unknown_tokens: [],
+    has_unsubscribe_token: false,
+    modified_at: iso(4318),
+  },
+];
+
+/**
+ * `GET /marketing/config` — and **the screen's main state is a disabled one**.
+ *
+ * Measured verbatim: the integration is off and there are no providers, on this
+ * shop and on the one the panel is built against. So the config screen's ordinary
+ * rendering is "nothing is configured", and a fixture with a live pixel in it
+ * would make the state every reader will actually see the unreachable one.
+ *
+ * The Conversions API token appears in no response ever, which is the property
+ * the screen states rather than displays. The two event lists are what the
+ * storefront reports and what the backend sends server-side; the panel sends
+ * neither and only names them.
+ */
+const MARKETING_CONFIG = {
+  enabled: false,
+  providers: [],
+  browser_events: [
+    "PageView",
+    "ViewContent",
+    "Search",
+    "AddToCart",
+    "InitiateCheckout",
+    "Purchase",
+  ],
+  server_events: ["Purchase", "InitiateCheckout"],
+};
+
 /* ------------------------------------------ the order detail's sub-resources --- */
 
 /**
@@ -5900,6 +6496,25 @@ const state = {
   menus: new Map(),
   nextMenuId: 0,
   nextMenuItemId: 0,
+  /**
+   * Campaign id → the whole row as it reads now, holding both the seeded rows a
+   * `PATCH` has rewritten **and** the rows `POST /campaigns` created — the shape
+   * coupons and pages already use, so one lookup answers for either.
+   *
+   * A campaign has **no trash**: `DELETE` removes it outright, and only while it
+   * is a draft. So `campaignsGone` is the whole of the delete's memory, unlike
+   * `couponsGone`, which has to distinguish a trashed code from a freed one.
+   */
+  campaigns: new Map(),
+  /** Ids created in this process, newest first — the default `created_at desc` head. */
+  createdCampaigns: [],
+  campaignsGone: new Set(),
+  nextCampaignId: 0,
+  /** Segment id → the row as it reads now, seeded or created. Same shape. */
+  segments: new Map(),
+  createdSegments: [],
+  segmentsGone: new Set(),
+  nextSegmentId: 0,
   /** Media id → the row as it reads now. `PATCH` writes alt, title and caption. */
   media: new Map(),
   /** The ids `POST /media` created, newest last. */
@@ -5986,6 +6601,20 @@ export function resetState() {
   // menu a `PUT` creates carries the same ids in every process.
   state.nextMenuId = 4300;
   state.nextMenuItemId = 4400;
+  state.campaigns = new Map();
+  state.createdCampaigns = [];
+  state.campaignsGone = new Set();
+  // Above the five seeded ids and far enough from them to read as new — the
+  // same rule `nextCouponId` follows, and the same figure in every process,
+  // which is what keeps a screenshot of a created draft byte-stable.
+  state.nextCampaignId = 340;
+  state.segments = new Map();
+  state.createdSegments = [];
+  state.segmentsGone = new Set();
+  // Clear of 43-46, and clear of 47 — the id the live shop handed the scratch
+  // segment this fixture's refusals were measured with, which is now free again
+  // and would read as a coincidence rather than as a new row.
+  state.nextSegmentId = 60;
   state.media = new Map();
   state.createdMedia = [];
   state.deletedMedia = new Set();
@@ -12167,6 +12796,870 @@ function uploadMedia(body) {
   return created(row);
 }
 
+/* ------------------------------------------------------------- marketing --- */
+
+/**
+ * ── The sort that ships, and the one collection where garbage is refused ─────
+ *
+ * `/campaigns` reaches a validator where `/shipping` and `/payments` do not: a
+ * value outside the enum is a **400**, not a silent 200. Measured 2026-08-28 —
+ * `?orderby=zzz`, `?orderby=`, `?order=zzz` and `?order=` are all refused, and
+ * `?bogus_param=1` is a 200 in default order. So this file has to do both
+ * things at once: sort, *and* refuse — which no other collection here does.
+ *
+ * **The order of the values inside each array is the order the refusal prints
+ * them in**, and the two collections do not agree: campaigns lead with
+ * `created_at` and segments with `name`, each naming its own default first.
+ * Sorting either list would change a sentence the shop sends.
+ */
+const CAMPAIGN_ORDERBY = ["created_at", "updated_at", "name", "id"];
+const SEGMENT_ORDERBY = ["name", "created_at", "updated_at", "id"];
+
+/**
+ * `?status=` on `/campaigns`, and **the empty string is inside the enum** —
+ * which is how "every status" is spelled and why the refusal reads
+ * `status is not one of , draft, sending, sent, and cancelled.` with a leading
+ * comma. `?status=` is a legal 200; `?status=scheduled` is a 400.
+ *
+ * The recipient list's own three are the notification queue's three and are
+ * validated the same way, against its own enum: `?status=draft` is a 400 there
+ * and a 200 one level up.
+ */
+const CAMPAIGN_STATUS_FILTERS = ["", "draft", "sending", "sent", "cancelled"];
+const RECIPIENT_STATUS_FILTERS = ["", "pending", "sent", "failed"];
+
+/**
+ * The second half of `canSendCampaigns()`, and the file's second capability
+ * predicate after `canSeeMoney()`.
+ *
+ * `ac_manage_marketing` gates the whole section and is enforced by `gatedOn` in
+ * the router; this one is the *other* half of the compound rule, and it is
+ * enforced on exactly the three routes measured to need it — the recipient list,
+ * a segment's count, and `send`. It also decides one **field**: a preview comes
+ * back whole with `audience_count: null` rather than being refused, because
+ * rendering a body is a marketing act and counting an audience is a customers
+ * one. `MOCK_IDENTITY=no_customers` is the credential that reaches all four.
+ */
+const canCountCustomers = () => IDENTITY.capabilities.includes("ac_manage_customers");
+
+const campaignRows = () =>
+  [
+    ...state.createdCampaigns.map((id) => state.campaigns.get(id)),
+    ...CAMPAIGN_SEED.map((row) => state.campaigns.get(row.id) ?? row),
+  ].filter((row) => row !== undefined && !state.campaignsGone.has(row.id));
+
+const campaignById = (id) =>
+  id === null ? undefined : campaignRows().find((row) => row.id === id);
+
+const segmentRows = () =>
+  [
+    ...state.createdSegments.map((id) => state.segments.get(id)),
+    ...SEGMENT_SEED.map((row) => state.segments.get(row.id) ?? row),
+  ].filter((row) => row !== undefined && !state.segmentsGone.has(row.id));
+
+const segmentById = (id) => (id === null ? undefined : segmentRows().find((row) => row.id === id));
+
+/**
+ * One sort for both collections, and **the tie-break is a per-collection
+ * measurement rather than a rule.**
+ *
+ * `/campaigns` breaks a `created_at` tie by **id descending** — 319 answers
+ * before 318 under `asc` *and* under `desc`. `/segments`, whose four rows tie on
+ * both stamps, answers [43, 44, 45, 46] in both directions, which is id
+ * **ascending**. Measured on the same day, on one shop; neither is written as a
+ * shared default because neither generalises, and a screen must not learn its
+ * secondary order from this file.
+ *
+ * Names fold before comparing, like every other sort here: MySQL's collation is
+ * accent-insensitive, which is what puts "Clients à plus…" before "Clients
+ * avec…" on the segments list.
+ */
+function sortMarketing(rows, key, order, tie) {
+  const direction = order === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const left = key(a);
+    const right = key(b);
+    if (left < right) return -direction;
+    if (left > right) return direction;
+    return tie === "asc" ? a.id - b.id : b.id - a.id;
+  });
+}
+
+const marketingKey = (orderby) =>
+  orderby === "name"
+    ? (row) => fold(row.name)
+    : orderby === "id"
+      ? (row) => row.id
+      : (row) => row[orderby];
+
+/** Null when the pair is acceptable; the 400 the shop sends when either is not. */
+function checkMarketingSort(params, orderbyValues) {
+  const orderby = params.get("orderby");
+  if (orderby !== null && !orderbyValues.includes(orderby)) {
+    return { error: invalidParam("orderby", notOneOf("orderby", orderbyValues)) };
+  }
+  const order = params.get("order");
+  if (order !== null && !SORT_DIRECTIONS.includes(order)) {
+    return { error: invalidParam("order", notOneOf("order", SORT_DIRECTIONS)) };
+  }
+  return { orderby, order };
+}
+
+/**
+ * `GET /campaigns`.
+ *
+ * Four parameters honoured, one refused by name, and **one that looks like a
+ * refusal and is not**:
+ *
+ *   ?status=zzz      400  — the enum above, empty string included
+ *   ?orderby/order   400  — outside their enums, `""` included
+ *   ?segment_id=zzz  400  "segment_id is not of type integer."
+ *   ?segment_id=-1   400  "segment_id must be greater than or equal to 0"
+ *   ?segment_id=0    200, **no filter** — 0 is the unset value, not a segment
+ *   ?segment_id=99999  **200 with 0 rows** — a segment that does not exist is
+ *                      not a refusal, so a screen cannot tell "no campaigns use
+ *                      it" from "there is no such segment"
+ *   ?search=         200, no filter — not an enum, so `""` is absence here
+ *   ?bogus_param=1   200, ignored
+ *
+ * `?search=` matches **name and subject**, measured with a positive control on
+ * each side: `?search=Ramadan` finds 320 by name and `?search=composeur` finds
+ * 318 by subject alone.
+ *
+ * `segment_id` goes through `pagingNumber` because it refuses in exactly the two
+ * families that helper already writes — the same argument `/payments?order_id=`
+ * made for sharing it.
+ */
+function campaignsListing(params) {
+  const sort = checkMarketingSort(params, CAMPAIGN_ORDERBY);
+  if (sort.error) return sort.error;
+
+  const status = params.get("status");
+  if (status !== null && !CAMPAIGN_STATUS_FILTERS.includes(status)) {
+    return invalidParam("status", notOneOf("status", CAMPAIGN_STATUS_FILTERS));
+  }
+
+  const segment = pagingNumber(params, "segment_id", 0, (value) =>
+    value >= 0 ? null : "segment_id must be greater than or equal to 0",
+  );
+  if (segment.error) return segment.error;
+
+  let rows = campaignRows();
+  if (status !== null && status !== "") rows = rows.filter((row) => row.status === status);
+  if (segment.value > 0) {
+    rows = rows.filter((row) => row.audience.segment_id === segment.value);
+  }
+  rows = searchRows(rows, params, (row) => [row.name, row.subject]);
+  rows = sortMarketing(
+    rows,
+    marketingKey(sort.orderby ?? "created_at"),
+    sort.order ?? "desc",
+    "desc",
+  );
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/**
+ * `GET /segments`, and **`?search=` is accepted and ignored** — measured,
+ * `?search=Alger` answers all four rows rather than the one whose name starts
+ * with it. The route declares no such argument, so the value reaches nothing.
+ * A mock that filtered would let somebody build a segment search that works
+ * only here.
+ */
+function segmentsListing(params) {
+  const sort = checkMarketingSort(params, SEGMENT_ORDERBY);
+  if (sort.error) return sort.error;
+
+  const rows = sortMarketing(
+    segmentRows(),
+    marketingKey(sort.orderby ?? "name"),
+    sort.order ?? "asc",
+    "asc",
+  );
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
+/**
+ * `GET /campaigns/{id}/recipients` — **`status` and paging, and no sort at all.**
+ *
+ * `?orderby=zzz` is a **200 here**, where the same value on the collection one
+ * level up is a 400: this route registers no sort argument, so the parameter
+ * reaches nothing and is not validated either. Two routes on one resource, two
+ * answers to the same wrong value, and reproducing both is the only way a screen
+ * cannot ship a recipient sort that appears to work.
+ *
+ * **`meta.total` follows the filter.** It did not before
+ * `feat/campaign-recipient-counts` — `?status=failed` answered 0 rows with
+ * `meta.total: 9`, so a paginating list showed "9 destinataires" over an empty
+ * table — and this screen pages, so it is the one that would have shown it.
+ *
+ * `meta.purged` is the fifth key and the reason this list has its own meta
+ * schema: after the 30-day purge the addresses are gone and the campaign's
+ * stored counts are all that is left.
+ */
+function recipientsListing(campaign, params) {
+  const status = params.get("status");
+  if (status !== null && !RECIPIENT_STATUS_FILTERS.includes(status)) {
+    return invalidParam("status", notOneOf("status", RECIPIENT_STATUS_FILTERS));
+  }
+
+  let rows = RECIPIENT_SEED.get(campaign.id) ?? [];
+  if (status !== null && status !== "") rows = rows.filter((row) => row.status === status);
+
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, { ...page.meta, purged: campaign.recipients.purged });
+}
+
+/**
+ * `GET /campaigns/{id}/preview`, and **`audience_count` is null for a caller who
+ * cannot read customers** — `canSendCampaigns()` showing through on a route that
+ * is otherwise a Marketing Manager's. Measured with the `ac_marketing_manager`
+ * credential; `MOCK_IDENTITY=no_customers` reaches it here. Null rather than
+ * absent and rather than zero: the key is always present, and a zero would read
+ * as "nobody".
+ */
+function campaignPreview(campaign) {
+  const seed = CAMPAIGN_PREVIEW_SEED.get(campaign.id);
+  // Only the five seeded campaigns have a rendered preview; a campaign this
+  // process created has no measured rendering and gets its own body back with
+  // nothing resolved, which is what an untokenised body renders to anyway.
+  const rendered = seed ?? {
+    subject: campaign.subject,
+    html: appendedHtml(campaign.body_html),
+    text: appendedText(campaign.body_text),
+    unknown_tokens: [],
+    audience_count: 8,
+  };
+
+  return ok({
+    campaign_id: campaign.id,
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    unknown_tokens: rendered.unknown_tokens,
+    // True on every seeded body: none of them writes `{{unsubscribe_url}}`, so
+    // the API adds one. The screen reads this as "we added one", never as a
+    // missing link — lib/campaigns.ts:188-198.
+    unsubscribe_appended: true,
+    sample_recipient: SAMPLE_RECIPIENT,
+    audience_count: canCountCustomers() ? rendered.audience_count : null,
+  });
+}
+
+/**
+ * `GET /segments/{id}/preview` — a live count and an English sentence.
+ *
+ * `problems` is empty on all four: it is the homepage drop report's shape and
+ * fills only when a criterion has stopped making sense. `note` is the API's own
+ * English and the panel renders a translated sentence instead, which is the rule
+ * the analytics branch set.
+ */
+const segmentPreview = (segment) =>
+  ok({
+    segment_id: segment.id,
+    matches: SEGMENT_MATCHES.get(segment.id) ?? 0,
+    criteria: segment.criteria,
+    problems: [],
+    note: SEGMENT_PREVIEW_NOTE,
+  });
+
+/* --------------------------------------------------------- campaign writes --- */
+
+/**
+ * ── The refusal vocabulary, measured one request at a time on 2026-08-28 ─────
+ *
+ * Written out as constants because every one of them is a *sentence the shop
+ * sends*, and DECISIONS.md records six CMS refusals that turned out to be this
+ * file's own invention and a coupons screen built to a `"Read-only."` the API
+ * never sends. Nothing here is paraphrased and nothing is generated.
+ *
+ * **`Required` and `Cannot be blank.` are different sentences for the same
+ * field**, and which one arrives depends on the verb: a create names what is
+ * missing, an edit names what was emptied. Both measured on `subject`.
+ *
+ * The em dash in two of them is the shop's, not this file's typography.
+ */
+const CAMPAIGN_INVALID = "The campaign is invalid.";
+const NAME_REQUIRED = "Required.";
+const SUBJECT_REQUIRED = "Required — a campaign with no subject line is not sendable.";
+const SEGMENT_ID_REQUIRED = 'Required when audience_type is "segment".';
+const CANNOT_BE_BLANK = "Cannot be blank.";
+const NO_SUCH_SEGMENT = "No segment with that id.";
+const NOT_A_DRAFT = "A campaign can only be edited while it is a draft.";
+const NOT_DELETABLE = "Only a draft can be deleted. Cancel the campaign instead.";
+
+const invalidCampaign = (fields) => fail(400, "invalid_request", CAMPAIGN_INVALID, { fields });
+
+const campaignNotFound = () => fail(404, "not_found", "No campaign with that id.");
+const segmentNotFound = () => fail(404, "not_found", NO_SUCH_SEGMENT);
+
+const readString = (value) => (typeof value === "string" ? value : null);
+
+/**
+ * `POST /campaigns` — **201**, and the fifth create in this file pinned there.
+ *
+ * Three things measured that an implementation would guess wrong:
+ *
+ *   1. **`audience_type` absent behaves as `"segment"`.** `POST {}` names
+ *      `segment_id` among its missing fields, and so does `POST {name}`. There
+ *      is no way to create a campaign without either naming an audience type or
+ *      being told a segment id is missing.
+ *   2. **Empty bodies are accepted.** `body_html: ""` and `body_text: ""` are a
+ *      201. lib/campaigns.ts:377-398 gates the wizard on both parts being
+ *      present, and that is the panel's rule rather than the API's — see the
+ *      honesty note in DECISIONS.md. This file must not refuse them.
+ *   3. **The panel's own create body is a 400 today.** `CampaignsList.tsx` sends
+ *      `subject: ""` with a comment calling it "the minimum the API accepts",
+ *      and the API answers `subject: Required — …`. Reproduced rather than
+ *      accommodated: a mock that let that through would hide a live defect.
+ *
+ * `segment_id` naming no segment is refused with the sentence measured on
+ * `PATCH`; that the same validator runs on create is an extrapolation from one
+ * field, and it is named here rather than left to read as measured.
+ */
+function createCampaign(body) {
+  const input = body ?? {};
+  const fields = {};
+
+  const name = (readString(input.name) ?? "").trim();
+  if (name === "") fields.name = NAME_REQUIRED;
+
+  const subject = (readString(input.subject) ?? "").trim();
+  if (subject === "") fields.subject = SUBJECT_REQUIRED;
+
+  const audienceType = readString(input.audience_type) ?? "segment";
+  const segmentId = Number.isInteger(input.segment_id) ? input.segment_id : 0;
+  if (audienceType === "segment") {
+    if (segmentId <= 0) fields.segment_id = SEGMENT_ID_REQUIRED;
+    else if (segmentById(segmentId) === undefined) fields.segment_id = NO_SUCH_SEGMENT;
+  }
+
+  if (Object.keys(fields).length > 0) return invalidCampaign(fields);
+
+  const id = state.nextCampaignId++;
+  const row = {
+    id,
+    name,
+    subject,
+    template_id: 0,
+    body_html: sanitizeCampaignHtml(readString(input.body_html) ?? ""),
+    body_text: readString(input.body_text) ?? "",
+    audience: {
+      type: audienceType,
+      segment_id: audienceType === "segment" ? segmentId : 0,
+      customer_ids: Array.isArray(input.customer_ids) ? input.customer_ids : [],
+    },
+    status: "draft",
+    is_editable: true,
+    allowed_transitions: ["sending", "cancelled"],
+    recipients: { total: 0, sent: 0, failed: 0, purged: false },
+    created_by: IDENTITY.id,
+    created_at: iso(0),
+    updated_at: iso(0),
+    claimed_at: null,
+    completed_at: null,
+  };
+
+  state.campaigns.set(id, row);
+  state.createdCampaigns.unshift(id);
+  return created(row);
+}
+
+/**
+ * `wp_kses` with an email-safe allowlist, as far as this file needs it.
+ *
+ * Measured: `<script>alert(1)</script><p>ok</p>` is stored as
+ * `alert(1)<p>ok</p>` — **the tag stripped and the text kept**, which is the
+ * property that makes rendering a stored body into a preview safe. Only the
+ * `<script>` case is reproduced, because it is the only one measured; `on*`
+ * attributes and `javascript:` hrefs are refused by the same allowlist upstream
+ * and nothing here has watched one go through.
+ */
+const sanitizeCampaignHtml = (html) =>
+  html.replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, "$1").replace(/<\/?script[^>]*>/gi, "");
+
+/**
+ * `PATCH /campaigns/{id}`.
+ *
+ *   a non-draft            409 `conflict`, `details.status` names which
+ *   `{}` or read-only keys 400 "No supported fields were provided." — the
+ *                          `bareFail` shape, with **no `details` key at all**,
+ *                          exactly as `PATCH /products/{id}` and `/media/{id}`
+ *   `name: ""`             400 "Cannot be blank."
+ *   `segment_id: 99999`    400 "No segment with that id."
+ *   `audience_type:"segment"` with no id  **200**, `segment_id: 0` — the create
+ *                          refuses this and the edit does not, measured on both
+ *
+ * The conflict is checked before the body, which is not measured: nobody has
+ * sent `{}` to a sent campaign. Named rather than left implicit.
+ */
+function patchCampaign(row, body) {
+  if (!row.is_editable) {
+    return fail(409, "conflict", NOT_A_DRAFT, { status: row.status });
+  }
+
+  const input = body ?? {};
+  const writes = {};
+  const fields = {};
+
+  for (const key of ["name", "subject"]) {
+    const value = readString(input[key]);
+    if (value === null) continue;
+    if (value.trim() === "") fields[key] = CANNOT_BE_BLANK;
+    else writes[key] = value;
+  }
+
+  const html = readString(input.body_html);
+  if (html !== null) writes.body_html = sanitizeCampaignHtml(html);
+  const text = readString(input.body_text);
+  if (text !== null) writes.body_text = text;
+
+  const audienceType = readString(input.audience_type);
+  const hasSegmentId = Number.isInteger(input.segment_id);
+  const hasIds = Array.isArray(input.customer_ids);
+  if (hasSegmentId && input.segment_id > 0 && segmentById(input.segment_id) === undefined) {
+    fields.segment_id = NO_SUCH_SEGMENT;
+  }
+
+  if (Object.keys(fields).length > 0) return invalidCampaign(fields);
+
+  if (audienceType !== null || hasSegmentId || hasIds) {
+    const type = audienceType ?? row.audience.type;
+    writes.audience = {
+      type,
+      segment_id: type === "segment" && hasSegmentId ? input.segment_id : 0,
+      customer_ids: type === "ids" && hasIds ? input.customer_ids : [],
+    };
+  }
+
+  if (Object.keys(writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const next = { ...row, ...writes, updated_at: iso(0) };
+  state.campaigns.set(row.id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /campaigns/{id}` — `{deleted: true}`, and **only for a draft**.
+ *
+ * Measured on a scratch campaign taken from draft to cancelled: the delete
+ * answers 409 `conflict` with the sentence below and `details.status`. A
+ * campaign has no trash — the row is gone rather than moved — which is why this
+ * refusal exists at all: a sent campaign is the record of mail that left the
+ * building.
+ */
+function deleteCampaign(row) {
+  if (row.status !== "draft") {
+    return fail(409, "conflict", NOT_DELETABLE, { status: row.status });
+  }
+  state.campaignsGone.add(row.id);
+  return ok({ deleted: true });
+}
+
+/**
+ * `POST /campaigns/{id}/cancel` — 200 with the **whole campaign row**, not a
+ * receipt.
+ *
+ * Measured on a draft: `status` becomes `cancelled`, `is_editable` false,
+ * `allowed_transitions` empty and `completed_at` is stamped — while
+ * **`updated_at` is left alone**, which is why the cancelled seed row carries
+ * three equal stamps rather than a later one.
+ *
+ * The refusal is measured on both terminal states:
+ *
+ *   sent       409 `A campaign in "sent" cannot be cancelled.`      {status, allowed: []}
+ *   cancelled  409 `A campaign in "cancelled" cannot be cancelled.` {status, allowed: []}
+ *
+ * The status is quoted back inside the sentence, which is this API's notation
+ * for *the thing you sent* — the same one the shipment 409 uses.
+ */
+function cancelCampaign(row) {
+  if (!row.allowed_transitions.includes("cancelled")) {
+    return fail(409, "conflict", `A campaign in "${row.status}" cannot be cancelled.`, {
+      status: row.status,
+      allowed: row.allowed_transitions,
+    });
+  }
+
+  const next = {
+    ...row,
+    status: "cancelled",
+    is_editable: false,
+    allowed_transitions: [],
+    completed_at: iso(0),
+  };
+  state.campaigns.set(row.id, next);
+  return ok(next);
+}
+
+/**
+ * ── `send` and `test`, and the one refusal this file deliberately cannot send ─
+ *
+ * **Neither was fired at the shop for this fixture**: a send mails a shop's
+ * customers and nothing un-mails them. Both shapes come from measurements this
+ * repository already records, and the source of each is named rather than left
+ * to read as a fresh request.
+ *
+ *   send  **202** `{campaign_id, status: "sending", recipients, next}` —
+ *         lib/campaigns.ts:408-421, and `next.command` is the whole point: the
+ *         call resolves an audience and writes rows, and the mail leaves when a
+ *         deployment runs `wp algerian-commerce send-campaigns`. A progress bar
+ *         implying live delivery is a lie the operator would act on.
+ *   test  **200 with `sent: false`** — ADMIN_PANEL.md's second correction and
+ *         `scripts/seed-campaigns.mjs:40-48`. The request succeeded and the
+ *         transport did not, which are different facts. It writes no recipient
+ *         row, so a test never appears in the list below.
+ *
+ * **503 `mail_not_configured` is not served, and that is a measurement rather
+ * than an omission.** It was the answer on this stack until `seed-campaigns.mjs`
+ * set `SMTP_HOST=127.0.0.1:1` — a port nothing listens on — and the seeded shop
+ * this file reproduces is the one *with* a transport. Serving the 503 would mean
+ * reproducing a stack that no longer exists, and it would make `classifySendRefusal`'s
+ * `"mail"` branch the one a capture reaches by default.
+ *
+ * The 409 for an audience matching nobody is likewise unserved: no seeded
+ * campaign has an empty audience, and the sentence has never been seen here.
+ */
+const SEND_COMMAND = "wp algerian-commerce send-campaigns";
+
+function sendCampaign(row) {
+  if (!row.allowed_transitions.includes("sending")) {
+    /*
+     * **The only invented sentence on this branch, and it is flagged here rather
+     * than left to be discovered** — the same treatment `MEDIA_LOGO_ID` gets in
+     * the media usage block, and for the same reason: an invention nobody can
+     * see is how DECISIONS.md's six invented CMS refusals and the coupons
+     * `"Read-only."` got built into screens.
+     *
+     * The **status and the details are recorded** — lib/campaigns.ts:434-448 has
+     * the 409 and `details.status` from the 2026-08-21 pass, and ADMIN_PANEL.md
+     * says a second `send` is a 409 — and only the wording is this file's,
+     * modelled on the `cancel` refusal measured beside it. It was not measured
+     * because provoking a `send` mails a shop's customers and nothing un-mails
+     * them.
+     *
+     * **No screen can reach it**: `Composer.tsx` renders the send control only
+     * while `canSend()` is true, which is `allowed_transitions` containing
+     * `sending`. So this is a fixture for a path the panel does not take, and a
+     * screen must not be built to its words. Whoever is willing to spend a send
+     * on a disposable draft should take the measurement.
+     */
+    return fail(409, "conflict", `A campaign in "${row.status}" cannot be sent.`, {
+      status: row.status,
+      allowed: row.allowed_transitions,
+    });
+  }
+
+  /*
+   * The recipient count is the campaign's audience resolved through the consent
+   * filter, and this file cannot resolve one — so it answers the number the
+   * *preview* of that campaign carries, which is the same count from the same
+   * gate. A campaign created in this process has no preview and gets 8, the
+   * count `all` resolves to on this shop.
+   */
+  const recipients = CAMPAIGN_PREVIEW_SEED.get(row.id)?.audience_count ?? 8;
+  const next = {
+    ...row,
+    status: "sending",
+    is_editable: false,
+    allowed_transitions: ["cancelled"],
+    claimed_at: iso(0),
+    recipients: { total: recipients, sent: 0, failed: 0, purged: false },
+  };
+  state.campaigns.set(row.id, next);
+
+  return {
+    status: 202,
+    body: {
+      success: true,
+      data: {
+        campaign_id: row.id,
+        status: "sending",
+        recipients,
+        next: { action: "drain", command: SEND_COMMAND },
+      },
+    },
+  };
+}
+
+function testCampaign(row, body) {
+  const to = readString((body ?? {}).to) ?? "";
+  return ok({
+    sent: false,
+    to,
+    subject: CAMPAIGN_PREVIEW_SEED.get(row.id)?.subject ?? row.subject,
+    unknown_tokens: CAMPAIGN_PREVIEW_SEED.get(row.id)?.unknown_tokens ?? [],
+  });
+}
+
+/* ---------------------------------------------------------- segment writes --- */
+
+/**
+ * ── Two different refusal shapes for criteria, and both are exact ───────────
+ *
+ * This is the part of the marketing surface most worth reproducing precisely,
+ * because the two shapes disagree about **where the enumeration goes**:
+ *
+ *   POST /segments {name, criteria:{}}
+ *     message  "A segment needs at least one criterion."
+ *     details.fields.criteria  "Empty criteria would match every customer; use
+ *                               audience_type \"all\" for that."
+ *     details.supported        the eleven, as an array and a **sibling of
+ *                              `fields`**
+ *
+ *   POST /segments {name, criteria:{zzz:1}}
+ *     message  "The segment criteria are invalid."
+ *     details.fields.zzz  "Unknown criterion. Supported: min_spent, …,
+ *                          not_bought_product_id."
+ *     — the same eleven, **inline in the sentence**, and no `supported` key at all
+ *
+ * lib/campaigns.ts:259-267 reads the eleven out of the first shape and calls it
+ * "a copy of a server-side constant that the server itself publishes on
+ * refusal". That is only true of the *empty* refusal; a form that read
+ * `details.supported` after sending an unknown key would find nothing there.
+ *
+ * The seven refused-by-name criteria are reproduced verbatim too, and their
+ * reasons are worth reading rather than paraphrasing — `sql` is answered with
+ * the single word "No." All seven were re-measured on 2026-08-28 and all seven
+ * match lib/campaigns.ts:302-324, which quotes three of them.
+ */
+const SEGMENT_CRITERIA = [
+  "min_spent",
+  "max_spent",
+  "min_orders",
+  "max_orders",
+  "ordered_after",
+  "ordered_before",
+  "registered_after",
+  "registered_before",
+  "wilaya_id",
+  "bought_product_id",
+  "not_bought_product_id",
+];
+
+const REFUSED_CRITERIA = {
+  consent:
+    "Consent is applied to every audience by the resolver and is never a criterion — a criterion that could set it could switch it off.",
+  email:
+    "A segment is not a search box. Mail one customer from their own record, not from an audience definition.",
+  email_contains:
+    'A criterion on an address makes the resolver answer "does this address shop here", which is an enumeration oracle.',
+  role: "Only customers are ever in an audience; a role filter would let a campaign reach staff accounts.",
+  commune_id:
+    "A shipment records a commune, but a commune-level audience is a handful of people and a definition that is wrong the moment one moves. Use wilaya_id.",
+  limit:
+    "A segment is a definition, not a page of results. A campaign sends to everyone the definition matches.",
+  sql: "No.",
+};
+
+/**
+ * The value rules. **Three of the four kinds were measured with a wrong value on
+ * 2026-08-28** — `min_spent: "abc"`, `wilaya_id: "abc"` and
+ * `registered_after: "nope"` — and `count` shares its sentence with `id`, which
+ * is the one generalisation here. Each kind is a criterion the shop really
+ * refuses; no kind was invented to fill the table.
+ *
+ * The API also **coerces** a well-shaped value: `min_orders: "3"` is a 201 that
+ * stores `3`, not `"3"`, so `readCriteria` below coerces rather than merely
+ * validating. A mock that stored the string would let a screen render a criteria
+ * chip that differs from the one the shop would hand back.
+ */
+const CRITERION_VALUE = {
+  money: 'Must be a decimal amount, e.g. "5000.00".',
+  count: "Must be a whole number.",
+  id: "Must be a whole number.",
+  date: "Must be Y-m-d.",
+};
+
+const CRITERION_KIND = {
+  min_spent: "money",
+  max_spent: "money",
+  min_orders: "count",
+  max_orders: "count",
+  ordered_after: "date",
+  ordered_before: "date",
+  registered_after: "date",
+  registered_before: "date",
+  wilaya_id: "id",
+  bought_product_id: "id",
+  not_bought_product_id: "id",
+};
+
+const SEGMENT_NAME_REQUIRED =
+  "Required — a segment is referred to by name in every conversation about it.";
+const EMPTY_CRITERIA =
+  'Empty criteria would match every customer; use audience_type "all" for that.';
+const UNKNOWN_CRITERION = `Unknown criterion. Supported: ${SEGMENT_CRITERIA.join(", ")}.`;
+
+const MONEY = /^\d+(\.\d+)?$/;
+
+/**
+ * The measured sentence when the value does not fit its criterion, and the
+ * **coerced** value when it does — a money criterion keeps its decimal string, a
+ * date keeps its `Y-m-d`, and a count or an id becomes a number whether it
+ * arrived as one or as a string.
+ */
+function readCriterion(key, value) {
+  const kind = CRITERION_KIND[key];
+  if (kind === "money") {
+    if (typeof value === "number") return { value: value.toFixed(2) };
+    return MONEY.test(String(value)) ? { value: String(value) } : { error: CRITERION_VALUE.money };
+  }
+  if (kind === "date") {
+    return DAY.test(String(value)) ? { value: String(value) } : { error: CRITERION_VALUE.date };
+  }
+  return INTEGER.test(String(value))
+    ? { value: Number.parseInt(String(value), 10) }
+    : { error: CRITERION_VALUE.count };
+}
+
+/**
+ * The criteria validator both writes share, and it answers **one of two whole
+ * error bodies** rather than a field map — because the two shapes differ above
+ * the `fields` key, not inside it.
+ */
+function readCriteria(criteria) {
+  /*
+   * A value that is not an object at all is refused **above** the two shapes
+   * below, with a third message and the *segment's* sentence rather than the
+   * criteria's — measured, `criteria: "x"` answers "The segment is invalid." with
+   * `criteria: "Must be an object of criteria."`. An **empty array** is not this
+   * case: it reads as an empty object and takes the empty-criteria branch, as
+   * does criteria being absent entirely.
+   */
+  if (typeof criteria !== "object" || criteria === null) {
+    return {
+      error: fail(400, "invalid_request", "The segment is invalid.", {
+        fields: { criteria: "Must be an object of criteria." },
+      }),
+    };
+  }
+
+  const keys = Object.keys(criteria);
+  if (keys.length === 0) {
+    return {
+      error: fail(400, "invalid_request", "A segment needs at least one criterion.", {
+        fields: { criteria: EMPTY_CRITERIA },
+        // A **sibling** of `fields`, and only on this one refusal.
+        supported: SEGMENT_CRITERIA,
+      }),
+    };
+  }
+
+  const fields = {};
+  const value = {};
+  for (const key of keys) {
+    if (key in REFUSED_CRITERIA) fields[key] = REFUSED_CRITERIA[key];
+    else if (!SEGMENT_CRITERIA.includes(key)) fields[key] = UNKNOWN_CRITERION;
+    else {
+      const read = readCriterion(key, criteria[key]);
+      if (read.error !== undefined) fields[key] = read.error;
+      else value[key] = read.value;
+    }
+  }
+
+  if (Object.keys(fields).length > 0) {
+    // No `supported` key here, which is the whole distinction.
+    return { error: fail(400, "invalid_request", "The segment criteria are invalid.", { fields }) };
+  }
+  return { error: null, value };
+}
+
+/** `POST /segments` — 201, measured on a scratch segment created and deleted again. */
+function createSegment(body) {
+  const input = body ?? {};
+  const name = (readString(input.name) ?? "").trim();
+
+  // The name is reported alone when it is missing, even with criteria also
+  // wrong: `POST {}` names `name` and nothing else. Measured.
+  if (name === "") {
+    return fail(400, "invalid_request", "The segment is invalid.", {
+      fields: { name: SEGMENT_NAME_REQUIRED },
+    });
+  }
+
+  const criteria = readCriteria(input.criteria ?? {});
+  if (criteria.error) return criteria.error;
+
+  const id = state.nextSegmentId++;
+  const row = {
+    id,
+    name,
+    description: readString(input.description) ?? "",
+    criteria: criteria.value,
+    is_resolvable: true,
+    created_by: IDENTITY.id,
+    created_at: iso(0),
+    updated_at: iso(0),
+  };
+  state.segments.set(id, row);
+  state.createdSegments.unshift(id);
+  return created(row);
+}
+
+function patchSegment(row, body) {
+  const input = body ?? {};
+  const writes = {};
+
+  const name = readString(input.name);
+  if (name !== null) {
+    if (name.trim() === "") {
+      return fail(400, "invalid_request", "The segment is invalid.", {
+        fields: { name: SEGMENT_NAME_REQUIRED },
+      });
+    }
+    writes.name = name;
+  }
+
+  const description = readString(input.description);
+  if (description !== null) writes.description = description;
+
+  // `null` is read as absence rather than as a bad type: nothing has measured
+  // what the shop does with it, and refusing is the direction that invents.
+  if (input.criteria !== undefined && input.criteria !== null) {
+    const criteria = readCriteria(input.criteria);
+    if (criteria.error) return criteria.error;
+    writes.criteria = criteria.value;
+  }
+
+  if (Object.keys(writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const next = { ...row, ...writes, updated_at: iso(0) };
+  state.segments.set(row.id, next);
+  return ok(next);
+}
+
+/**
+ * `DELETE /segments/{id}`, and **a segment a campaign names cannot be deleted.**
+ *
+ * Measured by pointing a scratch campaign at a scratch segment: 409 `conflict`,
+ * `details.campaigns` counting them and `details.fix` naming what to do. Both
+ * scratch rows were removed afterwards.
+ *
+ * The count is **every** campaign naming it, cancelled ones included — 44 is
+ * named only by the cancelled 320 and is undeletable in this fixture, which is
+ * the state worth having: a person looking at the segments list cannot see why.
+ */
+function deleteSegment(row) {
+  const users = campaignRows().filter((campaign) => campaign.audience.segment_id === row.id);
+  if (users.length > 0) {
+    return fail(409, "conflict", "That segment is used by a campaign.", {
+      campaigns: users.length,
+      fix: "Point those campaigns at another audience first.",
+    });
+  }
+  state.segmentsGone.add(row.id);
+  return ok({ deleted: true });
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -12218,6 +13711,12 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
     // delete, served since 2026-08-28 alongside the usage read that makes it
     // explicable.
     "media",
+    // Marketing writes on two of its four collections and reads the other two.
+    // `/email-templates` is read-only at the API — §85 makes a template a post
+    // authored in wp-admin — and `/marketing/config` is a GET with no arguments
+    // at all, so neither is here and a `POST` to either falls to the 404.
+    "campaigns",
+    "segments",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -13135,6 +14634,157 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       if (method === "GET") return ok(item);
       if (method === "PATCH") return patchMedia(item, body);
       return method === "DELETE" ? deleteMedia(item) : notFound();
+    }
+
+    /*
+     * ── Marketing: four collections, one capability, a second on three routes ─
+     *
+     * `ac_manage_marketing` gates every route in the block — the fifth gated
+     * collection in this file — and `MOCK_IDENTITY=no_marketing` is the
+     * credential that reaches the refusal. It is the section's forbidden state,
+     * which nothing could photograph before.
+     *
+     * **And this is the only place in the panel where a second capability
+     * gates individual routes.** `canSendCampaigns()` is marketing **and**
+     * customers, and it is enforced on exactly the three routes measured to need
+     * it with an `ac_marketing_manager` credential on 2026-08-28: the recipient
+     * list, a segment's count, and `send` — the last of those recorded rather
+     * than fired, for the reason `sendCampaign` gives. `MOCK_IDENTITY=no_customers`
+     * reaches all three, and the campaign preview beside them, which answers 200
+     * with `audience_count: null` rather than refusing.
+     *
+     * `/campaigns/0`, `/segments/0` and `/email-templates/0` are **400s, not
+     * 404s** — measured on all three. `\d+` matches `0`, so the request reaches
+     * the controller's `idArg()` with its `minimum: 1` and is refused as a
+     * parameter before any row is looked for. The same shape `/media/0` has.
+     */
+    case "campaigns": {
+      const refused = gatedOn("ac_manage_marketing");
+      if (refused !== null) return refused;
+      if (segments.length > 3) return notFound();
+
+      if (second === undefined) {
+        if (method === "POST") return createCampaign(body);
+        return method === "GET" ? campaignsListing(searchParams) : notFound();
+      }
+
+      const id = numericId(second);
+      // `/campaigns/abc` matches no route pattern; `/campaigns/99999` reaches
+      // the controller and answers this collection's own sentence. Two 404s.
+      if (id === null) return notFound();
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
+      const row = campaignById(id);
+      if (row === undefined) return campaignNotFound();
+
+      if (segments.length === 3) {
+        switch (`${method} ${segments[2]}`) {
+          case "GET preview":
+            return campaignPreview(row);
+          case "GET recipients": {
+            const denied = gatedOn("ac_manage_customers");
+            return denied ?? recipientsListing(row, searchParams);
+          }
+          case "POST send": {
+            const denied = gatedOn("ac_manage_customers");
+            return denied ?? sendCampaign(row);
+          }
+          case "POST test":
+            return testCampaign(row, body);
+          case "POST cancel":
+            return cancelCampaign(row);
+          default:
+            return notFound();
+        }
+      }
+
+      switch (method) {
+        // **Value-identical to the list row**, measured on all four seeded
+        // campaigns: 16 keys, zero diff. It is the same object rather than a
+        // copy, so the two cannot drift — which is what makes a peek drawer on
+        // this list free, in the sense DECISIONS.md's standing rule means.
+        case "GET":
+          return ok(row);
+        case "PATCH":
+          return patchCampaign(row, body);
+        case "DELETE":
+          return deleteCampaign(row);
+        default:
+          return notFound();
+      }
+    }
+
+    case "segments": {
+      const refused = gatedOn("ac_manage_marketing");
+      if (refused !== null) return refused;
+      if (segments.length > 3) return notFound();
+
+      if (second === undefined) {
+        if (method === "POST") return createSegment(body);
+        return method === "GET" ? segmentsListing(searchParams) : notFound();
+      }
+
+      const id = numericId(second);
+      if (id === null) return notFound();
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
+      const row = segmentById(id);
+      // Measured: `/segments/99999/preview` answers this and not a route 404, so
+      // the row is resolved before the sub-resource is matched.
+      if (row === undefined) return segmentNotFound();
+
+      if (segments.length === 3) {
+        if (method !== "GET" || segments[2] !== "preview") return notFound();
+        const denied = gatedOn("ac_manage_customers");
+        return denied ?? segmentPreview(row);
+      }
+
+      switch (method) {
+        case "GET":
+          return ok(row);
+        case "PATCH":
+          return patchSegment(row, body);
+        case "DELETE":
+          return deleteSegment(row);
+        default:
+          return notFound();
+      }
+    }
+
+    /*
+     * Read-only, and **paging is the whole of its query contract**: `?orderby=`,
+     * `?status=` and `?search=` are all accepted and all ignored, measured one
+     * at a time — none of them changes the three rows or their order. So a
+     * template screen ships no controls, and this file must not grow any.
+     */
+    case "email-templates": {
+      const refused = gatedOn("ac_manage_marketing");
+      if (refused !== null) return refused;
+      if (method !== "GET" || segments.length > 2) return notFound();
+
+      if (second === undefined) {
+        const page = paginate(EMAIL_TEMPLATE_SEED, searchParams);
+        return page.error ?? ok(page.rows, page.meta);
+      }
+
+      const id = numericId(second);
+      if (id === null) return notFound();
+      if (id === 0) return invalidParam("id", "id must be greater than or equal to 1");
+      const template = EMAIL_TEMPLATE_SEED.find((row) => row.id === id);
+      return template === undefined
+        ? fail(404, "not_found", "No email template with that id.")
+        : ok(template);
+    }
+
+    /*
+     * `/marketing/config` and nothing else. **`/marketing` is not a route** —
+     * measured, `rest_no_route` — so the shape is checked before the capability
+     * gate here, unlike the three collections above whose root really is a
+     * route. It takes **no arguments at all**: `?per_page=1` and `?zzz=1` are
+     * both 200 with the identical object, so there is nothing to validate.
+     */
+    case "marketing": {
+      if (method !== "GET" || segments.length !== 2 || second !== "config") return notFound();
+      const refused = gatedOn("ac_manage_marketing");
+      return refused ?? ok(MARKETING_CONFIG);
     }
 
     default:
