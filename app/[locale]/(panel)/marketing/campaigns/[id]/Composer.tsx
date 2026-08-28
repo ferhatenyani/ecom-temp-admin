@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import {
   type ComposerStep,
   type SendOutcome,
 } from "@/lib/campaigns";
+import type { CustomerRef } from "@/lib/customers";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
@@ -84,6 +85,7 @@ export function Composer({
   locale,
   initial,
   canSendCampaigns,
+  canManageCustomers,
 }: {
   locale: string;
   initial: Campaign;
@@ -93,6 +95,16 @@ export function Composer({
    * button is rendered disabled with the reason, never hidden.
    */
   canSendCampaigns: boolean;
+  /**
+   * The second half of the rule above, on its own — because the audience step
+   * needs it separately from the send.
+   *
+   * It decides whether the `ids` audience gets a customer picker or the
+   * comma-separated field, and it is **passed down rather than re-derived**, the
+   * arrangement `page.tsx` already uses for `canSendCampaigns` and the one
+   * ADMIN_PANEL.md asks for.
+   */
+  canManageCustomers: boolean;
 }) {
   const t = useTranslations("campaigns");
   const tStates = useTranslations("states");
@@ -133,6 +145,49 @@ export function Composer({
   const [refusal, setRefusal] = useState<{ kind: string; message: string } | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  /**
+   * **One `id → {email, name, consent}` map**, and coupons' defect #2 is why it is
+   * here rather than inside the audience step.
+   *
+   * That form rendered its ids from the draft and their names from the last
+   * *saved* response, so adding a product to a coupon that already had one showed
+   * the old name beside the new count. The fix was one map, seeded from what was
+   * saved and extended by every picker commit — and the lesson beside it: **a flag
+   * is an API fact, never a fallback.** An id in neither source renders as its id
+   * and claims nothing.
+   *
+   * It lives in this component because `StepAudience` unmounts on every step
+   * change, and a person who picks nine customers, walks to the preview and comes
+   * back must not watch nine addresses resolve again — the per-id query cache
+   * would answer without a request, but the map is the thing that is rendered and
+   * it has to survive.
+   *
+   * `learn` returns the previous map **by identity** when it is handed nothing
+   * new, so React bails out of the re-render. That is what keeps the effect that
+   * feeds it from being a loop.
+   */
+  const [known, setKnown] = useState<ReadonlyMap<number, CustomerRef>>(() => new Map());
+
+  const learn = useCallback((rows: readonly CustomerRef[]) => {
+    setKnown((previous) => {
+      const next = new Map(previous);
+      let changed = false;
+      for (const row of rows) {
+        const held = previous.get(row.id);
+        if (
+          held === undefined ||
+          held.email !== row.email ||
+          held.name !== row.name ||
+          held.consent !== row.consent
+        ) {
+          next.set(row.id, row);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, []);
 
   /*
    * The preview is a server render of the **saved** campaign, and it is fetched
@@ -361,6 +416,9 @@ export function Composer({
               stale={audienceChanged}
               disabled={saving}
               fieldErrors={fieldErrors}
+              canManageCustomers={canManageCustomers}
+              known={known}
+              onLearn={learn}
             />
           ) : step === "content" ? (
             <StepContent

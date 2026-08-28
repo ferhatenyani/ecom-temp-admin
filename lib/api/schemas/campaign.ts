@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CAMPAIGN_STATUSES, RECIPIENT_STATUSES } from "@/lib/campaigns";
+import { CAMPAIGN_STATUSES } from "@/lib/campaigns";
 
 /**
  * Shapes measured against the live API on 2026-08-21.
@@ -141,12 +141,28 @@ export type SendResult = z.infer<typeof sendResult>;
  * row and only emptiness tells them apart. And **`sent_at` has no offset**
  * (`"2026-08-21 17:31:12"`), unlike every timestamp on the campaign itself, which
  * is the `notes[].created_at` trap one table over.
+ *
+ * ## `status` is a **string**, and that is a deliberate loosening
+ *
+ * It was `z.enum(RECIPIENT_STATUSES)` — the panel's own three — which made this
+ * schema assert a claim nobody measured: that the drain will never write a fourth.
+ * The mail path is the part of this shop most likely to move, and a `delivered` or
+ * a `bounced` arriving one day would not degrade a cell, it would throw inside
+ * `recipientList.parse()` and blank the **whole recipient table** on a campaign
+ * that had sent perfectly well.
+ *
+ * That is `consentSource`'s correction one collection over, and the homepage's
+ * `unknownSectionTypes()` before it: **a vocabulary copied from the other side of
+ * the wire must degrade, not blank the page.** So the three stay as the values the
+ * *filter* offers — `?status=` is the route's own enum and the panel only ever
+ * sends what it has seen — and a fourth renders as itself, `neutral`, through
+ * `recipientTone()` and `recipientLabel()`.
  */
 export const recipient = z.looseObject({
   id: z.number(),
   customer_id: z.number(),
   email: z.string(),
-  status: z.enum(RECIPIENT_STATUSES),
+  status: z.string(),
   attempts: z.number(),
   last_error: z.string(),
   sent_at: z.string(),

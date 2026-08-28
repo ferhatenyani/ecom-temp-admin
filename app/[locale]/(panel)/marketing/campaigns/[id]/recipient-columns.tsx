@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { Recipient } from "@/lib/api/schemas/campaign";
-import { RECIPIENT_TONE, recipientError, recipientSentAt } from "@/lib/campaigns";
+import { recipientError, recipientLabel, recipientSentAt, recipientTone } from "@/lib/campaigns";
 import { formatDate } from "@/lib/format/date";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { Badge } from "@/components/ui/Badge";
@@ -30,9 +30,22 @@ import type { Column } from "@/components/ui/DataTable";
  * opens nothing must not wear a pointer cursor.
  */
 
+/**
+ * `t` carries `has` because **the status vocabulary is open**.
+ *
+ * `RECIPIENT_STATUSES` is the three this drain writes today, not a contract the
+ * API publishes — §15 records that the shop is likely moving to a different mail
+ * path, and a `delivered` or a `bounced` is the ordinary next value. The schema
+ * takes a plain string for that reason, and both readers below degrade: an
+ * unfamiliar status keeps its own name and takes the neutral tone rather than
+ * printing `campaigns.recipient.delivered` into a `Badge`.
+ */
 export type RecipientColumnContext = {
   locale: string;
-  t: (key: string, values?: Record<string, string | number>) => string;
+  t: {
+    (key: string, values?: Record<string, string | number>): string;
+    has: (key: string) => boolean;
+  };
 };
 
 export function buildRecipientColumns(ctx: RecipientColumnContext): Column<Recipient>[] {
@@ -57,7 +70,7 @@ export function buildRecipientColumns(ctx: RecipientColumnContext): Column<Recip
       key: "status",
       header: t("field.status"),
       cell: (row) => (
-        <Badge tone={RECIPIENT_TONE[row.status]}>{t(`recipient.${row.status}`)}</Badge>
+        <Badge tone={recipientTone(row.status)}>{recipientLabel(row.status, t)}</Badge>
       ),
     },
     {
@@ -129,7 +142,7 @@ export function recipientRecord(
         >
           {row.email}
         </Ltr>
-        <Badge tone={RECIPIENT_TONE[row.status]}>{t(`recipient.${row.status}`)}</Badge>
+        <Badge tone={recipientTone(row.status)}>{recipientLabel(row.status, t)}</Badge>
       </>
     ),
     secondary:

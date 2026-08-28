@@ -241,3 +241,65 @@ export function recipientsKey(
 ) {
   return ["campaigns", campaignId, "recipients", status, page, perPage] as const;
 }
+
+/* -------------------------------------------------- the customer picker --- */
+
+/**
+ * The `ids` audience's picker, and the two numbers it needs.
+ *
+ * ## `?search=` matches the **e-mail**, and the placeholder has to say so
+ *
+ * Measured against the harness on 2026-08-28 and recorded at `lib/customers.ts:45`
+ * and `scripts/mock-api.mjs`'s own block, which calls it "the single most carefully
+ * measured fact on that screen and the one this file got wrong for three
+ * branches":
+ *
+ *   ?search=Benali    **0 rows** — and customer 20 *is* named Benali
+ *   ?search=Amina     **0 rows**
+ *   ?search=client2   the rows whose address begins that way
+ *
+ * `user_login`, `user_email` and `display_name`; never `first_name` or
+ * `last_name`. In this shop every login is the local part of the address, so
+ * **e-mail** is the honest word for a placeholder — coupons' "the code only" rule
+ * arriving here with a third answer rather than the same one. `looksLikeAName()`
+ * is what turns the silent empty list into a sentence saying why.
+ *
+ * ## There is no batch route, so saved ids resolve one at a time
+ *
+ * Measured the same day: `?include=`, `?include[]=`, `?ids=` and `?post__in=` are
+ * each a silent **200 answering the whole collection**, byte-identical to
+ * `?bogus_param=1`. Only `GET /customers/{id}` resolves one id, so an audience of
+ * *n* saved ids is *n* requests.
+ *
+ * **`RESOLVED_CUSTOMER_LIMIT` is 25, and both halves of that number are reasons.**
+ * The API's own ceiling is `MAX_CUSTOMER_IDS` — a thousand — and a thousand reads
+ * is 1.7× the *entire* 600/min budget this credential has, shared across every tab
+ * the person has open, spent on labels. So a cap is mandatory rather than tidy.
+ * 25 is where it sits because that is roughly one screenful of addresses — past it
+ * nobody is reading rows, they are looking for one — and 25 reads is about 4% of
+ * that budget in one burst at open.
+ *
+ * Past the cap the ids are **not silently dropped**: they render as themselves,
+ * claiming no address, no name and no consent, under a line naming how many there
+ * are, and a `console.warn` says the same thing where a developer will see it.
+ */
+export const CUSTOMER_PICKER_PER_PAGE = 50;
+export const RESOLVED_CUSTOMER_LIMIT = 25;
+
+export function customerPickerParams(search: string, page: number): URLSearchParams {
+  const params = new URLSearchParams({
+    per_page: String(CUSTOMER_PICKER_PER_PAGE),
+    page: String(page),
+  });
+  if (search !== "") params.set("search", search);
+  return params;
+}
+
+export function customerPickerKey(search: string, page: number) {
+  return ["campaigns", "customer-picker", customerPickerParams(search, page).toString()] as const;
+}
+
+/** One saved id, resolved on its own. Shared with the panel's other customer reads. */
+export function customerKey(id: number) {
+  return ["customers", id] as const;
+}

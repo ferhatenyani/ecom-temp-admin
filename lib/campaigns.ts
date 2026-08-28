@@ -209,7 +209,23 @@ export function unsubscribeNote(preview: { unsubscribe_appended: boolean }): "ap
 
 /* ------------------------------------------------------------- recipients --- */
 
-/** The same three the notification queue has, and the same meaning. */
+/**
+ * The three the notification queue has, and the same meaning — but **an open
+ * vocabulary rather than a closed one**, which is a correction made on the gaps
+ * branch rather than a widening for its own sake.
+ *
+ * These three are every value this shop's drain writes *today*. They are not a
+ * contract: nothing in the API publishes the set, no refusal enumerates it the way
+ * `?status=` on `/campaigns` enumerates its four, and the mail path is the part of
+ * this shop most likely to change — §15 records that it is "likely moving to a
+ * different mail path". A `delivered` or a `bounced` is the ordinary next value.
+ *
+ * So the three are what the **filter** offers, because `?status=` is the route's
+ * own argument and the panel must only send values it has seen work. Everything
+ * that *reads* a status goes through the two functions below and degrades: an
+ * unknown value keeps its own name and takes the neutral tone. `z.enum` on the
+ * schema would instead have thrown inside the list parse and blanked the table.
+ */
 export const RECIPIENT_STATUSES = ["pending", "sent", "failed"] as const;
 export type RecipientStatus = (typeof RECIPIENT_STATUSES)[number];
 
@@ -217,11 +233,32 @@ export function isRecipientStatus(value: string): value is RecipientStatus {
   return (RECIPIENT_STATUSES as readonly string[]).includes(value);
 }
 
-export const RECIPIENT_TONE: Record<RecipientStatus, "neutral" | "success" | "danger"> = {
+const RECIPIENT_TONE: Record<RecipientStatus, "neutral" | "success" | "danger"> = {
   pending: "neutral",
   sent: "success",
   failed: "danger",
 };
+
+/** Neutral for a status this build has no opinion about — never a missing badge. */
+export function recipientTone(status: string): "neutral" | "success" | "danger" {
+  return isRecipientStatus(status) ? RECIPIENT_TONE[status] : "neutral";
+}
+
+/**
+ * The word beside the colour. A status with no message key renders **as itself**
+ * rather than as the key path next-intl would otherwise print, which is what
+ * `consentRecord`'s source line does one collection over.
+ *
+ * `has` is passed rather than imported so this module keeps its no-dependency
+ * property — a client component imports values from here without pulling in
+ * next-intl's server half.
+ */
+export function recipientLabel(
+  status: string,
+  t: { (key: string): string; has: (key: string) => boolean },
+): string {
+  return t.has(`recipient.${status}`) ? t(`recipient.${status}`) : status;
+}
 
 /**
  * **`last_error` and `sent_at` are empty strings here, not null.**
@@ -445,6 +482,81 @@ export function sendOutcome(data: {
   return {
     recipients: data.recipients,
     command: typeof data.next?.command === "string" ? data.next.command : "",
+  };
+}
+
+/* ------------------------------------------------------- watching a drain --- */
+
+/**
+ * Whether the campaign is mid-flight, which is the only state worth polling.
+ *
+ * `sent` and `cancelled` are records: their counts cannot move again, so a panel
+ * still asking every thirty seconds is spending a read budget on a row it already
+ * holds. `draft` has no recipients at all.
+ */
+export function isDraining(campaign: { status: string }): boolean {
+  return campaign.status === "sending";
+}
+
+/**
+ * **What the API publishes about a send in flight, and nothing more.**
+ *
+ * §15 shipped the sent campaign readable and not live, and the gap that left is
+ * not "there is no progress bar" — it is that a campaign stuck at *2 sent, 4
+ * pending* looks exactly like one mid-flight. The temptation is a threshold
+ * ("stalled after 10 minutes"), and that would be the panel inventing a fact,
+ * which is this run's oldest rule. There is no such number anywhere in the API and
+ * no way to derive one: a shop whose drain is a five-minute cron and one whose
+ * drain is hand-run have nothing in common.
+ *
+ * So this returns **published facts** and the reader draws the conclusion:
+ *
+ *   `remaining`  `total − sent − failed`, off the campaign's own stored counts.
+ *                Named *remaining* rather than *pending* deliberately — `pending`
+ *                is one recipient status among an open set (see
+ *                `RECIPIENT_STATUSES`), and this arithmetic stays true whatever
+ *                else the drain learns to write.
+ *   `claimedAt`  when `send` handed the campaign to the drain. Measured: null on a
+ *                draft, set on `sending` and on `sent`.
+ *   `movedAt`    the most recent `sent_at` across the recipients — the last time
+ *                anything actually happened.
+ *
+ * **`movedAt` is null unless every recipient is on screen**, and that restraint is
+ * the whole honesty of this function. `GET /campaigns/{id}/recipients` publishes no
+ * `orderby` at all, so "the most recently sent" is not a question this API can be
+ * asked; a maximum taken over page one of a filtered list is not the campaign's
+ * last movement and must not be labelled as one. When the list is complete and
+ * unfiltered the maximum is exact, and when it is not the screen shows the two
+ * facts it does have rather than a third it would be guessing at.
+ */
+export type SendProgress = {
+  remaining: number;
+  claimedAt: string | null;
+  movedAt: string | null;
+};
+
+export function sendProgress(
+  campaign: { recipients: { total: number; sent: number; failed: number }; claimed_at: string | null },
+  /** Every recipient of this campaign, or null when the screen holds only some. */
+  everyRecipient: readonly { sent_at: string }[] | null,
+): SendProgress {
+  const { total, sent, failed } = campaign.recipients;
+
+  return {
+    remaining: Math.max(0, total - sent - failed),
+    claimedAt: campaign.claimed_at,
+    movedAt:
+      everyRecipient === null
+        ? null
+        : (everyRecipient
+            .map((row) => recipientSentAt(row))
+            .filter((at): at is string => at !== null)
+            /* String comparison, and it is safe **because these stamps have no
+               offset**: `"2026-08-21 17:31:12"` is fixed-width UTC, so lexical
+               order is chronological order. A campaign's own `created_at` carries
+               `+00:00` and would not have this property. */
+            .sort()
+            .at(-1) ?? null),
   };
 }
 

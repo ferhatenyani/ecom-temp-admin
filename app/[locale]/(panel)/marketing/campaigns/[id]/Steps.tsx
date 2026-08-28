@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import type { CampaignPreview, Segment } from "@/lib/api/schemas/campaign";
 import { campaignPreview, testResult } from "@/lib/api/schemas/campaign";
+import type { CustomerRef } from "@/lib/customers";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import {
   AUDIENCE_TYPES,
@@ -24,6 +25,7 @@ import { Notice } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
+import { ChosenCustomers, CustomerPicker, useResolvedCustomers } from "./CustomerPicker";
 
 /**
  * The composer's five steps, each a module-level component.
@@ -76,6 +78,9 @@ export function StepAudience({
   stale,
   disabled,
   fieldErrors,
+  canManageCustomers,
+  known,
+  onLearn,
 }: {
   draft: Draft;
   onChange: (next: Draft) => void;
@@ -86,6 +91,19 @@ export function StepAudience({
   stale: boolean;
   disabled: boolean;
   fieldErrors: Record<string, string>;
+  /**
+   * `ac_manage_customers`, passed down rather than re-derived here — the
+   * arrangement `page.tsx` already uses for `canSendCampaigns`.
+   *
+   * It decides whether the `ids` audience gets a **picker** or the
+   * comma-separated field. §3.3: a control that cannot act is not rendered, and
+   * `/customers` is a 403 without it. Not a workaround — the same reader is 403 on
+   * `send` too, so nobody who could finish this task loses anything.
+   */
+  canManageCustomers: boolean;
+  /** The one id → customer map, held by `Composer` so it survives a step change. */
+  known: ReadonlyMap<number, CustomerRef>;
+  onLearn: (rows: readonly CustomerRef[]) => void;
 }) {
   const t = useTranslations("campaigns");
   const problem = audienceProblem(draft.audience);
@@ -150,49 +168,82 @@ export function StepAudience({
             />
           ) : null}
 
+          {/*
+            **Two controls for one value, and the capability picks between them.**
+
+            §15 recorded the picker as unbuildable because `/customers` needs
+            `ac_manage_customers`, "so it would be empty for the one role whose job
+            this is". That was wrong: `canSendCampaigns()` is *both* capabilities,
+            so the reader who lacks the second is 403 on `send` as well and could
+            never have finished the task either way. The reader who *can* finish it
+            necessarily holds it and can read `/customers`.
+
+            So the picker ships, and §3.3 decides who sees it — a control that
+            cannot act is not rendered. Without the capability the comma-separated
+            field stays exactly as it was, hint and all: it is not a downgrade,
+            it is the only control that reader could ever have used.
+          */}
           {draft.audience.type === "ids" ? (
-            <TextField
-              id={FIELD_IDS.customer_ids}
-              label={t("audience.ids")}
-              /*
-               * A comma-separated list of ids, `isolate` so it reads left to right
-               * in Arabic — it is a sequence of identifiers, not prose.
-               */
-              value={ids.join(", ")}
-              onChange={(value) =>
-                onChange({
-                  ...draft,
-                  audience: {
-                    ...draft.audience,
-                    customer_ids: value
-                      .split(",")
-                      .map((part) => Number.parseInt(part.trim(), 10))
-                      .filter((id) => Number.isFinite(id) && id > 0)
-                      .slice(0, MAX_CUSTOMER_IDS + 1),
-                  },
-                })
-              }
-              isolate
-              inputMode="numeric"
-              /*
-               * **There is no customer picker, and the copy says why without
-               * naming a screen that does not exist.** `/customers` is
-               * `ac_manage_customers`, which a Marketing Manager does not hold —
-               * so a picker would be an empty list for the one role whose job this
-               * is — and there is no `GET /campaigns/eligible-customers` to build
-               * one from either. DECISIONS.md §15 records the absence.
-               */
-              hint={t("audienceStep.idsHint")}
-              error={
-                fieldErrors.customer_ids ??
-                (problem === "ids_missing"
-                  ? t("audienceStep.idsMissing")
-                  : problem === "too_many_ids"
-                    ? t("audienceStep.tooManyIds")
-                    : undefined)
-              }
-              disabled={disabled}
-            />
+            canManageCustomers ? (
+              <AudienceIds
+                ids={ids}
+                known={known}
+                onLearn={onLearn}
+                onChange={(customer_ids) =>
+                  onChange({ ...draft, audience: { ...draft.audience, customer_ids } })
+                }
+                disabled={disabled}
+                error={
+                  fieldErrors.customer_ids ??
+                  (problem === "ids_missing"
+                    ? t("audienceStep.idsMissing")
+                    : problem === "too_many_ids"
+                      ? t("audienceStep.tooManyIds")
+                      : undefined)
+                }
+              />
+            ) : (
+              <TextField
+                id={FIELD_IDS.customer_ids}
+                label={t("audience.ids")}
+                /*
+                 * A comma-separated list of ids, `isolate` so it reads left to
+                 * right in Arabic — it is a sequence of identifiers, not prose.
+                 */
+                value={ids.join(", ")}
+                onChange={(value) =>
+                  onChange({
+                    ...draft,
+                    audience: {
+                      ...draft.audience,
+                      customer_ids: value
+                        .split(",")
+                        .map((part) => Number.parseInt(part.trim(), 10))
+                        .filter((id) => Number.isFinite(id) && id > 0)
+                        .slice(0, MAX_CUSTOMER_IDS + 1),
+                    },
+                  })
+                }
+                isolate
+                inputMode="numeric"
+                /*
+                 * **The reader of this field cannot look a customer up**, and the
+                 * copy says so without naming a screen they cannot open. It is the
+                 * same sentence it has always been; what changed is that it is now
+                 * scoped to the one reader it is true for.
+                 */
+                hint={t("audienceStep.idsHint")}
+                error={
+                  fieldErrors.customer_ids ??
+                  (problem === "ids_missing"
+                    ? t("audienceStep.idsMissing")
+                    : problem === "too_many_ids"
+                      ? t("audienceStep.tooManyIds")
+                      : undefined)
+                }
+                disabled={disabled}
+              />
+            )
           ) : null}
         </div>
       </Card>
@@ -242,6 +293,128 @@ export function StepAudience({
         )}
       </Card>
     </>
+  );
+}
+
+/**
+ * The `ids` audience for a reader who **can** look a customer up.
+ *
+ * A module-level component rather than a branch inside `StepAudience`, for this
+ * file's own stated reason and one more: a component declared inside another gets
+ * a new identity on every parent render, and this one holds the picker's open
+ * state — but also, the per-id resolution below is a `useQueries` whose length
+ * follows the audience, and it must not run at all for an `all` or a `segment`
+ * campaign. Rendering it only under `type === "ids"` is what guarantees that.
+ *
+ * The list of chosen people is the control. The comma-separated field is gone for
+ * this reader — a text box of primary keys beside a picker that can express every
+ * value it can is two controls for one field, and the panel has spent three
+ * branches removing exactly that shape.
+ */
+function AudienceIds({
+  ids,
+  known,
+  onLearn,
+  onChange,
+  disabled,
+  error,
+}: {
+  ids: readonly number[];
+  known: ReadonlyMap<number, CustomerRef>;
+  onLearn: (rows: readonly CustomerRef[]) => void;
+  onChange: (ids: number[]) => void;
+  disabled: boolean;
+  error: string | undefined;
+}) {
+  const t = useTranslations("campaigns");
+  const [open, setOpen] = useState(false);
+
+  /*
+   * The saved ids, resolved one request each — there is no batch route, and
+   * `query.ts` beside `RESOLVED_CUSTOMER_LIMIT` carries the measurement. The
+   * results feed the one map rather than being rendered from directly, so the
+   * rows the *picker* just handed over and the rows the API answered are the same
+   * source by the time anything draws them.
+   */
+  const resolved = useResolvedCustomers(ids, !disabled);
+
+  /*
+   * `onLearn` merges and returns the previous map unchanged when it learns
+   * nothing new, so React bails out of the re-render and this cannot loop. Keyed
+   * on the row count rather than on the array, which is fresh every render.
+   */
+  useEffect(() => {
+    if (resolved.rows.length > 0) onLearn(resolved.rows);
+  }, [resolved.rows, onLearn]);
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/*
+        **`audienceIds`, not `audience.ids`.** The first draft labelled this list
+        "Des clients choisis" — which is the word the `Select` directly above it
+        is already showing as its own value, so the screen said the same phrase
+        twice in forty pixels. `audienceIds` is the plural count the campaigns
+        list already uses for this audience ("17 clients choisis"), so the heading
+        names the group *and* carries the number, and its `=0` case is the empty
+        state: "Aucun client choisi", with the button under it.
+      */}
+      <p className="text-ui-label text-ui-fg">
+        <Isolate numeric>{t("audienceIds", { count: ids.length })}</Isolate>
+      </p>
+
+      {ids.length === 0 ? null : (
+        <ChosenCustomers
+          ids={ids}
+          known={known}
+          dropped={resolved.dropped}
+          pending={resolved.pending}
+          disabled={disabled}
+          onRemove={(id) => onChange(ids.filter((value) => value !== id))}
+        />
+      )}
+
+      <div>
+        <Button
+          /*
+            **The id `ErrorSummary` links `customer_ids` to.** A 400 names the
+            field and the summary sends focus to `document.getElementById` — so
+            when the picker replaces the text field, the *trigger* has to inherit
+            the id or a refusal on this field would link nowhere. It is also what
+            focus returns to when the drawer closes.
+          */
+          id={FIELD_IDS.customer_ids}
+          variant="secondary"
+          icon="customers"
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        >
+          {t("audienceStep.choose")}
+        </Button>
+      </div>
+
+      {/* The field's own refusal, in the place a `TextField`'s error would be —
+          `audienceProblem()`'s two, or whatever the 400 named. */}
+      {error ? (
+        <p role="alert" className="flex items-start gap-1.5 text-ui-label text-ui-danger-fg">
+          <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
+          <span className="min-w-0">{error}</span>
+        </p>
+      ) : null}
+
+      <CustomerPicker
+        open={open}
+        onOpenChange={setOpen}
+        selected={ids}
+        returnFocusTo={FIELD_IDS.customer_ids}
+        onCommit={(next, learned) => {
+          /* Learned **before** the ids change, so the rows are already in the map
+             when the list re-renders against the new audience. Otherwise a
+             freshly-picked customer flashes as a bare id for one paint. */
+          onLearn(learned);
+          onChange(next);
+        }}
+      />
+    </div>
   );
 }
 
