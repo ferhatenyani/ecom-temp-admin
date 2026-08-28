@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { acRead } from "@/lib/api/browser";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
 import { orderStatuses } from "@/lib/order-status";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
@@ -159,7 +160,32 @@ export function OrdersList({
      button closes it. It resolves against the page already in memory —
      `GET /orders/{id}` returns the same object as the list row, so opening a
      preview costs no request. */
-  const peeked = peekId ? (orders.find((o) => String(o.id) === peekId) ?? null) : null;
+  const inPage = peekId ? (orders.find((o) => String(o.id) === peekId) ?? null) : null;
+
+  /**
+   * **And when it is not on the page in memory, it is fetched**, because
+   * otherwise the URL is a dead link.
+   *
+   * Resolving only against `orders` is correct for the way the id usually gets
+   * into the URL — somebody clicked a visible row — and wrong for the reason the
+   * id is in the URL at all: a peek is shareable and bookmarkable, and a link
+   * arriving from someone else's filter, or from any page but the first, opened
+   * nothing and said nothing. Found on the media branch, where `?peek=5001` was
+   * an id on page three and the capture rendered a library with no drawer.
+   *
+   * `enabled` only on a miss, so the free path stays free — this costs a request
+   * exactly when the alternative was a blank screen. `retry: false`, and a
+   * failure opens nothing: an id naming no order is a link to a record that is
+   * not there, and the list behind it is intact and readable.
+   */
+  const peekQuery = useQuery({
+    queryKey: ["orders", "item", peekId],
+    enabled: peekId !== null && inPage === null,
+    queryFn: async () => (await acRead<Order>(`/orders/${peekId}`)).data,
+    retry: false,
+  });
+
+  const peeked = inPage ?? peekQuery.data ?? null;
 
   /* Every status the API accepts gets a tab. The old segmented control showed
      four of eight because a fifth did not fit at 390px; a scrolling strip has
