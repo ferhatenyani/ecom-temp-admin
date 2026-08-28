@@ -1830,7 +1830,8 @@
       "stale": "Recalculé à l’étape suivante.",
       "eligibleLabel": "Destinataires éligibles",
       "gapLabel": "Écart de consentement",
-      "idsHint": "Des identifiants de clients, séparés par des virgules. Il n’y a pas de sélecteur : la lecture des fiches clients demande la permission Clients, qui n’accompagne pas la permission Marketing."
+      "idsHint": "Des identifiants de clients, séparés par des virgules. Le sélecteur de clients demande la permission Clients, dont cette session ne dispose pas.",
+      "choose": "Choisir des clients"
     },
     "previewStep": {
       "sample": "Rendu pour un destinataire d’exemple.",
@@ -1999,7 +2000,35 @@
       "noBody": "Cette partie est vide.",
       "sourceNote": "Le corps est montré tel qu’il est enregistré. Le panneau ne le rend pas : un client de messagerie ne l’affichera pas comme ce navigateur."
     },
-    "audienceSegmentLabel": "Segment"
+    "audienceSegmentLabel": "Segment",
+    "picker": {
+      "title": "Choisir des clients",
+      "description": "Cochez les clients qui recevront cette campagne.",
+      "searchLabel": "Rechercher un client",
+      "searchPlaceholder": "Adresse e-mail",
+      "searchHint": "La recherche porte sur l’adresse e-mail. Un nom de personne ne correspond à rien.",
+      "none": "Cette boutique n’a aucun client.",
+      "noResults": "Aucun client pour cette recherche.",
+      "noResultsName": "Cette recherche lit l’adresse e-mail, jamais le prénom ni le nom : essayez une adresse.",
+      "consenting": "Consentement",
+      "noConsent": "Sans consentement",
+      "apply": "Appliquer ({count})",
+      "cancel": "Annuler",
+      "previous": "Précédent",
+      "next": "Suivant",
+      "remove": "Retirer {name}",
+      "bareId": "Client n° {id}",
+      "unresolved": "Client introuvable",
+      "notResolved": "{count, plural, one {# identifiant au-delà des {limit} recherchés : affiché tel quel.} other {# identifiants au-delà des {limit} recherchés : affichés tels quels.}}",
+      "notLookedUp": "Non recherché"
+    },
+    "progress": {
+      "title": "Envoi en cours",
+      "note": "Ces chiffres viennent de la campagne elle-même et se rafraîchissent toutes les 30 secondes tant qu’elle est en cours d’envoi.",
+      "remaining": "Restants",
+      "claimed": "Prise en charge",
+      "lastMovement": "Dernier mouvement"
+    }
   },
   "settings": {
     "title": "Réglages",

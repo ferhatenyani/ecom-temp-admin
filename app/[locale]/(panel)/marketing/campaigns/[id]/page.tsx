@@ -59,7 +59,19 @@ export default async function CampaignPage({
    */
   if (canEdit(campaign.data)) {
     return (
-      <Composer locale={locale} initial={campaign.data} canSendCampaigns={canSendCampaigns(me)} />
+      <Composer
+        locale={locale}
+        initial={campaign.data}
+        canSendCampaigns={canSendCampaigns(me)}
+        /*
+         * The second half of the compound rule, on its own, because the audience
+         * step needs it separately: it decides whether the `ids` audience gets a
+         * customer picker or the comma-separated field. Derived here beside
+         * `canSendCampaigns` rather than in a component — one place asks the
+         * session what it holds.
+         */
+        canManageCustomers={has(me, "ac_manage_customers")}
+      />
     );
   }
 

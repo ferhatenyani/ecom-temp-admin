@@ -144,6 +144,14 @@
  * two processes start identical and nothing carries over between them. See
  * "How a write can be stateful and a capture run still byte-stable" below.
  *
+ * **`MOCK_SEND_PROGRESS=tick` is the one switch that breaks that promise, and it
+ * is off by default for exactly that reason.** It makes a draining campaign's
+ * counts advance on every read, so two reads differ and a capture taken under it
+ * would not be reproducible. Its numeric form — `MOCK_SEND_PROGRESS=3` — is a
+ * seed offset instead and stays as deterministic as the default. The block beside
+ * `RECIPIENT_SEED` has the argument; the short version is that a capture uses the
+ * number and never the word.
+ *
  * ── Shape ────────────────────────────────────────────────────────────────────
  *
  * `respond()` is a function of its arguments and of what has been written to it
@@ -1401,10 +1409,38 @@ const SPECIAL_EMAILS = { 5: LONG_EMAIL, 6: "nadia.cherif@example.test" };
  * `false` and null. "They said no" against "we never asked" is the distinction
  * the row exists for, and it was the one this file could not produce.
  *
- *   0  granted    true  + a date + `registration`      a source the panel labels
- *   2  granted    true  + a date + `seed`              a source it has no label for
- *   4  withdrawn  false + a date + `unsubscribe_link`  the second negative
- *   …  never      false + null   + null                the other fourteen
+ *   0        granted    true  + a date + `registration`      a source the panel labels
+ *   2        granted    true  + a date + `seed`        a source it has no label for
+ *   4        withdrawn  false + a date + `unsubscribe_link`  the second negative
+ *   5 6 8    granted    true  + one shared date + `seed`
+ *   10 12 14 granted    true  + the same shared date + `seed`
+ *   …        never      false + null   + null                the other eight
+ *
+ * ── Eight granted, because the fixture has to reconcile with its own preview ──
+ *
+ * It was **two** granted until 2026-08-28, and that was the one number here that
+ * disagreed with something this same file publishes: `CAMPAIGN_PREVIEW_SEED`
+ * answers `audience_count: 8` for the two `all` campaigns, measured, and an `all`
+ * audience *is* the consented customers. So `/customers` served two rows a
+ * consent filter would keep while `/campaigns/319/preview` promised eight
+ * recipients — and a customer picker, which reads the first and is built beside
+ * the second, is exactly the screen that would have had to explain the gap. Live
+ * on 2026-08-28: **16 customers, 8 granted, 8 not**, and `audience_count` 8.
+ *
+ * The six added rows all carry **one shared stamp**, which is live's shape rather
+ * than a convenience — seven of the eight live grants share a single
+ * `marketing_consent_at` because one seeding pass wrote them, exactly the tie
+ * `/segments` has on its two date columns. Live sources are 7 × `seed`,
+ * 1 × `registration`, and this reproduces that ratio.
+ *
+ * **They are deliberately rows with no name.** Twelve of the seventeen customers
+ * here have empty `first_name`/`last_name` — the common live shape, where 12 of
+ * 16 are nameless — so a granted row that a picker draws is a row whose identity
+ * is its *email*, not its name. Putting all the consent on the four named rows
+ * would have let a picker ship that draws a blank label for the ordinary case.
+ *
+ * Index 4 stays the withdrawal and stays *not* granted: customer 24 is the row
+ * `scripts/capture.mjs` photographs, and the withdrawn state lives nowhere else.
  *
  * The withdrawal is on index 4 — customer 24 — rather than on a quiet row, and
  * that is a capture decision: 24 is the one customer `scripts/capture.mjs` takes
@@ -1429,10 +1465,19 @@ const SPECIAL_EMAILS = { 5: LONG_EMAIL, 6: "nadia.cherif@example.test" };
  * seen to produce, to reach a state the panel cannot tell apart anyway, would be
  * this file manufacturing a screen state rather than reproducing one.
  */
+/** The one stamp the six seeded grants share, the way the live seven do. */
+const CONSENT_SEEDED_AT = 10_080;
+
 const CONSENT_RECORDS = {
   0: { granted: true, minutesAgo: 9000, source: "registration" },
   2: { granted: true, minutesAgo: 12_000, source: "seed" },
   4: { granted: false, minutesAgo: 4000, source: "unsubscribe_link" },
+  5: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
+  6: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
+  8: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
+  10: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
+  12: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
+  14: { granted: true, minutesAgo: CONSENT_SEEDED_AT, source: "seed" },
 };
 
 const SEEDED_CUSTOMERS = Array.from({ length: 16 }, (_, index) => {
@@ -4131,6 +4176,167 @@ const RECIPIENT_SEED = new Map([
 ]);
 
 /**
+ * ── `MOCK_SEND_PROGRESS`, and the two things it has to be at once ────────────
+ *
+ * Campaign 321 is the only `sending` row in the fixture, and until 2026-08-28 its
+ * counts were **static**: `{total: 6, sent: 2, failed: 0}` on every read forever,
+ * so a panel polling a draining campaign could never be shown to observe
+ * anything, and neither could a test of it.
+ *
+ * Two requirements pull in opposite directions and both are real:
+ *
+ *   **Default captures must stay byte-stable.** The header's first promise is
+ *   that this file is seeded and deterministic so screenshots are stable. Counts
+ *   that advanced on every request would make every future marketing capture
+ *   differ from the last, and the drift would be invisible until a diff.
+ *
+ *   **Movement must be observable** — by an e2e test watching a poll, and by a
+ *   capture that wants a *mid-send* state rather than the resting one.
+ *
+ * One variable, two forms, because one form cannot serve both:
+ *
+ *     node scripts/capture.mjs /marketing/campaigns/321       2 of 6 — the default
+ *     MOCK_SEND_PROGRESS=3 node scripts/capture.mjs …         4 sent, 1 failed, 1 queued
+ *     MOCK_SEND_PROGRESS=tick node scripts/mock-api.mjs       advances per read
+ *
+ * **A number is a *seed offset*, applied once in `resetState()` and then frozen.**
+ * So `MOCK_SEND_PROGRESS=3` is as deterministic as the default is — every read in
+ * that run answers the same counts, and two runs at the same value are
+ * byte-identical. That is the form a capture uses; `tick` is not, and a capture
+ * must never be taken under it. It is a seed offset rather than a one-off mutation
+ * precisely so the unit suite's `resetState()` between tests restores it.
+ *
+ * **`tick` advances one recipient per `GET /campaigns/{id}`**, which is the read a
+ * polling panel makes. Under it the collection and the detail can answer
+ * different counts for the same campaign — and that is what a draining campaign
+ * *is*, two reads at two moments, rather than a break in the "value-identical to
+ * the list row" property §15 records. The property is about shape; nothing here
+ * adds or drops a key.
+ *
+ * The advance is faithful to what a drain does, and the invariants are asserted
+ * in `tests/mock-api.test.ts`:
+ *
+ *   - a row moves `pending` → `sent` or `failed`, and never the other way
+ *   - `total` never changes, and `sent + failed <= total` at every step
+ *   - `GET /campaigns/321/recipients?status=pending` is served from the same
+ *     rows the counts are computed from, so the two cannot disagree — the panel
+ *     reads both and a screen built on them must not be able to show 4 queued
+ *     over a campaign claiming 6 of 6 done
+ *   - the last step **completes** the campaign: `status` becomes `sent`,
+ *     `completed_at` is stamped, `allowed_transitions` empties and `is_editable`
+ *     stays false — the shape live campaign 322 has. That transition is
+ *     **inferred rather than measured**, and flagged here for the reason
+ *     `sendCampaign`'s 409 sentence is: leaving a campaign `sending` with nothing
+ *     left to send would be a state the drain cannot produce either, so there was
+ *     no honest third option, but nobody has watched this shop finish a send.
+ *
+ * **The per-row outcome is fixed by recipient id rather than drawn**, so the
+ * sequence is the same in every process. One of the four fails, because a
+ * `failed` row mid-send is otherwise unreachable — today `failed` exists only on
+ * 322, which is already `sent`, so a screen showing failures *during* a send had
+ * no fixture. `attempts: 3` and the `wp_mail()` sentence come with it, the same
+ * pair `recipientRow` writes.
+ */
+const SENDING_CAMPAIGN_ID = 321;
+
+const DRAIN_OUTCOME = new Map([
+  [362, "sent"],
+  [363, "failed"],
+  [364, "sent"],
+  [365, "sent"],
+]);
+
+/** The pending rows 321 starts with — the ceiling on the numeric form. */
+const DRAIN_STEPS = DRAIN_OUTCOME.size;
+
+const REQUESTED_SEND_PROGRESS = process.env.MOCK_SEND_PROGRESS ?? "0";
+
+/** True only under the `tick` form; the numeric form is applied in `resetState()`. */
+const SEND_PROGRESS_TICKING = REQUESTED_SEND_PROGRESS === "tick";
+
+const SEND_PROGRESS_STEPS = SEND_PROGRESS_TICKING ? 0 : Number(REQUESTED_SEND_PROGRESS);
+
+// Validated against a stated range like `MOCK_IDENTITY` and `MOCK_MEDIA` are
+// against their key sets — a typo is a startup failure naming what was allowed,
+// never a silent fall back to the resting fixture.
+if (
+  !SEND_PROGRESS_TICKING &&
+  (!Number.isInteger(SEND_PROGRESS_STEPS) ||
+    SEND_PROGRESS_STEPS < 0 ||
+    SEND_PROGRESS_STEPS > DRAIN_STEPS)
+) {
+  throw new Error(
+    `MOCK_SEND_PROGRESS must be "tick" or an integer 0-${DRAIN_STEPS} — got "${REQUESTED_SEND_PROGRESS}".`,
+  );
+}
+
+/**
+ * The recipient rows as they read now — the seed until a drain step has rewritten
+ * them. Hoisted, because `resetState()` runs some two thousand lines below and
+ * calls into this.
+ */
+function recipientsOf(campaignId) {
+  return state.recipients.get(campaignId) ?? RECIPIENT_SEED.get(campaignId) ?? [];
+}
+
+/**
+ * One drain step on one campaign: the first still-pending recipient is taken, and
+ * the campaign's stored counts are recomputed **from the rows** rather than
+ * incremented, so the two cannot drift apart. Returns the campaign as it now
+ * reads; a campaign with nothing pending is returned untouched.
+ */
+function advanceSend(campaign) {
+  const rows = recipientsOf(campaign.id);
+  const index = rows.findIndex((row) => row.status === "pending");
+  if (index === -1) return campaign;
+
+  const status = DRAIN_OUTCOME.get(rows[index].id) ?? "sent";
+  const next = [...rows];
+  next[index] = {
+    ...rows[index],
+    status,
+    // The same two conventions `recipientRow` writes: empty strings, never null.
+    attempts: status === "failed" ? 3 : 0,
+    last_error: status === "failed" ? MAIL_ERROR : "",
+    sent_at: status === "sent" ? stamp(0) : "",
+  };
+  state.recipients.set(campaign.id, next);
+
+  const sent = next.filter((row) => row.status === "sent").length;
+  const failed = next.filter((row) => row.status === "failed").length;
+  const finished = sent + failed === campaign.recipients.total;
+
+  const updated = {
+    ...campaign,
+    recipients: { ...campaign.recipients, sent, failed },
+    ...(finished
+      ? {
+          status: "sent",
+          is_editable: false,
+          allowed_transitions: [],
+          completed_at: iso(0),
+        }
+      : {}),
+  };
+  state.campaigns.set(campaign.id, updated);
+  return updated;
+}
+
+/**
+ * The numeric form, applied to the seeded `sending` campaign as part of the
+ * baseline. Called from `resetState()` rather than once at module load, so a unit
+ * test that resets between cases gets the offset back rather than losing it.
+ */
+function applySeededSendProgress() {
+  if (SEND_PROGRESS_TICKING) return;
+  const seeded = CAMPAIGN_SEED.find((row) => row.id === SENDING_CAMPAIGN_ID);
+  if (seeded === undefined) return;
+
+  let row = seeded;
+  for (let step = 0; step < SEND_PROGRESS_STEPS; step += 1) row = advanceSend(row);
+}
+
+/**
  * `GET /campaigns/{id}/preview`, measured on 318 and 319.
  *
  * Three things this reproduces and one it cannot. `subject`, `html` and `text`
@@ -6506,6 +6712,12 @@ const state = {
    * `couponsGone`, which has to distinguish a trashed code from a freed one.
    */
   campaigns: new Map(),
+  /**
+   * Campaign id → its recipient rows as they read now, written only by a drain
+   * step. `recipientsOf()` falls through to `RECIPIENT_SEED`, so the resting
+   * fixture needs no entry here and the default run never writes one.
+   */
+  recipients: new Map(),
   /** Ids created in this process, newest first — the default `created_at desc` head. */
   createdCampaigns: [],
   campaignsGone: new Set(),
@@ -6602,6 +6814,7 @@ export function resetState() {
   state.nextMenuId = 4300;
   state.nextMenuItemId = 4400;
   state.campaigns = new Map();
+  state.recipients = new Map();
   state.createdCampaigns = [];
   state.campaignsGone = new Set();
   // Above the five seeded ids and far enough from them to read as new — the
@@ -6623,6 +6836,12 @@ export function resetState() {
   // is what keeps a screenshot of a just-uploaded tile byte-stable.
   state.nextMediaId = 5120;
   state.uploads = new Map();
+
+  // Last, because it writes `state.campaigns` and `state.recipients` and every
+  // line above has just cleared them. A no-op unless `MOCK_SEND_PROGRESS` is a
+  // number greater than zero, which is what keeps the default run's fixture — and
+  // every capture taken against it — exactly what it was.
+  applySeededSendProgress();
 }
 
 resetState();
@@ -8917,6 +9136,30 @@ function deleteProduct(current, params) {
  * agent verify a control against the harness and ship one that does not work.
  */
 const CUSTOMER_ORDERBY = ["registered", "ID", "display_name", "user_email"];
+
+/**
+ * **The collection's own 404, which it did not have until 2026-08-28.**
+ *
+ * `GET /customers/99999` is `not_found` / "No customer with that id." on the
+ * wire, and this file was answering the *routing* 404 — `rest_no_route`, "No
+ * route was found matching the URL and request method." Those are different
+ * facts: one says the customer is gone, the other says the panel called a URL
+ * that does not exist, and only the first is something a screen can tell a person.
+ * `/campaigns`, `/segments` and `/media` all had their own sentence already;
+ * customers was the gap.
+ *
+ * It matters now because **a saved `audience.customer_ids` can only be resolved
+ * one id at a time** — measured the same day, there is no batch route: `?include=`,
+ * `?ids=`, `?id=`, `?post__in=` and `?exclude=` are each a silent 200 answering
+ * the whole collection, byte-identical to `?bogus_param=1`. So anything naming the
+ * people behind a stored audience walks `GET /customers/{id}`, and a deleted
+ * customer in that list is the ordinary case rather than an edge one.
+ *
+ * `/customers/0` is a **400** beside it, the same `idArg()` `minimum: 1` refusal
+ * `/campaigns/0`, `/segments/0` and `/media/0` answer, and `/customers/abc` stays
+ * a routing 404 because `\d+` never matched it.
+ */
+const customerNotFound = () => fail(404, "not_found", "No customer with that id.");
 
 /**
  * **A different enum on the sub-resource, and that is the point of having it.**
@@ -13007,7 +13250,10 @@ function recipientsListing(campaign, params) {
     return invalidParam("status", notOneOf("status", RECIPIENT_STATUS_FILTERS));
   }
 
-  let rows = RECIPIENT_SEED.get(campaign.id) ?? [];
+  // `recipientsOf()` rather than the seed directly, so a campaign a drain step
+  // has advanced serves the rows those counts were computed from. `?status=pending`
+  // and `campaign.recipients` are read by the same screen and must not disagree.
+  let rows = recipientsOf(campaign.id);
   if (status !== null && status !== "") rows = rows.filter((row) => row.status === status);
 
   const page = paginate(rows, params);
@@ -14224,10 +14470,32 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
 
       // The one sub-resource a customer has. Named, so `/customers/{id}/anything`
       // still falls to the 404 rather than being served the customer.
-      if (segments.length === 3) {
-        if (method !== "GET" || segments[2] !== "orders") return notFound();
-        const customer = CUSTOMERS.find((row) => row.id === numericId(second));
-        return customer === undefined ? notFound() : customerOrders(customer, searchParams);
+      if (segments.length === 3 && (method !== "GET" || segments[2] !== "orders")) {
+        return notFound();
+      }
+
+      /*
+       * The id is validated and resolved **before** the row is served, and in the
+       * order the wire does it — measured 2026-08-28 on all four shapes:
+       *
+       *   /customers/24/nonsense    404 routing   the sub-resource name goes first
+       *   /customers/99999/nonsense 404 routing   …even for an id that does not exist
+       *   /customers/abc            404 routing   `\d+` never matched
+       *   /customers/0              **400**       `idArg()`'s `minimum: 1`
+       *   /customers/99999          404 not_found "No customer with that id."
+       *   /customers/99999/orders   404 not_found the same sentence, one level down
+       *
+       * `collectionOf` answers the routing 404 for a missing row, which is right
+       * for the collections that have no sentence of their own and wrong here.
+       */
+      if (second !== undefined && method === "GET") {
+        const customerId = numericId(second);
+        if (customerId === null) return notFound();
+        if (customerId === 0) return invalidParam("id", "id must be greater than or equal to 1");
+
+        const customer = CUSTOMERS.find((row) => row.id === customerId);
+        if (customer === undefined) return customerNotFound();
+        if (segments.length === 3) return customerOrders(customer, searchParams);
       }
 
       // The list only. `orderby` is a collection parameter, so a single read is
@@ -14702,8 +14970,24 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
         // campaigns: 16 keys, zero diff. It is the same object rather than a
         // copy, so the two cannot drift — which is what makes a peek drawer on
         // this list free, in the sense DECISIONS.md's standing rule means.
+        //
+        // `MOCK_SEND_PROGRESS=tick` advances a draining campaign by one recipient
+        // here, on the read a polling panel makes — off by default, and the block
+        // beside `RECIPIENT_SEED` has the whole argument. The 16 keys are the same
+        // 16 either way; only two counts and a status move.
+        //
+        // **The advance lands before the answer is built, and it has to.** The
+        // obvious alternative — answer with the resting row, then move the drain
+        // on for the next read — was written first and is wrong: the recipient
+        // list is served from the state this writes, so a panel reading the
+        // campaign and then its recipients would be handed `sent: 2` over three
+        // `sent` rows, one step apart, on every single poll. Consistency between
+        // the two endpoints is the constraint; "the first read is the resting
+        // fixture" was only a preference, and it is the one that gives way. So
+        // under `tick` the first read already shows one step done, which is also
+        // what a drain that is genuinely running looks like.
         case "GET":
-          return ok(row);
+          return ok(SEND_PROGRESS_TICKING && row.status === "sending" ? advanceSend(row) : row);
         case "PATCH":
           return patchCampaign(row, body);
         case "DELETE":

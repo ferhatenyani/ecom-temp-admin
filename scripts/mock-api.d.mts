@@ -95,6 +95,16 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * would otherwise take the second draft — and the `status=draft` filter's own
  * fixture — away from every test after it.
  *
+ * **A campaign's recipient rows joined on 2026-08-28, and this call is where
+ * `MOCK_SEND_PROGRESS`'s numeric form is applied.** A drain step rewrites both the
+ * rows and the campaign's stored counts, so both are rebuilt here — and because
+ * the numeric form is a *seed offset* rather than a one-off mutation, it is
+ * re-applied at the end of every rebuild. That is what lets the unit suite reset
+ * between tests without losing the offset the run was started with, and what
+ * keeps `MOCK_SEND_PROGRESS=2 node scripts/capture.mjs` reproducible. The `tick`
+ * form is not applied here: it advances per request, by design, and a capture must
+ * never be taken under it.
+ *
  * Coupons, shipping rules, campaigns and segments are the collections where a
  * *create* is undone by this, which is what keeps `nextCouponId`, `nextRuleId`,
  * `nextCampaignId` and `nextSegmentId` handing out the same ids in every process

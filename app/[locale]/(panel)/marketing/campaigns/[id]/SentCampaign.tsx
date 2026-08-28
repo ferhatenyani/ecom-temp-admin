@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Campaign, Recipient, Segment } from "@/lib/api/schemas/campaign";
@@ -10,8 +10,11 @@ import {
   RECIPIENT_STATUSES,
   canCancel,
   isCampaignStatus,
+  isDraining,
   isPurged,
+  sendProgress,
   type RecipientStatus,
+  type SendProgress,
 } from "@/lib/campaigns";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
@@ -74,7 +77,115 @@ import { RECIPIENTS_PER_PAGE, recipientParams, recipientsKey } from "../query";
  * §3.7 as amended: this screen holds a react-query cache and it writes — cancel —
  * so both halves bite and the marker is honest. The cancel item goes off with the
  * same sentence rather than failing on click.
+ *
+ * ## It polls while it is draining, and only while it is draining
+ *
+ * §15 shipped this screen readable and **not live**: nothing under
+ * `marketing/campaigns/` had a `refetchInterval` anywhere, so the counts never
+ * moved on their own and a campaign stuck at *2 sent, 4 pending* was
+ * indistinguishable from one mid-flight. Both queries now poll on
+ * `OrdersList.tsx:95`'s numbers — `refetchInterval: 30_000`,
+ * `refetchIntervalInBackground: false` — gated on `isDraining()`.
+ *
+ * **Both, and that is the point of the gate rather than an afterthought.** The
+ * counts live on the campaign and the rows live one route down, and the two are
+ * computed from the same recipients — a screen polling only the first would show
+ * *6 of 6 done* over a table still listing four as queued. Two reads per thirty
+ * seconds against a 600/min budget is nothing.
+ *
+ * **It stops the moment the status leaves `sending`.** A `sent` or `cancelled`
+ * campaign is a record whose counts cannot move again; polling one forever spends
+ * a shared budget on a row already in hand. A `draft` never reaches this screen.
+ *
+ * ## What it shows, and the number it refuses to invent
+ *
+ * There is no stall threshold anywhere here, and there will not be one: a shop
+ * whose drain is a five-minute cron and one whose drain is hand-run have nothing
+ * in common, so *"stalled after N minutes"* would be the panel inventing a fact —
+ * this run's oldest rule. `sendProgress()` returns published facts and the reader
+ * draws the conclusion. It also declines to publish a last-movement time it cannot
+ * prove: see its docblock.
+ *
+ * **And no drain command.** `send`'s 202 names it in `next.command` and the
+ * composer renders *that string*; `GET /campaigns/{id}` publishes nothing of the
+ * kind, so this screen has no honest way to name a command and does not try.
  */
+/**
+ * A send in flight, said in published facts only.
+ *
+ * **There is no progress bar and no percentage**, and that is §15's own rule kept
+ * rather than reversed: `send` writes rows and returns, the mail leaves when a
+ * deployment runs the drain, and a filling bar implies a rate this panel cannot
+ * observe. What was missing was never a bar — it was that the counts sat still, so
+ * a stalled campaign and a working one looked the same. Polling fixes that; the
+ * facts below are what makes the difference *readable*.
+ *
+ * Three rows, each straight off the API, and **none of them repeated anywhere
+ * else on this screen**:
+ *
+ *   remaining     `total − sent − failed`. Not "pending" — `pending` is one status
+ *                 among an open set, and this arithmetic survives a `delivered`
+ *                 arriving next year.
+ *   claimed       `claimed_at`, when `send` handed it over
+ *   last movement `max(sent_at)`, **and only when the whole recipient list is on
+ *                 screen** — otherwise the row is absent rather than approximate.
+ *
+ * `sent` and `failed` are deliberately *not* here, and the first capture is what
+ * showed why: they already sit in the recipients card six inches below, so a
+ * progress block carrying them printed the same two figures twice on one screen —
+ * the shape §15 rejected when it refused a chip row that restated three controls
+ * just above it. This card answers *is it moving*; the card below answers *what
+ * happened*. Two questions, two blocks, no number in both.
+ *
+ * The reader draws the conclusion. "Claimed at 09:02, last movement 09:04, four
+ * remaining" at 11:30 says *stalled* to a human without the panel ever having
+ * invented a threshold — and a shop whose drain is a nightly cron reads the same
+ * two timestamps and correctly concludes nothing is wrong.
+ */
+function SendProgressCard({ progress, locale }: { progress: SendProgress; locale: string }) {
+  const t = useTranslations("campaigns");
+
+  return (
+    <Card title={t("progress.title")} footnote={t("progress.note")}>
+      {/*
+        Capped rather than stretched. The card is full width because it is the
+        headline of a draining campaign, but a `DataList` is a label at one end
+        and a figure at the other — across 1440 that puts eleven hundred pixels
+        between "Restants" and "2", which is exactly the scanning distance the
+        three cards below avoid by being 360 wide.
+      */}
+      <div className="max-w-md" data-testid="send-progress">
+        <DataList>
+          <DataRow label={t("progress.remaining")}>
+            <span data-testid="remaining">
+              <Ltr>{progress.remaining.toLocaleString(locale)}</Ltr>
+            </span>
+          </DataRow>
+          {progress.claimedAt !== null ? (
+            <DataRow label={t("progress.claimed")}>
+              <Isolate>{formatWhen(progress.claimedAt, locale)}</Isolate>
+            </DataRow>
+          ) : null}
+          {/*
+            **Absent rather than approximate.** `GET /campaigns/{id}/recipients`
+            publishes no `orderby`, so "the most recently sent" is not a question
+            this API answers; the maximum is exact only when every row is on
+            screen. A campaign with more recipients than one page shows the two
+            facts above and no third.
+          */}
+          {progress.movedAt !== null ? (
+            <DataRow label={t("progress.lastMovement")}>
+              <span data-testid="last-movement">
+                <Isolate>{formatWhen(progress.movedAt, locale)}</Isolate>
+              </span>
+            </DataRow>
+          ) : null}
+        </DataList>
+      </div>
+    </Card>
+  );
+}
+
 export function SentCampaign({
   locale,
   initial,
@@ -114,9 +225,20 @@ export function SentCampaign({
       return campaignSchema.parse(data);
     },
     initialData: initial,
+    /*
+     * **Read off the answer, not off `initial`.** The gate has to close when the
+     * drain finishes, and the only thing that knows it has is the response this
+     * poll just received — a campaign that arrived `sending` and is now `sent`
+     * must stop being asked about. TanStack v5 hands the query in for exactly
+     * this, and `false` ends the interval.
+     */
+    refetchInterval: (query) => (isDraining(query.state.data ?? initial) ? 30_000 : false),
+    // A background tab is not watching a send. Orders' pair, and its reason.
+    refetchIntervalInBackground: false,
   });
 
   const purged = isPurged(campaign);
+  const draining = isDraining(campaign);
 
   const recipients = useQuery({
     queryKey: recipientsKey(campaign.id, status, page, perPage),
@@ -133,8 +255,41 @@ export function SentCampaign({
     // are what remains, and asking would return an empty page that reads as
     // "nobody" rather than as "not any more".
     enabled: canReadRecipients && !purged,
+    /*
+     * §3.6 mechanism 3, and it is what makes the poll invisible: the rows already
+     * on screen stay there across every refetch, marked refreshing rather than
+     * replaced by a skeleton. The render below only reaches a skeleton when
+     * `rows.length === 0`, which a background poll never is.
+     */
     placeholderData: keepPreviousData,
+    /* The same gate as the campaign above, driven by the campaign's own status —
+       so the two stop together and the table can never disagree with the counts
+       over it. */
+    refetchInterval: draining ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
+
+  /*
+   * **One last read of the recipients when the drain finishes**, and it is a
+   * defect found by driving the poll rather than by reading the code.
+   *
+   * Both queries stop on the same gate, and the campaign read that reports `sent`
+   * is by definition the *first one after the drain finished* — so the recipient
+   * list stops one interval behind it. The screen settled showing "6 inscrits, 5
+   * envoyés, 1 échec" over a table with a row still marked *En attente*, and
+   * stayed that way until somebody reloaded: exactly the disagreement between the
+   * counts and the rows this screen's docblock says cannot happen.
+   *
+   * A ref rather than a state pair, because the transition has to be observed
+   * *after* the render that carries the new status — state adjusted during render
+   * would have equalised before the effect ever ran.
+   */
+  const wasDraining = useRef(draining);
+  const refetchRecipients = recipients.refetch;
+  useEffect(() => {
+    if (wasDraining.current && !draining) void refetchRecipients();
+    wasDraining.current = draining;
+  }, [draining, refetchRecipients]);
 
   const blocked = online ? null : tStates("offlineWrites");
 
@@ -157,6 +312,23 @@ export function SentCampaign({
   };
 
   const counts = campaign.recipients;
+
+  /*
+   * **Whether the screen is holding every recipient**, which is the condition
+   * `sendProgress()` will only publish a last-movement time under.
+   *
+   * `?status=` narrows the rows *and* the reported total, so an unfiltered page
+   * whose row count equals its total is the whole list and nothing else is. A
+   * maximum over page one of a filtered list is not the campaign's last movement
+   * and would be a number the panel made up.
+   */
+  const wholeList =
+    status === "" &&
+    recipients.data !== undefined &&
+    recipients.data.rows.length === recipients.data.total;
+
+  const progress = sendProgress(campaign, wholeList ? recipients.data.rows : null);
+
   const segmentName = (id: number) => segments.find((s) => s.id === id)?.name ?? null;
   const ctx: CampaignColumnContext = { locale, t, segmentName };
 
@@ -207,6 +379,14 @@ export function SentCampaign({
         ) : null}
 
         <div className="flex flex-col gap-6">
+          {/*
+            **The drain, while it is running.** Full width above the record's own
+            three cards, because for a `sending` campaign this *is* what the screen
+            was opened for — and gone the moment the status leaves `sending`, since
+            every fact in it is about a thing in motion.
+          */}
+          {draining ? <SendProgressCard progress={progress} locale={locale} /> : null}
+
           {/*
             **Three cards in a row rather than a `DetailGrid`, and the recipient
             table below them at full width.** §2.3 gives a two-column detail a

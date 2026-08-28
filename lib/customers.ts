@@ -43,6 +43,44 @@ export function customerName(customer: Customer): CustomerName {
 }
 
 /**
+ * A customer as something *other than the customers screen* needs to name them.
+ *
+ * The campaign composer's `ids` audience is the first caller: it holds a list of
+ * primary keys and has to draw a row per key, and the three things that row needs
+ * are the address, the name where there is one, and **whether the person consents
+ * to marketing** — because a customer without consent is silently dropped by the
+ * resolver, so a picker that hid the flag would let somebody choose ten people and
+ * reach two.
+ *
+ * **The address leads and the name is secondary**, which is the opposite of the
+ * customers list and is measured rather than a preference: 12 of the 17 customers
+ * here have neither a first nor a last name, as 12 of the 16 live ones do. A row
+ * built name-first renders blank for the ordinary case.
+ *
+ * `name` is null unless it is a **real** name — `customerName()`'s username and
+ * e-mail fallbacks are dropped here rather than carried, because in this shop
+ * every login *is* the local part of the address, so a secondary line holding one
+ * would restate the primary line back to the reader.
+ */
+export type CustomerRef = {
+  id: number;
+  email: string;
+  name: string | null;
+  consent: boolean;
+};
+
+export function customerRef(customer: Customer): CustomerRef {
+  const name = customerName(customer);
+
+  return {
+    id: customer.id,
+    email: customer.email,
+    name: name.kind === "name" ? name.text : null,
+    consent: customer.marketing_consent,
+  };
+}
+
+/**
  * Whether a search term looks like a person's name — which this endpoint cannot
  * match.
  *

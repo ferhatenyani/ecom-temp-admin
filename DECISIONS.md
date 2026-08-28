@@ -2002,11 +2002,15 @@ Server Component with no writes and no refresh.
 
 ### Omitted deliberately, each measured
 
-- **No `ids` customer picker.** `/customers` is `ac_manage_customers`, which a
-  Marketing Manager does not hold, so it would be empty for the one role whose job
-  this is — and no `GET /campaigns/eligible-customers` exists to build one from.
-  The comma-separated field stays and says why **without naming a screen or action
-  that does not exist**.
+- ~~**No `ids` customer picker.**~~ **Shipped 2026-08-28 — the reasoning below was
+  wrong, and §15.1 records how.** The argument was that `/customers` is
+  `ac_manage_customers`, which a Marketing Manager does not hold, "so it would be
+  empty for the one role whose job this is". `canSendCampaigns()` is
+  `ac_manage_marketing` **and** `ac_manage_customers`, so that reader is 403 on
+  `send` too and could never have completed the task the picker serves. The
+  sentence is kept struck through rather than deleted because the shape of the
+  mistake is the lesson: a capability was read as a reason a *feature* was
+  impossible when it was only ever a reason to gate one.
 - **No schedule and no duplicate** — no such transition. `is_editable` and
   `allowed_transitions` are read off the record; nothing hard-codes a table.
 - **No search, sort or filter on `email-templates`.** `?orderby=`, `?status=` and
@@ -2016,8 +2020,12 @@ Server Component with no writes and no refresh.
   no such argument, so it is "accepted and ignored", not "nobody asked".
 - **No writes on `email-templates` or `/marketing/config`** — GET-only, refused by
   the allowlist deliberately.
-- **No live send progress** — the drain is a CLI command and `send`'s 202 names
-  it. A progress bar would be a lie an operator acts on.
+- **No live send progress bar** — the drain is a CLI command and `send`'s 202
+  names it. A progress bar would be a lie an operator acts on, and it still would
+  be; none shipped. **What did ship on 2026-08-28 is the poll under it** (§15.1):
+  nothing in `marketing/campaigns/` had a `refetchInterval` at all, so the counts
+  never moved and a stalled campaign looked exactly like a working one. That was a
+  separate absence hiding behind this one.
 - **No `ConfirmDialog` on `send`.** Irreversible but not destructive, and the
   wizard *is* the guard: a fifth step whose whole content is the recipient count
   and what will and will not happen. A modal on top would confirm the same act one
@@ -2100,6 +2108,116 @@ and `-no_customers` PNGs already on disk were the *harness* commit's, and
 and they read as current. Judging the composer's `no_customers` capture is what
 caught it — it still showed the screen this branch replaced. **A stale capture is
 worse than a missing one.**
+
+## 15.1 Marketing — the two gaps, closed 2026-08-28
+
+Both were recorded above as deliberate omissions. One of the two reasons was
+wrong and the other was answering a different question.
+
+### The `ids` picker, and a capability read as an impossibility
+
+A `Drawer` on `RestrictionPicker`'s shape, submit-gated search, real `CheckRow`
+checkboxes — `CustomerPicker.tsx`. Nothing was extended to build it: `CheckRow`
+already grew `secondary` and `badge` on the coupons branch, and this is the third
+caller of both.
+
+**The picker renders only for a session holding `ac_manage_customers`**, and that
+is §3.3 rather than a workaround. Without it the comma-separated field and its
+hint stay exactly as they were — the same field, the same value, and a hint
+rewritten to be about *this session* rather than about the panel. The capability
+is a prop from `page.tsx`, beside `canSendCampaigns`, never re-derived.
+
+**The search matches the address and the placeholder says so.** `?search=` reads
+`user_login`, `user_email` and `display_name` and never `first_name` or
+`last_name` — the fact `lib/customers.ts:45` and `mock-api.mjs` both call the most
+carefully measured one on that screen. Re-measured here: `?search=Benali` answers
+**0 rows** while customer 20 *is* named Benali. `looksLikeAName()` turns the
+silent empty list into a sentence, which is the customers screen's own defence
+arriving one screen over.
+
+**The row is an address first.** 12 of the 17 customers have no name at all, so a
+name-first row renders blank for the common case; the name is a secondary line
+where there is one. **Consent is on every row, in both states** — a customer
+without it is not counted by the resolver, so a picker that hid it would let
+somebody choose ten people and reach two, and badging only the absence would make
+a bare row ambiguous.
+
+**Saved ids resolve one at a time and the cap is 25.** There is no batch route:
+`?include=`, `?include[]=`, `?ids=` and `?post__in=` are each a silent 200
+answering the whole collection, byte-identical to `?bogus_param=1`. Only
+`GET /customers/{id}` answers about one person, so an audience of *n* is *n*
+reads — and the API's own ceiling is a thousand, which is 1.7× the entire 600/min
+budget spent on labels. 25 is one screenful, and about 4% of that budget in one
+burst. Past it the ids are **not truncated**: every id still renders, a line names
+how many were never looked up, and a `console.warn` says the same. **Three second
+lines, three different facts** — a name, `Client introuvable` (looked up, 404,
+the ordinary case for a saved audience), and `Non recherché` (past the cap, so
+nothing is known). That is `consentRecord()`'s *declined* versus *never asked*,
+one collection over.
+
+**One `id → {email, name, consent}` map**, held in `Composer` so it survives a
+step change, seeded from the resolved ids and extended by every picker commit.
+Coupons' defect #2 exactly, and its lesson: a flag is an API fact, never a
+fallback.
+
+### The send is live while it is draining, and never after
+
+`GET /campaigns/{id}` **and** its recipient list both poll on orders' numbers —
+`refetchInterval: 30_000`, `refetchIntervalInBackground: false` — gated on
+`status === "sending"`. Both, because the counts and the rows are computed from
+the same recipients and a screen polling only the first would show *6 of 6 done*
+over a table listing four as queued.
+
+**No stall threshold, and there will not be one.** A shop whose drain is a
+five-minute cron and one whose drain is hand-run have nothing in common, so
+"stalled after N minutes" would be the panel inventing a fact. `sendProgress()`
+publishes three facts — remaining, `claimed_at`, and the last `sent_at` — and the
+reader draws the conclusion. **The third is absent rather than approximate**: the
+recipients route publishes no `orderby`, so a maximum over page one of a filtered
+list is not the campaign's last movement, and it renders only when the whole list
+is on screen.
+
+**`sent` and `failed` are deliberately not in that card.** The first capture is
+why: they already sit in the recipients card six inches below, and a progress
+block carrying them printed the same two figures twice on one screen.
+
+**The recipient status vocabulary is open now.** `recipient.status` was
+`z.enum([...])` — three values nothing in the API publishes as a set, on the part
+of this shop most likely to move. A `delivered` would not have degraded a cell, it
+would have thrown inside `recipientList.parse()` and blanked the **whole table**
+on a campaign that sent perfectly. It is a `z.string()`, `recipientTone()` and
+`recipientLabel()` degrade, and the three stay as what the *filter* offers.
+
+**No drain command on this screen.** `send`'s 202 names it in `next.command` and
+the composer renders that string; `GET /campaigns/{id}` publishes nothing of the
+kind, so this screen has no honest way to name one and does not try.
+
+### Two defects the browser found that a review would not have
+
+1. **The recipient table settled one tick stale under a finished campaign.** Both
+   queries stop on the same gate, and the campaign read that reports `sent` is by
+   definition the first one *after* the drain finished — so the list stopped one
+   interval behind and the screen sat on "6 inscrits, 5 envoyés, 1 échec" over a
+   row still marked *En attente*, until somebody reloaded. One last refetch on the
+   transition out of `sending` closes it. Found under `MOCK_SEND_PROGRESS=tick`.
+2. **A Latin name was clipped from its front in Arabic** — §15's own defect #1,
+   reproduced in a new row. `dir="auto"` on the truncating block fixes the
+   ellipsis and breaks the alignment (an Arabic name floats to the right edge of a
+   French row); `dir="auto"` on an inline span inside it fixes the alignment and
+   breaks the ellipsis. The shape that does both is an **`inline-block` carrying
+   both, inside a plain wrapper** — the wrapper is load-bearing, because a flex
+   item is blockified and `inline-block` on a direct flex child becomes `block`.
+
+### One consequence recorded rather than fixed
+
+**A 404 from `GET /customers/{id}` writes a `console.error` the panel does not
+own**, and `capture.mjs` fails a run on any console error. So a capture of an
+`ids` audience naming a deleted customer would fail the harness for a screen
+behaving exactly correctly. It cannot be suppressed — the message is the network
+stack's and the request is the only one this API offers. No default capture
+reaches it today because **no fixture campaign has an `ids` audience**, which is
+also why the picker was verified by driving Chromium rather than by a capture:
+the audience was created through the mock's own stateful `PATCH`.
 
 ---
 
