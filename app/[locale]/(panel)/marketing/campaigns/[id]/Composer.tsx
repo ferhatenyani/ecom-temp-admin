@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,9 @@ import type { Campaign } from "@/lib/api/schemas/campaign";
 import { campaign as campaignSchema, sendResult } from "@/lib/api/schemas/campaign";
 import { BrowserApiError, acRead, acWrite, acWriteWithMeta } from "@/lib/api/browser";
 import {
+  COMPOSER_STEPS,
   canAdvance,
+  canDelete,
   canSend,
   classifySendRefusal,
   furthestStep,
@@ -20,14 +22,17 @@ import {
   type ComposerStep,
   type SendOutcome,
 } from "@/lib/campaigns";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ErrorState } from "@/components/patterns/States";
-import { Button } from "@/components/primitives/Button";
-import { Sheet } from "@/components/primitives/Sheet";
-import { Icon } from "@/components/primitives/Icon";
+import { useOnline } from "@/lib/use-online";
+import { formatWhen } from "@/lib/format/date";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { ErrorSummary, StepIndicator, type FormFailure } from "@/components/ui/Form";
+import { ErrorState, StaleBanner } from "@/components/ui/States";
+import { ConfirmDialog } from "@/components/ui/Confirm";
+import { Menu } from "@/components/ui/Menu";
+import { Button, IconButton } from "@/components/ui/Button";
 import { useToast } from "@/components/primitives/Toast";
-import { StepIndicator } from "./StepIndicator";
 import {
+  FIELD_IDS,
   StepAudience,
   StepContent,
   StepPreview,
@@ -40,26 +45,40 @@ import {
 /**
  * The composer: audience → content → preview → test → send.
  *
- * **A stepped wizard, which this panel has nowhere else**, and the argument for
- * it here is specific rather than stylistic. Every other editor in this codebase
- * — the coupon form, the page form — edits a thing that already exists, whose
- * fields are independent, and whose save is reversible. This one ends in an
- * action that **freezes an audience and cannot be undone**, and its correctness
- * depends on every step before it: a person who never opens the preview cannot
- * see that `{{firstname}}` renders empty, and that mistake goes out to everybody.
+ * ## A stepped form, which is the panel's *other* long-form shape
  *
- * Three properties keep it from being the usual wizard annoyance:
+ * DESIGN.md §3.4 as amended on this branch: **a form built as steps saves per
+ * step and ships no `SaveBar` at all.** The rule the amendment carves out of was
+ * written about a coupon and a page — one screen of independent fields, saved
+ * once at the end, every save reversible by saving again. This is none of those,
+ * and the two properties that make it different are measured rather than
+ * stylistic:
  *
- *   **Backwards is always free.** Any step already reached is one tap away, so
- *   fixing a subject seen wrong in the preview costs nothing.
+ *   **The last step is irreversible.** `send` freezes an audience as one row per
+ *   recipient and mail leaves the building. Nothing un-sends it.
  *
- *   **The draft is saved, not held.** Each forward move PATCHes, so a closed tab
- *   loses nothing and the preview is of what the server actually holds rather
- *   than of what this browser thinks it sent.
+ *   **The third step is a render of the *server's* copy.** `GET
+ *   /campaigns/{id}/preview` resolves the tokens against what is stored, which
+ *   only exists because the second step already PATCHed. One long form with a
+ *   sticky bar would preview the client's draft against that irreversible act —
+ *   and the whole reason the preview is a step is that an unknown token renders
+ *   *empty*, which is invisible in a body that has a name in it from another
+ *   token.
  *
- *   **It is only a wizard while it is a draft.** A sent campaign is a record, and
- *   `SentCampaign` renders it read-only with its counts — walking five steps
- *   through something nobody can change would be a costume.
+ * Three properties keep it from being the usual wizard annoyance. **Backwards is
+ * always free** — any step already reached is one press away, at the keyboard as
+ * well as the pointer, so fixing a subject seen wrong in the preview costs
+ * nothing. **The draft is saved, not held**, so a closed tab loses nothing. And
+ * **it is only a wizard while it is a draft**: a sent campaign is a record and
+ * `SentCampaign` renders it read-only, because walking five steps through
+ * something nobody can change would be a costume.
+ *
+ * ## The stale marker, and every write carrying its reason
+ *
+ * §3.7 bites here in both halves: a client component over a react-query cache
+ * that writes on every forward move. When the browser is certain it is offline
+ * the banner says how old the draft on screen is, and **advance, send and test
+ * are all disabled with that same sentence** rather than failing on click.
  */
 export function Composer({
   locale,
@@ -76,11 +95,15 @@ export function Composer({
   canSendCampaigns: boolean;
 }) {
   const t = useTranslations("campaigns");
+  const tStates = useTranslations("states");
   const router = useRouter();
   const client = useQueryClient();
   const toast = useToast();
+  const menuTriggerId = useId();
 
-  const { data, isError, error, refetch } = useQuery({
+  const online = useOnline();
+
+  const { data, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["campaigns", initial.id],
     queryFn: async () => {
       const { data } = await acRead<unknown>(`/campaigns/${initial.id}`);
@@ -107,10 +130,9 @@ export function Composer({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const [outcome, setOutcome] = useState<SendOutcome | null>(null);
-  const [refusal, setRefusal] = useState<{ kind: string; message: string; fix?: string } | null>(
-    null,
-  );
+  const [refusal, setRefusal] = useState<{ kind: string; message: string } | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   /*
    * The preview is a server render of the **saved** campaign, and it is fetched
@@ -137,7 +159,10 @@ export function Composer({
     draft.audience.segment_id !== campaign.audience.segment_id ||
     draft.audience.customer_ids.join(",") !== campaign.audience.customer_ids.join(",");
 
-  const furthest = furthestStep(draft);
+  /* The fifth state's second half: when the browser is certain it is offline the
+     draft on screen is as old as the last fetch, and every write control says so
+     rather than failing on click. */
+  const blocked = online ? null : tStates("offlineWrites");
 
   const save = async (): Promise<boolean> => {
     setSaving(true);
@@ -154,15 +179,14 @@ export function Composer({
       });
       await refetch();
       await client.invalidateQueries({ queryKey: ["campaigns", campaign.id, "preview"] });
-      await client.invalidateQueries({ queryKey: ["campaigns"] });
+      await client.invalidateQueries({ queryKey: ["campaigns", "list"] });
       return true;
     } catch (thrown) {
       const apiError = thrown as BrowserApiError;
       /*
        * **A 400 lists every bad field at once**, and each binds to its own
-       * control — so the errors are kept whole rather than flattened to the
-       * first message. `lib/api/browser.ts` preserves `details.fields` for
-       * exactly this.
+       * control — so the errors are kept whole rather than flattened to the first
+       * message. `lib/api/browser.ts` preserves `details.fields` for exactly this.
        */
       setFieldErrors(apiError.fields ?? {});
       if (!apiError.fields) toast.show(apiError.message, "danger");
@@ -184,16 +208,22 @@ export function Composer({
     setSending(true);
     setRefusal(null);
     try {
-      const { data } = await acWriteWithMeta<unknown>(
-        "POST",
-        `/campaigns/${campaign.id}/send`,
-      );
+      const { data } = await acWriteWithMeta<unknown>("POST", `/campaigns/${campaign.id}/send`);
       setOutcome(sendOutcome(sendResult.parse(data)));
       await refetch();
-      await client.invalidateQueries({ queryKey: ["campaigns"] });
+      await client.invalidateQueries({ queryKey: ["campaigns", "list"] });
     } catch (thrown) {
       const apiError = thrown as BrowserApiError;
       const kind = classifySendRefusal(apiError.status, apiError.code, apiError.details);
+      /*
+       * **The panel's own sentence wherever the panel has one**, and the API's
+       * English only where it does not. All four named refusals are mirrored in
+       * `campaigns.sendStep.*`, so the fifth — a refusal nobody has seen — is the
+       * only path that renders the provider's words, and `Notice` carries them as
+       * its title rather than as a translated generic that throws the actionable
+       * half away. That is the analytics branch's rule, arriving here for the
+       * sixth time in this run.
+       */
       setRefusal({
         kind,
         message:
@@ -206,7 +236,6 @@ export function Composer({
                 : kind === "forbidden"
                   ? t("sendStep.refusedForbidden")
                   : apiError.message,
-        fix: typeof apiError.details.fix === "string" ? apiError.details.fix : undefined,
       });
       // A refusal is a real state of the campaign, so the row is re-read: the
       // already-sent case means somebody else sent it while this tab was open.
@@ -216,150 +245,228 @@ export function Composer({
     }
   };
 
-  if (isError) {
-    return (
-      <Scaffold
-        title={campaign.name}
-        back={{ href: `/${locale}/marketing/campaigns`, label: t("campaigns") }}
-      >
-        <div className="mx-auto max-w-3xl px-4">
-          <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
-        </div>
-      </Scaffold>
-    );
-  }
-
-  const atEnd = step === "send";
-  const forwardAllowed = canAdvance(step, draft);
-
-  return (
-    <Scaffold
-      title={draft.name || t("create")}
-      back={{ href: `/${locale}/marketing/campaigns`, label: t("campaigns") }}
-      trailing={
-        <button
-          type="button"
-          onClick={() => setDeleteOpen(true)}
-          aria-label={t("deleteAction")}
-          className="tap-44 press flex size-11 items-center justify-center rounded-full text-danger"
-        >
-          <Icon name="trash" className="size-5" />
-        </button>
-      }
-      toolbar={<StepIndicator step={step} furthest={furthest} onGoTo={setStep} />}
-    >
-      <div className="mx-auto max-w-3xl px-4">
-        {step === "audience" ? (
-          <StepAudience
-            draft={draft}
-            onChange={setDraft}
-            count={count}
-            countKnown={countKnown}
-            stale={audienceChanged}
-            disabled={saving}
-          />
-        ) : step === "content" ? (
-          <StepContent
-            draft={draft}
-            onChange={setDraft}
-            disabled={saving}
-            fieldErrors={fieldErrors}
-          />
-        ) : step === "preview" ? (
-          <StepPreview preview={preview.data ?? null} />
-        ) : step === "test" ? (
-          <StepTest campaignId={campaign.id} />
-        ) : (
-          <StepSend
-            count={count}
-            countKnown={countKnown}
-            canSendCampaigns={canSendCampaigns && canSend(campaign)}
-            pending={sending}
-            outcome={outcome}
-            refusal={refusal}
-            onSend={() => void send()}
-          />
-        )}
-
-        {/*
-          The navigation, at the end of the content rather than pinned.
-
-          A fixed bar would sit on top of the tab bar at the 390px floor — the
-          panel already spends that edge — and every step here is short enough to
-          reach its own bottom. `Précédent` is always live; `Continuer` is gated
-          on the draft being complete enough for the step after.
-        */}
-        <nav className="mb-8 flex items-center justify-between gap-3">
-          <Button
-            variant="plain"
-            disabled={previousStep(step) === null}
-            onClick={() => {
-              const target = previousStep(step);
-              if (target) setStep(target);
-            }}
-          >
-            <Icon name="back" flipInRtl className="size-4" />
-            {t("back")}
-          </Button>
-
-          {!atEnd ? (
-            <Button
-              variant="tinted"
-              loading={saving}
-              disabled={!forwardAllowed}
-              onClick={() => void advance()}
-              data-testid="continue"
-            >
-              {t("continue")}
-              <Icon name="chevron" flipInRtl className="size-4" />
-            </Button>
-          ) : (
-            <Button variant="plain" loading={saving} onClick={() => void save()}>
-              {t("saveAction")}
-            </Button>
-          )}
-        </nav>
-      </div>
-
-      {/*
-        A `Sheet`, not `window.confirm` — the panel confirms destructive acts on
-        its own surface everywhere else, and a native dialog is unstyled,
-        untranslatable in place and ignores the reading direction.
-      */}
-      <Sheet
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={t("deleteConfirm")}
-        footer={
-          <div className="flex gap-3">
-            <Button variant="plain" fullWidth onClick={() => setDeleteOpen(false)}>
-              {t("sendStep.cancel")}
-            </Button>
-            <Button variant="destructive" fullWidth onClick={() => void deleteDraft()}>
-              {t("deleteAction")}
-            </Button>
-          </div>
-        }
-      >
-        <p className="px-4 text-body text-label-secondary" dir="auto">
-          {draft.name}
-        </p>
-      </Sheet>
-    </Scaffold>
-  );
-
-  async function deleteDraft() {
+  const deleteDraft = async () => {
+    setDeleting(true);
     try {
       await acWrite("DELETE", `/campaigns/${campaign.id}`);
       await client.invalidateQueries({ queryKey: ["campaigns"] });
       router.push(`/${locale}/marketing/campaigns`);
     } catch (thrown) {
       // A cancelled or sent campaign answers 409 here — "Only a draft can be
-      // deleted." The button is not offered in those states, but the race is
-      // real and the API's own sentence is the right thing to show.
+      // deleted." The action is not offered in those states, but the race is real
+      // and the API's own sentence is the right thing to show.
       toast.show((thrown as BrowserApiError).message, "danger");
-    } finally {
+      setDeleting(false);
       setDeleteOpen(false);
     }
+  };
+
+  const back = { href: `/${locale}/marketing/campaigns`, label: t("campaigns") };
+
+  if (isError) {
+    return (
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader title={campaign.name} back={back} divided={false} />
+        <PageBody width="detail">
+          <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
+        </PageBody>
+      </div>
+    );
   }
+
+  const current = stepIndex(step);
+  const furthest = stepIndex(furthestStep(draft));
+  const atEnd = step === "send";
+  const forwardAllowed = canAdvance(step, draft);
+
+  /*
+   * The summary, and the reason every control in `Steps.tsx` names its own id.
+   *
+   * A 400 can name a field this form does not render on the step somebody is
+   * standing on — or one the API grew — and an orphan still has to be readable,
+   * or a person sees a refusal with no cause anywhere on screen. Those render as
+   * **text** rather than as a link, per §3.4: there is nowhere to send them.
+   */
+  const LABELLED: Record<string, { id: string; label: string }> = {
+    name: { id: FIELD_IDS.name, label: t("field.name") },
+    subject: { id: FIELD_IDS.subject, label: t("field.subject") },
+    body_html: { id: FIELD_IDS.body_html, label: t("field.bodyHtml") },
+    body_text: { id: FIELD_IDS.body_text, label: t("field.bodyText") },
+    segment_id: { id: FIELD_IDS.segment_id, label: t("field.segment") },
+    customer_ids: { id: FIELD_IDS.customer_ids, label: t("audience.ids") },
+  };
+
+  const failures: FormFailure[] = Object.entries(fieldErrors).map(([key, message]) => {
+    const known = LABELLED[key];
+    return known === undefined ? { message } : { id: known.id, label: known.label, message };
+  });
+
+  return (
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        /* `dir="auto"` is `PageHeader`'s — the title is the record's own name. */
+        title={draft.name || t("create")}
+        back={back}
+        divided={false}
+        actions={
+          canDelete(campaign) ? (
+            <Menu
+              label={t("actionsFor", { name: campaign.name })}
+              trigger={
+                <IconButton
+                  id={menuTriggerId}
+                  label={t("actionsFor", { name: campaign.name })}
+                  icon="more"
+                  variant="secondary"
+                />
+              }
+              actions={[
+                {
+                  key: "delete",
+                  label: t("deleteAction"),
+                  icon: "trash",
+                  destructive: true,
+                  disabled: blocked !== null,
+                  onSelect: () => setDeleteOpen(true),
+                },
+              ]}
+            />
+          ) : null
+        }
+        toolbar={
+          <StepIndicator
+            steps={COMPOSER_STEPS.map((key) => ({ key, label: t(`step.${key}`) }))}
+            current={current}
+            furthest={furthest}
+            onGoTo={(index) => setStep(COMPOSER_STEPS[index])}
+            label={t("stepsLabel")}
+          />
+        }
+      />
+
+      <PageBody width="detail">
+        {!online && dataUpdatedAt > 0 ? (
+          <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)} />
+        ) : null}
+
+        <div className="flex flex-col gap-4">
+          <ErrorSummary failures={failures} />
+
+          {step === "audience" ? (
+            <StepAudience
+              draft={draft}
+              onChange={setDraft}
+              count={count}
+              countKnown={countKnown}
+              stale={audienceChanged}
+              disabled={saving}
+              fieldErrors={fieldErrors}
+            />
+          ) : step === "content" ? (
+            <StepContent
+              draft={draft}
+              onChange={setDraft}
+              disabled={saving}
+              fieldErrors={fieldErrors}
+            />
+          ) : step === "preview" ? (
+            <StepPreview preview={preview.data ?? null} loading={preview.isPending} />
+          ) : step === "test" ? (
+            <StepTest campaignId={campaign.id} blocked={blocked} />
+          ) : (
+            <StepSend
+              count={count}
+              countKnown={countKnown}
+              canSendCampaigns={canSendCampaigns && canSend(campaign)}
+              pending={sending}
+              outcome={outcome}
+              refusal={refusal}
+              blocked={blocked}
+              onSend={() => void send()}
+            />
+          )}
+
+          {/*
+            The step navigation, at the end of the content rather than pinned.
+            §3.4's *first* footer — "actions pin to the bottom of the form" —
+            because there is no accumulated dirty state for the sticky one to
+            report: each forward move is itself the save.
+
+            `Précédent` is always live and never saves; `Continuer` is gated on
+            the draft being complete enough for the step after, and says which of
+            the two reasons is stopping it.
+          */}
+          <nav className="flex items-center justify-between gap-3" aria-label={t("stepsLabel")}>
+            <Button
+              variant="ghost"
+              icon="back"
+              disabled={previousStep(step) === null}
+              title={previousStep(step) === null ? t("atFirstStep") : undefined}
+              onClick={() => {
+                const target = previousStep(step);
+                if (target) setStep(target);
+              }}
+            >
+              {t("back")}
+            </Button>
+
+            {!atEnd ? (
+              <Button
+                variant="primary"
+                iconEnd="chevron"
+                loading={saving}
+                disabled={!forwardAllowed || blocked !== null}
+                title={blocked ?? (forwardAllowed ? undefined : t("incompleteStep"))}
+                onClick={() => void advance()}
+                data-testid="continue"
+              >
+                {t("continue")}
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                loading={saving}
+                disabled={blocked !== null}
+                title={blocked ?? undefined}
+                onClick={() => void save()}
+              >
+                {t("saveAction")}
+              </Button>
+            )}
+          </nav>
+        </div>
+      </PageBody>
+
+      {/*
+        **No type-to-confirm, and §3.1 as amended on the shipping branch is why.**
+        The rule asks for the record's identifier on an irreversible act, and a
+        campaign's delete is exactly that — there is no trash, the row is gone —
+        so the guard would be right if the string were typeable. It is not: a
+        campaign's only identifier is its free-text name, and this shop's own
+        drafts are called "Soldes d'août — brouillon", with an em dash nobody can
+        produce from a keyboard. The content branch's lesson stands — a guard
+        nobody can satisfy is a dead end with a text box in it — so the dialog
+        names the record instead, the tone stays `danger`, and Cancel takes focus.
+      */}
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={(next) => {
+          if (!next) setDeleteOpen(false);
+        }}
+        title={t("deleteConfirm")}
+        body={
+          <span className="flex flex-col gap-2">
+            <span dir="auto" className="text-ui-fg">
+              {campaign.name}
+            </span>
+            <span>{t("deleteConfirmBody")}</span>
+          </span>
+        }
+        confirmLabel={t("deleteAction")}
+        loading={deleting}
+        onConfirm={() => void deleteDraft()}
+        returnFocusTo={menuTriggerId}
+      />
+    </div>
+  );
 }

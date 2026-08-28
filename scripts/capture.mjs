@@ -526,6 +526,110 @@ const DEFAULT_ROUTES = [
    * which is the field the drawer has to render absent rather than blank.
    */
   "/media?peek=5001",
+  /*
+   * ── Marketing: six screens that had never been photographed ────────────────
+   *
+   * Not an oversight in this list either: `/campaigns`, `/segments`,
+   * `/email-templates` and `/marketing/config` were **all `rest_no_route`** in
+   * the mock until 2026-08-28, so every capture of this section would have been
+   * a photograph of its error state. That was the largest harness gap of the
+   * run — six screens across the widest matrix the panel has.
+   *
+   * The hub first. Its three counts come from three `?per_page=1` requests, so
+   * this route is also the only place a wrong `meta.total` would show.
+   */
+  "/marketing",
+  /*
+   * The campaign list, and it carries the strongest sort control in the panel —
+   * four fields, both directions, and a real 400 for anything else. Five rows in
+   * five states, so every status chip and both toned ones (`sending` accent,
+   * `sent` success) are on screen at once.
+   */
+  "/marketing/campaigns",
+  /*
+   * **The peek drawer's URL, captured before the drawer exists.** The list has
+   * no `?peek=` handler today; this route currently photographs the plain list,
+   * and it is listed now because `GET /campaigns/{id}` is **value-identical to
+   * the list row** — measured on all five — which is the condition
+   * DECISIONS.md's standing rule makes a peek free under. Whoever adds the
+   * drawer gets the capture for nothing.
+   *
+   * §14's lesson applies and is discharged here: a peek pinned to an id has to
+   * be checked for which *page* it lands on, and 318 is on page 1 because the
+   * collection holds five rows against a `PER_PAGE` of 20. It stays true only
+   * while that is true.
+   */
+  "/marketing/campaigns?peek=318",
+  /*
+   * The composer, on a **draft** — the only status that renders it. 318 is the
+   * one with a segment audience and a clean body, so the wizard opens on a
+   * complete audience step rather than on a refusal.
+   *
+   * 319 is the other draft and is worth its own capture when the preview step
+   * changes: its body says `{{firstname}}`, the preview renders `<p>Bonjour ,</p>`
+   * and `unknown_tokens` names the typo — the state §85 asks the composer to
+   * make impossible to miss.
+   *
+   *     node scripts/capture.mjs /marketing/campaigns/319
+   */
+  "/marketing/campaigns/318",
+  /*
+   * The **sent** campaign, which is a different screen rather than a state of
+   * the one above: read-only, with the recipient list, its status filter and the
+   * 5 / 4 counts. Row 353 carries the 80-character unbroken address, so this is
+   * one of the two routes where the 340px overflow assertion has something to
+   * catch.
+   *
+   * 321 is the campaign still draining — the only place a `pending` recipient
+   * exists and the only cancellable non-draft:
+   *
+   *     node scripts/capture.mjs /marketing/campaigns/321
+   */
+  "/marketing/campaigns/322",
+  /*
+   * Segments. Four rows, one of which (46, `wilaya_id`) previews **0 matches**
+   * while the other three match somebody — that is correct behaviour and looks
+   * exactly like a broken filter, which is the sentence the criteria form owes
+   * the reader.
+   */
+  "/marketing/segments",
+  /*
+   * The templates list, and **4652 is why the screen exists**: two unknown
+   * tokens named on the row, and `has_unsubscribe_token: false` beside them
+   * which is *not* a warning. Both states are on this one capture.
+   */
+  "/marketing/email-templates",
+  /*
+   * The pixel configuration, and **its ordinary state is the disabled one** —
+   * `enabled: false` with no providers, measured on this shop and on the one the
+   * panel is built against. So this capture is the state every reader will
+   * actually see rather than an edge case.
+   */
+  "/marketing/config",
+  /*
+   * ── And the section's forbidden state, which needs its own run ─────────────
+   *
+   * Every route above is `ac_manage_marketing`, and the four identities that
+   * existed before this branch all hold it — so DESIGN.md §3.7's forbidden state
+   * was unreachable for the whole section:
+   *
+   *     MOCK_IDENTITY=no_marketing node scripts/capture.mjs /marketing
+   *
+   * **And the compound rule needs a third run**, which is the one this section
+   * has that no other does. `canSendCampaigns()` is `ac_manage_marketing` *and*
+   * `ac_manage_customers`; without the second, the composer renders whole with
+   * its send button disabled and its reason shown, the preview comes back with
+   * `audience_count: null`, and the recipient list and a segment's count are
+   * 403s — measured with a real `ac_marketing_manager` credential:
+   *
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /marketing/campaigns/318
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /marketing/campaigns/322
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /marketing/segments
+   *
+   * The middle one is the interesting capture: a screen that is mostly readable
+   * with one section refused inside it, which is the shape `/orders/1023` under
+   * `reduced` established and the only other place in the panel it occurs.
+   */
 ];
 
 /* -------------------------------------------------------------- the cookie --- */

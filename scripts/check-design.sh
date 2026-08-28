@@ -25,8 +25,9 @@ cd "$(dirname "$0")/.." || exit 2
 # at the orders-detail redesign, floor 245; 253 at the products-detail redesign,
 # floor 246; 259 at the customers redesign, floor 252; 266 at the inventory
 # redesign, floor 259; 270 at the coupons redesign, floor 263; 281 at the
-# dashboard redesign, floor 274; 282 at the analytics redesign, floor 275.
-FLOOR=275
+# dashboard redesign, floor 274; 282 at the analytics redesign, floor 275; 314 at
+# the marketing redesign, floor 307.
+FLOOR=307
 failures=0
 checks=0
 

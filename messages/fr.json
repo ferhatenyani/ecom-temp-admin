@@ -224,7 +224,11 @@
     "stockItem": "Article {name}",
     "parcelTracking": "Colis {tracking}",
     "paymentNumber": "Transaction {number}",
-    "pageName": "Page {title}"
+    "pageName": "Page {title}",
+    "campaignName": "Campagne {name}",
+    "segmentName": "Segment {name}",
+    "recipientEmail": "Destinataire {email}",
+    "templateName": "Modèle {name}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -1724,15 +1728,12 @@
     "customerRowLabel": "{event} — {date}"
   },
   "campaigns": {
-    "title": "Marketing",
     "hubTitle": "Marketing",
     "campaigns": "Campagnes",
     "segments": "Segments",
     "templates": "Modèles d’e-mail",
     "config": "Pixel et événements",
     "refresh": "Actualiser",
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "count": "{total, plural, =0 {Aucune campagne} one {# campagne} other {# campagnes}}",
     "create": "Nouvelle campagne",
     "status": {
@@ -1756,7 +1757,6 @@
       "test": "Test",
       "send": "Envoi"
     },
-    "stepOf": "Étape {current} sur {total}",
     "back": "Retour",
     "continue": "Continuer",
     "criterion": {
@@ -1790,8 +1790,11 @@
       "none": "Aucune campagne. La première se crée ici.",
       "noResults": "Aucune campagne pour ce filtre.",
       "clear": "Effacer le filtre",
-      "segments": "Aucun segment. Un segment est une requête enregistrée, pas une liste figée.",
-      "templates": "Aucun modèle. Les modèles s’écrivent dans wp-admin ; le panneau les lit."
+      "segments": "Aucun segment pour le moment.",
+      "templates": "Aucun modèle.",
+      "pastEnd": "Cette page est au-delà de la fin de la liste.",
+      "firstPage": "Revenir à la première page",
+      "segmentsWhy": "Un segment enregistre une définition — « a commandé au moins une fois », « inscrit depuis 2026 » — et les campagnes le nomment."
     },
     "notFound": "Cette campagne n’existe pas.",
     "section": {
@@ -1810,9 +1813,9 @@
       "created": "Créée le",
       "sentAt": "Envoyée le",
       "recipients": "Destinataires",
-      "template": "Modèle",
       "matches": "Clients correspondants",
-      "description": "Description"
+      "updated": "Modifiée le",
+      "status": "État"
     },
     "nameHint": "Vu uniquement par vous. N’apparaît dans aucun e-mail.",
     "bodyTextHint": "Écrit à part, jamais déduit du HTML. Les deux parties partent ensemble.",
@@ -1824,7 +1827,10 @@
       "idsMissing": "Choisissez au moins un client.",
       "tooManyIds": "1 000 clients au maximum.",
       "countHidden": "Le décompte demande la permission Clients. Le reste de l’aperçu vous est accessible.",
-      "stale": "Recalculé à l’étape suivante."
+      "stale": "Recalculé à l’étape suivante.",
+      "eligibleLabel": "Destinataires éligibles",
+      "gapLabel": "Écart de consentement",
+      "idsHint": "Des identifiants de clients, séparés par des virgules. Il n’y a pas de sélecteur : la lecture des fiches clients demande la permission Clients, qui n’accompagne pas la permission Marketing."
     },
     "previewStep": {
       "sample": "Rendu pour un destinataire d’exemple.",
@@ -1833,7 +1839,8 @@
       "unsubscribeAppended": "Le lien de désabonnement a été ajouté automatiquement. N’en ajoutez pas un second.",
       "unsubscribeAuthored": "Votre lien de désabonnement a été conservé.",
       "html": "HTML",
-      "text": "Texte"
+      "text": "Texte",
+      "partLabel": "Partie"
     },
     "testStep": {
       "explain": "Envoie un exemplaire à une seule adresse. N’écrit aucun destinataire et ne consomme rien.",
@@ -1842,7 +1849,7 @@
       "delivered": "Remis au serveur d’envoi.",
       "refused": "Le serveur d’envoi a refusé le message.",
       "refusedWhy": "Cette boutique n’a pas de serveur d’envoi joignable. La campagne peut quand même être préparée : rien ne part depuis le panneau.",
-      "skip": "Passer le test"
+      "needsAddress": "Saisissez une adresse de test."
     },
     "sendStep": {
       "title": "Envoyer la campagne",
@@ -1850,8 +1857,6 @@
       "nothingSent": "Rien n’est envoyé depuis le panneau.",
       "explain": "L’envoi inscrit un destinataire par personne et rend la main. Les e-mails partent quand cette commande est exécutée :",
       "action": "Envoyer",
-      "confirm": "Confirmer l’envoi",
-      "cancel": "Annuler",
       "queued": "{count, plural, one {# destinataire inscrit} other {# destinataires inscrits}}",
       "refusedMail": "Cette boutique ne peut pas encore envoyer d’e-mail.",
       "refusedMailFix": "Réglez SMTP_HOST, puis vérifiez avec :",
@@ -1859,12 +1864,14 @@
       "refusedNobody": "Cette audience ne correspond à personne pour le moment.",
       "refusedNobodyWhy": "Le plus souvent un segment trop étroit, ou des clients sans consentement marketing.",
       "refusedForbidden": "L’envoi demande la permission Clients en plus de la permission Marketing.",
-      "forbiddenNote": "Vous pouvez rédiger, prévisualiser et tester. L’envoi atteint chaque fiche client, il est donc réservé aux personnes qui peuvent déjà les lire."
+      "forbiddenNote": "Vous pouvez rédiger, prévisualiser et tester. L’envoi atteint chaque fiche client, il est donc réservé aux personnes qui peuvent déjà les lire.",
+      "alreadyQueued": "Les destinataires sont déjà inscrits."
     },
     "readOnly": {
       "sent": "Cette campagne est partie. Elle est conservée telle quelle : c’est le registre de ce qui a été envoyé.",
       "cancelled": "Cette campagne a été annulée. Elle n’est plus modifiable.",
-      "sending": "Envoi en cours. L’audience est figée ; les e-mails partent au fil des exécutions de la commande d’envoi."
+      "sending": "Envoi en cours. L’audience est figée ; les e-mails partent au fil des exécutions de la commande d’envoi.",
+      "body": "Le corps est celui qui est parti. Il n’est plus modifiable."
     },
     "cancelAction": "Annuler la campagne",
     "cancelConfirm": "Annuler cette campagne ?",
@@ -1878,7 +1885,16 @@
       "purgedWhy": "Les adresses sont supprimées trente jours après la fin d’une campagne.",
       "filterAll": "Tous",
       "attempts": "{count, plural, one {# tentative} other {# tentatives}}",
-      "hidden": "La liste des destinataires demande la permission Clients."
+      "hidden": "La liste des destinataires demande la permission Clients.",
+      "total": "Inscrits",
+      "email": "Adresse",
+      "error": "Erreur",
+      "sentAt": "Envoyé le",
+      "attemptsLabel": "Tentatives",
+      "notSentYet": "Pas encore envoyé",
+      "none": "Aucun destinataire pour cette campagne.",
+      "noneForFilter": "Aucun destinataire dans cet état.",
+      "countsScope": "Colonnes enregistrées : elles survivent à la purge des adresses."
     },
     "segment": {
       "count": "{total, plural, =0 {Aucun segment} one {# segment} other {# segments}}",
@@ -1889,31 +1905,101 @@
       "emptyCriteria": "Un segment a besoin d’au moins un critère. Pour écrire à tout le monde, choisissez l’audience « tous les clients éligibles ».",
       "wilayaNote": "La wilaya est lue sur l’expédition, jamais sur l’adresse : une commande non expédiée n’a pas de wilaya et ne peut pas correspondre.",
       "inUse": "{count, plural, one {Utilisé par # campagne} other {Utilisé par # campagnes}}",
-      "inUseDelete": "Un segment utilisé par une campagne ne peut pas être supprimé.",
       "notResolvable": "Ce segment ne peut plus être résolu.",
       "addCriterion": "Ajouter un critère",
-      "removeCriterion": "Retirer",
-      "deleteAction": "Supprimer le segment"
+      "deleteAction": "Supprimer le segment",
+      "edit": "Modifier le segment",
+      "nameHint": "Vu par vous et par les campagnes qui le nomment.",
+      "nameRequired": "Donnez un nom au segment : c’est ainsi qu’on le désigne partout ailleurs.",
+      "noCriteria": "Aucun critère",
+      "supportedList": "Critères possibles : {list}.",
+      "unknownCriterion": "« {key} » n’est pas un critère reconnu.",
+      "pickCriterion": "Choisir un critère",
+      "removeCriterionNamed": "Retirer {name}",
+      "counting": "Décompte en cours…",
+      "countFailed": "Décompte indisponible",
+      "countHidden": "Demande la permission Clients",
+      "problems": "{count, plural, one {Un critère pose problème} other {# critères posent problème}}",
+      "deleteConfirm": "Supprimer ce segment ?",
+      "deleteConfirmBody": "La suppression est définitive. Les campagnes déjà envoyées gardent leurs destinataires.",
+      "deleted": "Segment supprimé",
+      "inUseAny": "Ce segment est utilisé par une campagne.",
+      "inUseFix": "Pointez ces campagnes vers une autre audience avant de le supprimer.",
+      "value": {
+        "money": "Un montant décimal, par exemple 5000.00.",
+        "count": "Un nombre entier.",
+        "id": "Un numéro entier.",
+        "date": "Une date au format AAAA-MM-JJ."
+      }
     },
     "template": {
       "count": "{total, plural, =0 {Aucun modèle} one {# modèle} other {# modèles}}",
       "readOnly": "Les modèles s’écrivent dans wp-admin, où vivent les révisions et la médiathèque. Le panneau les lit.",
       "unknownTokens": "{count, plural, one {Un champ inconnu} other {# champs inconnus}}",
-      "unsubscribeMissing": "Pas de lien de désabonnement dans le corps : il sera ajouté automatiquement.",
-      "unsubscribePresent": "Lien de désabonnement présent dans le corps.",
-      "use": "Utiliser ce modèle"
+      "unsubscribeMissing": "Ajouté à l’envoi",
+      "unsubscribePresent": "Dans le corps",
+      "modified": "Modifié",
+      "tokensColumn": "Champs inconnus",
+      "unsubscribeColumn": "Désabonnement",
+      "unavailable": "Les modèles n’ont pas pu être lus.",
+      "unsubscribeNote": "Quand le corps ne contient pas de lien de désabonnement, l’API en ajoute un à l’envoi. Son absence n’est donc pas un défaut, et en ajouter un second est la vraie erreur."
     },
     "marketing": {
       "title": "Pixel et événements",
-      "enabled": "Suivi actif",
-      "disabled": "Aucun pixel configuré",
+      "enabled": "Actif",
+      "disabled": "Inactif",
       "providers": "Fournisseurs",
       "noProviders": "Aucun fournisseur enregistré.",
       "browserEvents": "Événements envoyés par la vitrine",
       "serverEvents": "Événements envoyés par le serveur",
       "tokenNote": "Le jeton de l’API Conversions n’apparaît dans aucune réponse, jamais. Cet écran montre la configuration publique.",
-      "storefrontNote": "L’événement d’achat est envoyé par la vitrine, pas par le panneau."
-    }
+      "storefrontNote": "L’événement d’achat est envoyé par la vitrine, pas par le panneau.",
+      "trackingLabel": "Suivi",
+      "noEvents": "Aucun événement.",
+      "disabledNote": "Aucun pixel n’est configuré pour cette boutique. Cela se règle dans la configuration de la boutique, pas ici : cet écran ne fait que lire.",
+      "serverNote": "Ces événements partent du serveur de la boutique, pas du panneau.",
+      "unavailable": "La configuration marketing n’a pas pu être lue.",
+      "noPixel": "Aucun pixel configuré"
+    },
+    "loading": "Chargement",
+    "hubNote": "Chaque destination est un écran à part : rien ici ne partage de filtre ni de format de ligne.",
+    "hub": {
+      "campaigns": "Rédiger, prévisualiser, tester, envoyer.",
+      "segments": "Des définitions de clientèle que les campagnes nomment.",
+      "templates": "Écrits dans wp-admin, lus ici.",
+      "config": "Ce que la vitrine et le serveur signalent."
+    },
+    "actionsFor": "Actions pour {name}",
+    "newSubject": "Objet à compléter",
+    "searchLabel": "Rechercher une campagne",
+    "searchPlaceholder": "Nom ou objet",
+    "clearSearch": "Effacer la recherche",
+    "segmentAny": "Tous les segments",
+    "segmentNone": "Choisir un segment",
+    "segmentUnknown": "Segment n° {id}",
+    "audienceIds": "{count, plural, =0 {Aucun client choisi} one {# client choisi} other {# clients choisis}}",
+    "stepsLabel": "Étapes de la campagne",
+    "atFirstStep": "Vous êtes à la première étape.",
+    "incompleteStep": "Complétez cette étape pour continuer.",
+    "cancelled": "Campagne annulée",
+    "cancelConfirmBody": "L’envoi s’arrête où il en est. Les destinataires déjà servis le restent ; cette campagne ne repartira pas.",
+    "deleteConfirmBody": "La suppression est définitive : une campagne n’a pas de corbeille.",
+    "columns": {
+      "name": "Nom",
+      "subject": "Objet",
+      "audience": "Audience",
+      "recipients": "Destinataires",
+      "updated": "Modifiée",
+      "created": "Créée"
+    },
+    "peek": {
+      "edit": "Ouvrir le composeur",
+      "open": "Ouvrir le registre",
+      "countsScope": "Figés à l’envoi",
+      "noBody": "Cette partie est vide.",
+      "sourceNote": "Le corps est montré tel qu’il est enregistré. Le panneau ne le rend pas : un client de messagerie ne l’affichera pas comme ce navigateur."
+    },
+    "audienceSegmentLabel": "Segment"
   },
   "settings": {
     "title": "Réglages",
@@ -2265,6 +2351,11 @@
       "discard": "Annuler les modifications",
       "summary": "{count, plural, one {Un champ empêche l’enregistrement.} other {# champs empêchent l’enregistrement.}}",
       "summaryItem": "{label} — {message}"
+    },
+    "steps": {
+      "of": "Étape {current} sur {total}",
+      "goTo": "Étape : {step}",
+      "locked": "Terminez l’étape en cours pour l’atteindre."
     }
   }
 }

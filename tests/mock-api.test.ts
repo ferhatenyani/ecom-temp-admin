@@ -155,6 +155,40 @@ import {
   pageList,
   pageSeo,
 } from "@/lib/api/schemas/cms";
+import {
+  campaign as campaignSchema,
+  campaignList,
+  campaignPreview,
+  emailTemplate as emailTemplateSchema,
+  emailTemplateList,
+  marketingConfig,
+  recipientList,
+  recipientMeta,
+  segment as segmentSchema,
+  segmentInUseDetails,
+  segmentList,
+  segmentPreview,
+  sendResult,
+  testResult,
+} from "@/lib/api/schemas/campaign";
+import {
+  CAMPAIGN_STATUSES,
+  RECIPIENT_STATUSES,
+  SEGMENT_CRITERIA,
+  canCancel,
+  canDelete,
+  canEdit,
+  canSend,
+  consentGap,
+  hasAudienceCount,
+  hasCriteria,
+  isPurged,
+  recipientError,
+  recipientSentAt,
+  sendOutcome,
+  testDelivered,
+  unsubscribeNote,
+} from "@/lib/campaigns";
 import { mediaItem, mediaList, mediaSizes, mediaUsage } from "@/lib/api/schemas/media";
 import {
   ACCEPTED_MIME,
@@ -240,14 +274,16 @@ function apiError(response: MockResponse): ApiError {
 describe("the envelope", () => {
   it("answers an unmocked path with a well-formed rest_no_route error", () => {
     /*
-     * `/campaigns`, and this assertion has now moved twice for the same reason:
-     * a 404 test is only worth anything while its path is genuinely unmocked. It
-     * stood on `/analytics/overview` until the dashboard branch served that, then
-     * on `/analytics/revenue` until this one served all six. `campaign` is in
-     * UNCOVERED below with a reason, which is what makes it the right anchor —
-     * the two lists move together or this line goes stale a third time.
+     * `/audit`, and this assertion has now moved three times for the same
+     * reason: a 404 test is only worth anything while its path is genuinely
+     * unmocked. It stood on `/analytics/overview` until the dashboard branch
+     * served that, then on `/analytics/revenue` until the payments branch served
+     * all six, then on `/campaigns` until the marketing branch served the whole
+     * section. `audit` is in UNCOVERED below with a reason, which is what makes
+     * it the right anchor — the two lists move together or this line goes stale
+     * a fourth time.
      */
-    const response = get("/campaigns");
+    const response = get("/audit");
     expect(response.status).toBe(404);
 
     // Loudly, and through the same code path a real 404 would take. A mock that
@@ -8341,11 +8377,30 @@ const COVERED = [
    * asserted directly beside the listing rather than left to a future upload.
    */
   "media",
+  /*
+   * **Every schema in the module is exercised, which is the standard the
+   * `analytics` and `cms` entries set** — and this one had to meet it from a
+   * standing start, because the whole section was `rest_no_route` until
+   * 2026-08-28 and this entry read "/campaigns is not mocked yet".
+   *
+   * `campaign`/`campaignList` on the list, the detail and every write;
+   * `audience` and `recipientCounts` nested in all of them; `campaignPreview` on
+   * two campaigns, one of them the typo row; `recipient`/`recipientList` in all
+   * three statuses and `recipientMeta` for its fifth key; `sendResult` on the
+   * 202 and `testResult` on the 200 that reports a failed send;
+   * `segment`/`segmentList` on the list and the create, `segmentPreview` on a
+   * segment matching nobody and on three that match somebody,
+   * `segmentInUseDetails` on the 409 a named segment answers;
+   * `emailTemplate`/`emailTemplateList` on the list and the detail; and
+   * `marketingConfig` on the one object it describes.
+   *
+   * What the module cannot express is named below rather than left implied.
+   */
+  "campaign",
 ];
 
 const UNCOVERED: Record<string, string> = {
   audit: "/audit is not mocked yet",
-  campaign: "/campaigns is not mocked yet",
   settings: "/settings is not mocked yet",
   staff: "/users and /roles are not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",
@@ -8357,6 +8412,820 @@ const UNCOVERED: Record<string, string> = {
  * carry schemas for routes that are still 404s here. Named, so "covered" does not
  * quietly come to mean "finished".
  */
+/**
+ * ── Marketing, and the sort that really is a sort ───────────────────────────
+ *
+ * `/campaigns` is the one collection in this file that must **sort and refuse at
+ * the same time**. Every other list here either ignores `orderby` because the
+ * shop ignores it, or honours it because the shop does; this one reaches a
+ * validator — `?orderby=zzz`, `?orderby=`, `?order=zzz` and `?order=` are all
+ * 400s — *and* reorders. Measured against the live shop 2026-08-28, and the
+ * whole point of the assertions below is that a sequence is compared against a
+ * sequence rather than against itself.
+ */
+describe("GET /campaigns — the sort", () => {
+  const idsOf = (query: string) =>
+    parseList(campaignList, get("/campaigns", query)).data.map((row) => row.id);
+
+  /**
+   * **The default proves nothing on its own, and two of the four values agree
+   * with it.** `created_at desc` and `id desc` are both the bare listing —
+   * measured live, and reproduced — so this pins the two that *can*
+   * discriminate. DECISIONS.md's standing rule in one assertion.
+   */
+  it("sorts on four fields in both directions, and the default is not a control", () => {
+    expect(idsOf("")).toEqual([322, 321, 320, 319, 318]);
+    expect(idsOf("orderby=created_at&order=desc")).toEqual(idsOf(""));
+    expect(idsOf("orderby=id&order=desc")).toEqual(idsOf(""));
+
+    // The two that discriminate, each an exact reverse of its own other half.
+    expect(idsOf("orderby=name&order=asc")).toEqual([321, 320, 319, 322, 318]);
+    expect(idsOf("orderby=name&order=desc")).toEqual([318, 322, 319, 320, 321]);
+    expect(idsOf("orderby=updated_at&order=asc")).toEqual([320, 322, 321, 318, 319]);
+    expect(idsOf("orderby=updated_at&order=desc")).toEqual([319, 318, 321, 322, 320]);
+
+    // And `created_at asc` is a fourth distinct sequence, which is what makes
+    // `created_at` a working sort rather than one that happens to be the default.
+    expect(idsOf("orderby=created_at&order=asc")).toEqual([319, 318, 320, 321, 322]);
+    expect(idsOf("orderby=id&order=asc")).toEqual([318, 319, 320, 321, 322]);
+  });
+
+  /**
+   * **318 and 319 tie on `created_at`, and the tie-break is id descending in
+   * both directions** — measured. It is written down because it is the opposite
+   * of what `/segments` does with its own ties, so neither collection's
+   * secondary order can be read off the other.
+   */
+  it("breaks a created_at tie by id descending, whichever way the sort runs", () => {
+    const rows = parseList(campaignList, get("/campaigns", "per_page=100")).data;
+    const tied = rows.filter((row) => [318, 319].includes(row.id));
+    expect(tied[0].created_at).toBe(tied[1].created_at);
+
+    expect(idsOf("orderby=created_at&order=asc").slice(0, 2)).toEqual([319, 318]);
+    expect(idsOf("orderby=created_at&order=desc").slice(-2)).toEqual([319, 318]);
+  });
+
+  it("refuses an off-enum sort exactly where the router does, empty string included", () => {
+    for (const query of ["orderby=zzz", "orderby="]) {
+      const refused = get("/campaigns", query);
+      expect(refused.status, query).toBe(400);
+      expect(apiError(refused).apiMessage, query).toBe("Invalid parameter(s): orderby");
+      expect(apiError(refused).params?.orderby, query).toBe(
+        "orderby is not one of created_at, updated_at, name, and id.",
+      );
+    }
+    for (const query of ["order=zzz", "order="]) {
+      expect(apiError(get("/campaigns", query)).params?.order, query).toBe(
+        "order is not one of asc and desc.",
+      );
+    }
+    // And a parameter nobody registered is ignored rather than refused.
+    expect(idsOf("bogus_param=1")).toEqual(idsOf(""));
+  });
+});
+
+/**
+ * The filters, and the one that looks like a refusal and is not.
+ */
+describe("GET /campaigns — the filters", () => {
+  const idsOf = (query: string) =>
+    parseList(campaignList, get("/campaigns", query)).data.map((row) => row.id);
+
+  it("honours status, and the empty string is a legal value inside the enum", () => {
+    expect(idsOf("status=draft")).toEqual([319, 318]);
+    expect(idsOf("status=sent")).toEqual([322]);
+    expect(idsOf("status=sending")).toEqual([321]);
+    expect(idsOf("status=cancelled")).toEqual([320]);
+
+    // `""` means every status and is a 200 — which is why the refusal names it
+    // first, with a leading comma.
+    expect(idsOf("status=")).toEqual(idsOf(""));
+    const refused = get("/campaigns", "status=scheduled");
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).params?.status).toBe(
+      "status is not one of , draft, sending, sent, and cancelled.",
+    );
+
+    // Every status in the panel's vocabulary has a row, which is what makes the
+    // filter's four tabs photographable rather than four tabs with three states.
+    const statuses = parseList(campaignList, get("/campaigns", "per_page=100")).data.map(
+      (row) => row.status,
+    );
+    for (const status of CAMPAIGN_STATUSES) expect(statuses, status).toContain(status);
+  });
+
+  /**
+   * **`?search=` matches name *and* subject**, and each half has its own
+   * positive control: `Ramadan` appears only in 320's name, `composeur` only in
+   * 318's subject. Without the second, a screen could ship a search that
+   * silently matched one field.
+   */
+  it("searches name and subject, with a control for each", () => {
+    expect(idsOf("search=Ramadan")).toEqual([320]);
+    expect(idsOf("search=composeur")).toEqual([318]);
+    expect(idsOf("search=ZZZQQQ")).toEqual([]);
+    // Not an enum, so `""` is absence here rather than a value.
+    expect(idsOf("search=")).toEqual(idsOf(""));
+  });
+
+  /**
+   * **A `segment_id` that names no segment is a 200 with 0 rows, not a 404.** So
+   * a screen cannot tell "no campaigns use this segment" from "there is no such
+   * segment", and neither can this file. `0` is the unset value and filters
+   * nothing; a negative or non-integer is refused in the two families
+   * `pagingNumber` already writes.
+   */
+  it("filters by segment_id, and refuses only the shapes the router refuses", () => {
+    expect(idsOf("segment_id=43")).toEqual([318]);
+    expect(idsOf("segment_id=99999")).toEqual([]);
+    expect(get("/campaigns", "segment_id=99999").status).toBe(200);
+    expect(idsOf("segment_id=0")).toEqual(idsOf(""));
+
+    for (const query of ["segment_id=zzz", "segment_id="]) {
+      expect(apiError(get("/campaigns", query)).params?.segment_id, query).toBe(
+        "segment_id is not of type integer.",
+      );
+    }
+    expect(apiError(get("/campaigns", "segment_id=-1")).params?.segment_id).toBe(
+      "segment_id must be greater than or equal to 0",
+    );
+  });
+});
+
+/**
+ * ── The peek drawer's precondition, and it is free here ────────────────────
+ *
+ * DECISIONS.md's standing rule: a peek drawer is free only when `GET /{id}`
+ * returns the list row exactly. Measured on all four live campaigns — 16 keys,
+ * zero diff — and this pins it on all five here, so a screen decision rests on
+ * an assertion rather than on a recollection.
+ */
+describe("GET /campaigns/{id}", () => {
+  it("is value-identical to the list row, which is what makes a peek free", () => {
+    const { data: rows } = parseList(campaignList, get("/campaigns", "per_page=100"));
+    expect(rows).toHaveLength(5);
+
+    for (const row of rows) {
+      const { data: detail } = parse(campaignSchema, get(`/campaigns/${row.id}`));
+      expect(detail, String(row.id)).toEqual(row);
+      // Not merely equal in the keys the schema names: equal in every key.
+      expect(Object.keys(detail as object).sort()).toEqual(Object.keys(row).sort());
+    }
+  });
+
+  /**
+   * The two 404s and the 400 between them. `/campaigns/abc` matches no route
+   * pattern; `/campaigns/99999` reaches the controller; `/campaigns/0` matches
+   * `\d+` and is refused by `idArg()`'s `minimum: 1` before any row is sought.
+   */
+  it("separates a route that does not exist from a row that does not", () => {
+    expect(get("/campaigns/abc").status).toBe(404);
+    expect(apiError(get("/campaigns/abc")).code).toBe("rest_no_route");
+
+    expect(get("/campaigns/99999").status).toBe(404);
+    expect(apiError(get("/campaigns/99999")).apiMessage).toBe("No campaign with that id.");
+    expect(apiError(get("/campaigns/99999")).code).toBe("not_found");
+
+    expect(get("/campaigns/0").status).toBe(400);
+    expect(apiError(get("/campaigns/0")).params?.id).toBe("id must be greater than or equal to 1");
+  });
+
+  /**
+   * `is_editable` and `allowed_transitions` are published on every row, which is
+   * why lib/campaigns.ts carries no transition table of its own. Every one of
+   * its four predicates is exercised against a real row here rather than against
+   * a literal.
+   */
+  it("publishes a transition table consistent with each row's status", () => {
+    const rows = parseList(campaignList, get("/campaigns", "per_page=100")).data;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    const draft = byId.get(318)!;
+    expect(canEdit(draft)).toBe(true);
+    expect(canDelete(draft)).toBe(true);
+    expect(canSend(draft)).toBe(true);
+    expect(canCancel(draft)).toBe(true);
+
+    const sending = byId.get(321)!;
+    expect(canEdit(sending)).toBe(false);
+    expect(canDelete(sending)).toBe(false);
+    expect(canSend(sending)).toBe(false);
+    // The one non-draft that can still be stopped, and the only fixture for it.
+    expect(canCancel(sending)).toBe(true);
+
+    for (const id of [320, 322]) {
+      const terminal = byId.get(id)!;
+      expect(terminal.allowed_transitions, String(id)).toEqual([]);
+      expect(canEdit(terminal), String(id)).toBe(false);
+      expect(canCancel(terminal), String(id)).toBe(false);
+    }
+
+    // Stored columns rather than a live query, and nothing here is purged — so
+    // the counts and the recipient rows are allowed to agree, and do.
+    expect(isPurged(byId.get(322)!)).toBe(false);
+    expect(byId.get(322)!.recipients).toMatchObject({ total: 9, sent: 5, failed: 4 });
+  });
+});
+
+/**
+ * ── The recipient list: a status filter, no sort at all, and a fifth meta key ─
+ */
+describe("GET /campaigns/{id}/recipients", () => {
+  it("filters by status and moves meta.total with it", () => {
+    const all = get("/campaigns/322/recipients");
+    const { data, meta } = parse(recipientList, all);
+    expect(data).toHaveLength(9);
+    expect(recipientMeta.parse(meta)).toMatchObject({ total: 9, purged: false });
+
+    const failed = get("/campaigns/322/recipients", "status=failed");
+    expect(parse(recipientList, failed).data).toHaveLength(4);
+    // The half that was wrong before `feat/campaign-recipient-counts`: 0 rows
+    // under a total of 9 is a paginating list lying about its own length.
+    expect(recipientMeta.parse(parse(recipientList, failed).meta).total).toBe(4);
+
+    expect(parse(recipientList, get("/campaigns/322/recipients", "status=sent")).data).toHaveLength(
+      5,
+    );
+    // `""` is inside this enum too, and a status this campaign has none of is an
+    // empty 200 rather than a refusal.
+    expect(
+      parse(recipientList, get("/campaigns/322/recipients", "status=pending")).data,
+    ).toHaveLength(0);
+    expect(parse(recipientList, get("/campaigns/322/recipients", "status=")).data).toHaveLength(9);
+
+    const refused = get("/campaigns/322/recipients", "status=draft");
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).params?.status).toBe(
+      "status is not one of , pending, sent, and failed.",
+    );
+  });
+
+  /**
+   * **`?orderby=zzz` is a 200 here and a 400 one level up.** Two routes on one
+   * resource, two answers to the same wrong value — the route registers no sort
+   * argument, so the parameter reaches nothing and is not validated either.
+   * Reproducing both is what stops a recipient sort shipping.
+   */
+  it("accepts and ignores a sort the collection above it refuses", () => {
+    const ordered = get("/campaigns/322/recipients", "orderby=zzz&order=asc");
+    expect(ordered.status).toBe(200);
+    expect(parse(recipientList, ordered).data.map((row) => row.id)).toEqual(
+      parse(recipientList, get("/campaigns/322/recipients")).data.map((row) => row.id),
+    );
+    // And the same value on the collection is the 400 the test above pins.
+    expect(get("/campaigns", "orderby=zzz").status).toBe(400);
+  });
+
+  /**
+   * **Empty strings, never null, and a `sent_at` with no offset.** Both are
+   * conventions this route has and the notification queue does not, and both are
+   * what `recipientError()` and `recipientSentAt()` exist to read.
+   */
+  it("stringifies last_error and sent_at where the notification queue nulls them", () => {
+    const rows = parse(recipientList, get("/campaigns/322/recipients")).data;
+
+    for (const row of rows) {
+      expect(row.last_error, String(row.id)).not.toBeNull();
+      expect(row.sent_at, String(row.id)).not.toBeNull();
+    }
+
+    const sent = rows.find((row) => row.status === "sent")!;
+    expect(recipientError(sent)).toBeNull();
+    expect(recipientSentAt(sent)).not.toBeNull();
+    // No `T` and no offset — the `notes[].created_at` trap, one table over.
+    expect(sent.sent_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(parseApiDate(sent.sent_at)?.toISOString()).toBe(
+      `${sent.sent_at.replace(" ", "T")}.000Z`,
+    );
+
+    const failed = rows.find((row) => row.status === "failed")!;
+    expect(recipientError(failed)).toBe("wp_mail() did not accept the message.");
+    expect(recipientSentAt(failed)).toBeNull();
+    expect(failed.attempts).toBe(3);
+  });
+
+  /**
+   * All three recipient states exist somewhere in the fixture, and `pending`
+   * exists **only** on the campaign still draining — which is the whole reason
+   * that campaign is in the seed.
+   */
+  it("has a row in each of the three states, pending only on a sending campaign", () => {
+    const sent = parse(recipientList, get("/campaigns/322/recipients")).data;
+    const draining = parse(recipientList, get("/campaigns/321/recipients")).data;
+    const states = new Set([...sent, ...draining].map((row) => row.status));
+    for (const status of RECIPIENT_STATUSES) expect([...states], status).toContain(status);
+
+    expect(sent.some((row) => row.status === "pending")).toBe(false);
+    expect(draining.filter((row) => row.status === "pending")).toHaveLength(4);
+    // The widest string in the panel sits on a failed row, so the 340px overflow
+    // assertion has it in the same cell as the error text.
+    expect(sent.find((row) => row.status === "failed")!.email.length).toBeGreaterThan(70);
+  });
+
+  it("serves an empty list for a campaign that has sent nothing", () => {
+    const { data, meta } = parse(recipientList, get("/campaigns/318/recipients"));
+    expect(data).toEqual([]);
+    expect(recipientMeta.parse(meta)).toMatchObject({ total: 0, total_pages: 0, purged: false });
+  });
+});
+
+/**
+ * ── The preview, and the one field a second capability decides ──────────────
+ */
+describe("GET /campaigns/{id}/preview", () => {
+  it("resolves tokens, names the unknown ones and says it appended the link", () => {
+    const { data: clean } = parse(campaignPreview, get("/campaigns/318/preview"));
+    expect(clean.unknown_tokens).toEqual([]);
+    expect(clean.subject).not.toContain("{{");
+    expect(unsubscribeNote(clean)).toBe("appended");
+    expect(clean.html).toContain("Unsubscribe");
+
+    /*
+     * The typo row, and it is the reason the composer has a preview step at all:
+     * `{{firstname}}` is not `{{first_name}}`, it renders **empty**, and
+     * `<p>Bonjour ,</p>` is easy to skim past in a preview that has a name in it
+     * from another token.
+     */
+    const { data: typo } = parse(campaignPreview, get("/campaigns/319/preview"));
+    expect(typo.unknown_tokens).toEqual(["firstname"]);
+    expect(typo.html).toContain("<p>Bonjour ,</p>");
+    expect(hasAudienceCount(typo)).toBe(true);
+    expect(typo.audience_count).toBe(8);
+
+    // The count a person chose against the count that will be mailed — the
+    // number §85 asks the composer to make legible.
+    expect(consentGap(1000, typo.audience_count)).toEqual({
+      selected: 1000,
+      eligible: 8,
+      excluded: 992,
+    });
+  });
+});
+
+/**
+ * ── Segments, and the tie that has to stay ──────────────────────────────────
+ */
+describe("GET /segments", () => {
+  const idsOf = (query: string) =>
+    parseList(segmentList, get("/segments", query)).data.map((row) => row.id);
+
+  /**
+   * **Two of this collection's four sort values cannot discriminate at all**,
+   * because every row carries the same two stamps — measured live, and kept.
+   * That is the coupons `date` trap made permanent: a screen that proved its
+   * sort with `created_at` here proved nothing, in either direction.
+   */
+  it("sorts on name and id, and answers one sequence for both stamp fields", () => {
+    expect(idsOf("")).toEqual([46, 44, 43, 45]);
+    expect(idsOf("orderby=name&order=asc")).toEqual(idsOf(""));
+    expect(idsOf("orderby=name&order=desc")).toEqual([45, 43, 44, 46]);
+    expect(idsOf("orderby=id&order=asc")).toEqual([43, 44, 45, 46]);
+    expect(idsOf("orderby=id&order=desc")).toEqual([46, 45, 44, 43]);
+
+    for (const field of ["created_at", "updated_at"]) {
+      expect(idsOf(`orderby=${field}&order=asc`), field).toEqual([43, 44, 45, 46]);
+      expect(idsOf(`orderby=${field}&order=desc`), field).toEqual([43, 44, 45, 46]);
+    }
+
+    // And the tie is a property of the fixture rather than of the sort.
+    const rows = parseList(segmentList, get("/segments", "per_page=100")).data;
+    expect(new Set(rows.map((row) => row.created_at)).size).toBe(1);
+    expect(new Set(rows.map((row) => row.updated_at)).size).toBe(1);
+  });
+
+  /**
+   * The collation is accent-insensitive, which is what puts "Clients à plus…"
+   * before "Clients avec…" — fold on one side only and this pair inverts.
+   */
+  it("folds accents when sorting by name, as the shop's collation does", () => {
+    const names = parseList(segmentList, get("/segments", "orderby=name&order=asc")).data.map(
+      (row) => row.name,
+    );
+    expect(names[1]).toBe("Clients à plus de 10 000 DA");
+    expect(names[2]).toBe("Clients avec commande");
+  });
+
+  /**
+   * **`?search=` is accepted and ignored**, measured — the route declares no
+   * such argument, so the value reaches nothing and is not refused either. A
+   * mock that filtered would let a segment search ship that works only here.
+   */
+  it("ignores a search it accepts, and refuses an off-enum sort", () => {
+    expect(idsOf("search=Alger")).toEqual(idsOf(""));
+    expect(idsOf("search=ZZZQQQ")).toEqual(idsOf(""));
+
+    const refused = get("/segments", "orderby=zzz");
+    expect(refused.status).toBe(400);
+    // Its own enum, in its own order — `name` first, because that is its default.
+    expect(apiError(refused).params?.orderby).toBe(
+      "orderby is not one of name, created_at, updated_at, and id.",
+    );
+  });
+
+  /**
+   * **A segment that matches nobody, beside three that match somebody.**
+   * `wilaya_id` comes off the shipment rather than the address, so an unshipped
+   * order has no wilaya and cannot match — correct behaviour that looks exactly
+   * like a broken filter, which is the sentence the criteria form owes a reader.
+   */
+  it("previews a live count, and one segment matches nobody on purpose", () => {
+    const { data: empty } = parse(segmentPreview, get("/segments/46/preview"));
+    expect(empty.matches).toBe(0);
+    expect(empty.criteria).toEqual({ wilaya_id: 16 });
+    expect(empty.problems).toEqual([]);
+    // The API's own English, which the panel translates rather than renders.
+    expect(empty.note).toBe("Only customers who have given marketing consent are counted.");
+
+    for (const id of [43, 44, 45]) {
+      expect(parse(segmentPreview, get(`/segments/${id}/preview`)).data.matches, String(id))
+        .toBeGreaterThan(0);
+    }
+
+    expect(get("/segments/99999/preview").status).toBe(404);
+    expect(apiError(get("/segments/99999/preview")).apiMessage).toBe("No segment with that id.");
+  });
+});
+
+/**
+ * ── The two criteria refusals, and they disagree about where the list goes ──
+ *
+ * This is the most exactly-copied thing on the branch. Both were re-measured on
+ * 2026-08-28, and the difference between them is the whole reason both are here:
+ * one publishes the eleven as `details.supported`, a **sibling** of `fields`; the
+ * other puts the same eleven **inline in the sentence** and carries no
+ * `supported` key at all. lib/campaigns.ts:259-267 reads the constant out of the
+ * first and describes it as what the server "publishes on refusal" — true of that
+ * shape only.
+ */
+describe("POST /segments — the refusals", () => {
+  const post = (body: unknown) => write("POST", "/segments", body);
+
+  it("names the missing name, and does it in the shop's own words", () => {
+    const refused = post({});
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).apiMessage).toBe("The segment is invalid.");
+    expect(apiError(refused).code).toBe("invalid_request");
+    // An em dash, which is the shop's typography and not this file's.
+    expect(apiError(refused).fields?.name).toBe(
+      "Required — a segment is referred to by name in every conversation about it.",
+    );
+  });
+
+  it("publishes the eleven as a sibling of fields when the criteria are empty", () => {
+    const refused = post({ name: "probe", criteria: {} });
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).apiMessage).toBe("A segment needs at least one criterion.");
+    expect(apiError(refused).fields?.criteria).toBe(
+      'Empty criteria would match every customer; use audience_type "all" for that.',
+    );
+
+    // The sibling, and it is the only refusal in the API carrying it.
+    const details = apiError(refused).details as { supported?: unknown };
+    expect(details.supported).toEqual([...SEGMENT_CRITERIA]);
+    expect(hasCriteria({})).toBe(false);
+  });
+
+  it("puts the same eleven inline in the sentence for an unknown criterion, with no supported key", () => {
+    const refused = post({ name: "probe", criteria: { zzz: 1 } });
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).apiMessage).toBe("The segment criteria are invalid.");
+    expect(apiError(refused).fields?.zzz).toBe(
+      `Unknown criterion. Supported: ${SEGMENT_CRITERIA.join(", ")}.`,
+    );
+    // **No `supported` key.** A form that read it after this refusal finds
+    // nothing, which is the half the shared constant's docblock does not say.
+    expect(apiError(refused).details).not.toHaveProperty("supported");
+  });
+
+  /**
+   * The seven refused by name, verbatim. They are quoted rather than
+   * paraphrased because a person reading `lib/campaigns.ts` will wonder why
+   * `email_contains` is not a criterion, and the reason is the answer.
+   */
+  it("refuses the seven by name, each with the reason the shop gives", () => {
+    expect(apiError(post({ name: "p", criteria: { sql: "1" } })).fields?.sql).toBe("No.");
+    expect(apiError(post({ name: "p", criteria: { limit: 10 } })).fields?.limit).toBe(
+      "A segment is a definition, not a page of results. A campaign sends to everyone the definition matches.",
+    );
+    expect(apiError(post({ name: "p", criteria: { consent: 1 } })).fields?.consent).toContain(
+      "Consent is applied to every audience by the resolver",
+    );
+    for (const key of ["email", "email_contains", "role", "commune_id"]) {
+      expect(apiError(post({ name: "p", criteria: { [key]: "x" } })).fields?.[key], key)
+        .toBeTruthy();
+    }
+  });
+
+  /**
+   * A **third** message above the two shapes, and the empty-criteria refusal
+   * catches more than an empty object: an empty array reads as one, and so does
+   * criteria being absent entirely. All three measured.
+   */
+  it("refuses a criteria that is not an object with the segment's own sentence", () => {
+    const refused = post({ name: "probe", criteria: "x" });
+    expect(apiError(refused).apiMessage).toBe("The segment is invalid.");
+    expect(apiError(refused).fields?.criteria).toBe("Must be an object of criteria.");
+
+    for (const criteria of [[], undefined]) {
+      const empty = post({ name: "probe", criteria });
+      expect(apiError(empty).apiMessage).toBe("A segment needs at least one criterion.");
+      expect((apiError(empty).details as { supported?: unknown }).supported).toBeDefined();
+    }
+  });
+
+  /** A well-shaped value is **coerced**: `"3"` is stored as `3`, measured. */
+  it("coerces a numeric criterion arriving as a string, as the shop does", () => {
+    const { data } = parse(segmentSchema, post({ name: "zz", criteria: { min_orders: "3" } }));
+    expect(data.criteria).toEqual({ min_orders: 3 });
+  });
+
+  it("refuses a value that does not fit its criterion, in the kind's own words", () => {
+    expect(apiError(post({ name: "p", criteria: { min_spent: "abc" } })).fields?.min_spent).toBe(
+      'Must be a decimal amount, e.g. "5000.00".',
+    );
+    expect(apiError(post({ name: "p", criteria: { wilaya_id: "abc" } })).fields?.wilaya_id).toBe(
+      "Must be a whole number.",
+    );
+    expect(
+      apiError(post({ name: "p", criteria: { registered_after: "nope" } })).fields
+        ?.registered_after,
+    ).toBe("Must be Y-m-d.");
+  });
+
+  it("creates with 201 and refuses to delete a segment a campaign names", () => {
+    const { data: made } = parse(segmentSchema, post({ name: "zz", criteria: { min_orders: 2 } }));
+    expect(post({ name: "zz", criteria: { min_orders: 2 } }).status).toBe(201);
+    expect(made.is_resolvable).toBe(true);
+
+    // 43 is the draft's audience, so it cannot go. `details` names how many.
+    const refused = write("DELETE", "/segments/43");
+    expect(refused.status).toBe(409);
+    expect(apiError(refused).code).toBe("conflict");
+    expect(apiError(refused).apiMessage).toBe("That segment is used by a campaign.");
+    expect(segmentInUseDetails.parse(apiError(refused).details)).toEqual({
+      campaigns: 1,
+      fix: "Point those campaigns at another audience first.",
+    });
+
+    // 45 is only named by the campaign that is sending, and 46 by nothing.
+    expect(write("DELETE", "/segments/46").status).toBe(200);
+  });
+});
+
+/**
+ * ── The campaign writes, and the panel's own create body is a 400 today ─────
+ */
+describe("the campaign writes", () => {
+  /**
+   * **`CampaignsList.tsx` sends `subject: ""` and calls it "the minimum the API
+   * accepts", and the API refuses it.** Measured 2026-08-28 with that exact
+   * body. Reproduced rather than accommodated: a mock that let it through would
+   * hide a live defect in the panel's "new campaign" button.
+   */
+  it("refuses the create body the panel actually sends", () => {
+    const refused = write("POST", "/campaigns", {
+      name: "Nouvelle campagne",
+      subject: "",
+      body_html: "",
+      body_text: "",
+      audience_type: "all",
+    });
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).fields).toEqual({
+      subject: "Required — a campaign with no subject line is not sendable.",
+    });
+  });
+
+  /**
+   * **`audience_type` absent behaves as `"segment"`**, so `POST {}` names a
+   * `segment_id` nobody mentioned. And **empty bodies are accepted** — the
+   * wizard's requirement that both parts be present is the panel's rule, not the
+   * API's, so this file must not refuse them.
+   */
+  it("names three missing fields for an empty body, and accepts empty bodies", () => {
+    expect(apiError(write("POST", "/campaigns", {})).fields).toEqual({
+      name: "Required.",
+      subject: "Required — a campaign with no subject line is not sendable.",
+      segment_id: 'Required when audience_type is "segment".',
+    });
+
+    const { data } = parse(
+      campaignSchema,
+      write("POST", "/campaigns", {
+        name: "zz",
+        subject: "s",
+        body_html: "",
+        body_text: "",
+        audience_type: "all",
+      }),
+    );
+    expect(data.status).toBe("draft");
+    expect(data.body_text).toBe("");
+    expect(data.audience).toEqual({ type: "all", segment_id: 0, customer_ids: [] });
+    expect(
+      write("POST", "/campaigns", {
+        name: "zz",
+        subject: "s",
+        body_html: "",
+        body_text: "",
+        audience_type: "all",
+      }).status,
+    ).toBe(201);
+  });
+
+  it("edits only a draft, and says which status stopped it", () => {
+    const refused = write("PATCH", "/campaigns/322", { subject: "x" });
+    expect(refused.status).toBe(409);
+    expect(apiError(refused).code).toBe("conflict");
+    expect(apiError(refused).apiMessage).toBe(
+      "A campaign can only be edited while it is a draft.",
+    );
+    expect(apiError(refused).details).toEqual({ status: "sent" });
+
+    // The cancelled one answers the same sentence naming its own status.
+    expect(apiError(write("PATCH", "/campaigns/320", { subject: "x" })).details).toEqual({
+      status: "cancelled",
+    });
+
+    // A body of nothing supported is the `bareFail` shape: no `details` at all.
+    const empty = write("PATCH", "/campaigns/318", {});
+    expect(empty.status).toBe(400);
+    expect(apiError(empty).apiMessage).toBe("No supported fields were provided.");
+    expect((empty.body as { error: object }).error).not.toHaveProperty("details");
+
+    // And an emptied field is a different sentence from a missing one.
+    expect(apiError(write("PATCH", "/campaigns/318", { subject: "" })).fields?.subject).toBe(
+      "Cannot be blank.",
+    );
+  });
+
+  /**
+   * `wp_kses` with an email-safe allowlist: **the tag stripped and the text
+   * kept**, measured. That is the property that makes rendering a stored body
+   * into a preview safe, and it is why the schema says so.
+   */
+  it("strips a script tag on save and keeps its text", () => {
+    const { data } = parse(
+      campaignSchema,
+      write("PATCH", "/campaigns/318", { body_html: "<script>alert(1)</script><p>ok</p>" }),
+    );
+    expect(data.body_html).toBe("alert(1)<p>ok</p>");
+  });
+
+  /**
+   * **Only a draft can be deleted, and a campaign has no trash.** Measured on a
+   * scratch campaign taken from draft to cancelled: the delete answers 409 with
+   * `details.status`, and the row it refuses is the record of mail that left.
+   */
+  it("deletes a draft outright and refuses every other status", () => {
+    expect(parse(z.looseObject({ deleted: z.boolean() }), write("DELETE", "/campaigns/318")).data)
+      .toEqual({ deleted: true });
+    expect(get("/campaigns/318").status).toBe(404);
+
+    for (const id of [320, 321, 322]) {
+      const refused = write("DELETE", `/campaigns/${id}`);
+      expect(refused.status, String(id)).toBe(409);
+      expect(apiError(refused).apiMessage, String(id)).toBe(
+        "Only a draft can be deleted. Cancel the campaign instead.",
+      );
+    }
+  });
+
+  /**
+   * `cancel` answers the **whole row**, not a receipt — and it stamps
+   * `completed_at` while leaving `updated_at` alone, which is why the cancelled
+   * seed row carries three equal stamps.
+   */
+  it("cancels a draft into the whole row, and quotes the status back when it cannot", () => {
+    const { data } = parse(campaignSchema, write("POST", "/campaigns/319/cancel"));
+    expect(data.status).toBe("cancelled");
+    expect(data.is_editable).toBe(false);
+    expect(data.allowed_transitions).toEqual([]);
+    expect(data.completed_at).not.toBeNull();
+
+    for (const [id, status] of [
+      [322, "sent"],
+      [320, "cancelled"],
+    ] as const) {
+      const refused = write("POST", `/campaigns/${id}/cancel`);
+      expect(refused.status, status).toBe(409);
+      expect(apiError(refused).apiMessage, status).toBe(
+        `A campaign in "${status}" cannot be cancelled.`,
+      );
+      expect(apiError(refused).details, status).toEqual({ status, allowed: [] });
+    }
+  });
+
+  /**
+   * **`send` sends nothing.** 202, the audience frozen as rows, and the command
+   * that will do the mailing named in `next` — a progress bar implying live
+   * delivery is a lie the operator would act on.
+   */
+  it("answers send with a 202 and the command that actually sends", () => {
+    const response = write("POST", "/campaigns/318/send");
+    expect(response.status).toBe(202);
+    const { data } = parse(sendResult, response);
+    expect(data.status).toBe("sending");
+    expect(sendOutcome(data)).toEqual({
+      recipients: data.recipients,
+      command: "wp algerian-commerce send-campaigns",
+    });
+    // And the campaign moved, so the composer's refetch shows a sending row.
+    expect(parse(campaignSchema, get("/campaigns/318")).data.status).toBe("sending");
+  });
+
+  /**
+   * **A test send is a 200 that reports a failed send**, which is not an error:
+   * the request succeeded and the transport did not. It writes no recipient row,
+   * so a test never appears in the list.
+   */
+  it("answers a test with a 200 that reports the transport refusing", () => {
+    const { data } = parse(
+      testResult,
+      write("POST", "/campaigns/318/test", { to: "essai@example.test" }),
+    );
+    expect(testDelivered(data)).toBe(false);
+    expect(data.to).toBe("essai@example.test");
+    expect(parse(recipientList, get("/campaigns/318/recipients")).data).toEqual([]);
+  });
+});
+
+/**
+ * ── Templates and the pixel config: two reads, and neither takes an argument ─
+ */
+describe("GET /email-templates and /marketing/config", () => {
+  /**
+   * **4652 is the row the screen exists for**, and it carries both halves: two
+   * unknown tokens named on the template itself rather than only on a preview,
+   * and `has_unsubscribe_token: false` beside them which is **not** a problem —
+   * the API appends one, so a screen flagging it would be inventing a fault.
+   */
+  it("names the typo template's unknown tokens, and its missing token is not a fault", () => {
+    const { data } = parseList(emailTemplateList, get("/email-templates", "per_page=100"));
+    expect(data).toHaveLength(3);
+
+    const typo = data.find((row) => row.id === 4652)!;
+    expect(typo.unknown_tokens).toEqual(["firstname", "prenom"]);
+    expect(typo.has_unsubscribe_token).toBe(false);
+
+    // The control: a template that writes the token itself, so the screen has
+    // both states to render.
+    const clean = data.find((row) => row.id === 4650)!;
+    expect(clean.unknown_tokens).toEqual([]);
+    expect(clean.has_unsubscribe_token).toBe(true);
+
+    expect(parse(emailTemplateSchema, get("/email-templates/4652")).data).toEqual(typo);
+    expect(apiError(get("/email-templates/99999")).apiMessage).toBe(
+      "No email template with that id.",
+    );
+  });
+
+  /**
+   * **Paging is the whole of its query contract.** `orderby`, `status` and
+   * `search` are accepted and ignored — measured one at a time — so a template
+   * screen ships no controls at all.
+   */
+  it("accepts and ignores every parameter but paging, and writes nothing", () => {
+    const base = parseList(emailTemplateList, get("/email-templates")).data.map((row) => row.id);
+    expect(base).toEqual([4650, 4652, 4651]);
+    for (const query of ["orderby=id", "orderby=zzz", "status=publish", "search=Soldes"]) {
+      expect(
+        parseList(emailTemplateList, get("/email-templates", query)).data.map((row) => row.id),
+        query,
+      ).toEqual(base);
+    }
+    // Paging is real, and out-of-range is refused by the shared helper.
+    expect(get("/email-templates", "per_page=101").status).toBe(400);
+    // No write of any kind — §85 makes a template a post authored in wp-admin.
+    expect(write("POST", "/email-templates", { name: "x" }).status).toBe(404);
+    expect(write("PATCH", "/email-templates/4650", { name: "x" }).status).toBe(404);
+    expect(write("DELETE", "/email-templates/4650").status).toBe(404);
+  });
+
+  /**
+   * **The config screen's main state is a disabled one**, on this shop and on
+   * the one the panel is built against. A fixture with a live pixel in it would
+   * make the state every reader actually sees the unreachable one.
+   */
+  it("serves a shop with no pixel configured, and takes no arguments", () => {
+    const { data } = parse(marketingConfig, get("/marketing/config"));
+    expect(data.enabled).toBe(false);
+    expect(data.providers).toEqual([]);
+    expect(data.browser_events).toContain("Purchase");
+    expect(data.server_events).toEqual(["Purchase", "InitiateCheckout"]);
+
+    // No arguments at all — the identical object either way.
+    expect(get("/marketing/config", "per_page=1").body).toEqual(get("/marketing/config").body);
+    expect(get("/marketing/config", "zzz=1").body).toEqual(get("/marketing/config").body);
+
+    // `/marketing` itself is not a route, so it is a `rest_no_route` rather than
+    // this collection's own 404 — measured.
+    expect(get("/marketing").status).toBe(404);
+    expect(apiError(get("/marketing")).code).toBe("rest_no_route");
+    expect(get("/marketing/zzz").status).toBe(404);
+  });
+});
+
 describe("what the newly-covered modules still do not serve", () => {
   /**
    * **The shipping half of this block became real coverage on 2026-08-25** and
@@ -8450,6 +9319,50 @@ describe("what the newly-covered modules still do not serve", () => {
     }
     expect(get("/analytics/traffic").status).toBe(404);
     expect(get("/analytics/inventory").status).toBe(404);
+  });
+
+  /**
+   * **What the marketing module still cannot express**, now that every route
+   * the panel calls is served. None of these is a missing endpoint, and each is
+   * named so "covered" does not quietly come to mean "complete":
+   *
+   *   **503 `mail_not_configured` is unreachable, and that is a measurement.**
+   *   It was the answer on this stack until `scripts/seed-campaigns.mjs` set
+   *   `SMTP_HOST=127.0.0.1:1` — a port nothing listens on — and the seeded shop
+   *   this mock reproduces is the one *with* a transport. So
+   *   `classifySendRefusal`'s `"mail"` branch has no fixture here, and serving
+   *   one would mean reproducing a stack that no longer exists.
+   *
+   *   **The 409 for an audience matching nobody is likewise unserved.** No
+   *   seeded campaign has an empty audience, so the sentence has never been seen
+   *   on this shop — and inventing it is exactly what DECISIONS.md records six
+   *   CMS refusals and a coupons `"Read-only."` doing.
+   *
+   *   **`recipientMeta.purged` is false on every row.** The purge is a 30-day
+   *   cron, the fixture has nothing old enough, and `meta.purged: true` with
+   *   surviving counts is the state §85 designs the sent view around. It is
+   *   reachable only by aging the fixture, which would move every other stamp.
+   */
+  it("leaves the marketing routes the panel must never call unmocked", () => {
+    /*
+     * **`POST /marketing/events/purchase` is the one write on this subject the
+     * API offers, and it records a *storefront* conversion.** The browser and
+     * the server each report their half and share an `event_id` so Meta does not
+     * count it twice; a panel that could post one would be inventing purchases
+     * in somebody's ad reporting. lib/api/allowlist.ts:334-340 refuses it, so a
+     * fixture that answered would be an invitation to build the screen.
+     */
+    expect(write("POST", "/marketing/events/purchase", { event_id: "x" }).status).toBe(404);
+    expect(get("/marketing/events").status).toBe(404);
+
+    /*
+     * `/marketing/unsubscribe` is public, signed-token, and belongs to a
+     * customer following a link in their mail. Proxying it through a staff
+     * credential would let the panel write a consent record it has no business
+     * writing — the same reason `PATCH /customers/{id}` refuses
+     * `marketing_consent` by name.
+     */
+    expect(get("/marketing/unsubscribe", "token=sample").status).toBe(404);
   });
 
   it("leaves the coupon redemption story unanswerable, as the API does", () => {

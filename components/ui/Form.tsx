@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
+import { Isolate } from "@/components/primitives/Ltr";
 import { Button } from "@/components/ui/Button";
 import { useHydrated } from "@/lib/use-hydrated";
 
@@ -1166,10 +1167,11 @@ export function ReadOnlyField({
 
 /* ═══════════════════════════════════════════════════ the form, not the field ═══
  *
- * Two things that belong to a *form* rather than to any control in it, and that
+ * Three things that belong to a *form* rather than to any control in it, and that
  * every screen in the redesign run would otherwise hand-roll: the summary a
- * failed submission puts at the top, and the bar a dirty form puts at the
- * bottom. Both are DESIGN.md §3.4 and neither existed anywhere in the panel.
+ * failed submission puts at the top, the bar a dirty form puts at the bottom, and
+ * the position indicator a **stepped** form puts at the top. All three are
+ * DESIGN.md §3.4 and none existed anywhere in the panel.
  */
 
 /**
@@ -1406,5 +1408,115 @@ export function SaveBar({
         {saveLabel ?? t("save")}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Where you are in a stepped form, and how far you may go.
+ *
+ * ## Why this is a primitive and not a page
+ *
+ * It arrived as `marketing/campaigns/[id]/StepIndicator.tsx`, and DESIGN.md §3's
+ * rule is that anything a second screen would re-draw belongs here. It sits
+ * beside `SaveBar` on purpose: a stepped form is the **alternative** to a sticky
+ * save, not a variant of it — see §3.4's amendment — so the two shapes should be
+ * reachable from one import and the choice between them made once.
+ *
+ * ## Bars and a sentence, not five labelled tabs
+ *
+ * Five labels do not fit at the 340px floor: "Audience · Contenu · Aperçu · Test
+ * · Envoi" is 44 characters before any padding and the Arabic is longer, so the
+ * labels would truncate to initials and stop being labels. The bars carry
+ * position, the sentence below carries the current step's name, and the bars
+ * carry the names as accessible labels so nothing is lost to a screen reader.
+ *
+ * ## The buttons are real tab stops, which they were not
+ *
+ * The page-local original set `tabIndex={-1}` and `aria-hidden` on the whole
+ * strip, so the only way back from step five to step one was four presses of
+ * "Retour" — a control with no keyboard path, which is §5's floor rather than a
+ * nicety. They are ordinary buttons now: reachable steps activate, and an
+ * unreached one is **disabled with the reason on it** per §3.3 rather than
+ * silently inert.
+ *
+ * Backwards is always free and forwards is gated, which is the whole reason a
+ * wizard is safe on an irreversible act: somebody who reaches a preview and sees
+ * a mistake goes straight back to the step that made it, and nobody reaches a
+ * confirmation through steps that never ran.
+ */
+export function StepIndicator({
+  steps,
+  current,
+  furthest,
+  onGoTo,
+  label,
+}: {
+  /** In order. `label` is the step's name in the reader's language. */
+  steps: readonly { key: string; label: string }[];
+  /** Index of the step on screen. */
+  current: number;
+  /** Index of the furthest step the form currently supports. */
+  furthest: number;
+  onGoTo: (index: number) => void;
+  /** Names the strip for a screen reader — "Étapes de la campagne". */
+  label: string;
+}) {
+  const t = useTranslations("ui.steps");
+  /* A step already passed is reachable even when the draft has since stopped
+     supporting a later one: going back must never be gated on going forward. */
+  const limit = Math.max(current, furthest);
+
+  return (
+    <nav aria-label={label} className="flex min-w-0 flex-col gap-2">
+      <ol className="flex min-w-0 items-center gap-1.5">
+        {steps.map((step, index) => {
+          const reachable = index <= limit;
+          return (
+            <li key={step.key} className="flex min-w-0 flex-1">
+              <button
+                type="button"
+                disabled={!reachable}
+                aria-current={index === current ? "step" : undefined}
+                aria-label={t("goTo", { step: step.label })}
+                title={reachable ? step.label : t("locked")}
+                onClick={() => reachable && onGoTo(index)}
+                /* The drawn bar is 6px; the hit area is the button's own 24px
+                   block, which is what `py-2.5` buys without moving the bar. */
+                className="ui-ring ui-interactive group flex w-full cursor-pointer justify-stretch rounded-ui-sm py-2.5 disabled:cursor-not-allowed"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-full rounded-ui-sm ${
+                    index === current
+                      ? "bg-ui-fg"
+                      : index < current
+                        ? "bg-ui-fg opacity-40"
+                        : "bg-ui-line-strong"
+                  }`}
+                />
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      {/*
+        The visible name of the position, and the only place the step's own word
+        appears on screen. A translated sentence carrying two numbers, so the
+        caller wraps it in `Isolate` — forcing LTR would lay "الخطوة ٢ من ٥" out
+        from the left and put the number an Arabic reader meets first at the far
+        end. `aria-live` is deliberate: the strip does not scroll the page, so
+        the only signal that a press landed is this line changing.
+      */}
+      <p className="text-ui-label text-ui-muted" aria-live="polite">
+        <Isolate numeric>
+          {t("of", { current: current + 1, total: steps.length })}
+        </Isolate>
+        <span aria-hidden="true" className="mx-1">
+          ·
+        </span>
+        <span className="text-ui-fg">{steps[current]?.label}</span>
+      </p>
+    </nav>
   );
 }

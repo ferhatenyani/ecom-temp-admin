@@ -83,9 +83,22 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * API's own shape and not a shortcut: there is no `PATCH` on a transaction
  * anywhere in the surface.
  *
- * Coupons and shipping rules are the two collections where a *create* is undone
- * by this, which is what keeps `nextCouponId` and `nextRuleId` handing out the
- * same ids in every process and a screenshot of a created row byte-stable.
+ * **Marketing joined on 2026-08-28, and it is the first collection here whose
+ * writes include a *delete with no trash*.** A campaign and a segment are both
+ * removed outright rather than moved, so `campaignsGone` and `segmentsGone` are
+ * the whole of each delete's memory — and without this call the first test to
+ * delete a draft would leave every later one reading a four-row collection,
+ * which is the number every sort assertion on that list is written against.
+ *
+ * The other marketing state that has to come back is a **status**: `cancel` and
+ * `send` move a campaign out of `draft` for good, so one test cancelling 319
+ * would otherwise take the second draft — and the `status=draft` filter's own
+ * fixture — away from every test after it.
+ *
+ * Coupons, shipping rules, campaigns and segments are the collections where a
+ * *create* is undone by this, which is what keeps `nextCouponId`, `nextRuleId`,
+ * `nextCampaignId` and `nextSegmentId` handing out the same ids in every process
+ * and a screenshot of a created row byte-stable.
  *
  * Parcels are rebuilt too, and that matters more here than it reads: the fixture
  * holds exactly **one live shipment**, and cancelling or delivering it is what

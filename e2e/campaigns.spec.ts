@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * Marketing: the composer, segments and templates — deliberately small.
@@ -20,7 +20,40 @@ import { test, expect, type Page } from "@playwright/test";
  * Every fixture comes from `scripts/seed-campaigns.mjs`, whose own floor asserts
  * it created them — so a failure here is a failure of the panel rather than of a
  * shop that drifted.
+ *
+ * ## What the redesign changed here, and what it did not
+ *
+ * Eight declarations before and eight after, titles byte-identical. Every
+ * assertion still checks the same fact; what moved is how a row is reached.
+ *
+ * **A campaign row now opens a peek drawer rather than navigating.**
+ * `GET /campaigns/{id}` is value-identical to the list row, so the preview is
+ * free — DECISIONS.md §15 — and the drawer's primary is what goes to the
+ * composer or to the record, labelled from `is_editable`. So `openCampaign()`
+ * below is two clicks where it used to be one, and the label it clicks is the
+ * assertion that the flag reached the screen.
+ *
+ * **`selectSegment()` kept its name and lost its body.** It was written for
+ * `Segmented`'s `sr-only` radio, which a pointer can only reach through its
+ * `<label>`; `FilterTabs` draws a real `<button>`, so the label locator matched
+ * nothing at all. The content branch made the same change for the same reason.
+ *
+ * **Rows resolve through the visible-filtered helper coupons introduced.** Both
+ * presentations are in the DOM at every width — `DataTable` at `md`+ and
+ * `RecordList` below — so a bare `getByText(name)` matches twice and every
+ * `toBeVisible()` is a strict-mode violation before it reaches its own
+ * assertion. Every project here bar one is phone-sized, so the table is the copy
+ * that is never painted.
  */
+
+/**
+ * The rows that are actually on screen, whichever presentation that is.
+ * `e2e/coupons.spec.ts`'s helper, and the reason is the same one: a row is read
+ * as well as clicked, so the container has to be the one carrying the text.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
 
 const USER = process.env.AC_STAFF_USER;
 const PASS = process.env.AC_STAFF_PASS;
@@ -51,14 +84,26 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
  */
 const DRAFT_NAME = "Soldes d'août — brouillon";
 
-/** The segmented control's input is `sr-only`; a pointer reaches it by its label. */
+/** A `FilterTabs` chip is a real `<button>`; the retired `Segmented` was not. */
 async function selectSegment(page: Page, label: string) {
-  await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
+  await page.getByRole("button", { name: label, exact: true }).click();
 }
 
 async function openCampaigns(page: Page, locale: string) {
   await page.goto(`/${locale}/marketing/campaigns`);
   await page.waitForSelector('[data-testid="campaigns-count"]');
+}
+
+/**
+ * A row's peek, then the screen behind it.
+ *
+ * The drawer's primary is labelled from `is_editable` — "Ouvrir le composeur" on
+ * a draft, "Ouvrir le registre" on anything else — so asking for the link by name
+ * asserts the flag reached the screen on the way past.
+ */
+async function openCampaign(page: Page, name: string, action: string) {
+  await rows(page).filter({ hasText: name }).first().click();
+  await page.getByRole("link", { name: action }).click();
 }
 
 test.describe("the hub", () => {
@@ -84,7 +129,7 @@ test.describe("the composer", () => {
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
-    await page.getByText(DRAFT_NAME).first().click();
+    await openCampaign(page, DRAFT_NAME, "Ouvrir le composeur");
 
     // 1. audience
     await expect(page.getByText("Étape 1 sur 5")).toBeVisible();
@@ -117,7 +162,7 @@ test.describe("the composer", () => {
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
-    await page.getByText("Relance panier — brouillon").first().click();
+    await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
     await page.getByTestId("continue").click();
     await page.getByTestId("continue").click();
@@ -140,7 +185,7 @@ test.describe("the composer", () => {
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
-    await page.getByText("Relance panier — brouillon").first().click();
+    await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
     for (let step = 0; step < 3; step += 1) await page.getByTestId("continue").click();
     await expect(page.getByText("Étape 4 sur 5")).toBeVisible();
@@ -165,7 +210,7 @@ test.describe("the composer", () => {
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
-    await page.getByText("Relance panier — brouillon").first().click();
+    await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
     for (let step = 0; step < 4; step += 1) await page.getByTestId("continue").click();
     await expect(page.getByText("Étape 5 sur 5")).toBeVisible();
@@ -186,7 +231,7 @@ test.describe("a campaign that is no longer a draft", () => {
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
-    await page.getByText("Rentrée — envoyée").first().click();
+    await openCampaign(page, "Rentrée — envoyée", "Ouvrir le registre");
 
     await expect(page.getByText("Étape 1 sur 5")).toHaveCount(0);
     await expect(page.getByTestId("sent-body")).toBeVisible();
@@ -217,9 +262,9 @@ test.describe("segments", () => {
     await page.goto("/fr/marketing/segments");
     await page.waitForSelector('[data-testid="segments-count"]');
 
-    await expect(page.getByText("Clients avec commande")).toBeVisible();
-    await expect(page.getByText("8 clients")).toBeVisible();
-    await expect(page.getByText("Aucun client")).toBeVisible();
+    await expect(rows(page).filter({ hasText: "Clients avec commande" })).toHaveCount(1);
+    await expect(rows(page).filter({ hasText: "8 clients" }).first()).toBeVisible();
+    await expect(rows(page).filter({ hasText: "Aucun client" }).first()).toBeVisible();
   });
 });
 
@@ -245,7 +290,7 @@ test.describe("the capability", () => {
      */
     await signIn(page, "fr", MARKETING_USER!, MARKETING_PASS!);
     await openCampaigns(page, "fr");
-    await page.getByText("Relance panier — brouillon").first().click();
+    await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
     // The count is the second capability's, so it is withheld rather than zeroed.
     await expect(page.getByText(/demande la permission Clients/)).toBeVisible();
@@ -274,7 +319,7 @@ test.describe("Arabic", () => {
     await page.waitForSelector('[data-testid="campaigns-count"]');
 
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-    await page.getByText("Relance panier — brouillon").first().click();
+    await openCampaign(page, "Relance panier — brouillon", "فتح المُحرِّر");
     await expect(page.getByText("الخطوة 1 من 5")).toBeVisible();
 
     await page.getByTestId("continue").click();

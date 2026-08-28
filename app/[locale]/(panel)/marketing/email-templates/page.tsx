@@ -3,136 +3,160 @@ import { requireSession } from "@/lib/session/read";
 import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { emailTemplateList } from "@/lib/api/schemas/campaign";
+import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState, EmptyState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { Icon } from "@/components/primitives/Icon";
-import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { formatDate } from "@/lib/format/date";
-import { tokenLiteral } from "@/lib/campaigns";
+import { EmptyState, ErrorState, ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { Isolate } from "@/components/primitives/Ltr";
+import { TemplatesTable } from "./TemplatesTable";
+import { listParams, queryFromParams } from "./query";
 
 /**
  * Email templates, read-only.
  *
  * **There is no editor here and that is not an omission.** §85 makes a template
  * an `ac_email_template` post authored in wp-admin, *where the revisions and the
- * media library already are*, and gives the API two read routes and no write. So
- * this screen reads them and says where to write one — the alternative being a
- * form that cannot save, which is worse than no form.
+ * media library already are*, and gives the API two read routes and no write —
+ * which `lib/api/allowlist.ts` mirrors deliberately. So this screen reads them
+ * and says where to write one; the alternative is a form that cannot save, which
+ * is worse than no form.
  *
  * What it adds over wp-admin is the two checks the API computes on the template
- * itself rather than only on a campaign's preview:
+ * itself rather than only on a campaign's preview: the **unknown tokens** that
+ * will render empty, and whether the body carries its own **unsubscribe link** —
+ * where absent is *correct*, because the API appends one. `TemplatesTable`
+ * carries both arguments.
  *
- *   **unknown tokens** — `{{firstname}}` is not `{{first_name}}` and renders
- *   empty, invisible in a preview that has a name in it from another token. §85
- *   asks for this to be surfaced prominently, and on the template is the earliest
- *   place it can be: before a campaign ever uses it.
+ * ## A Server Component, and the client half holds nothing
  *
- *   **the unsubscribe link** — absent is *correct*, because the API appends one.
- *   Rendering that as a warning would teach somebody to add a second.
+ * The fetch is here and the table below is a client component only because
+ * `DataTable` needs a hook: it caches nothing, writes nothing and refetches
+ * nothing, so what is on screen is exactly as old as the navigation. **No stale
+ * marker and no refresh control** — §3.7 as amended on the customers branch, and
+ * the half of that rule which does the real work has nothing to disable.
+ *
+ * ## One empty state, and the missing half has no producer
+ *
+ * §3.7 as amended on the media branch. This route's whole query contract is
+ * paging — `?search=`, `?status=` and `?orderby=` are accepted and ignored,
+ * measured — so there is no control that could return "nothing matching this
+ * filter", and this screen ships one half and says so here. A page past the end
+ * *is* reachable and gets its own state and its own action, which is the
+ * inventory branch's lesson about a report with no way back.
+ *
+ * **Re-read this whenever a control is added**, which is the point of the
+ * sentence living in the file the new control would land in.
  */
 export default async function EmailTemplatesPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locale: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { locale } = await params;
+  const raw = await searchParams;
   const { session, me } = await requireSession(locale);
   const t = await getTranslations("campaigns");
 
+  const header = (subtitle?: React.ReactNode) => (
+    <PageHeader
+      title={t("templates")}
+      back={{ href: `/${locale}/marketing`, label: t("hubTitle") }}
+      subtitle={subtitle}
+    />
+  );
+
   if (!has(me, "ac_manage_marketing")) {
     return (
-      <Scaffold title={t("templates")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {header()}
+        <PageBody width="detail">
           <ForbiddenState capability="ac_manage_marketing" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
+
+  const incoming = new URLSearchParams();
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") incoming.set(key, value);
+    else if (Array.isArray(value) && value[0] !== undefined) incoming.set(key, value[0]);
+  }
+  const query = queryFromParams(incoming);
 
   const result = await acFetch(
     emailTemplateList,
     session,
-    "/email-templates?per_page=100",
+    `/email-templates?${listParams(query)}`,
   ).catch((error: unknown) => {
     if (error instanceof ApiError) return null;
     throw error;
   });
 
-  const templates = result?.data ?? [];
+  if (result === null) {
+    return (
+      <div className="min-h-dvh bg-ui-canvas">
+        {header()}
+        <PageBody width="full">
+          {/* No `onRetry`: a Server Component cannot re-fetch itself, and a button
+              that reloaded the page would be a reload wearing a retry's clothes. */}
+          <ErrorState message={t("template.unavailable")} />
+        </PageBody>
+      </div>
+    );
+  }
+
+  const templates = result.data;
+  const meta = result.meta ? listMeta.safeParse(result.meta) : null;
+  const total = meta?.success ? meta.data.total : templates.length;
+  const overPaged = templates.length === 0 && query.page > 1;
 
   return (
-    <Scaffold title={t("templates")} back={{ href: `/${locale}/marketing`, label: t("hubTitle") }}>
-      <div className="mx-auto max-w-3xl px-4">
-        <p className="mb-2 px-1 text-footnote text-label-secondary" data-testid="templates-count">
-          <Isolate numeric>{t("template.count", { total: templates.length })}</Isolate>
-        </p>
-
+    <div className="min-h-dvh bg-ui-canvas">
+      {header(
+        <span data-testid="templates-count">
+          <Isolate>{t("template.count", { total })}</Isolate>
+        </span>,
+      )}
+      <PageBody width="full">
         {templates.length === 0 ? (
-          <EmptyState message={t("empty.templates")} />
+          <EmptyState
+            icon={overPaged ? "search" : "note"}
+            message={overPaged ? t("empty.pastEnd") : t("empty.templates")}
+            detail={overPaged ? undefined : t("template.readOnly")}
+            /* A **navigation**, not a handler: this is a Server Component and
+               `States.tsx` is `"use client"`, so a function cannot cross the
+               boundary. `EmptyState.action.href` exists for exactly this. */
+            action={
+              overPaged
+                ? {
+                    label: t("empty.firstPage"),
+                    href: `/${locale}/marketing/email-templates`,
+                  }
+                : undefined
+            }
+          />
         ) : (
-          <ListGroup footnote={t("template.readOnly")}>
-            {templates.map((template) => (
-              <ListRow key={template.id} className="flex-col items-stretch gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span dir="auto" className="min-w-0 truncate text-body text-label">
-                    {template.name}
-                  </span>
-                  {template.unknown_tokens.length > 0 ? (
-                    <StatusBadge tone="warning" className="ms-auto">
-                      <Isolate numeric>
-                        {t("template.unknownTokens", { count: template.unknown_tokens.length })}
-                      </Isolate>
-                    </StatusBadge>
-                  ) : null}
-                </div>
-
-                <span dir="auto" className="truncate text-footnote text-label-secondary">
-                  {template.subject}
-                </span>
-
-                {template.unknown_tokens.length > 0 ? (
-                  <span className="flex flex-wrap gap-2">
-                    {template.unknown_tokens.map((token) => (
-                      <Ltr
-                        key={token}
-                        numeric={false}
-                        className="tone-warning tonal rounded-sm px-2 py-0.5 font-mono text-caption"
-                      >
-                        {tokenLiteral(token)}
-                      </Ltr>
-                    ))}
-                  </span>
-                ) : null}
-
-                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-label-tertiary">
-                  {/*
-                    **Absent is correct.** The API appends the link when the body
-                    has none, so this reads as a statement of what will happen
-                    rather than as a defect — hence a plain line and not a badge.
-                  */}
-                  <span className="flex items-center gap-1">
-                    <Icon
-                      name={template.has_unsubscribe_token ? "check" : "plus"}
-                      className="size-3.5 shrink-0"
-                    />
-                    {template.has_unsubscribe_token
-                      ? t("template.unsubscribePresent")
-                      : t("template.unsubscribeMissing")}
-                  </span>
-                  {template.modified_at !== null ? (
-                    <span className="ms-auto">
-                      <Isolate>{formatDate(template.modified_at, locale, false)}</Isolate>
-                    </span>
-                  ) : null}
-                </span>
-              </ListRow>
-            ))}
-          </ListGroup>
+          <div className="flex flex-col gap-3">
+            <TemplatesTable
+              locale={locale}
+              templates={templates}
+              total={total}
+              query={query}
+            />
+            {/*
+              Two footnotes, said once rather than once per row. The unsubscribe
+              column is two words because the sentence behind them ran the table
+              past its own card at 1440 — and the sentence is the same for every
+              row anyway, which is the content branch's `dataHint` lesson: nine
+              copies of one fact down a document is a fact nobody reads.
+            */}
+            <p className="text-ui-label text-ui-subtle">{t("template.unsubscribeNote")}</p>
+            <p className="text-ui-label text-ui-subtle">{t("template.readOnly")}</p>
+          </div>
         )}
-      </div>
-    </Scaffold>
+      </PageBody>
+    </div>
   );
 }
