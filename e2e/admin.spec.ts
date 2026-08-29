@@ -450,23 +450,37 @@ test.describe("import and export", () => {
     await page.goto("/fr/transfer");
 
     /*
-     * `setInputFiles` on the input itself, not through the button: the input is
-     * `sr-only` because its native chrome renders "Choose File" as page content
-     * in the *browser's* language, and Playwright sets files on the element
-     * rather than by clicking anything.
+     * **Scoped to the inventory card, not `.last()`.** Both import subjects
+     * render the same two controls, and the two locators here used to resolve
+     * them by document order — which silently re-targets the whole test the day
+     * a third subject is added or the two are reordered, exactly the class of bug
+     * `rows()` at the top of this file was written to avoid. `import-inventory`
+     * is a handle on the card, so the file and the button are read from the same
+     * place the assertions below are about.
+     *
+     * `setInputFiles` goes to the input itself rather than through a click:
+     * Playwright sets files on the element, and `FileField` renders a real
+     * `<input type="file">` inside its labelled frame.
      */
-    await page
-      .locator('input[type="file"]')
-      .last()
-      .setInputFiles({
-        name: "stock.csv",
-        mimeType: "text/csv",
-        buffer: Buffer.from("sku,stock_quantity\nAC-NOT-A-REAL-SKU,4\n"),
-      });
+    const inventory = page.getByTestId("import-inventory");
 
-    await page.getByRole("button", { name: "Prévisualiser" }).last().click();
+    await inventory.locator('input[type="file"]').setInputFiles({
+      name: "stock.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("sku,stock_quantity\nAC-NOT-A-REAL-SKU,4\n"),
+    });
 
-    await expect(page.getByText("Prévisualisation")).toBeVisible();
+    await inventory.getByRole("button", { name: "Prévisualiser" }).click();
+
+    /*
+     * The badge the server's own `dry_run` produced, `exact` and scoped.
+     * `getByText` is a case-insensitive *substring* match by default, and the
+     * safety footnote on each import card opens "La prévisualisation n'écrit
+     * jamais rien" — so the bare string resolves the badge **and** both
+     * footnotes, which is a strict-mode violation rather than an assertion. The
+     * badge's whole text is the word, so `exact` picks it and nothing else.
+     */
+    await expect(inventory.getByText("Prévisualisation", { exact: true })).toBeVisible();
     // The row error, with the field name and the API's own sentence under it.
     await expect(page.getByText(/An inventory import never creates products/)).toBeVisible();
 
@@ -477,8 +491,16 @@ test.describe("import and export", () => {
      * `failed === 0` as well and therefore called a file of nothing but errors
      * "work to do", offering an Apply button that could only fail again.
      */
-    await expect(page.getByText(/n’écrirait rien/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Appliquer" })).toBeDisabled();
+    await expect(inventory.getByText(/n’écrirait rien/)).toBeVisible();
+    /*
+     * Still a **disabled button** and not an absent one. §3.3 removes a control
+     * that cannot act; this one is waiting on input — a file whose rows would
+     * write something — and acts the moment it arrives, so it stays and carries
+     * its reason in `title`. Nothing else on the card is named "Appliquer": the
+     * confirm dialog's own button reads "Appliquer l'import" and is unmounted
+     * while the dialog is closed.
+     */
+    await expect(inventory.getByRole("button", { name: "Appliquer" })).toBeDisabled();
   });
 });
 

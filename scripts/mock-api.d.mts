@@ -17,7 +17,22 @@ import type { Server } from "node:http";
 
 export declare const BASE_PATH: string;
 
-export type MockResponse = { status: number; body: unknown };
+/**
+ * `body` is the envelope on every route but four. `GET /export/{subject}`
+ * answers a **file** — a `Buffer` of `EF BB BF` and the CSV, with `headers`
+ * beside it carrying the `content-type`, the `Content-Disposition` filename and
+ * `Cache-Control: no-store, private` — because an export is not an envelope and
+ * a mock that JSON-encoded one here would reproduce the exact defect
+ * `fix/export-download` repaired in the shop.
+ *
+ * `headers` is absent on every other response; the server shell branches on
+ * `Buffer.isBuffer(body)` rather than on its presence.
+ */
+export type MockResponse = {
+  status: number;
+  body: unknown;
+  headers?: Record<string, string>;
+};
 
 /**
  * `body` is the parsed JSON of a write, the parsed multipart of an upload, or
@@ -44,6 +59,19 @@ export declare function respond(
  * Returns `null` when the content type carries no boundary.
  */
 export declare function parseMultipart(buffer: Buffer, contentType: string): unknown;
+
+/**
+ * `text/csv` → the `body` argument `respond()` takes for an import.
+ *
+ * `POST /import/{products,inventory}` are the only requests in this panel whose
+ * body is not JSON. Exported for the reason `parseMultipart` is: the wrapper is
+ * what lets the handler tell a JSON body from an empty file — two different
+ * measured 400s — so hand-writing it in the suite would leave the mapping that
+ * decides between them untested.
+ *
+ * Returns `null` when the content type is not `text/csv`.
+ */
+export declare function parseCsvBody(buffer: Buffer, contentType: string): unknown;
 
 /**
  * Rebuild every mutable thing — order statuses, COD records, parcels, payments,

@@ -30,6 +30,20 @@
  *
  *     MOCK_IDENTITY=no_content node scripts/capture.mjs --all
  *
+ * **`no_transfer` is the ninth and it drops four** — `ac_manage_products`,
+ * `ac_manage_orders`, `ac_manage_inventory` and `ac_manage_customers`, which is
+ * the measured Marketing Manager column of lib/transfer.ts:22-41 and the only
+ * way to photograph `/transfer` refused. No identity before it dropped the first
+ * three at all, so that screen's flat refusal had never been reachable:
+ *
+ *     MOCK_IDENTITY=no_transfer node scripts/capture.mjs /transfer
+ *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /transfer
+ *
+ * The second line is the half a single identity cannot show: `/transfer` gates
+ * **per subject**, so `no_customers` photographs one refused card beside three
+ * served ones. Both runs write their own `-no_transfer` / `-no_customers`
+ * suffix, so all three sit in one folder.
+ *
  * **A second harness switch arrived with it, and it is not an identity.**
  * `MOCK_HOMEPAGE` chooses which stored homepage document the mock serves,
  * because the three states that screen has are properties of the *document*
@@ -939,6 +953,48 @@ const DEFAULT_ROUTES = [
    * number of staff accounts can never open.
    */
   "/settings",
+  /*
+   * ── The one screen in the panel whose gate is per *subject* ───────────────
+   *
+   * Four export cards and two import cards on one page, and **each card is a
+   * different capability** — `SUBJECT_CAPABILITY` in lib/transfer.ts:57-62. So
+   * unlike every other route in this list, "the forbidden state" is not one
+   * screenshot: a credential can be entitled to half of this page.
+   *
+   * The bare path is the whole section. There is no id, no filter, no sort and
+   * no parameter anywhere, and the two states that are not a credential are
+   * *inside* the page rather than at a URL — a chosen file and a returned report
+   * both come from a `<input type="file">` and a POST, so neither is reachable
+   * by navigation and neither is capturable here.
+   *
+   *     node scripts/capture.mjs /transfer          all four, all six cards
+   *
+   * ── The refusals, which need their own runs ───────────────────────────────
+   *
+   *     MOCK_IDENTITY=no_transfer node scripts/capture.mjs /transfer
+   *     MOCK_IDENTITY=no_customers node scripts/capture.mjs /transfer
+   *
+   * **`no_transfer` is new and none of the eight identities before it could
+   * stand in.** Every one of them is `CAPABILITIES` minus one or two entries and
+   * not one of those entries was `ac_manage_products`, so the flat refusal — the
+   * measured **Marketing Manager** column, 403 on all six routes — could not be
+   * photographed at all. A capture under `reduced` or `no_settings` would
+   * produce a green screenshot of the *served* screen and report it as the
+   * forbidden state, which is the failure DECISIONS.md §16.1 records.
+   *
+   * `no_customers` is the second run and it is the more interesting one: it
+   * drops `ac_manage_customers` alone, so `/export/customers` is 403 while the
+   * other three are 200 — **one page, one refused card and three served ones**,
+   * which is the only proof a screenshot can carry that the gate is per subject
+   * rather than per screen.
+   *
+   * **`support` is not that fixture, however much its name suggests it.** The
+   * measured Support Agent is 200 on `/export/customers` and 403 on the other
+   * three; this mock's `support` keeps `ac_manage_products`, so it is 200 on two
+   * exports and importable on products. The mock's own block beside that
+   * identity says why it was left alone.
+   */
+  "/transfer",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
