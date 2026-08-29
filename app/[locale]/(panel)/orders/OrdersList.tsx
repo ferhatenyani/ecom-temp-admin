@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/DataTable";
 import { FilterTabs, SearchField, FilterChips, FilterRow } from "@/components/ui/FilterBar";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { ExportNotice, exportHref, useExportFrom } from "@/components/ui/ExportNotice";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
 import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
@@ -78,6 +79,7 @@ export function OrdersList({
 
   const status = (searchParams.get("status") ?? "") as StatusFilter;
   const search = searchParams.get("search") ?? "";
+  const from = useExportFrom();
   const peekId = searchParams.get("peek");
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(initialQuery.perPage);
@@ -234,9 +236,13 @@ export function OrdersList({
               loading={isFetching}
             />
             {/* A real link, so the browser performs the download and the
-                credential is attached server-side — never in the document. */}
+                credential is attached server-side — never in the document.
+
+                `from` is where a refusal comes back to: the route answers a 303
+                to this list, filters intact, and `ExportNotice` below says what
+                happened. Before it, a 403 replaced the panel with raw JSON. */}
             <ButtonLink
-              href={`/api/export/orders`}
+              href={exportHref("orders", from)}
               variant="secondary"
               icon="download"
               prefetch={false}
@@ -282,6 +288,10 @@ export function OrdersList({
       />
 
       <PageBody width="full">
+        {/* Inside `<main>`, where the reader was looking. Above the stale marker
+            because it reports the thing they just did, not the age of the rows. */}
+        <ExportNotice />
+
         {/* The count is a live region: a filter that changes the result count
             must announce it, or a screen-reader user has no idea it worked. */}
         <p aria-live="polite" className="sr-only" data-testid="orders-count">

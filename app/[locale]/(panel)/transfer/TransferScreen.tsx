@@ -5,6 +5,7 @@ import { ROUND_TRIPS, type ExportSubject, type ImportSubject } from "@/lib/trans
 import { useOnline } from "@/lib/use-online";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { ExportNotice, exportHref, useExportFrom } from "@/components/ui/ExportNotice";
 import { ButtonLink } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { ImportSection } from "./ImportSection";
@@ -70,6 +71,7 @@ export function TransferScreen({
   const tStates = useTranslations("states");
   const online = useOnline();
   const offlineReason = online ? undefined : tStates("offlineWrites");
+  const from = useExportFrom();
 
   return (
     <div className="min-h-dvh bg-ui-canvas">
@@ -86,6 +88,11 @@ export function TransferScreen({
       />
 
       <PageBody width="detail">
+        {/* Inside `<main>`, above the card whose button produced it — where the
+            reader was looking when they pressed it, and not above the page
+            chrome. It renders only when the route sent them back here. */}
+        <ExportNotice />
+
         <div className="flex flex-col gap-4">
           {exportable.length > 0 ? (
             <Card
@@ -165,9 +172,14 @@ export function TransferScreen({
                       Disabled offline with the reason: this genuinely leaves the
                       page, and a navigation to a route that cannot answer
                       replaces the panel with the browser's own error page.
+
+                      **`from` is where a refusal comes back to.** The route
+                      answers a 303 to this path rather than painting an
+                      envelope, and `ExportNotice` above renders what happened —
+                      the defect `exportNote` used to claim was already fixed.
                     */}
                     <ButtonLink
-                      href={`/api/export/${subject}`}
+                      href={exportHref(subject, from)}
                       variant="secondary"
                       icon="download"
                       prefetch={false}
