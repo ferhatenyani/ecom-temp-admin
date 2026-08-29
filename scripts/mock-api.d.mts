@@ -120,6 +120,22 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * `attempts: 5` and the permanently-refused one at 2. Three of the six states the
  * list assertions are written against are one request from being gone.
  *
+ * **Settings joined on 2026-08-29, and it is the only thing rebuilt here that is
+ * a document rather than a collection.** There is no id, no counter and nothing
+ * to create: `PATCH /settings` merges a diff into one stored object, so the
+ * whole of its memory is that object and the rebuild is a deep copy of the seed.
+ * The copy is the point — a shallow one would let a write reach into the seed
+ * through a shared block and quietly move the baseline this call restores, which
+ * is the trap `state.menus` documents and the only other nested seed here.
+ *
+ * It has to come back for the reason the notification queue does: a write is
+ * **destructive of the state the fixture exists for**. The live document is
+ * almost entirely empty — `store.name` is the one field set — and that emptiness
+ * is what makes `storefrontConsequences()` true and what the screen's ordinary
+ * rendering is built on, so the first test to write `storefront_url` would
+ * otherwise leave every later one reading a shop whose three broken behaviours
+ * had silently been repaired.
+ *
  * Coupons, shipping rules, campaigns and segments are the collections where a
  * *create* is undone by this, which is what keeps `nextCouponId`, `nextRuleId`,
  * `nextCampaignId` and `nextSegmentId` handing out the same ids in every process

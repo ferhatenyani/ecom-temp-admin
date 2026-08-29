@@ -818,6 +818,48 @@ const IDENTITIES = {
     ),
     auth_method: "application_password",
   },
+  /*
+   * ── The eighth, and it is the fifth time this hole has been found ─────────
+   *
+   * **All seven identities above hold `ac_manage_settings`.** Every one of them
+   * is `CAPABILITIES` minus one or two entries and none of those entries was
+   * this — `reduced` drops shipping and payments, `support` orders and
+   * inventory, `no_content` content, `no_customers` customers, `no_users` users,
+   * `no_marketing` marketing and customers. So `/settings` had no capturable
+   * forbidden state, which DESIGN.md §3.7 requires of every screen. That is
+   * `no_content`, `no_customers`, `no_marketing` and `no_users` again, one
+   * section over, for the fifth time.
+   *
+   * **`reduced` is not the credential for this, and it looks as though it should
+   * be.** It holds `ac_manage_settings` like the rest, so a capture taken under
+   * it photographs the *served* screen and reports a green forbidden state that
+   * is nothing of the kind — which is exactly the failure DECISIONS.md §16.1
+   * describes and the reason an unrecognised `MOCK_IDENTITY` throws here rather
+   * than falling back.
+   *
+   * Measured, and recorded at lib/api/allowlist.ts:366-376 and in
+   * ADMIN_PANEL.md's Settings section: **a Manager holding the other ten
+   * management capabilities is 403 on both verbs**, with
+   * `{"code":"forbidden","message":"You are not allowed to perform this
+   * action."}` and no `details` key — the shape `forbidden()` already emits.
+   * `ac_manage_settings` is Super Admin's alone and is the boundary that stops
+   * an Admin escalating, so this is the section the largest number of staff
+   * accounts can never open.
+   *
+   * **A credential with a measured shape, not a claim about the shop's roles.**
+   * The delta from `full` is exactly the one capability the measured 403s turn
+   * on and nothing else — the rule `reduced` set and every identity since has
+   * followed.
+   */
+  no_settings: {
+    id: 521,
+    username: "harness-no-settings",
+    display_name: "Harness No-Settings",
+    email: "harness-no-settings@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_settings"),
+    auth_method: "application_password",
+  },
 };
 
 const REQUESTED_IDENTITY = process.env.MOCK_IDENTITY ?? "full";
@@ -4927,10 +4969,10 @@ const STAFF_ORDERBY = ["registered", "ID", "display_name", "user_email", "user_l
  * ties — a fixture that ties on every row is the thing DECISIONS.md's standing
  * rule says cannot prove a sort.
  *
- * **The ids 514-520 are held out, and five of them exist live.** Those are
+ * **The ids 514-521 are held out, and five of them exist live.** Those are
  * `IDENTITIES`' own ids, and the acting user is appended below as exactly one
- * row under every `MOCK_IDENTITY` — so the collection is 69 under all seven of
- * them rather than 68 under two and 69 under five. It is 69 where the shop's is
+ * row under every `MOCK_IDENTITY` — so the collection is 69 under all eight of
+ * them rather than 68 under three and 69 under five. It is 69 where the shop's is
  * 73, and the difference is the reservation rather than a fixture that ran
  * short. Role histogram, therefore: support_agent 19, admin 14,
  * super_admin 12, order_manager 7, product_manager 6, manager 5,
@@ -5192,6 +5234,200 @@ const staffRow = ([id, login, role, minutesAgo]) => {
 };
 
 const STAFF = [...STAFF_SEED.map(staffRow), ACTING_STAFF];
+
+/* --------------------------------------------------------------- settings --- */
+
+/**
+ * `GET/PATCH /settings`, reproduced from the eleven payloads
+ * `tests/fixtures-admin.json` captured live on 2026-08-21. **Every sentence this
+ * route answers with is the shop's own** — none of them is written here. The
+ * coupons branch shipped a screen built to a `"Read-only."` refusal the API
+ * never sends, which is what DECISIONS.md §0 means by the expensive kind of
+ * wrong, and this is the route with the most prose on it in the whole surface.
+ *
+ * **Six blocks, four of which take a write, and a writable block is not wholly
+ * writable.** `GET` publishes eight keys under `store` and `PATCH` accepts
+ * **four**: `locale`, `currency`, `currency_symbol` and `logo` are refused from
+ * inside a block ADMIN_PANEL.md calls writable, with the same "Unknown keys:"
+ * sentence an invented name gets. `lib/settings.ts:46-63` records the probe. A
+ * mock that accepted every key it publishes would be more permissive than the
+ * wire on the one route where a form is most likely to send its own read
+ * straight back.
+ */
+const SETTINGS_WRITABLE_BLOCKS = ["store", "contact", "legal", "social"];
+
+/**
+ * The four key lists, taken from the four **refusal sentences** rather than from
+ * the document — the refusal is the only place they are stated, which is the
+ * whole reason the probe was worth running.
+ */
+const SETTINGS_WRITABLE_KEYS = {
+  store: ["name", "description", "storefront_url", "logo_id"],
+  contact: ["email", "phone", "address", "wilaya", "hours"],
+  legal: ["registered_name", "rc", "nif", "nis", "ai"],
+  social: ["facebook", "instagram", "tiktok", "youtube"],
+};
+
+/**
+ * The two blocks `GET` publishes and `PATCH` refuses **by name with the
+ * reason**, both verbatim.
+ *
+ * They are not "unknown blocks" and must not answer as if they were: the screen
+ * renders these two sentences as reports rather than as disabled switches, so
+ * the wording *is* the payload. `settingsRefusedFeatures` and
+ * `settingsRefusedProviders` are the captures.
+ */
+const SETTINGS_READ_ONLY_BLOCKS = {
+  features:
+    "Feature flags are environment variables read once at bootstrap (ENABLE_COD, ENABLE_CHARGILY, …). Set them in .env and restart, or the registry and this document disagree.",
+  providers:
+    "Read-only: this reports which providers actually registered, which follows from their credentials and flags.",
+};
+
+/**
+ * **The live document, and it is very nearly empty — that is the measurement,
+ * not a placeholder.**
+ *
+ * `store.name` is the one text field this shop has set. Every other string in
+ * `store`, `contact`, `legal` and `social` is `""`, `logo_id` is `0` and `logo`
+ * is `null`. So the default fixture is the settings screen's *ordinary* state
+ * for this install, and it is what makes `storefrontConsequences()` true: the
+ * empty `storefront_url` is why password reset answers 503
+ * `storefront_url_not_set`, tracking links carry no URL and the unsubscribe link
+ * points at the API's own domain.
+ *
+ * **`features` and `providers` agree here, and the agreement is the fixture.**
+ * `chargily` and `cod` are flagged and both registered; `yalidine` and
+ * `zr_express` are off and both absent. `flagWithoutProvider()` therefore
+ * answers false for every flag on this document — a gap this shop is not in,
+ * which ADMIN_PANEL.md says is worth stating rather than implying. The variant
+ * below is the state that *is* in it.
+ */
+const SETTINGS_DEFAULT = {
+  store: {
+    name: SHOP_NAME,
+    description: "",
+    locale: "en_US",
+    currency: "DZD",
+    currency_symbol: "د.ج",
+    storefront_url: "",
+    logo_id: 0,
+    logo: null,
+  },
+  contact: { email: "", phone: "", address: "", wilaya: "", hours: "" },
+  legal: { registered_name: "", rc: "", nif: "", nis: "", ai: "" },
+  social: { facebook: "", instagram: "", tiktok: "", youtube: "" },
+  features: {
+    cod: true,
+    chargily: true,
+    yalidine: false,
+    zr_express: false,
+    marketing_pixels: false,
+    blog: false,
+    reviews: false,
+    sms: false,
+    whatsapp: false,
+  },
+  providers: { payment: ["chargily", "cod"], shipping: ["manual"], marketing: [] },
+};
+
+/**
+ * ── `MOCK_SETTINGS=populated`, and the two states nothing here has ever shown ─
+ *
+ * **Constructed, not measured**, and labelled as such at the top rather than
+ * left to be discovered — the treatment `MOCK_HOMEPAGE=future` gets. Every
+ * *shape* in it is the document's own; only the values are made up, and they are
+ * made up to be long.
+ *
+ * The first state is DESIGN.md's "long strings render", which the default
+ * **cannot** exercise at all: a form of thirteen empty inputs proves nothing
+ * about a 69-character shop name, a 154-character description, a 75-character
+ * URL, an 84-character registered name or an 88-character Arabic address inside
+ * a document the French and Arabic locales both render. Counted in code points
+ * rather than UTF-16 units, which is the difference the Arabic one turns on. The
+ * screen takes no parameters — no search, no filter, no sort — so there is no URL
+ * that fills it, which is the same argument `MOCK_MEDIA=empty` makes from the
+ * other end and the reason this is an environment switch read once at module
+ * load rather than a query the panel could send.
+ *
+ * The second is the one that had **no fixture anywhere in this project** — not
+ * here, not in `scripts/capture.mjs`, not in `e2e/`. `yalidine: true` with
+ * `providers.shipping` still `["manual"]` is a flag on with no provider behind
+ * it: `flagWithoutProvider()` at `lib/settings.ts:231` detects exactly this,
+ * `lib/settings.ts:214` records it as reachable on the wire by setting a flag
+ * without a key, and ADMIN_PANEL.md's stated reason for rendering `providers` at
+ * all is that **this is the only place the gap shows**. The warning it drives has
+ * therefore never rendered in this project's history. That is the inventory
+ * branch's lesson in DECISIONS.md §6 — three bugs, each needing a fixture that
+ * did not exist — one section over.
+ *
+ * `storefront_url` is set here, which is the third thing the default cannot
+ * show: `storefrontConsequences()` is false, so the consequence sentence beside
+ * the field is *absent* rather than rendered, and a screen that hard-coded it
+ * would look correct against the default forever.
+ *
+ * `logo_id` stays `0` and `logo` stays `null`. The resolved attachment's shape
+ * was never captured — `lib/api/schemas/settings.ts` types it `z.unknown()`
+ * because of that — and inventing one here is the thing the file header forbids.
+ */
+const SETTINGS_POPULATED = {
+  store: {
+    name: "Boutique Artisanale Algérienne — Tapis, Poterie et Cuivre de Ghardaïa",
+    description:
+      "Artisanat algérien authentique : tapis noués à la main, poterie de Kabylie et cuivre martelé de Constantine, expédiés depuis Ghardaïa vers les 58 wilayas.",
+    locale: "en_US",
+    currency: "DZD",
+    currency_symbol: "د.ج",
+    storefront_url: "https://boutique-artisanale-algerienne-tapis-poterie.example.dz/fr/boutique",
+    logo_id: 0,
+    logo: null,
+  },
+  contact: {
+    email: "contact@boutique-artisanale-algerienne-tapis-poterie.example.dz",
+    phone: "+213 555 01 02 03",
+    address:
+      "شارع الاستقلال، حي النصر، بجوار المسجد الكبير، بلدية غرداية، ولاية غرداية، الجزائر ٤٧٠٠٠",
+    wilaya: "Ghardaïa",
+    hours: "Samedi – Jeudi : 09:00 – 17:00 · Vendredi : fermé",
+  },
+  legal: {
+    registered_name:
+      "Société à Responsabilité Limitée Boutique Artisanale Algérienne des Métiers du Tapis",
+    rc: "47/00-1234567 B 25",
+    nif: "000547012345678",
+    nis: "000547098765432",
+    ai: "47050123456789",
+  },
+  social: {
+    facebook: "https://www.facebook.com/boutique.artisanale.algerienne.ghardaia",
+    instagram: "https://www.instagram.com/boutique_artisanale_algerienne_dz",
+    tiktok: "",
+    youtube: "",
+  },
+  features: { ...SETTINGS_DEFAULT.features, yalidine: true },
+  providers: { payment: ["chargily", "cod"], shipping: ["manual"], marketing: [] },
+};
+
+const SETTINGS_VARIANTS = {
+  /** The measured document. `store.name` and nothing else. */
+  empty: SETTINGS_DEFAULT,
+  /** Constructed. Long values, and the flag with no provider behind it. */
+  populated: SETTINGS_POPULATED,
+};
+
+const REQUESTED_SETTINGS = process.env.MOCK_SETTINGS ?? "empty";
+if (!(REQUESTED_SETTINGS in SETTINGS_VARIANTS)) {
+  throw new Error(
+    `MOCK_SETTINGS must be one of ${Object.keys(SETTINGS_VARIANTS).join(", ")} — got "${REQUESTED_SETTINGS}".`,
+  );
+}
+
+/**
+ * Read once at module load, like `MOCK_IDENTITY`, `MOCK_HOMEPAGE` and
+ * `MOCK_MEDIA`, so `respond()` stays pure and a capture run is one document from
+ * beginning to end.
+ */
+const SETTINGS_SEED = SETTINGS_VARIANTS[REQUESTED_SETTINGS];
 
 /* ------------------------------------------ the order detail's sub-resources --- */
 
@@ -7476,6 +7712,16 @@ const state = {
    * value nobody can fetch a second time.
    */
   mintedCredentials: 0,
+  /**
+   * The settings **document**, not a diff — the shape `state.homepage` already
+   * uses, and for the same reason: `PATCH /settings` answers with the whole
+   * document rather than the block it wrote, so the thing the route has to hold
+   * is the thing it returns.
+   *
+   * A partial write updates only what it names and `""` clears a field, so this
+   * is mutated key by key and read out whole.
+   */
+  settings: {},
 };
 
 export function resetState() {
@@ -7574,7 +7820,7 @@ export function resetState() {
   state.staffGone = new Set();
   /*
    * Clear of every seeded id — the shop's own run to 778 — and clear of the
-   * seven `IDENTITIES` ids this fixture holds out (514-520), so a created
+   * eight `IDENTITIES` ids this fixture holds out (514-521), so a created
    * account can never collide with the acting user under any `MOCK_IDENTITY`.
    * Fixed rather than derived, which is what keeps
    * a screenshot of a created account byte-stable.
@@ -7582,6 +7828,15 @@ export function resetState() {
   state.nextStaffId = 810;
   state.appPasswords = new Map();
   state.mintedCredentials = 0;
+
+  /*
+   * A deep copy rather than the seed itself: a `PATCH` writes into the blocks in
+   * place, and sharing the object would let one write leak into the baseline
+   * this call exists to restore — the same trap `state.menus` documents one
+   * collection over, and the same fix. `structuredClone` is in node 17+ and the
+   * document is plain JSON.
+   */
+  state.settings = structuredClone(SETTINGS_SEED);
 
   // Last, because it writes `state.campaigns` and `state.recipients` and every
   // line above has just cleared them. A no-op unless `MOCK_SEND_PROGRESS` is a
@@ -13489,27 +13744,38 @@ function patchMedia(current, body) {
  *                `120`. Reproduced below by comparing values rather than
  *                substrings, which is the same property from the other side.
  *
- *   **invented, and flagged at each site**: `MEDIA_LOGO_ID` (this shop has no
- *                settings document here to read a logo out of); and the *order*
- *                of `references`, which the repository leaves to `ORDER BY
- *                pm.post_id` per scope and which is therefore per-store here
- *                rather than globally sorted.
+ *   **invented, and flagged at each site**: `MEDIA_LOGO_ID` (see the block
+ *                below, which now contradicts a document this file serves); and
+ *                the *order* of `references`, which the repository leaves to
+ *                `ORDER BY pm.post_id` per scope and which is therefore
+ *                per-store here rather than globally sorted.
  *
- * **Two of the five scopes have no store in this file and cannot be found by
+ * **One of the five scopes has no store in this file and cannot be found by
  * scanning**: `seo_image` is a post meta key this mock does not model — the
  * `seo` block it serves on a page and a product is derived text with no image id
- * in it — and `store_logo` lives in a settings document no route here serves.
- * `checked` still names all five, because that is what the API reports and the
- * panel's sentence is built on it; what changes is only that no scan can produce
- * a hit in those two. The seeded logo below is what keeps `store_logo` from
- * being a scope this file can never demonstrate at all.
+ * in it. `store_logo` was the second until `/settings` was served on 2026-08-29;
+ * it now has a document behind it, and the seeded logo below is what the two
+ * disagree about. `checked` still names all five, because that is what the API
+ * reports and the panel's sentence is built on it; what changes is only that no
+ * scan can produce a hit in `seo_image`.
  */
 
 /**
- * **Invented.** The shop's logo is `ac_client_settings['store']['logo_id']` and
- * there is no settings route in this file to read it from — so one attachment is
- * declared to be it, and that is the fixture the delete dialog's *in use* state
- * is built on.
+ * **Invented, and since 2026-08-29 it contradicts `/settings` — deliberately,
+ * and this is the honest place to say so.**
+ *
+ * The shop's logo is `ac_client_settings['store']['logo_id']`, and the settings
+ * document this file now serves says that value is **`0`** with `logo: null` —
+ * measured, and the live truth for this install. So on the wire *no* attachment
+ * is the store logo and `GET /media/5001/usage` would report `total: 0`, while
+ * here it reports one `store_logo` reference.
+ *
+ * It is kept because reading `state.settings.store.logo_id` instead would leave
+ * the whole library unused from a cold start, and that reference is the **only**
+ * fixture the media delete dialog's *in use* state has — a screen already built
+ * and captured against it. Trading a live defect on one screen for a lost
+ * fixture on another is not what the audit is for. The settings screen does not
+ * read `/media/{id}/usage`, so nothing renders both sides of the disagreement.
  *
  * Everything else in the library is genuinely unused, so 5002 and its forty
  * neighbours are the *not in use* fixture without anyone declaring anything.
@@ -13519,17 +13785,24 @@ function patchMedia(current, body) {
 const MEDIA_LOGO_ID = 5001;
 
 /**
- * **Invented, and it is the reference's `title`.**
+ * The reference's `title`, **and it stopped being invented on 2026-08-29.**
  *
  * `MediaUsageRepository::storeLogo()` titles the settings reference with
  * `SettingsRepository::storeName()` so the panel can write "the logo of <shop>"
  * rather than naming a table, and falls back to the English `'Store settings'`
- * for a shop that has not set one. There is **no settings route in this file**,
- * so there is no name to read: this is a plausible one for the shop the rest of
- * these fixtures describe. It is a name, never a key — the fallback string would
- * put English chrome on a French screen and hide that this was made up.
+ * for a shop that has not set one. This block read "there is **no settings route
+ * in this file**, so there is no name to read" and carried a plausible invention
+ * — `"Boutique artisanale"` — beside a mock that already knew the shop's real
+ * name from `SHOP_NAME`. `/settings` is served now, so the name is read out of
+ * the document the way the repository reads it, and the two routes can no longer
+ * answer different names for one shop in one process. It follows
+ * `MOCK_SETTINGS`, which is what the wire does.
+ *
+ * The fallback is reproduced rather than dropped: a shop with `store.name`
+ * unset really does get the English string, and hard-coding a French one would
+ * hide that the branch exists.
  */
-const MOCK_STORE_NAME = "Boutique artisanale";
+const storeSettingsName = () => state.settings.store?.name || "Store settings";
 
 /** `MediaUsageRepository::SCOPES`, verbatim and in its own order. */
 const MEDIA_USAGE_SCOPES = [
@@ -13618,7 +13891,7 @@ function mediaUsageOf(id) {
   // `id: 0` — settings live in an option and have no row id, which is the same
   // spelling the audit trail uses for them.
   if (id === MEDIA_LOGO_ID) {
-    references.push(usageRef("settings", 0, MOCK_STORE_NAME, "store_logo"));
+    references.push(usageRef("settings", 0, storeSettingsName(), "store_logo"));
   }
 
   return {
@@ -15686,6 +15959,149 @@ function revokeCredential(id, uuid) {
   return ok({ uuid, revoked: true });
 }
 
+/* --------------------------------------------------------------- settings --- */
+
+/**
+ * The value rules, and **two of the three sentences are the shop's**.
+ *
+ *   PATCH {"store":{"storefront_url":"boutique.dz"}}
+ *     → details.fields["store.storefront_url"] "Must be a URL, including https://."
+ *   PATCH {"contact":{"email":"nope"}}
+ *     → details.fields["contact.email"]        "Must be an email address."
+ *
+ * Both keyed `block.key` rather than by the block, which is the two-level shape
+ * `fieldErrorFor()`/`blockErrorFor()` exist for.
+ *
+ * **What was measured is the refusal, not the acceptance.** Exactly which
+ * strings pass was never probed, so the predicates are the loosest reading of
+ * each sentence — a scheme and an authority for the URL, something either side
+ * of an `@` and a dot for the address. Tightening them beyond that would grow
+ * refusals the wire may not answer, which is the *stricter* direction §0 calls
+ * the quieter and more expensive one. `""` clears either field and is not a
+ * refusal: `changedBlocks()` sends `""` for a field a reader emptied, and a mock
+ * that refused it would break the panel's only way to clear one.
+ *
+ * `store.logo_id` is the third and its sentence is **this file's**, flagged
+ * here rather than left to read as measured. It is a shape guard rather than a
+ * validation: `logo_id` is writable, the panel offers no control for it, and no
+ * refusal for a bad one was captured — but storing a string in it would hand the
+ * *next* `GET` a document `lib/api/schemas/settings.ts` types `z.number()` and
+ * refuses, which is a screen breaking at its own boundary against a body the
+ * shop would never have stored. That is the argument `mustBeSeo` makes on
+ * products, and the reason the harness guards the store rather than the caller.
+ */
+const SETTINGS_VALUE_RULES = {
+  "store.storefront_url": (value) => {
+    if (typeof value !== "string") return "Must be a URL, including https://.";
+    if (value === "") return null;
+    return /^[a-z][a-z0-9+.-]*:\/\/[^\s/]+/i.test(value)
+      ? null
+      : "Must be a URL, including https://.";
+  },
+  "store.logo_id": mustBeWholeNumber,
+  "contact.email": (value) => {
+    if (typeof value !== "string") return "Must be an email address.";
+    if (value === "") return null;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? null : "Must be an email address.";
+  },
+};
+
+/**
+ * `PATCH /settings` — the diff in, **the whole document out**.
+ *
+ * Verified rather than assumed: a `PATCH` naming only `contact.phone` came back
+ * with `store`, `legal`, `social`, `features` and `providers` all present
+ * (`settingsWritten`). That is why `settingsWriteResponse` *is* `settings` and
+ * why the form rebinds to the response rather than to its own draft.
+ *
+ * ── The empty body, which is the one refusal that changes shape ──────────────
+ *
+ *   PATCH {}   400 "No supported fields were provided."
+ *              details.fields: ["store","contact","legal","social"]   ← an ARRAY
+ *
+ * Every other refusal on this route keys `fields` as an **object**, by block or
+ * by `block.key`. `BrowserApiError.fields` returns `null` for the array rather
+ * than mis-rendering it, so a caller falls through to the top-level sentence —
+ * which is the one a reader needs, and the alternative is putting
+ * `store,contact,legal,social` on screen as though it were an explanation. The
+ * panel never sends this request (`changedBlocks()` returns nothing when nothing
+ * is dirty and the save bar does not appear); it is reproduced because it is the
+ * shape a *future* caller meets, and because it is the only place in the whole
+ * mock where `details.fields` is not a map.
+ *
+ * Note the message differs too: every other refusal here says *"The settings are
+ * invalid."* This one does not, and it carries no per-field sentence at all.
+ *
+ * ── Everything else, in one answer ───────────────────────────────────────────
+ *
+ * A read-only block answers its own reason; an unrecognised block answers
+ * "Unknown block."; an unrecognised *key* — which includes all four of the
+ * read-only keys `GET` publishes inside `store` — answers "Unknown keys: …" for
+ * the block, naming what it will take. **One response names every bad field**,
+ * the standard `readStaffBody()` set, so a form with three mistakes takes one
+ * round trip rather than three. The *order* the keys are collected in is the
+ * body's own and was not measured; nothing reads it, since `fields` is a map.
+ */
+function patchSettings(body) {
+  const payload = body !== null && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const names = Object.keys(payload);
+
+  if (names.length === 0) {
+    return fail(400, "invalid_request", "No supported fields were provided.", {
+      fields: [...SETTINGS_WRITABLE_BLOCKS],
+    });
+  }
+
+  const fields = {};
+  const clean = {};
+
+  for (const name of names) {
+    if (name in SETTINGS_READ_ONLY_BLOCKS) {
+      fields[name] = SETTINGS_READ_ONLY_BLOCKS[name];
+      continue;
+    }
+
+    const known = SETTINGS_WRITABLE_KEYS[name];
+    if (known === undefined) {
+      fields[name] = `Unknown block. Known: ${SETTINGS_WRITABLE_BLOCKS.join(", ")}.`;
+      continue;
+    }
+
+    const block = payload[name];
+    const supplied =
+      block !== null && typeof block === "object" && !Array.isArray(block)
+        ? Object.keys(block)
+        : [];
+
+    // Named keys first and the whole block at once: an unknown key is a
+    // complaint about the block, so it is keyed by the block and the values
+    // beside it are never reached. That is the shape `settingsUnknownKey` and
+    // `settingsRefusedCurrency` share — one sentence naming every bad key.
+    const unknown = supplied.filter((key) => !known.includes(key));
+    if (unknown.length > 0) {
+      fields[name] = `Unknown keys: ${unknown.join(", ")}. Known: ${known.join(", ")}.`;
+      continue;
+    }
+
+    for (const key of supplied) {
+      const rule = SETTINGS_VALUE_RULES[`${name}.${key}`] ?? mustBeText;
+      const problem = rule(block[key]);
+      if (problem !== null) {
+        fields[`${name}.${key}`] = problem;
+        continue;
+      }
+      (clean[name] ??= {})[key] = block[key];
+    }
+  }
+
+  if (Object.keys(fields).length > 0) return invalidBody("The settings are invalid.", fields);
+
+  // A partial write updates only what it names, and `""` clears a field — so the
+  // block is merged rather than replaced, and the answer is the whole document.
+  for (const [name, values] of Object.entries(clean)) Object.assign(state.settings[name], values);
+  return ok(state.settings);
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -15761,6 +16177,15 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * decided by this list.
      */
     "users",
+    /*
+     * **The only entry here that is not a collection**, and the only one whose
+     * write addresses no row: `/settings` is a single document with `GET` and
+     * `PATCH` on it and no id anywhere in the path. Listing it here opens the
+     * verb; the `case` below still refuses `POST`, `PUT` and `DELETE` by name,
+     * because this list decides which collections may write and never which
+     * verbs they take.
+     */
+    "settings",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -15824,20 +16249,33 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
   };
 
   /**
-   * A capability gate, and there are three of them in this file.
+   * A capability gate. **Eight capabilities are enforced below**, over seventeen
+   * call sites — this block said "three of them" and named `/customers` as the
+   * collection deliberately left ungated, and both halves had gone stale.
    *
-   * `/payments` came first, on 2026-08-26, and the rule it set is the one
-   * followed here: **a capability is enforced where it was measured and nowhere
+   * `/payments` came first, on 2026-08-26, and the rule it set is the one still
+   * followed: **a capability is enforced where it was measured and nowhere
    * else.** `/orders` and `/inventory` are enforced because the Support Agent
    * credential that measured the analytics money gate was measured 403 on both
-   * of them in the same pass — and `/customers` beside them was a 200, which is
-   * why there is no gate on that collection however plausible one would look.
+   * of them in the same pass.
    *
-   * Both are inert for `full` and for `reduced`, which hold the two. Adding them
-   * without `support` would have been a refusal nothing could reach; adding
-   * `support` without them would have made the mock answer 200 where the shop
-   * answers 403, which is the *more permissive* direction the honesty audit
-   * exists to catch.
+   * **`/customers` is gated now, and the sentence that used to sit here is the
+   * reason it is worth recording rather than deleting.** It read "`/customers`
+   * beside them was a 200, which is why there is no gate on that collection
+   * however plausible one would look" — a correct reading of the *Support
+   * Agent's* measurement that was wrong about the capability, and DECISIONS.md
+   * §16.1 is what it cost: closing the gap made `MOCK_IDENTITY=no_customers`
+   * render that screen's forbidden state for the first time, and the capture
+   * immediately showed a nav entry that could never have been photographed
+   * while the mock answered 200. A mock more permissive than the wire does not
+   * merely fail to catch a defect — it manufactures a passing screenshot of the
+   * broken state.
+   *
+   * Every gate is inert for `full`, which holds all thirteen. Adding one without
+   * an identity that lacks the capability would be a refusal nothing can reach;
+   * adding the identity without the gate makes the mock answer 200 where the
+   * shop answers 403, which is the *more permissive* direction the honesty audit
+   * exists to catch. Both halves land together or neither does.
    */
   const gatedOn = (capability) =>
     IDENTITY.capabilities.includes(capability) ? null : forbidden();
@@ -17024,6 +17462,41 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       if (method !== "GET" || segments.length !== 2 || second !== "config") return notFound();
       const refused = gatedOn("ac_manage_marketing");
       return refused ?? ok(MARKETING_CONFIG);
+    }
+
+    /*
+     * ── The fourth capability gate, and the strictest one in the panel ────────
+     *
+     * `ac_manage_settings` is **Super Admin alone** — measured, and recorded at
+     * lib/api/allowlist.ts:366-376: an Admin holding the other ten management
+     * capabilities is 403 on *both* verbs. That is the boundary that stops an
+     * Admin escalating, so it is the one gate here whose absence would be a
+     * claim about the shop's security model rather than about a screen.
+     *
+     * **Both verbs, and the gate is not optional tidiness.** DECISIONS.md §16.1
+     * is what happens without it: the missing `/customers` gate was found to have
+     * been *manufacturing a passing screenshot* of a broken state for two
+     * branches — a mock more permissive than the wire does not merely fail to
+     * catch a defect, it photographs the defect as if it were correct.
+     *
+     * The shape is checked before the capability, the way `/marketing/config`
+     * does it and unlike `/orders`: this is **one route with two methods**, so
+     * `POST /settings` and `/settings/anything` never reach a
+     * `permission_callback` on the wire either — WordPress answers
+     * `rest_no_route` for a path/verb pair it has no handler for, before
+     * permissions run at all. A 403 there would be the harness claiming a route
+     * exists that does not.
+     */
+    case "settings": {
+      if (segments.length !== 1) return notFound();
+      if (method !== "GET" && method !== "PATCH") return notFound();
+
+      const refused = gatedOn("ac_manage_settings");
+      if (refused !== null) return refused;
+
+      // No parameters at all on the read: `/settings` takes none, the way
+      // `/marketing/config` takes none, so there is nothing to validate.
+      return method === "GET" ? ok(state.settings) : patchSettings(body);
     }
 
     default:

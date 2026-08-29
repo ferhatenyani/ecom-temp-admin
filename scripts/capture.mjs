@@ -82,6 +82,22 @@
  * it is read at module load and writes no filename suffix, so capture one number
  * at a time and move the output to hold two side by side.
  *
+ * **`MOCK_SETTINGS` is the fifth, and it is `MOCK_MEDIA`'s argument on a form
+ * rather than on a grid.**
+ *
+ *     node scripts/capture.mjs /settings                       the live document
+ *     MOCK_SETTINGS=populated node scripts/capture.mjs /settings
+ *
+ * `/settings` takes no parameters — six blocks on one document, no pagination,
+ * no filter, no sort — so there is no URL that fills it, and the live document
+ * this shop has is almost entirely empty: `store.name` is the one text field
+ * set. The variant is **constructed rather than measured** and the mock's own
+ * block says so at the top; it carries the long values DESIGN.md asks every
+ * screen to survive, and a feature flag switched on with no provider behind it,
+ * which is the warning state `flagWithoutProvider()` exists for and which had no
+ * fixture anywhere in this project until 2026-08-29. Read at module load and no
+ * filename suffix, like the three above.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale
@@ -859,6 +875,70 @@ const DEFAULT_ROUTES = [
    * different from Admin, so this is the one section of the panel most staff
    * accounts can never open.
    */
+  /*
+   * ── Settings: one screen, and it had never been photographed ───────────────
+   *
+   * Not an oversight in this list, and it is the shortest version of the reason
+   * `/content`, `/marketing` and `/users` each gave: `GET/PATCH /settings` was
+   * **completely unmocked** until 2026-08-29 — `tests/mock-api.test.ts` declared
+   * the whole `settings` module `UNCOVERED` — so every request this screen makes
+   * fell to `notFound()` and a capture would have been a photograph of an error
+   * state at every width, theme and locale. The mock is the prerequisite for
+   * verifying the screen rather than a convenience, which is why it is a
+   * separate commit before it.
+   *
+   * The bare path is the whole section: six blocks on one document, no
+   * pagination, no filter, no sort and no id anywhere. There is nothing to
+   * capture by name — **but there are three states, and two of them need a
+   * switch**, because the screen takes no parameters at all. Same argument
+   * `MOCK_MEDIA=empty` makes on the library.
+   *
+   * **The default is the shop's real document, and it is very nearly empty.**
+   * `store.name` is the one text field this install has set; the other thirteen
+   * are `""`, `logo_id` is `0` and `logo` is `null`. So the ordinary capture is
+   * a form of empty inputs — which is the state every reader of *this* shop
+   * meets, and which proves nothing about a long value. It is also where
+   * `store.storefront_url` is unset, so the consequence sentence beside that
+   * field is rendered: password reset answers 503, tracking links carry no URL,
+   * the unsubscribe link points at the API's own domain.
+   *
+   *     MOCK_SETTINGS=populated node scripts/capture.mjs /settings
+   *
+   * is the second, and it carries the two things the default cannot show. The
+   * first is DESIGN.md's "long strings render" — a 69-character shop name, a
+   * 75-character URL, an 84-character registered name and an 88-character
+   * **Arabic** address, which in the French capture is the one place a direction
+   * flip and a 340px overflow compound, the way row 19's filename does on the
+   * media grid. The second is a **flag on with no provider behind it**:
+   * `yalidine: true` while `providers.shipping` stays `["manual"]`, which is
+   * what `flagWithoutProvider()` (lib/settings.ts:231) detects and what
+   * ADMIN_PANEL.md says is the only place the gap between what the environment
+   * asked for and what actually registered can show. **That fixture existed
+   * nowhere in this project before 2026-08-29** — not in the mock, not here, not
+   * in `e2e/` — so the warning it drives has never rendered. `storefront_url` is
+   * set in this variant too, so it is also the capture where the consequence
+   * sentence is correctly *absent*.
+   *
+   * ── And the forbidden state, which needs its own run ───────────────────────
+   *
+   *     MOCK_IDENTITY=no_settings node scripts/capture.mjs /settings
+   *
+   * **`reduced` is not the credential for this and neither is any other one that
+   * existed before today.** All seven held `ac_manage_settings` — each of them is
+   * the full list minus one or two entries and none of those entries was this —
+   * so a capture under `reduced` photographs the *served* screen and reports a
+   * green forbidden state that is nothing of the kind. `no_settings` was added
+   * for it, which is `no_content`, `no_customers`, `no_marketing` and `no_users`
+   * for the fifth time.
+   *
+   * The refusal is measured and recorded at lib/api/allowlist.ts:366-376: a
+   * Manager holding the other ten management capabilities is **403 on both
+   * verbs**. `ac_manage_settings` is Super Admin's alone and is the boundary
+   * that stops an Admin escalating, so the forbidden screen names Super Admin
+   * rather than the capability string, and this is the section the largest
+   * number of staff accounts can never open.
+   */
+  "/settings",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
