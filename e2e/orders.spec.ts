@@ -139,22 +139,39 @@ test.describe("the credential boundary", () => {
   test("the proxy refuses a route that is not on its allowlist", async ({ page }) => {
     await signIn(page, "fr");
 
-    // Positive control: an allowlisted route answers through the proxy.
-    const allowed = await page.request.get("/api/ac/orders?per_page=1");
-    expect(allowed.status()).toBe(200);
+    /*
+     * Positive controls: the allowlist has to be shown admitting what it should
+     * as well as refusing what it should, or removing an entry from the list
+     * below only ever weakens this test.
+     *
+     * `settings` is here because it *left* the refused list on the settings
+     * branch — `lib/api/allowlist.ts:376` has permitted `GET /settings` since
+     * long before a screen called it, so the 404 assertion had been false all
+     * along and survived only because this file needs live credentials nobody
+     * runs it with. `users` left for the same reason on the staff branch and
+     * gets no positive control of its own: `/api/ac/orders` and
+     * `/api/ac/settings` between them already prove the admitting half, and a
+     * third identical request proves nothing a second time.
+     */
+    for (const path of ["orders?per_page=1", "settings"]) {
+      const allowed = await page.request.get(`/api/ac/${path}`);
+      expect(allowed.status()).toBe(200);
+    }
 
     /*
      * A generic proxy would relay these with an admin credential attached.
      *
      * `customers` used to be in this list and is not any more — a screen calls it
      * as of the customers branch, and the allowlist grows one screen at a time.
-     * What replaces it is the storefront's half of the same subject: `/account/*`
-     * is the *shopper's* identity, authenticated by a customer token, and this
-     * panel holds a staff credential. A staff credential against `/account` is
-     * either a 401 or, worse, the staff member's own account — never the customer
-     * whose screen is open.
+     * `users` and `settings` went the same way, which is the identical
+     * maintenance one branch later. What replaces them is the storefront's half
+     * of the same subject: `/account/*` is the *shopper's* identity,
+     * authenticated by a customer token, and this panel holds a staff
+     * credential. A staff credential against `/account` is either a 401 or,
+     * worse, the staff member's own account — never the customer whose screen is
+     * open. Neither is allowlisted, and they are this assertion's real point.
      */
-    for (const path of ["users", "settings", "account", "account/orders"]) {
+    for (const path of ["account", "account/orders"]) {
       const refused = await page.request.get(`/api/ac/${path}`);
       expect(refused.status()).toBe(404);
     }

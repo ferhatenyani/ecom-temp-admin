@@ -458,15 +458,26 @@
    * sticky` inside the form's own column and knows nothing about the tab bar, the
    * safe inset or the sidebar's width, which are the three numbers below.
    *
-   * But it is **not** used only by that screen. Eight forms still on the old
-   * visual system carry it — settings, the coupon form, the user detail and the
-   * new-user form, the inventory item, the CMS page form, the homepage editor and
-   * the menu editor — plus the `scripts/shots.mjs` capture that measures one.
-   * Deleting the rule would not remove their bars, it would unstick them: each is
-   * `fixed inset-x-0` with no block-end of its own, so all eight would jump to the
-   * top of the viewport. It goes with the teardown pass at the end of the
-   * redesign run, when the last of those eight has migrated — `grep -rn save-bar`
-   * is the check.
+   * **Its condition is now met, and this class is dead — teardown deletes it.**
+   * This note used to read: "Eight forms still on the old visual system carry it
+   * — settings, the coupon form, the user detail and the new-user form, the
+   * inventory item, the CMS page form, the homepage editor and the menu editor",
+   * with the reason for keeping it being that each is `fixed inset-x-0` with no
+   * block-end of its own, so deleting the rule would not remove their bars but
+   * **unstick** them, jumping all eight to the top of the viewport.
+   *
+   * Every one of those eight has since migrated to `SaveBar`, settings last, on
+   * the settings branch. The check the note itself named is the proof:
+   * `grep -rn save-bar` matches only this rule, `Form.tsx`'s prose about it, and
+   * the `data-testid="save-bar"` the *new* primitive carries — which is a test
+   * handle on the sticky bar, not this class. No source file applies it.
+   *
+   * It is left for the teardown pass rather than removed here because that pass
+   * owns the retired layer wholesale, and because a rule with no consumer breaks
+   * nothing while it waits. The count is corrected rather than the sentence
+   * quietly dropped: a note that reads like a property of the system and is a
+   * stale observation is the defect DECISIONS.md legislates against everywhere
+   * else, and this one had a number in it.
    */
   .save-bar {
     inset-block-end: calc(3.25rem + env(safe-area-inset-bottom, 0px));

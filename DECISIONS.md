@@ -31,7 +31,7 @@ left looking like an oversight.
 [x] 14. Marketing — campaigns, composer, segments, config, templates
 [x] 15. Notifications — list + detail
 [x] 16. Staff — list, detail, new
-[ ] 17. Settings
+[x] 17. Settings
 [ ] 18. Transfer
 [ ] 19. Audit
 [ ] 20. Login + not-found
@@ -39,7 +39,7 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **22
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **20
 files left**, down from 31 after the notifications branch. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
@@ -2587,6 +2587,133 @@ test: §3.3 removes a control that *cannot* act, not one that is waiting on inpu
 
 ---
 
+## 18. Settings — six blocks, three kinds of read-only, one save
+
+Checklist item **17**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **`PageBody width="form"` (640), six `Card`s, one `SaveBar` when dirty.** §2.3's
+  table and `PageBody`'s own docblock both name settings for this width. `Card`
+  and not `Form.tsx`'s `Section`, which is §7's rule: `Section` is sized for
+  inside an overlay, and `Card` is the box model `FormSkeleton` is measured
+  against. No back link (a top-level nav route, not a detail) and no primary
+  action — there is nothing here to create or delete.
+- **One save, because the audit trail is what it costs.** `changedBlocks()` sends
+  only what moved: `settings.updated` records `{blocks, fields}` and nothing else,
+  so a save posting the whole document would record every field as changed on
+  every save. §3.4's stepped-form amendment does not apply — this is one screen of
+  independent fields, which is the shape the sticky bar was legislated for.
+- **Three kinds of read-only, and they are not the same kind.** A refused *block*
+  (`features`, `providers`) is a **report** — `Card` + `DataList` + `Badge` — not a
+  disabled form, because a switch that cannot be switched is a control and these
+  are not controls. A refused *key inside a writable block* (`locale`, `currency`,
+  `currency_symbol`, `logo_id`) stays a `ReadOnlyField` **in the block it belongs
+  to**: `currency` is a fact about the store and belongs beside the store's name.
+  `logo_id` stays off — it needs a picker behind `ac_manage_content`, and
+  `lib/settings.ts:71-80` records that with its reason.
+- **The storefront warning moved onto the card that needs it.** It was a
+  `.tone-warning` box at the foot of the page, four cards below the field it is
+  about; it is a `Notice` directly under `storefront_url` now. §11's dashboard
+  lesson, and it still renders only while the field is empty.
+- **Nothing sorts, nothing filters, and there is no `aria-sort` anywhere** —
+  measured 0 in the browser. The screen takes no parameters at all, which is why
+  it ships **one empty half** per §3.7-2 as amended on media. The trap is that the
+  live document *looks* empty: thirteen of fourteen text fields are `""` on this
+  install, and that is an empty **form**, not an empty **state**.
+- Omitted: `MediaPicker`, `ConfirmDialog` (nothing here is destructive), any poll,
+  and a refresh control — see below.
+
+**The brief said no stale marker and the build agent was right to refuse it.**
+§3.7-5's exemption is for "a Server Component with **no writes**, nothing polling,
+and no refresh control", and this screen writes. So the marker applies and the
+half of the rule that does the real work has something to disable: `SaveBar`
+takes `blockedReason` and the save goes off with the same sentence the marker
+gives. Driven offline in Chromium: marker present, save disabled,
+`title="Les modifications nécessitent une connexion."` What the screen
+deliberately does **not** have is a **refresh control**, and that is an argument
+rather than an omission — a refresh on a form with unsaved edits either discards
+them or races them, and there is no third behaviour a person would predict. The
+retry lives on the error state, where there is no draft to lose. That is the
+fourth time this run an agent has corrected a fixed decision and been right.
+
+**`page.tsx` was discarding the refusal — §11's dashboard defect, one screen
+over.** The read ended in `.catch(() => null)` for any `ApiError`, so a 403 the
+capability check had not predicted rendered *"Les réglages n'ont pas pu être
+lus."* — an error state where the forbidden state belongs, with no retry and no
+capability named. Status decides the state now, the API's sentence travels to
+`ErrorState.detail`, and the retry is `router.refresh()`. The gate above is for
+rendering; the fetch is the authority, and its own docblock had said so all along.
+
+**`ErrorSummary` is wired, which is coupons §7's defect #1 not recurring.** The
+API keys two levels and the dot is its own: `block.key` has a control on screen
+and is a **link**; a bare `block` has no field to send anybody to and is listed as
+**text**, which is §3.4's own orphan rule. It walks `details.fields` itself rather
+than asking about the keys this form knows — a 400 names every bad field including
+ones the form does not render, and a summary built from the form's own key list
+would drop exactly those. Driven: a bad URL renders the link, `aria-invalid` on
+the field, the inline message, and clicking the link moves focus to the control.
+
+**`FormSkeleton` learned four field shapes, and the number is why.** It drew *n*
+copies of one control, so a card of textareas and read-only rows was measured
+**294px short** — a quarter of the first card, settling on every visit, from the
+component §3.6 exists to prevent. `field`/`hinted`/`area`/`read` measure
+60/84/104/70px, and `CardSkeleton`/`FormSkeleton` gained `described` because
+`Card.description` had no placeholder at all. Re-measured in Chromium against the
+real screen with the read stalled: skeleton **740/550/504/386/448/226** against
+real **926/550/504/386/457/226** — four of six exact, 9px on `features` (a
+`Badge` row against a text row), and 186px on the store card, which is the
+*conditional* storefront `Notice` a placeholder drawn before the document arrives
+cannot know about. A number still means *n* plain fields, so every existing caller
+is unchanged.
+
+**i18n**: **2 035 keys in each file, exact parity, zero orphans.** The `settings`
+namespace 66 → 63, and all three removals lost their last caller: `save` and
+`revert` were **shadowing `ui.form.save` and `ui.form.discard`** — byte-identical
+duplicates of the primitive's own words, which is staff §17's finding one branch
+later — and `auditNote` was a stray paragraph at the foot of the page saying what
+`blockNote.legal` already says one card up, about the very block it sits on. The
+namespace has exactly two callers and shares nothing, so nothing else could break.
+
+**`e2e/admin.spec.ts`: 9 tests before, 9 after, and the file was not touched —
+which is a measurement rather than a shrug.** Every selector was resolved against
+the redesigned DOM in Chromium: all six block headings as `role="heading"`, the
+three prose assertions, `getByLabel("Téléphone")`, the `المتجر` heading inside
+`<main>` (`PageHeader`'s title is outside it, the card's is not), `dir="rtl"`, and
+no `settings.[a-z]` leak. `Enregistrer` is correctly absent at rest — the bar is
+dirty-gated, and both tests fill a field before clicking it, exactly as the
+retired screen also required.
+
+**`e2e/orders.spec.ts:157` was asserting a 404 on a route the allowlist permits.**
+It looped over `["users","settings","account","account/orders"]` expecting the
+proxy to refuse all four; `allowlist.ts:376` has allowed `GET /settings` since
+before any screen called it, and `users` left the same way on the staff branch.
+Its own comment records `customers` being removed for exactly this reason one
+branch earlier, so this is the identical maintenance twice deferred. Both moved
+out, **and a positive control on `/api/ac/settings` moved in** — removing entries
+from a refusal list only ever weakens the test unless the admitting half is proved
+too. `account/*` stays: it is genuinely not allowlisted and it is the assertion's
+real point. It survived because this file needs live credentials nobody runs it
+with.
+
+**Verified**: `tsc` silent · lint 0 errors, 9 warnings · `test:design` 14/14,
+floor 318 → **319** against 321 scanned · `test:unit` 936/936 · clean
+`rm -rf .next && npm run build` · **48 captures clean** — 12 on the live document,
+12 on `MOCK_SETTINGS=populated`, 12 on `MOCK_IDENTITY=no_settings`, and 12 on
+`/coupons`, which this branch does not own but whose `FormSkeleton` it extended.
+Driven in Chromium beyond the captures: the skeleton geometry above, the save bar
+appearing only when dirty and discarding cleanly, a real save rebinding to the
+response, the refusal summary and its focus move, the offline marker with the save
+disabled, **0px overflow at 340 in Arabic**, and zero `aria-sort`.
+
+**The forbidden state had never been photographable.** See the harness commit: no
+identity in the mock lacked `ac_manage_settings`, so a capture under `reduced`
+would have produced a green screenshot of a screen that is not the forbidden one.
+`no_settings` exists now, and the capture shows both halves — the forbidden card
+naming the capability, **and `Réglages` correctly absent from the sidebar**, which
+is the §16.1 nav check passing rather than being assumed.
+
+---
+
 ## Carried forward — teardown owns these
 
 - ~~**Seventeen shipped screens still blank their rows on a failed *refetch*, and
@@ -2619,6 +2746,15 @@ test: §3.3 removes a control that *cannot* act, not one that is waiting on inpu
   a number arriving in prose and being treated as measured. Two in one branch is
   a pattern rather than a slip, and the cheap defence is the one above — carry the
   command, not the count.
+- **`store.logo_id` is writable and the panel offers no control for it**, which is
+  the one capability on this screen left unspent. It needs `MediaPicker`, which is
+  `ac_manage_content` — a Super Admin holding `ac_manage_settings` has it today,
+  but it would be the only control on the screen able to 403 on its own.
+  `lib/settings.ts:71-80` carries the reasoning and the read-only row shows what is
+  set. **Its populated state has no fixture anywhere**: `logo` is `z.unknown()` in
+  the schema because the resolved-attachment shape was never captured, so both the
+  mock's default and its `populated` variant answer `logo_id: 0`/`logo: null`.
+  Whoever ships the picker owes that capture first.
 - **`?date_from=2026-13-45` is a 200 with 0 rows and a database error nobody can
   see.** It passes `NotificationController`'s `^\d{4}-\d{2}-\d{2}$`, reaches
   MySQL as `'2026-13-45 00:00:00'`, and logs `Incorrect DATETIME value` twice —
@@ -2728,9 +2864,22 @@ test: §3.3 removes a control that *cannot* act, not one that is waiting on inpu
   Public props unchanged across **33 importers**; none was touched. The lesson is
   the ledger's own: a carried entry describes what somebody noticed, not what is
   wrong, and it goes stale in the direction of *understating*.
-- **`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
+- ~~**`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
   they are `fixed` with no block-end, so deleting the rule would unstick their
-  bars rather than remove them.
+  bars rather than remove them.~~ **Its condition is met as of the settings
+  branch: the class is dead and teardown may simply delete it.** The rule's own
+  comment named **eight** forms, not six — settings, the coupon form, the user
+  detail and the new-user form, the inventory item, the CMS page form, the
+  homepage editor and the menu editor — and settings was the last of them.
+  `grep -rn save-bar` now matches only the rule, `Form.tsx`'s prose about it, and
+  the `data-testid="save-bar"` the **new** primitive carries, which is a test
+  handle on the sticky bar rather than this class. The comment in `globals.css`
+  has been corrected in place rather than left standing at eight.
+
+  **Two entries disagreed about the count and neither had been re-run**, which is
+  the capture-count and refetch-count failure a third time: the number lived in
+  prose on both sides. The check was one command and it was written down in the
+  rule itself.
 - **`RowSkeleton.tsx` stays** — ~~**seven**~~ ~~**two**~~ **one** unmigrated screen
   imports it, `audit/AuditList.tsx`, which is checklist item 19. The count had been stale by
   four before the notifications branch removed the fifth, and nobody had recounted

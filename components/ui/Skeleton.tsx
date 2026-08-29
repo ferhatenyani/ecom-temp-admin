@@ -139,6 +139,44 @@ export function RecordListSkeleton({
 }
 
 /**
+ * A card's heading, and the description line or two under it.
+ *
+ * **`Card.description` had no placeholder at all**, and every card that carries
+ * one therefore drew a skeleton shorter than the card that replaced it: the
+ * heading is a 1.5rem line box (`h-6`) and the description is `mt-0.5` above a
+ * `--text-label` paragraph at 1.125rem a line (`h-4.5`), so a two-line
+ * description is 38px the placeholder did not reserve. Six described cards on
+ * one form is 228px of settling, which is §3.6's "layout shift with extra steps"
+ * arriving in the thing written to prevent it.
+ *
+ * `described` is a **line count** rather than a boolean because the real
+ * paragraph's height is its own: the count is taken at the column's full width,
+ * which is where the screen is read, and a narrower viewport wraps further. The
+ * lines touch rather than being gapped — that is what a paragraph does — and the
+ * last is short, which is what makes a stack of grey blocks read as text.
+ *
+ * Shared by `CardSkeleton` and `FormSkeleton` so the two cannot disagree about a
+ * geometry they both take from `Card`.
+ */
+function TitleBlock({ described }: { described: number }) {
+  return (
+    <div className="px-4 sm:px-5">
+      <Skeleton className="h-6 w-32" />
+      {described > 0 ? (
+        <div className="mt-0.5">
+          {Array.from({ length: described }, (_, i) => (
+            <Skeleton
+              key={i}
+              className={`h-4.5 ${i === described - 1 ? "w-2/3" : "w-full"}`}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * A card of label/value rows — the shape a detail screen's aside is made of, and
  * the one §3.6 listed and nobody had built.
  *
@@ -158,21 +196,20 @@ export function CardSkeleton({
   label,
   /** A card with no heading — a totals block, a bare list. */
   titled = true,
+  /** Lines of `Card.description` under the heading. See `TitleBlock`. */
+  described = 0,
 }: {
   rows?: number;
   label: string;
   titled?: boolean;
+  described?: number;
 }) {
   return (
     <SkeletonRegion
       label={label}
       className="ui-card flex flex-col gap-3 overflow-hidden py-4 sm:py-5"
     >
-      {titled ? (
-        <div className="px-4 sm:px-5">
-          <Skeleton className="h-6 w-32" />
-        </div>
-      ) : null}
+      {titled ? <TitleBlock described={described} /> : null}
       <div className="px-4 sm:px-5">
         {Array.from({ length: rows }, (_, i) => (
           <div
@@ -264,31 +301,74 @@ export function StatSkeleton({
  * `titled` is the caller's because a card without a heading exists (a bare list),
  * and `fields` is because the real cards differ — identity has four controls and
  * inventory has three, and a placeholder that renders four for both shifts once.
+ *
+ * ## `fields` also takes a list of shapes, added on the settings branch
+ *
+ * **A form card is not n copies of one control**, and a count could only ever
+ * draw the plainest of them. Driven in Chromium against the real screen at 1440,
+ * `Form.tsx`'s four shapes measure 60 / 84 / 104 / 70 px, and a `TextField`'s 60
+ * standing in for all of them left the settings form's first card **294px short**
+ * of what replaced it — a quarter of the card, and every card below it settling
+ * by that much on every visit. That is §3.6's own "layout shift with extra steps"
+ * arriving in the thing written to prevent it, which is exactly what `Stat`
+ * caught this component doing on the dashboard branch.
+ *
+ * The four are named after the components they stand in for and every number
+ * below is measured rather than chosen:
+ *
+ *   field    label + control                      18 + 6 + 36  = 60
+ *   hinted   …and a help line under it            + 6 + 18     = 84
+ *   area     `TextArea rows={3}`                  18 + 6 + 80  = 104
+ *   read     `ReadOnlyField` — label, value,      18 + 6 + 22
+ *            one line of `reason`                 + 6 + 18     = 70
+ *
+ * `h-20` for the textarea rather than `.ui-field`: three rows of `--text-body` at
+ * 1.375rem inside `py-1.5` and a border is 80px, which is already above the
+ * 44px `.ui-field` floor, so the coarse-pointer growth the plain control needs
+ * does not apply to this one. `h-5.5` is `--text-body`'s own line box, which is
+ * what a read-only value occupies.
+ *
+ * A number still means *n plain fields*, so every existing caller is unchanged.
+ * A `read` whose reason wraps to two lines is 18px taller than this draws; that
+ * is the residual, and it is smaller than the shape error it replaces.
  */
+export type FieldShape = "field" | "hinted" | "area" | "read";
+
 export function FormSkeleton({
   fields = 4,
   label,
   titled = true,
+  /** Lines of `Card.description` under the heading. See `TitleBlock`. */
+  described = 0,
 }: {
-  fields?: number;
+  fields?: number | readonly FieldShape[];
   label: string;
   titled?: boolean;
+  described?: number;
 }) {
+  const shapes: readonly FieldShape[] =
+    typeof fields === "number" ? Array.from({ length: fields }, () => "field") : fields;
+
   return (
     <SkeletonRegion
       label={label}
       className="ui-card flex flex-col gap-3 overflow-hidden py-4 sm:py-5"
     >
-      {titled ? (
-        <div className="px-4 sm:px-5">
-          <Skeleton className="h-6 w-32" />
-        </div>
-      ) : null}
+      {titled ? <TitleBlock described={described} /> : null}
       <div className="flex flex-col gap-4 px-4 sm:px-5">
-        {Array.from({ length: fields }, (_, i) => (
+        {shapes.map((shape, i) => (
           <div key={i} className="flex flex-col gap-1.5">
             <Skeleton className={`h-4.5 ${CELL_WIDTHS[i % CELL_WIDTHS.length]}`} />
-            <Skeleton className="ui-field w-full rounded-ui-md" />
+            {shape === "area" ? (
+              <Skeleton className="h-20 w-full rounded-ui-md" />
+            ) : shape === "read" ? (
+              <Skeleton className="h-5.5 w-40" />
+            ) : (
+              <Skeleton className="ui-field w-full rounded-ui-md" />
+            )}
+            {shape === "hinted" || shape === "read" ? (
+              <Skeleton className={`h-4.5 ${CELL_WIDTHS[(i + 2) % CELL_WIDTHS.length]}`} />
+            ) : null}
           </div>
         ))}
       </div>

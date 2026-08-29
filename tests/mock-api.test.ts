@@ -242,6 +242,22 @@ import {
   formatBytes,
 } from "@/lib/media";
 import {
+  settings as settingsSchema,
+  settingsEmptyPatchDetails,
+  settingsFieldDetails,
+  settingsWriteResponse,
+} from "@/lib/api/schemas/settings";
+import {
+  FLAGS_WITHOUT_PROVIDERS,
+  READ_ONLY_STORE_KEYS,
+  WRITABLE_BLOCKS,
+  WRITABLE_KEYS,
+  blockErrorFor,
+  fieldErrorFor,
+  flagWithoutProvider,
+  storefrontConsequences,
+} from "@/lib/settings";
+import {
   CONTENT_STATUSES,
   DEFAULT_STATUS_FILTER,
   MAX_MENU_DEPTH,
@@ -9866,6 +9882,536 @@ describe("MOCK_IDENTITY=no_users", () => {
 });
 
 /**
+ * ── `/settings`, and the one refusal in this file whose `fields` is an array ──
+ *
+ * The document is six blocks, four of which take a write, and the whole of it is
+ * one route with two verbs — so there is no listing, no paging and no sort here,
+ * and every assertion below is about a *shape* rather than about a sequence.
+ *
+ * The eleven captured payloads in `tests/fixtures-admin.json` are the standard
+ * these are written to. The coupons branch shipped a screen built to a
+ * `"Read-only."` refusal the API never sends; this route carries more prose than
+ * any other in the surface — two whole paragraphs of it — so a mock that wrote
+ * its own wording here would be the same defect several times over.
+ */
+describe("GET /settings", () => {
+  it("serves the live document, which is very nearly empty", () => {
+    const { data } = parse(settingsSchema, get("/settings"));
+
+    // Six blocks, and the two reports are not optional decoration: `providers`
+    // is the only place the flag-versus-registry gap can show at all.
+    expect(Object.keys(data)).toEqual([
+      "store",
+      "contact",
+      "legal",
+      "social",
+      "features",
+      "providers",
+    ]);
+
+    /*
+     * **`store.name` is the one text field this install has set.** Worth
+     * asserting rather than assuming: the whole screen is a form of empty
+     * inputs, which is a state a reader will actually meet and which a fixture
+     * carrying tidy sample values everywhere would hide.
+     */
+    expect(data.store.name).toBe("Algerian Commerce");
+    const emptied = [
+      data.store.description,
+      data.store.storefront_url,
+      ...Object.values(data.contact),
+      ...Object.values(data.legal),
+      ...Object.values(data.social),
+    ];
+    expect(emptied.every((value) => value === "")).toBe(true);
+
+    // `0` and `null`, never absent — the id-and-resolved-object pairing a banner
+    // has, and the reason the panel renders the id rather than a picker.
+    expect(data.store.logo_id).toBe(0);
+    expect(data.store.logo).toBeNull();
+
+    // The three read-only keys sitting *inside* a writable block, all published.
+    for (const key of READ_ONLY_STORE_KEYS) expect(data.store[key]).not.toBe("");
+    expect(data.store.currency).toBe("DZD");
+
+    /*
+     * **The consequence, and it is a fact rather than a sentence somebody
+     * typed.** An empty `storefront_url` is why password reset answers 503
+     * `storefront_url_not_set`, tracking links carry no URL and the unsubscribe
+     * link points at the API's own domain. The screen generates its warning from
+     * this, so the harness has to be in the state that produces one.
+     */
+    expect(storefrontConsequences(data.store.storefront_url)).toBe(true);
+  });
+
+  /**
+   * **The positive control first, and the gap it is a control for does not exist
+   * on this document.** ADMIN_PANEL.md says so in as many words and asks for it
+   * to be stated rather than implied: `chargily` and `cod` are flagged and both
+   * registered, `yalidine` and `zr_express` are off and both absent. So every
+   * flag here agrees with the registry, and a screen that rendered a warning
+   * against this fixture would be rendering it against nothing.
+   */
+  it("agrees with its own registry on every flag, which is the shop's real state", () => {
+    const { data } = parse(settingsSchema, get("/settings"));
+
+    expect(data.features.chargily).toBe(true);
+    expect(data.providers.payment).toContain("chargily");
+    expect(data.features.yalidine).toBe(false);
+    expect(data.providers.shipping).not.toContain("yalidine");
+
+    const gaps = Object.entries(data.features)
+      .filter(([flag]) => !FLAGS_WITHOUT_PROVIDERS.includes(flag as never))
+      .filter(([flag, on]) => flagWithoutProvider(flag, on as boolean, data.providers));
+    expect(gaps).toEqual([]);
+  });
+
+  it("takes no parameters at all, the way /marketing/config takes none", () => {
+    const bare = get("/settings");
+    expect(get("/settings", "per_page=1&zzz=1&orderby=name")).toEqual(bare);
+  });
+
+  /*
+   * **One route, two verbs, and nothing else.** `POST` and `DELETE` are
+   * `rest_no_route` rather than 405 or 403, which is what WordPress answers for
+   * a path/verb pair it has no handler for — the permission callback never runs,
+   * so a 403 here would be the harness claiming a route exists that does not.
+   */
+  it("has no other verb and no sub-resource", () => {
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      expect(write(method, "/settings", {}).status, method).toBe(404);
+    }
+    expect(get("/settings/store").status).toBe(404);
+    expect(get("/settings/features").status).toBe(404);
+  });
+});
+
+describe("PATCH /settings", () => {
+  /**
+   * **The whole document comes back, not the block that was written**, which is
+   * why `settingsWriteResponse` *is* `settings` and why the form rebinds to the
+   * response rather than to its own draft. Verified rather than assumed — the
+   * captured `settingsWritten` names only `contact.phone` on the way in and
+   * carries all six blocks on the way out.
+   */
+  it("answers with the whole document and writes only what was named", () => {
+    const response = write("PATCH", "/settings", { contact: { phone: "+213 555 01 02 03" } });
+    const { data } = parse(settingsWriteResponse, response);
+
+    expect(Object.keys(data)).toEqual([
+      "store",
+      "contact",
+      "legal",
+      "social",
+      "features",
+      "providers",
+    ]);
+    expect(data.contact.phone).toBe("+213 555 01 02 03");
+
+    // Only what it named. The other four keys of the block it touched are still
+    // empty, which is what makes `changedBlocks()` sending a diff safe.
+    expect(data.contact.email).toBe("");
+    expect(data.contact.address).toBe("");
+    expect(data.store.name).toBe("Algerian Commerce");
+
+    // And the write is real: the next read sees it.
+    expect(parse(settingsSchema, get("/settings")).data.contact.phone).toBe(
+      "+213 555 01 02 03",
+    );
+  });
+
+  it('clears a field with "", which is the panel\'s only way to empty one', () => {
+    write("PATCH", "/settings", { contact: { phone: "+213 555 01 02 03" } });
+    const { data } = parse(settingsWriteResponse, write("PATCH", "/settings", {
+      contact: { phone: "" },
+    }));
+    expect(data.contact.phone).toBe("");
+  });
+
+  /**
+   * ── The empty body, and it is the important one ──────────────────────────────
+   *
+   * **`details.fields` arrives as an ARRAY on exactly this refusal** and as an
+   * object on every other one on the route. `ApiError.fields` returns `null`
+   * rather than walking the array's indices, so the caller falls through to the
+   * top-level sentence — which is the one a reader needs. Rendering the array
+   * would put `store,contact,legal,social` on screen as though it were an
+   * explanation.
+   *
+   * The panel never sends this request: `changedBlocks()` returns nothing when
+   * nothing is dirty and the save bar does not appear. It is pinned because it
+   * is the shape a *future* caller meets, and because it is the only place in
+   * this whole mock where `details.fields` is not a map.
+   */
+  it("refuses an empty body with an array where every other refusal has an object", () => {
+    const response = write("PATCH", "/settings", {});
+    expect(response.status).toBe(400);
+
+    const error = apiError(response);
+    expect(error.code).toBe("invalid_request");
+    expect(error.apiMessage).toBe("No supported fields were provided.");
+
+    // The array, parsed by the schema that exists to pin it.
+    const details = settingsEmptyPatchDetails.parse(error.details);
+    expect(details.fields).toEqual(["store", "contact", "legal", "social"]);
+    expect(details.fields).toEqual([...WRITABLE_BLOCKS]);
+
+    // And the getter every form in this panel binds to refuses to render it.
+    expect(error.fields).toBeNull();
+    expect(blockErrorFor(error.fields, "store")).toBeUndefined();
+
+    /*
+     * The two halves of the split, side by side — the point of this assertion is
+     * that one route answers both shapes and a caller cannot assume either.
+     */
+    const other = apiError(write("PATCH", "/settings", { store: { zzz: "1" } }));
+    expect(Array.isArray(settingsFieldDetails.parse(other.details).fields)).toBe(false);
+    expect(other.fields).not.toBeNull();
+    expect(other.apiMessage).toBe("The settings are invalid.");
+  });
+
+  /**
+   * The refusals that key `fields` by the **block**, each with its captured
+   * sentence. Two of them are the read-only blocks answering by name with the
+   * reason — the sentences the screen renders as reports rather than as disabled
+   * switches, so the wording is the entire payload and a paraphrase is a defect.
+   */
+  it("refuses each block by name, with the sentence the shop sends", () => {
+    const blockError = (body: unknown, key: string) => {
+      const error = apiError(write("PATCH", "/settings", body));
+      expect(error.code).toBe("invalid_request");
+      expect(error.apiMessage).toBe("The settings are invalid.");
+      const { fields } = settingsFieldDetails.parse(error.details);
+      expect(Object.keys(fields)).toEqual([key]);
+      // Read through the panel's own two-level accessor, not off the raw map.
+      expect(blockErrorFor(error.fields, key)).toBe(fields[key]);
+      return fields[key];
+    };
+
+    expect(blockError({ nonsense: { a: 1 } }, "nonsense")).toBe(
+      "Unknown block. Known: store, contact, legal, social.",
+    );
+    expect(blockError({ store: { zzz: "1" } }, "store")).toBe(
+      "Unknown keys: zzz. Known: name, description, storefront_url, logo_id.",
+    );
+    expect(blockError({ features: { cod: false } }, "features")).toBe(
+      "Feature flags are environment variables read once at bootstrap (ENABLE_COD, ENABLE_CHARGILY, …). Set them in .env and restart, or the registry and this document disagree.",
+    );
+    expect(blockError({ providers: { payment: [] } }, "providers")).toBe(
+      "Read-only: this reports which providers actually registered, which follows from their credentials and flags.",
+    );
+  });
+
+  /**
+   * **A writable block is not wholly writable, and this is the assertion that
+   * says so.** `GET` publishes eight keys under `store` and `PATCH` accepts
+   * four; `locale`, `currency`, `currency_symbol` and `logo` are refused from
+   * inside a block ADMIN_PANEL.md calls writable, with the same "Unknown keys:"
+   * sentence an invented name gets. A mock that accepted every key it published
+   * would be more permissive than the wire on the one route where a form is most
+   * likely to send its own read straight back.
+   */
+  it("refuses the four read-only keys inside store exactly as it refuses an invented one", () => {
+    const { data } = parse(settingsSchema, get("/settings"));
+
+    for (const key of [...READ_ONLY_STORE_KEYS, "logo"]) {
+      // The key really is published, or the refusal would be about nothing.
+      expect(data.store, key).toHaveProperty(key);
+
+      const error = apiError(write("PATCH", "/settings", { store: { [key]: "x" } }));
+      const { fields } = settingsFieldDetails.parse(error.details);
+      expect(fields.store, key).toBe(
+        `Unknown keys: ${key}. Known: name, description, storefront_url, logo_id.`,
+      );
+    }
+
+    // And the four the block does take are accepted — the other half of the
+    // split, without which this test would pass on a route that refuses
+    // everything.
+    for (const key of WRITABLE_KEYS.store) {
+      const value = key === "logo_id" ? 0 : "";
+      expect(write("PATCH", "/settings", { store: { [key]: value } }).status, key).toBe(200);
+    }
+  });
+
+  /** Every block names the keys it takes, and `WRITABLE_KEYS` is those lists. */
+  it("names the same key lists lib/settings.ts derives from the refusal", () => {
+    for (const block of WRITABLE_BLOCKS) {
+      const error = apiError(write("PATCH", "/settings", { [block]: { zzz: 1 } }));
+      const { fields } = settingsFieldDetails.parse(error.details);
+      expect(fields[block]).toBe(
+        `Unknown keys: zzz. Known: ${WRITABLE_KEYS[block].join(", ")}.`,
+      );
+    }
+  });
+
+  /**
+   * The two refusals keyed `block.key` rather than by the block — the second
+   * level of the dot notation, and the dot is the API's rather than
+   * `next-intl`'s. A form that read only one of the two levels would render
+   * neither.
+   */
+  it("keys a bad value by block.key, where a bad block is keyed by the block", () => {
+    const url = apiError(
+      write("PATCH", "/settings", { store: { storefront_url: "boutique.dz" } }),
+    );
+    expect(settingsFieldDetails.parse(url.details).fields).toEqual({
+      "store.storefront_url": "Must be a URL, including https://.",
+    });
+    expect(fieldErrorFor(url.fields, "store", "storefront_url")).toBe(
+      "Must be a URL, including https://.",
+    );
+    // Keyed at the leaf, so the block-level accessor finds nothing — which is
+    // exactly why the screen reads both.
+    expect(blockErrorFor(url.fields, "store")).toBeUndefined();
+
+    const email = apiError(write("PATCH", "/settings", { contact: { email: "nope" } }));
+    expect(settingsFieldDetails.parse(email.details).fields).toEqual({
+      "contact.email": "Must be an email address.",
+    });
+    expect(fieldErrorFor(email.fields, "contact", "email")).toBe("Must be an email address.");
+
+    // `""` clears either field and is not a refusal — `changedBlocks()` sends it
+    // for a field a reader emptied, and a mock that refused it would break the
+    // panel's only way to clear one.
+    expect(write("PATCH", "/settings", { store: { storefront_url: "" } }).status).toBe(200);
+    expect(write("PATCH", "/settings", { contact: { email: "" } }).status).toBe(200);
+    expect(write("PATCH", "/settings", { store: { storefront_url: "https://a.dz" } }).status).toBe(
+      200,
+    );
+  });
+
+  /**
+   * One response names **every** bad field, the standard the staff writes set: a
+   * form with three mistakes takes one round trip rather than three. The order
+   * they arrive in was not measured and nothing reads it, because `fields` is a
+   * map.
+   */
+  it("names every bad field in one answer", () => {
+    const error = apiError(
+      write("PATCH", "/settings", {
+        nonsense: {},
+        features: { cod: false },
+        contact: { email: "nope" },
+      }),
+    );
+    expect(Object.keys(settingsFieldDetails.parse(error.details).fields).sort()).toEqual([
+      "contact.email",
+      "features",
+      "nonsense",
+    ]);
+  });
+
+  /**
+   * The written document must survive the panel's own boundary on the way back
+   * *in*, which is the failure a mock is most likely to manufacture: storing a
+   * string in `logo_id` would hand the next `GET` a body the schema types
+   * `z.number()` and refuses — a screen breaking against data the shop would
+   * never have stored. The sentence is this harness's own and the mock's block
+   * says so; the guard is not.
+   */
+  it("refuses a shape that would make its own next read unparseable", () => {
+    const error = apiError(write("PATCH", "/settings", { store: { logo_id: "5" } }));
+    expect(settingsFieldDetails.parse(error.details).fields).toEqual({
+      "store.logo_id": "Must be a whole number.",
+    });
+
+    expect(write("PATCH", "/settings", { store: { logo_id: 5 } }).status).toBe(200);
+    expect(parse(settingsSchema, get("/settings")).data.store.logo_id).toBe(5);
+  });
+});
+
+/**
+ * ── The capability, and the identity that had to be invented to reach it ─────
+ *
+ * `ac_manage_settings` is **Super Admin alone** — measured, and recorded at
+ * lib/api/allowlist.ts:366-376: a Manager holding the other ten management
+ * capabilities is 403 on both verbs. It is the boundary that stops an Admin
+ * escalating, so it is the one gate whose absence would be a claim about the
+ * shop's security model rather than about a screen.
+ *
+ * **None of the seven identities that existed before today could reach it.**
+ * Each is the full list minus one or two entries and none of those entries was
+ * this — so `MOCK_IDENTITY=reduced` is served a 200 here, and a capture taken
+ * under it would report a green forbidden state that is nothing of the kind.
+ * That is DECISIONS.md §16.1's lesson exactly: a mock more permissive than the
+ * wire does not merely fail to catch a defect, it manufactures a passing
+ * screenshot of the broken state.
+ */
+describe("MOCK_IDENTITY=no_settings", () => {
+  it("refuses both verbs with the wire's own 403, and no other identity can", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_settings");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const call = (method: string, body?: unknown) =>
+        mock.respond(method, `${mock.BASE_PATH}/settings`, new URLSearchParams(), body ?? null);
+
+      for (const [method, body] of [
+        ["GET", null],
+        ["PATCH", { contact: { phone: "+213 555 01 02 03" } }],
+      ] as const) {
+        const response = call(method, body);
+        expect(response.status, method).toBe(403);
+        expect(response.body, method).toEqual({
+          success: false,
+          // No `details` key at all — the shape `forbidden()` emits everywhere
+          // else in this file, and the captured `settingsForbidden` payload.
+          error: { code: "forbidden", message: "You are not allowed to perform this action." },
+        });
+      }
+
+      // The gate is about the credential and not about the shape: an unroutable
+      // verb is still `rest_no_route`, because the wire's permission callback
+      // never runs for one.
+      expect(call("POST", {}).status).toBe(404);
+      // And nothing else moved.
+      expect(call("GET").status).toBe(403);
+      expect(
+        mock.respond("GET", `${mock.BASE_PATH}/customers`, new URLSearchParams()).status,
+      ).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * The negative control, and it is the assertion that would have caught the
+   * brief this branch was written from: `reduced` looks like the credential for
+   * a forbidden capture and is not one. Asserted rather than assumed, for all
+   * seven, so that widening any of them later goes red here rather than in a
+   * screenshot nobody can tell is wrong.
+   */
+  it("is the only identity that reaches the refusal", async () => {
+    for (const identity of [
+      "full",
+      "reduced",
+      "support",
+      "no_content",
+      "no_customers",
+      "no_users",
+      "no_marketing",
+    ]) {
+      vi.stubEnv("MOCK_IDENTITY", identity);
+      try {
+        vi.resetModules();
+        const mock = await import("@/scripts/mock-api.mjs");
+        const response = mock.respond("GET", `${mock.BASE_PATH}/settings`, new URLSearchParams());
+        expect(response.status, identity).toBe(200);
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    }
+  });
+});
+
+/**
+ * ── `MOCK_SETTINGS`, and the state that had no fixture anywhere ──────────────
+ *
+ * The fifth harness switch, and `MOCK_MEDIA`'s argument on a form rather than on
+ * a grid: `/settings` takes no parameters at all, so a document other than the
+ * shop's own is reachable no other way. Read at module load like the four before
+ * it, so `respond()` stays pure and a capture run is one document throughout.
+ *
+ * It is **constructed rather than measured** and the mock's own block says so at
+ * the top — the treatment `MOCK_HOMEPAGE=future` gets. Every shape in it is the
+ * document's; only the values are made up, and they are made up to be long.
+ */
+describe("MOCK_SETTINGS", () => {
+  const freshSettings = async (variant: string) => {
+    vi.stubEnv("MOCK_SETTINGS", variant);
+    vi.resetModules();
+    const mock = await import("@/scripts/mock-api.mjs");
+    return unwrap(
+      settingsSchema,
+      mock.respond("GET", `${mock.BASE_PATH}/settings`, new URLSearchParams()).body,
+      200,
+    ).data;
+  };
+
+  /**
+   * **The flag on with no provider behind it, which has never rendered in this
+   * project's history.** `flagWithoutProvider()` detects exactly this,
+   * `lib/settings.ts:214` records it as reachable on the wire by setting a flag
+   * without a key, and ADMIN_PANEL.md's stated reason for rendering `providers`
+   * at all is that this is the only place the gap shows. It had no fixture in
+   * the mock, in `scripts/capture.mjs` or in `e2e/`, so the warning it drives
+   * was a code path nothing could reach.
+   */
+  it("puts one flag on with no provider behind it, and only one", async () => {
+    try {
+      const data = await freshSettings("populated");
+
+      expect(data.features.yalidine).toBe(true);
+      expect(data.providers.shipping).toEqual(["manual"]);
+      expect(flagWithoutProvider("yalidine", true, data.providers)).toBe(true);
+
+      const gaps = Object.entries(data.features)
+        .filter(([flag]) => !FLAGS_WITHOUT_PROVIDERS.includes(flag as never))
+        .filter(([flag, on]) => flagWithoutProvider(flag, on as boolean, data.providers))
+        .map(([flag]) => flag);
+      expect(gaps).toEqual(["yalidine"]);
+
+      // The flags that gate nothing are still all off, so none of them can be
+      // mistaken for the gap this fixture exists to produce.
+      for (const flag of FLAGS_WITHOUT_PROVIDERS) expect(data.features[flag], flag).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * The long values, which the default cannot exercise at all: a form of empty
+   * inputs proves nothing about DESIGN.md's "long strings render". Counted in
+   * **code points** rather than UTF-16 units, which is the difference the Arabic
+   * address turns on.
+   */
+  it("carries long values in the four places the screen can overflow", async () => {
+    try {
+      const data = await freshSettings("populated");
+      const length = (value: string) => [...value].length;
+
+      expect(length(data.store.name)).toBeGreaterThan(60);
+      expect(length(data.store.storefront_url)).toBeGreaterThan(60);
+      expect(length(data.legal.registered_name)).toBeGreaterThan(60);
+
+      // Arabic, in a document the French locale also renders — the one place on
+      // this screen an overflow and a direction flip compound.
+      expect(length(data.contact.address)).toBeGreaterThan(60);
+      expect(/[؀-ۿ]/.test(data.contact.address)).toBe(true);
+
+      // And the third state the default cannot show: with the URL set, the
+      // consequence sentence is *absent* rather than rendered.
+      expect(storefrontConsequences(data.store.storefront_url)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("is the shop's own document by default, and throws on a name it has not got", async () => {
+    try {
+      expect((await freshSettings("empty")).store.name).toBe("Algerian Commerce");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+
+    vi.stubEnv("MOCK_SETTINGS", "populatd");
+    try {
+      vi.resetModules();
+      await expect(import("@/scripts/mock-api.mjs")).rejects.toThrow(/MOCK_SETTINGS/);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
+/**
  * The mock grows one collection per redesign branch, and the promise this suite
  * makes — every schema the mock serves is validated against it — only stays true
  * if a new schema file cannot arrive unnoticed. So the directory is enumerated
@@ -10005,11 +10551,31 @@ const COVERED = [
    * What the module cannot express is named below rather than left implied.
    */
   "staff",
+  /*
+   * **Every schema in the module is exercised**, the standard `analytics`,
+   * `cms`, `campaign` and `staff` set — and this one had to meet it from a
+   * standing start too, because `/settings` was `notFound()` until 2026-08-29
+   * and this entry read "/settings is not mocked yet".
+   *
+   * `settings` on the read, where the block schemas — `storeSettings`,
+   * `contactSettings`, `legalSettings`, `socialSettings`, `featureFlags` and
+   * `providerRegistries` — are all nested inside it and parse with it;
+   * `settingsWriteResponse` on the `PATCH`, which is the assertion that the
+   * whole document comes back rather than the block that was written;
+   * `settingsEmptyPatchDetails` on the empty body, the **only** place in this
+   * mock where `details.fields` is an array; and `settingsFieldDetails` on the
+   * other eight refusals, where it is a map keyed by block or by `block.key`.
+   *
+   * The array-versus-object split is the reason two `details` schemas exist for
+   * one route, and both arms are asserted against each other in the same test
+   * rather than separately — a caller cannot assume either shape, so neither can
+   * this suite.
+   */
+  "settings",
 ];
 
 const UNCOVERED: Record<string, string> = {
   audit: "/audit is not mocked yet",
-  settings: "/settings is not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",
 };
 
