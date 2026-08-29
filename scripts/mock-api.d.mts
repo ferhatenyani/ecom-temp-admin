@@ -40,12 +40,37 @@ export type MockResponse = {
  * validates it the way the API does, and a hand-written request type here would
  * be a second copy of that contract.
  */
+/**
+ * `headers` are the request's, lower-cased the way `node:http` delivers them,
+ * and **only `authorization` is ever read** — by `GET /auth/me` and by nothing
+ * else. It is optional and defaults to none, which is what keeps every call in
+ * `tests/mock-api.test.ts` answering what it answered before the parameter
+ * existed: a request presenting no credential gets the identity, not a 401.
+ *
+ * Typed as an index signature rather than as `IncomingHttpHeaders` so a test can
+ * hand it a hand-built `{ authorization: "Basic …" }` without importing
+ * `node:http`. The mock reads one key and tolerates any shape for it.
+ */
 export declare function respond(
   method: string,
   pathname: string,
   searchParams?: URLSearchParams,
   body?: unknown,
+  headers?: Record<string, string | string[] | undefined>,
 ): MockResponse;
+
+/**
+ * The credential `GET /auth/me` treats as this harness's own.
+ *
+ * Exported because two files have to agree on it and, since `/auth/me` started
+ * reading the credential, disagreeing is a silently red capture run rather than
+ * a dead string: `scripts/capture.mjs` mints its sealed cookie from this, and
+ * the mock answers `incorrect_password` to this username with any other
+ * password. It is deliberately **not** the acting identity's username — a
+ * capture under `MOCK_IDENTITY=no_audit` still signs in as `harness` — and the
+ * mock's own `HARNESS_CREDENTIAL` block says why at length.
+ */
+export declare const HARNESS_CREDENTIAL: { username: string; password: string };
 
 /**
  * `multipart/form-data` → the `body` argument `respond()` takes for an upload.

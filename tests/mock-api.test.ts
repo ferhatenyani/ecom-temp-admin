@@ -19,6 +19,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_PATH,
+  HARNESS_CREDENTIAL,
   createServer,
   parseCsvBody,
   parseMultipart,
@@ -503,6 +504,312 @@ describe("GET /auth/me", () => {
     expect(data.capabilities).toContain("ac_manage_orders");
     // A detail response carries no `meta`; only lists do.
     expect(parse(identity, get("/auth/me")).meta).toBeNull();
+  });
+});
+
+/**
+ * ── The three refusals `/auth/me` can answer, and the default that must not
+ *    have moved ────────────────────────────────────────────────────────────────
+ *
+ * `app/api/session/route.ts` distinguishes four failures and until 2026-08-29
+ * this mock could produce **none** of them: `/auth/me` answered `ok(IDENTITY)`
+ * whatever was presented, so the panel's only unauthenticated screen had exactly
+ * one outcome and every refusal branch on it was unreachable.
+ *
+ * **Every assertion here is about a status, a code or a header, and none is
+ * about a sentence** — deliberately, and it is the same discipline as the
+ * carried-forward enum-sentence entry read from the other end. The three
+ * messages are the mock's own and are flagged as such at their site; asserting
+ * one would pin an invention and turn the flag into a lie. What the panel
+ * actually branches on is asserted, all of it, through the panel's own
+ * `unwrap()` and `ApiError` rather than by reading the body shape here.
+ */
+describe("GET /auth/me, and the credential it now reads", () => {
+  const basic = (username: string, password: string) => ({
+    authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+  });
+  const me = (headers: Record<string, string> = {}) =>
+    respond("GET", `${BASE_PATH}/auth/me`, new URLSearchParams(), null, headers);
+
+  /**
+   * The failure half of the boundary, for this route. `apiError()` above parses
+   * against `productList` and would report a schema mismatch rather than the
+   * refusal on a body that is not a product list; this parses against the
+   * schema the route actually has, and takes `retryAfter` the way `client.ts`
+   * hands it over — off the response header, not out of the body.
+   */
+  const refusalOf = (response: MockResponse, retryAfter: number | null = null): ApiError => {
+    try {
+      unwrap(identity, response.body, response.status, retryAfter);
+    } catch (error) {
+      if (error instanceof ApiError) return error;
+      throw error;
+    }
+    return expect.unreachable("the response did not throw");
+  };
+
+  /**
+   * **The hard constraint, asserted first.** Every existing consumer calls
+   * `respond()` with four arguments or fewer, so the default path is what all
+   * 900-odd assertions in this file and every capture ever taken depend on.
+   */
+  it("answers a request presenting no credential exactly as it did before", () => {
+    const bare = get("/auth/me");
+    expect(bare.status).toBe(200);
+    // Byte-identical to the four-argument call, and to an explicit empty header
+    // set: the parameter defaults to none and none is the old behaviour.
+    expect(me()).toEqual(bare);
+    expect(me({ "content-type": "application/json" })).toEqual(bare);
+    expect(parse(identity, me()).data.capabilities).toHaveLength(13);
+  });
+
+  it("accepts the credential capture.mjs mints, under any identity", () => {
+    /*
+     * `scripts/capture.mjs` seals this pair into every context's cookie and does
+     * so under **every** `MOCK_IDENTITY` — the acting identity's own username is
+     * `harness-support`, `harness-no-audit` and so on, and the cookie still says
+     * `harness`. So this is the assertion that keeps ten of the eleven capture
+     * identities working: if `HARNESS_CREDENTIAL` and the mock's own check ever
+     * disagree, every capture in the run lands on the login form with an `h1` on
+     * it and no console error, which is the green failure that harness exists to
+     * prevent and which no other check here would catch.
+     */
+    expect(me(basic(HARNESS_CREDENTIAL.username, HARNESS_CREDENTIAL.password))).toEqual(
+      get("/auth/me"),
+    );
+  });
+
+  it("refuses the harness username with any other password, as incorrect_password", () => {
+    const refused = me(basic(HARNESS_CREDENTIAL.username, "not-the-password"));
+    expect(refused.status).toBe(401);
+
+    const error = refusalOf(refused);
+    expect(error.code).toBe("incorrect_password");
+    /*
+     * The pair the panel actually reads, and they must disagree. `route.ts:51`
+     * asks `isSuspended` to choose between two sentences and `read.ts:41` asks
+     * it to choose between two `?reason=` values, so a wrong password that came
+     * back `isSuspended` would tell the person their account was suspended and
+     * send them to find a Super Admin. `errors.ts:113-115` records why this is
+     * keyed on the code and the 401 on the status.
+     */
+    expect(error.isAuthFailure).toBe(true);
+    expect(error.isSuspended).toBe(false);
+    expect(error.retryAfter).toBeNull();
+  });
+
+  it("refuses the suspended fixture as account_suspended, which is a different 401", () => {
+    const refused = me(basic("harness-suspended", HARNESS_CREDENTIAL.password));
+    expect(refused.status).toBe(401);
+
+    const error = refusalOf(refused);
+    expect(error.code).toBe("account_suspended");
+    expect(error.isSuspended).toBe(true);
+    expect(error.isAuthFailure).toBe(true);
+
+    /*
+     * **The guard order is not asserted, because it is not observable here.**
+     * ADMIN_PANEL.md:208 records `SuspensionGuard` at priority 9 ahead of the
+     * rate limiter at 10, and the mock branches in that order — but both
+     * fixtures are keyed on a username and one credential cannot be both, so
+     * there is no request that distinguishes "suspended, checked first" from
+     * "suspended, checked second". Naming the gap rather than writing an
+     * assertion that would pass either way.
+     */
+    expect(refusalOf(me(basic("harness-locked", "x"))).code).toBe("too_many_requests");
+  });
+
+  it("refuses the locked fixture with a 429 carrying Retry-After, right password included", () => {
+    /*
+     * The bucket's one observable property, and the whole reason
+     * `scripts/reset-rate-limit.sh` exists: **a locked-out address is refused
+     * even with the correct password.** So this presents the credential that
+     * succeeds one test up.
+     */
+    const refused = me(basic("harness-locked", HARNESS_CREDENTIAL.password));
+    expect(refused.status).toBe(429);
+    expect(refused.headers?.["retry-after"]).toBe("900");
+
+    // And the header is what `client.ts:69-70` turns into `ApiError.retryAfter`,
+    // which is the value `route.ts:64` re-emits and the countdown is drawn from.
+    const error = refusalOf(refused, Number.parseInt(refused.headers!["retry-after"], 10));
+    expect(error.code).toBe("too_many_requests");
+    expect(error.retryAfter).toBe(900);
+    // A 429 is not a 401, so it must not clear the session on its way past.
+    expect(error.isAuthFailure).toBe(false);
+    expect(error.isSuspended).toBe(false);
+  });
+
+  it("leaves an unrecognised credential, and a malformed one, on the unchanged path", () => {
+    const bare = get("/auth/me");
+    /*
+     * **This is the mock being more permissive than the wire, on purpose and in
+     * one place.** The shop refuses an unknown username; this file serves the
+     * identity, because refusing would mean every `respond()` call in this suite
+     * presenting a credential and every capture run minting the acting
+     * identity's own. `HARNESS_CREDENTIAL`'s block argues it at length. Asserted
+     * so the permissiveness is a decision with a test on it rather than a gap.
+     */
+    expect(me(basic("somebody-else", "whatever"))).toEqual(bare);
+    // A header this parser cannot read must fall through rather than refuse: a
+    // misread header becoming a 401 would take a consumer that has nothing to do
+    // with login off its old answer.
+    expect(me({ authorization: "Bearer a-token" })).toEqual(bare);
+    expect(me({ authorization: "Basic !!!!not-base64!!!!" })).toEqual(bare);
+    expect(me({ authorization: "Basic " })).toEqual(bare);
+  });
+
+  it("reads the header on /auth/me and on nothing else", () => {
+    // The gate is one route deep, which is narrower than the wire — `lib/staff.ts:149`
+    // records a suspended account refused at *every* route in the namespace. The
+    // narrowing is deliberate and this is what pins it.
+    const suspended = basic("harness-suspended", "x");
+    for (const path of ["/orders", "/products", "/customers", "/settings", "/audit-logs"]) {
+      expect(respond("GET", `${BASE_PATH}${path}`, new URLSearchParams(), null, suspended)).toEqual(
+        get(path),
+      );
+    }
+  });
+
+  /**
+   * **The shell, not the object.** `respond()` returned `Retry-After` correctly
+   * from the day it was written; `createServer()` built its JSON response
+   * headers from scratch and dropped it, because until this branch only `Buffer`
+   * bodies carried any. A unit assertion on the returned object cannot see that
+   * class of defect at all — it asserts the object, and the object was right —
+   * so this one goes over a real socket.
+   */
+  it("sends Retry-After over the wire, not merely in the returned object", async () => {
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", () => done()));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const locked = await fetch(`http://127.0.0.1:${port}${BASE_PATH}/auth/me`, {
+        headers: basic("harness-locked", HARNESS_CREDENTIAL.password),
+      });
+      expect(locked.status).toBe(429);
+      expect(locked.headers.get("retry-after")).toBe("900");
+      // The envelope still arrives as JSON: `content-type` is written last so a
+      // returned header can never displace it.
+      expect(locked.headers.get("content-type")).toBe("application/json; charset=utf-8");
+
+      // And the success path over the same socket carries no such header.
+      const fine = await fetch(`http://127.0.0.1:${port}${BASE_PATH}/auth/me`, {
+        headers: basic(HARNESS_CREDENTIAL.username, HARNESS_CREDENTIAL.password),
+      });
+      expect(fine.status).toBe(200);
+      expect(fine.headers.get("retry-after")).toBeNull();
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  });
+});
+
+/**
+ * ── The credential that authenticates and holds nothing ─────────────────────
+ *
+ * The eleventh identity, and the first that is not a *delta*: `capabilities` is
+ * empty. It is item 20's fixture — the login form signs a real credential in and
+ * then has to send the person somewhere, and this is the reader for whom there
+ * is nowhere honest to send.
+ *
+ * **The second assertion is the uncomfortable one and it is the point.** The
+ * mock enforces ten of the thirteen capabilities, so this credential still gets
+ * 200 from four families of route the panel's own `nav-tree.ts` refuses it. That
+ * is the mock being more permissive than the wire, it is recorded at
+ * `gatedOn`'s docblock and at this identity's, and pinning it here means the day
+ * somebody closes one of those gates this test goes red and they are sent to
+ * both records rather than discovering the disagreement in a screenshot.
+ */
+describe("MOCK_IDENTITY=no_capabilities", () => {
+  it("authenticates, holds nothing, and still parses as an identity", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_capabilities");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const ask = (path: string) =>
+        mock.respond("GET", `${mock.BASE_PATH}${path}`, new URLSearchParams());
+
+      // An empty array is a real answer, and the schema says so: `[]` parses and
+      // a missing key does not.
+      const { data } = unwrap(identity, ask("/auth/me").body, 200);
+      expect(data.capabilities).toEqual([]);
+      expect(data.username).toBe("harness-no-capabilities");
+
+      // Every gate in the file fires at once, which no other identity can do.
+      for (const path of [
+        "/orders",
+        "/inventory",
+        "/customers",
+        "/notifications",
+        "/payments",
+        "/cms/pages",
+        "/media",
+        "/campaigns",
+        "/segments",
+        "/email-templates",
+        "/marketing/config",
+        "/users",
+        "/roles",
+        "/settings",
+        "/audit-logs",
+        "/export/products",
+      ]) {
+        expect(ask(path).status, `${path} must be refused`).toBe(403);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("still reaches the collections the mock gates on nothing, which is the gap", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_capabilities");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const ask = (path: string) =>
+        mock.respond("GET", `${mock.BASE_PATH}${path}`, new URLSearchParams());
+
+      /*
+       * `ac_manage_products`, `ac_manage_coupons` and `ac_manage_shipping` are
+       * enforced nowhere in this file — the first only through `/export` and
+       * `/import`. `lib/api/allowlist.ts:123-125` records the coupons
+       * measurement outright, and every one of these screens renders
+       * `ForbiddenState` on a capability this reader lacks, so the mock and the
+       * panel disagree about all of them.
+       *
+       * **Red here means somebody closed a gate**, which is the good outcome:
+       * strike the path, and update `gatedOn`'s docblock and the identity's.
+       */
+      for (const path of [
+        "/products",
+        "/product-categories",
+        "/attributes",
+        "/coupons",
+        "/shipping/providers",
+        "/shipments",
+        "/locations/wilayas",
+      ]) {
+        expect(ask(path).status, `${path} is ungated — see gatedOn's docblock`).toBe(200);
+      }
+
+      /*
+       * `ac_view_analytics` is the fourth and it is the one that is half closed:
+       * `/analytics/revenue` refuses through `canSeeMoney()` and the other six
+       * reports do not. **That is the API's own shape rather than a gap** —
+       * `meta.money_requires` is `"ac_manage_orders"`, published by the wire and
+       * asserted at line 2272 of this file — so a mock that ANDed
+       * `ac_view_analytics` in here would be *stricter* than the shop, which is
+       * §0's quieter wrong direction.
+       */
+      expect(ask("/analytics/revenue").status).toBe(403);
+      expect(ask("/analytics/overview").status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });
 

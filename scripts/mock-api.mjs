@@ -570,6 +570,7 @@ const CAPABILITIES = [
  *   MOCK_IDENTITY=no_marketing … /marketing                      eleven
  *   MOCK_IDENTITY=no_transfer  … /transfer                       nine
  *   MOCK_IDENTITY=no_audit     … /audit                          twelve
+ *   MOCK_IDENTITY=no_capabilities … /login                       **none**
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
@@ -594,6 +595,11 @@ const CAPABILITIES = [
  * `no_audit` is the tenth and the seventh time the same hole has been found —
  * all nine before it hold `ac_view_audit_logs`, so the trail's forbidden state
  * was unphotographable. Its own block says what was read and from where.
+ *
+ * `no_capabilities` is the eleventh and it is the first that is not a *delta*:
+ * the list is empty, so it is the fixture for a person who authenticates and can
+ * reach nothing. Its own block says why that state is item 20's rather than
+ * another section's, and that the shape is constructed.
  *
  * Read **once, at module load**, so `respond()` stays pure and a capture run is
  * one identity from beginning to end. An unrecognised value throws rather than
@@ -973,6 +979,67 @@ const IDENTITIES = {
     capabilities: CAPABILITIES.filter((capability) => capability !== "ac_view_audit_logs"),
     auth_method: "application_password",
   },
+  /*
+   * ── The eleventh, and the only one whose delta is the whole list ───────────
+   *
+   * **Every identity above is `CAPABILITIES` minus one to four entries**, so the
+   * smallest credential this file could serve still held nine. The state that
+   * had no fixture anywhere is the one at the bottom: an account that
+   * **authenticates and holds nothing** — `/auth/me` answers 200 and the
+   * capabilities array is empty.
+   *
+   * It is item 20's own state rather than another section's forbidden one. The
+   * login form signs a real credential in and then has to send the person
+   * somewhere, and `login/page.tsx:19` sends a cookied reader to `/orders`; a
+   * holder of no capability is refused there and on every other gated
+   * collection, so the screen has to answer *"signed in, nowhere to go"* rather
+   * than redirect. Nothing could photograph that before this existed, and no
+   * identity above can be widened into it: each is a *named* delta and its block
+   * says so, whereas this one is not a delta at all.
+   *
+   * **It does not reach zero routes, and saying so is the point.** This block
+   * said *"every gated collection below refuses"* and meant it as *"can reach
+   * nothing"*, which is a claim about the shop that this file cannot keep: the
+   * `gatedOn` docblock lists three capabilities the mock enforces nowhere, so a
+   * credential holding none of the thirteen still gets **200** from
+   *
+   *     /products · /products/{id} · /product-categories · /attributes ·
+   *     /coupons · /coupons/eligible-* · /shipping/* · /shipments/* ·
+   *     /locations/* · every /analytics/* but `revenue` · /cod/statistics
+   *
+   * Under the panel's own model — `nav-tree.ts` and each screen's
+   * `ForbiddenState` — this reader is refused all of them. **So this identity is
+   * the credential under which the mock is most visibly more permissive than the
+   * wire**, and a capture of `/products` taken under it photographs a screen this
+   * reader could never open. It is the right fixture for `/login` and the wrong
+   * one for anything else until those three gates land, which is a decision with
+   * the blast radius `no_transfer`'s block describes rather than a line to slip
+   * in here.
+   *
+   * **Constructed, not measured, and the construction is the honest part.**
+   * Nothing here has met an account with an empty `ac_*` list. What is recorded
+   * — ADMIN_PANEL.md:768 — is that `GET /auth/me` returns the caller's
+   * capabilities *"filtered to this plugin's vocabulary"*, and a WordPress user
+   * holding a valid Application Password and none of this plugin's roles filters
+   * to exactly `[]`. That is the shape's derivation; it is not a claim that the
+   * shop has such an account today, and the name says what the credential *does*
+   * rather than who it is, which is the rule `reduced` set.
+   *
+   * **The empty array is a real answer and must not be confused with a missing
+   * one.** `lib/api/schemas/order.ts:158` parses `capabilities` as an array of
+   * strings, so `[]` parses and `undefined` does not — the same
+   * distinction `ApiError.conflict` makes about `allowed: []` on a terminal
+   * order, one collection over.
+   */
+  no_capabilities: {
+    id: 524,
+    username: "harness-no-capabilities",
+    display_name: "Harness No-Capabilities",
+    email: "harness-no-capabilities@example.test",
+    roles: ["ac_staff"],
+    capabilities: [],
+    auth_method: "application_password",
+  },
 };
 
 const REQUESTED_IDENTITY = process.env.MOCK_IDENTITY ?? "full";
@@ -982,6 +1049,206 @@ if (!(REQUESTED_IDENTITY in IDENTITIES)) {
   );
 }
 const IDENTITY = IDENTITIES[REQUESTED_IDENTITY];
+
+/* ------------------------------------------------------------ credential --- */
+
+/**
+ * ── `/auth/me` reads the credential, and this is the whole of what it reads ──
+ *
+ * **Until 2026-08-29 this file checked no credential at all.** `/auth/me`
+ * answered `ok(IDENTITY)` unconditionally, `content-type` was the only request
+ * header the file read, and the consequence was that the mock could produce
+ * exactly one outcome on the panel's *only* unauthenticated screen: success.
+ * `app/api/session/route.ts` distinguishes four refusals and the harness could
+ * reach none of them, so `/login` had no failure state to photograph and the
+ * three branches in `LoginForm.tsx:55-74` were paths nothing could take. That is
+ * the *more permissive than the wire* direction DECISIONS.md §0 exists to catch,
+ * on the one screen where a refusal is the ordinary case rather than the edge.
+ *
+ * ## The shape chosen, and the two consumers that chose it
+ *
+ * **A username the mock recognises as a refusal fixture is refused; everything
+ * else answers exactly as it did before, including a request carrying no
+ * `Authorization` at all.** That is deliberately *not* "verify the credential",
+ * and neither existing consumer would survive one:
+ *
+ *   - `tests/mock-api.test.ts` calls `respond()` directly with no headers — 38
+ *     call sites, and `get()`/`write()` build every other one. A mock that
+ *     answered 401 to a request with no credential would fail the whole suite
+ *     on its first line and would be testing the harness's plumbing rather than
+ *     the shop's shapes.
+ *   - `scripts/capture.mjs:1193` mints its cookie from `HARNESS_CREDENTIAL`
+ *     **under every `MOCK_IDENTITY`**, while the acting identity's own username
+ *     is `harness-support`, `harness-no-audit` and so on. A check that compared
+ *     the presented username against `IDENTITY.username` would therefore refuse
+ *     every capture run except `full` — ten of the eleven identities, every one
+ *     of them a forbidden-state capture some earlier branch depends on.
+ *
+ * So the credential this file accepts is the pair below rather than the acting
+ * identity's, and it is **exported** for the second reason above: it was a bare
+ * literal in two files that had never had to agree, and the moment `/auth/me`
+ * started reading it, a drift between them became a silently red capture run.
+ *
+ * ## What is measured and what is not
+ *
+ * The **statuses and the codes are measured** and are the only part of these
+ * three refusals any code branches on:
+ *
+ *     no credential          401  `unauthenticated`      ADMIN_PANEL.md:748
+ *     wrong Application Pw   401  `incorrect_password`   ADMIN_PANEL.md:749
+ *     suspended account      401  `account_suspended`    ADMIN_PANEL.md:750
+ *     failed-login bucket    429  `too_many_requests`    ADMIN_PANEL.md:3155,
+ *                                                        reset-rate-limit.sh:11
+ *
+ * **The three sentences are this file's own and are flagged at each site**, the
+ * way `sendCampaign()`'s 409 is at line 15268. Nothing in `lib/`,
+ * `ADMIN_PANEL.md` or `README.md` records the `message` of any auth refusal —
+ * only the codes — and provoking the wrong-password one costs a request the
+ * shop counts. What makes the invention low-consequence here, and it was checked
+ * rather than assumed: **no screen can render any of them.**
+ * `app/api/session/route.ts:52-58` throws the API's `message` away and
+ * substitutes its own on every branch, and `LoginForm.tsx:65-74` then throws
+ * *that* away too and renders `t("rateLimited")`, `t("suspended")` or
+ * `t("failed")` from `messages/{fr,ar}.json`. The API's prose is discarded twice
+ * before it could reach a reader. Whoever spends one of the ten failed-login
+ * attempts on a wrong password should replace these with what came back.
+ *
+ * **`unauthenticated` — the no-credential 401 — is deliberately not served**, and
+ * it is unreachable rather than omitted: `lib/api/client.ts:57` attaches
+ * `Authorization: Basic` to every request that carries a session, and the login
+ * route builds one from the submitted form before it calls anything. There is no
+ * path through the panel that reaches this API without a credential. It is also
+ * the one refusal the route flattens away — `route.ts:55` maps *both* 401 codes
+ * to its own `unauthenticated`, so a screen could not tell it from
+ * `incorrect_password` even if it arrived.
+ */
+export const HARNESS_CREDENTIAL = { username: "harness", password: "harness" };
+
+/**
+ * A suspended account, and it is refused **before** the rate limiter.
+ *
+ * That order is measured rather than convenient: ADMIN_PANEL.md:208 records
+ * `Users\SuspensionGuard` running in `rest_pre_dispatch` at priority 9 and
+ * `RateLimitGuard` at 10, *"so a refused account does not spend anyone's
+ * allowance"*. A mock that checked the bucket first would answer 429 to a
+ * suspended account whose IP was locked out, and `route.ts:60` would then send
+ * a 429 where the shop sends the one refusal that tells the person to stop
+ * trying.
+ */
+const SUSPENDED_USERNAME = "harness-suspended";
+
+/**
+ * The failed-login bucket, as a credential rather than as a counter.
+ *
+ * **The bucket is real and this is not a simulation of it.** ADMIN_PANEL.md:240
+ * and `scripts/reset-rate-limit.sh:7` record 10 failures per 15 minutes per IP,
+ * and `e2e/rate-limit.ts` exists because a real run spent the allowance and
+ * eleven later tests failed looking exactly like a broken login. Counting here
+ * would reproduce that inside the harness: `respond()` would stop being a
+ * function of its arguments, the eleventh capture in a run would differ from the
+ * tenth, and a byte-stable screenshot — the property this whole file is built
+ * for — would be gone.
+ *
+ * What the fixture encodes instead is the bucket's one *observable* property,
+ * which is also the one that makes it worth rendering: **a locked-out address is
+ * refused even with the correct password.** This username answers 429 whatever
+ * password is presented, including the right one.
+ */
+const LOCKED_USERNAME = "harness-locked";
+
+/**
+ * `Retry-After`, in seconds, and **this number is derived rather than read.**
+ *
+ * 900 is the measured 15-minute window (ADMIN_PANEL.md:240) expressed in
+ * seconds. Nobody has read a `Retry-After` off a real 429 from this shop, so the
+ * *header's presence* is what is reproduced faithfully and its *value* is a
+ * ceiling rather than a measurement — the shop may well send the remaining time
+ * rather than the whole window.
+ *
+ * Two consequences the login screen owns, both of which follow from the value
+ * being large and neither of which is a defect in this file:
+ *
+ *   1. **`acFetch` retries the login.** `isRetryable()` is true for a GET on
+ *      429, `/auth/me` is a GET, and `client.ts:104-107` sleeps
+ *      `min(retryAfter, 10)` seconds and asks again. So a locked-out sign-in
+ *      takes **ten seconds** to fail, spinner running, before the 429 reaches
+ *      the browser. ADMIN_PANEL.md:871 asks for exactly that retry, so it is the
+ *      panel behaving as specified; whether a login form is where it belongs is
+ *      a question for the screen, and this fixture is what makes it visible.
+ *   2. **The copy renders the raw seconds.** `login.rateLimited` is
+ *      `"Réessayez dans {seconds, plural, …}"`, so 900 renders as *"900
+ *      secondes"* in French and the Arabic plural form beside it. That is an
+ *      honest render of an unhelpful number, and it is the screen's to decide.
+ */
+const RETRY_AFTER_SECONDS = 900;
+
+/**
+ * `Authorization: Basic base64(user:pass)` → `{username, password}`, or null.
+ *
+ * Deliberately narrow: anything that is not a well-formed Basic header — absent,
+ * `Bearer`, undecodable, or missing the colon — returns null and lands on the
+ * unchanged path. A parse failure here must never become a refusal, because the
+ * refusals are the new behaviour and a header this function misreads would take
+ * a consumer that has nothing to do with login off its old answer.
+ *
+ * The password is `slice(colon + 1)` rather than a `split(":")` pair: a
+ * WordPress Application Password is displayed in six space-separated groups and
+ * nothing forbids a colon inside a password generally, so splitting on every
+ * colon would silently truncate one.
+ */
+function basicCredential(headers) {
+  const header = headers?.authorization;
+  if (typeof header !== "string") return null;
+  const match = /^Basic\s+(\S+)$/i.exec(header);
+  if (match === null) return null;
+  const decoded = Buffer.from(match[1], "base64").toString("utf8");
+  const colon = decoded.indexOf(":");
+  if (colon === -1) return null;
+  return { username: decoded.slice(0, colon), password: decoded.slice(colon + 1) };
+}
+
+/**
+ * The refusal a presented credential earns, or null for "answer as before".
+ *
+ * Every branch is keyed on the **username** alone, which is what keeps the three
+ * fixtures reachable from the login form by typing a name. The one exception is
+ * the wrong-password branch, which is the only one that can be *provoked* rather
+ * than *named*: it is the harness credential with anything else in the password
+ * field, so it is what a person mistyping their password on `/login` gets, and
+ * it is why `HARNESS_CREDENTIAL.password` is now load-bearing.
+ */
+function authRefusal(headers) {
+  const credential = basicCredential(headers);
+  if (credential === null) return null;
+
+  // Priority 9, ahead of the bucket. See SUSPENDED_USERNAME above.
+  if (credential.username === SUSPENDED_USERNAME) {
+    /* Invented sentence — see the block above. Only the 401 and the code are
+       measured, and `route.ts:56` replaces this before a browser sees it. */
+    return fail(401, "account_suspended", "This account has been suspended.");
+  }
+
+  if (credential.username === LOCKED_USERNAME) {
+    /* Invented sentence, as above. The 429, the code and the presence of the
+       header are what `route.ts:60-64` and `LoginForm.tsx:60-66` read. */
+    return {
+      ...fail(429, "too_many_requests", "Too many failed sign-in attempts."),
+      headers: { "retry-after": String(RETRY_AFTER_SECONDS) },
+    };
+  }
+
+  if (
+    credential.username === HARNESS_CREDENTIAL.username &&
+    credential.password !== HARNESS_CREDENTIAL.password
+  ) {
+    /* Invented sentence, as above. ADMIN_PANEL.md:751 records that the *code*
+       here is WordPress core's own surfacing through the envelope; it does not
+       record the sentence, and this file has not seen one. */
+    return fail(401, "incorrect_password", "The Application Password is not valid.");
+  }
+
+  return null;
+}
 
 /* --------------------------------------------------------------- products --- */
 
@@ -7948,10 +8215,17 @@ export function resetState() {
   state.staffGone = new Set();
   /*
    * Clear of every seeded id — the shop's own run to 778 — and clear of the
-   * nine `IDENTITIES` ids this fixture holds out (514-522), so a created
-   * account can never collide with the acting user under any `MOCK_IDENTITY`.
-   * Fixed rather than derived, which is what keeps
-   * a screenshot of a created account byte-stable.
+   * `IDENTITIES` ids this fixture holds out, so a created account can never
+   * collide with the acting user under any `MOCK_IDENTITY`. Fixed rather than
+   * derived, which is what keeps a screenshot of a created account byte-stable.
+   *
+   * **The range is deliberately not written down here.** This said "the nine
+   * ids (514-522)" and was stale on both halves within two branches — there
+   * were ten by then and there are eleven now, running to 524 — while `810`
+   * covered every one of them the whole time and the sentence was the only
+   * thing that went wrong. `IDENTITIES` is where the ids live and a second copy
+   * of their extent is a second thing to keep true, which is the same defect
+   * the `gatedOn` docblock records of its own count.
    */
   state.nextStaffId = 810;
   state.appPasswords = new Map();
@@ -17558,8 +17832,22 @@ const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment,
  * `pathname` is the full request path including the base, so this also proves
  * the base-path routing rather than assuming it. `body` is the parsed JSON of a
  * write, or null.
+ *
+ * **`headers` is the fifth argument and it defaults to none**, which is what
+ * keeps every existing caller byte-identical. It arrived when `/auth/me` started
+ * reading the credential: the server shell passes node's own lower-cased
+ * `request.headers`, and `tests/mock-api.test.ts` passes nothing, so a request
+ * with no `Authorization` gets exactly the answer it got before this existed.
+ * Only `authorization` is read, and only by `/auth/me` — see
+ * `HARNESS_CREDENTIAL` for why that is a fixture lookup rather than a check.
  */
-export function respond(method, pathname, searchParams = new URLSearchParams(), body = null) {
+export function respond(
+  method,
+  pathname,
+  searchParams = new URLSearchParams(),
+  body = null,
+  headers = {},
+) {
   // WordPress answers `rest_no_route` for a path/verb pair it has no handler
   // for, and the panel only ever reaches this mock through the proxy.
   if (!pathname.startsWith(`${BASE_PATH}/`)) return notFound();
@@ -17641,8 +17929,24 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
+  /*
+   * **The one route in this file that reads a request header.** A recognised
+   * refusal credential earns its refusal; everything else — including a request
+   * with no `Authorization` at all, which is every call the unit suite makes —
+   * gets the identity, exactly as it did before the check existed.
+   *
+   * The gate is here rather than at the top of `respond()` on purpose. The wire
+   * authenticates every route in the namespace and this file authenticates one,
+   * which is a real gap and is recorded as one: reproducing it everywhere would
+   * mean the unit suite's 38 direct `respond()` calls and every `get()` beside
+   * them presenting a credential, and the suite exists to check *shapes* rather
+   * than the harness's own plumbing. `/auth/me` is where the panel's only
+   * unauthenticated screen sends its credential, so it is where the refusals
+   * have to be reachable; nothing else in the panel can produce a 401 a person
+   * is looking at rather than being redirected by.
+   */
   if (segments.length === 2 && collection === "auth" && second === "me") {
-    return ok(IDENTITY);
+    return authRefusal(headers) ?? ok(IDENTITY);
   }
 
   /*
@@ -17701,9 +18005,46 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
   };
 
   /**
-   * A capability gate. **Eight capabilities are enforced below**, over seventeen
-   * call sites — this block said "three of them" and named `/customers` as the
-   * collection deliberately left ungated, and both halves had gone stale.
+   * A capability gate. **Ten of the thirteen capabilities are enforced below**,
+   * over twenty call sites.
+   *
+   * ── The count has now gone stale twice, so carry the command ───────────────
+   *
+   * This block said "three of them" and named `/customers` as deliberately
+   * ungated; both halves were stale and were corrected to "eight over seventeen"
+   * — which was itself stale within two branches, and was still standing at
+   * eight when the login harness recounted it on 2026-08-29. That is
+   * DECISIONS.md's own recurring failure: a number arriving in prose and being
+   * copied rather than re-run, which the ledger has recorded of the capture
+   * count, the refetch count and the `save-bar` count. **A count in a comment is
+   * wrong the moment the next branch lands, so the check goes here instead:**
+   *
+   *     grep -c 'gatedOn(' scripts/mock-api.mjs                 # 20, +1 for the
+   *                                                             # helper itself
+   *     grep -o 'gatedOn("[a-z_]*")' scripts/mock-api.mjs | sort -u
+   *
+   * The second command lists **nine** literals; the tenth capability is
+   * `ac_manage_products`, reached only through `SUBJECT_CAPABILITY[second]` on
+   * `/export/{subject}` and `/import/{subject}`, so a grep for literals alone
+   * undercounts by one. The three never enforced here are `ac_manage_coupons`,
+   * `ac_manage_shipping` and `ac_view_analytics` — the last of which *is*
+   * enforced, one gate over, by `canSeeMoney()` on `/analytics/revenue`.
+   *
+   * **All three of those absences are the mock being more permissive than the
+   * panel's own model**, and they are recorded rather than closed for the reason
+   * the next paragraph gives:
+   *
+   *     ac_manage_coupons    /coupons, /coupons/{id}, /coupons/eligible-*
+   *                          — and lib/api/allowlist.ts:123-125 records the
+   *                          measurement outright: a Marketing Manager is 403 on
+   *                          the two eligible-* routes.
+   *     ac_manage_shipping   /shipping/*, /shipments/*, /locations/*
+   *                          — reachable today under MOCK_IDENTITY=reduced.
+   *     ac_manage_products   the /products collection, /product-categories and
+   *                          /attributes — reachable today under
+   *                          MOCK_IDENTITY=no_transfer, which is refused at
+   *                          `/export/products` and served at `/products` from
+   *                          the same capability in the same process.
    *
    * `/payments` came first, on 2026-08-26, and the rule it set is the one still
    * followed: **a capability is enforced where it was measured and nowhere
@@ -19231,11 +19572,20 @@ export function createServer() {
         }
       }
 
+      /*
+       * `request.headers` is node's own object and its keys are already
+       * lower-cased, which is what `basicCredential()` reads. It is passed
+       * whole rather than narrowed to `authorization`: narrowing here would put
+       * the list of headers the mock may read in the shell instead of beside
+       * the one handler that reads one, and the next header some route needs
+       * would be added in two files.
+       */
       const { status, body, headers } = respond(
         request.method ?? "GET",
         url.pathname,
         url.searchParams,
         parsed,
+        request.headers,
       );
 
       /*
@@ -19252,7 +19602,32 @@ export function createServer() {
         return;
       }
 
-      response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+      /*
+       * **`headers` is spread here too, and it was not until 2026-08-29.** The
+       * `Buffer` branch above has always carried them because an export needs
+       * its `Content-Disposition`; this branch built its own object from
+       * scratch, so a header on an *envelope* response was silently dropped by
+       * the shell while `respond()` returned it and `tests/mock-api.test.ts`
+       * read it off the return value and passed.
+       *
+       * Nothing had ever put one there — the four exports were the only
+       * responses with headers and they are all Buffers — so this was latent
+       * rather than broken, and it stopped being latent the moment `/auth/me`
+       * grew a 429: `client.ts:69` reads `Retry-After` off the *response*, so
+       * the panel would have seen a 429 with `retryAfter: null`, skipped the
+       * countdown, and `LoginForm.tsx:65` would have rendered "réessayez dans 0
+       * secondes" from a header the mock believed it had sent. A unit test
+       * cannot catch that class at all: it asserts the object, and the object
+       * was right.
+       *
+       * `content-type` is written last so it still wins. No response here sets
+       * one, and one that did would be answering an envelope as something other
+       * than JSON.
+       */
+      response.writeHead(status, {
+        ...headers,
+        "content-type": "application/json; charset=utf-8",
+      });
       response.end(JSON.stringify(body));
     });
   });
