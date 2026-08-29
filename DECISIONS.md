@@ -32,15 +32,16 @@ left looking like an oversight.
 [x] 15. Notifications — list + detail
 [x] 16. Staff — list, detail, new
 [x] 17. Settings
-[ ] 18. Transfer
+[x] 18. Transfer
 [ ] 19. Audit
 [ ] 20. Login + not-found
 [ ] 21. TEARDOWN
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **20
-files left**, down from 31 after the notifications branch. Read it as an **upper
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **17
+files left**, down from 31 after the notifications branch. Transfer removed three
+of its own — all it had — and added none. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
 primitive contains no `ui-` string of its own. Content added none, and neither
@@ -67,6 +68,8 @@ Apply these to every remaining screen unless something measured says otherwise.
 | **Copy never names a screen or action that does not exist.** | Three such strings were found and fixed; one had just been written. |
 | **A picker over a working filter ships only when the allowlisted enumeration is complete.** Payments yes, shipping no. | Both parameters work and neither is validated — a wrong value is a silent 200 with 0 rows, not a refusal, so the *picker* is the only thing that can keep a typo unreachable. `/payments/methods` lists both values the collection carries, so it can; `/shipping/providers` lists one of two, so it cannot and shipping ships no provider filter. The test is the enumeration, never the parameter. **Notifications is the third and the starkest: there is no channel enumeration at any URL**, so the only candidate was a panel-side copy of a server constant — and a control took it off a shipped screen rather than being declined before one existed. |
 | **A translated word for a shop's own vocabulary, a brand for a brand.** | `providerLabel`'s message key → API `label` → raw name, now in two places. `manual` and `cod` are states of this shop and read in the reader's language; `acfake` and `chargily` keep what their own side of the wire calls them. Nobody translates "Yalidine". |
+| **The stale marker follows the *data*; the disabled write follows the *writes*.** Transfer. | §3.7-5's two halves had travelled together on every screen before it — settings owed both, the customer detail neither — so nothing had to say which caused which. A screen holding no data and still writing owes the disable and not the marker: there is no age to report, and a banner reporting the age of a constant names a condition it has not established. Login and audit both have to answer this separately rather than reading one answer off the other. |
+| **A control's own chrome is copy too, and the browser writes it in the browser's language.** Transfer. | `FileField` styled the UA button rather than replacing it, for a *measured* reason about keyboard behaviour — and the cost was "Choose File" and "No file chosen" rendered twice on a French screen and LTR under an Arabic label. Six branches have now fixed the API's English reaching both localised panels; this is the same defect one layer down, and no rule in `DESIGN.md` or `check-design.sh` looks for it. The fix kept both facts, so the trade-off was never the real one. **Ask what a native control renders before shipping it.** |
 | **A figure links only where its reader is not refused, and a figure with no honest destination renders unlinked.** Dashboard. | The same rule the nav and every disabled control follow, reaching a *number*. A link to a 403 is a control that cannot act, and a link to the wrong list is worse than none — `awaiting` counts two statuses the API cannot filter together and led to a list of half its own value. The figure always stays: a refused destination is not a refused number. A type that made the destination mandatory is what produced both defects, so "this cannot be drilled into" has to be representable. |
 
 ---
@@ -2714,7 +2717,229 @@ is the §16.1 nav check passing rather than being assumed.
 
 ---
 
+## 19. Transfer — two operations, three kinds of reader, one untranslated control
+
+Checklist item **18**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **`PageBody width="detail"` (768), one export `Card` of four rows and one
+  `Card` per importable subject.** The width is *chosen*, not converted: §8
+  retires `max-w-3xl` by name, §2.3 has no row for a task screen — this is not a
+  document you edit and save, it is *choose a subject, run it, read the report* —
+  and 640 wraps every preview row twice. No back link (a top-level nav route,
+  §2.4) and no primary action; there is nothing here to create.
+- **No `DataTable`, and the absence is the decision.** Four fixed rows that never
+  sort, filter or page; §3.2's table is for collections, and a table here would
+  invite operations the data does not have — §5's customers-statistics reasoning.
+  Its dual presentation would also have broken three `e2e/admin.spec.ts`
+  assertions on the phone projects for no gain. **Zero `aria-sort` on the screen,
+  measured in the browser rather than asserted.**
+- **Three kinds of reader and only one is a refusal.** Holding **none** of the
+  four capabilities is a real `ForbiddenState`; it used to be an `EmptyState`
+  doing a forbidden's job — a lock-shaped refusal wearing a search icon, offering
+  nothing to ask for. Holding **some** is *not* a refusal and must not render as
+  one, because a Support Agent is 200 on `/export/customers`: they get the
+  subjects they hold plus one line saying the gate is per subject, without which
+  a reader seeing one row cannot tell the panel from a bug. `ForbiddenState` now
+  takes `string | readonly string[]`, joined with **`Intl.ListFormat`
+  disjunction** — French wants `A, B ou C`, Arabic wants its own comma `،`, and a
+  hard-coded `", "` carries the wrong one. The thirteen callers passing a string
+  are untouched.
+- **`nav-tree.ts:85` gated this route on `ac_manage_settings` and was wrong in
+  both directions.** `more/page.tsx:95-113` had already spent fourteen lines
+  arguing the right gate, so two files were silently disagreeing and the one the
+  new shell reads was the wrong one. **Photographed under
+  `MOCK_IDENTITY=no_transfer`**: the entry present and highlighted for a reader
+  who can do nothing here — and a Manager holding `ac_manage_products` but not
+  `ac_manage_settings` got **no entry at all** for a screen serving them all four
+  exports. That Manager is `e2e/admin.spec.ts:491`'s positive fixture. This is
+  `dashboard`'s §11 defect two lines up the same file. Now `ac_manage_products`,
+  the widest of the four; the residue is recorded rather than papered over —
+  **no single capability expresses a per-subject gate**, so a reader holding only
+  `ac_manage_customers` still reaches the screen by URL and gets their one export.
+- **Four grey paragraphs used to stack at the foot of the page.** §11's dashboard
+  defect. What an export *is* became the export card's description, the two facts
+  about the exported bytes its footnote, the per-subject preconditions the **hint
+  on the file field that has to satisfy them**, and the safety property the
+  footnote of the card whose button writes. §18's rule — restraint applies to
+  words as much as to decoration.
+- **No `StaleBanner`, and every write control disabled offline.** See the
+  DESIGN.md amendment below. Also omitted: any `limit` or date control (the route
+  forwards `limit` alone and drops the rest, and no subject's date range was ever
+  measured), any bulk, any poll, and a runtime parse of the import report —
+  every write in `lib/api/browser.ts` casts, and this render already guards each
+  optional field, so a shape drift degrades to a sparser row rather than a crash.
+
+**DESIGN.md §3.7-5 amended: the marker follows the data, the disable follows the
+writes, and a screen can owe one without the other.** Both existing amendments
+are written as though the two halves travel together, because until now they did
+— settings had data *and* writes so both bit, the customer detail had neither.
+This screen holds **no data at all** and still writes: there is no `time` for a
+`StaleBanner` to carry, and a banner reporting the age of a constant would be a
+marker naming a condition it has not established. Three controls carry
+`states.offlineWrites` instead.
+
+**The copy contradicted a badge six inches above it, in both locales.**
+`importNote.products` said the product export *"n'est pas réimportable tel quel"*
+while `ROUND_TRIPS.products` renders `Réimportable` on the same card — stale
+since `fix/product-export-field-names`, and visible in a single screenshot. A
+second: `exportNote` claimed a refused export *"s'affiche à l'écran"*, which it
+does not — the anchor is a top-level navigation and the route answers
+`application/json`, so a refusal replaces the panel with a raw JSON body.
+`README.md:880-891` was one repair behind and is corrected;
+`tests/admin-schema.test.ts:934-935` is deliberately **not** touched, because it
+reads a *verbatim capture* that predates the fix and editing a capture to say
+what we believe would be inventing a measurement.
+
+**`FileField` drew the browser's English into both localised panels, and the old
+docblock's measurement was right while its conclusion was wrong.** It styled the
+UA button rather than replacing it, recording that a `<label>` driving a hidden
+input loses the control's keyboard behaviour on two engines. True — and the cost
+was two English strings as page content: a French screen showing *"Choose File"*
+and *"No file chosen"* twice, and the Arabic screen showing the same two
+left-to-right directly under the correct Arabic label `اختيار ملف CSV`. **This run
+has fixed the API's English reaching both localised panels five times; this is the
+browser's, one layer down**, and it was the most visible thing on the redesigned
+screen. It was also a *regression* — the retired screen said `Choisir un fichier
+CSV`, which is exactly why it hid the control.
+
+The shape that keeps both facts is neither option that had been considered: the
+input stays a real `<input type="file">`, `sr-only` and never `hidden` — in the
+accessibility tree and **in the tab order**, so Enter still opens the platform
+picker — and a `<label for>` drawn as the control carries the localised text and
+the ring through `.peer`/`.ui-ring-peer`, the mechanism `CheckRow` has used since
+the redesign began. The strings are `ui.file.*`, so they are the **layer's**
+rather than a caller's: `media/UploadModal.tsx` inherited the repair without being
+edited for it, and stopped printing the filename a second time ten pixels below.
+
+**The orchestrator's fixed decision was the thing that was wrong here**, and it
+took looking at the captures to see it: the brief said ship `FileField`
+unextended unless the captures showed a problem, the build agent's own analysis
+correctly identified that the language reason was the one that survived, and it
+shipped anyway. Two readings of a report had agreed with each other; the
+screenshot did not.
+
+**Two defects measured on the retired screen before it was replaced**, neither
+visible to build, lint or the capture harness — both from driving Chromium:
+1. Both `Prévisualiser` buttons were `disabled` with **no reason at all** (§3.3,
+   §8). They are waiting on input, which §17 established is a legitimate disable
+   rather than a §3.3 removal, so they stay and carry `title`.
+2. **Escape from the apply dialog dropped focus to `<body>`.** `ActionSheet`
+   renders a bare Radix `Dialog`, so §3's panel-wide focus-restoration fix never
+   reached this call site. Now `ConfirmDialog` with a computed `returnFocusTo`;
+   Escape restores to `apply-inventory`, a confirmed apply to
+   `start-over-inventory` — because Apply unmounts before `onCloseAutoFocus`,
+   which is §10's latch reasoning at a fifth site.
+
+**`ConfirmDialog`, tone `danger`, and no type-to-confirm.** §3.1 as amended on
+shipping requires typing only where there is an identifier a person would
+recognise *and would type*; the guard that actually works here is the preview
+they have just read, so the body names the subject, the file and the three counts
+the preview reported.
+
+**Two things looked at and deliberately kept.** The safety sentence renders on
+**both** import cards rather than once: it is the Preview control's own help
+text, the control genuinely appears twice, and a person may only ever use one of
+the two — this is not §11's repeated footnote, which restated one fact about
+different cards. And `noImportFor` names "les clients" on a partial identity
+whose Clients row is absent: it is a fact about the API rather than about the
+reader's permissions, and the subtitle already says the gate is per subject.
+
+**i18n**: **2 041 keys in each file, exact parity, zero orphans.** The `transfer`
+namespace 51 → 54 and shares nothing — `nothingPermitted` and `noFile` lost their
+last caller and went; `perSubject`, `applyFile`, `applyConfirm`, `chooseFileFirst`
+and `refused` arrived. `states.forbiddenBodyAny` is a second sentence *beside* the
+singular one rather than a rewrite, and `ui.file.browse`/`ui.file.none` are the
+layer's own.
+
+**`e2e/admin.spec.ts`: 9 tests before, 9 after, titles byte-identical.** Only the
+import test's body changed; the download test and the Manager test resolve
+through `export-{subject}` testids, which survived. The two `.last()` locators are
+scoped to `import-inventory` — they resolved by document order and would have
+silently re-targeted the day a third subject appeared, which is what `rows()` at
+the top of that file exists to prevent. And **`getByText("Prévisualisation")` was
+a latent strict-mode violation before this branch**: `getByText` is a
+case-insensitive *substring* match and the safety footnote opens *"La
+prévisualisation n'écrit jamais rien"*, so the bare string resolved the badge and
+both footnotes.
+
+**Verified**: `tsc` silent · lint **0 errors, 8 warnings** (baseline 9; the ninth
+lived in the retired transfer code) · `test:design` 14/14, floor 319 → **320**
+against 322 scanned · `test:unit` **953/953** · clean `rm -rf .next && npm run
+build` · **60 captures clean** — 12 on `/transfer`, 12 `no_transfer`, 12
+`no_customers`, and 12 each on `/media` and `/settings`, which this branch does
+not own but whose `FileField` and `ForbiddenState` it changed. Driven in Chromium
+beyond the captures, in two probes outside the repo: the export downloads with a
+real BOM, zero `aria-sort`, 0px overflow at 340 in both locales, every disabled
+control carrying its reason, the dialog trapping and restoring focus — **14/14
+against 12/14 on the retired screen** — and, for `FileField`, **18/18**: no
+English in the rendered text at 340 in fr and ar, the input still taking focus at
+`tabIndex 0`, the drawn row painting its 3px ring, `setInputFiles` still reaching
+the `sr-only` input, and the media modal inheriting all of it.
+
+**`ButtonLink` downloads, and nothing was broken.** The branch opened on a
+suspicion that it might not: it wraps `next/link`, `/api/export/{subject}` is a
+Route Handler, and **both** e2e download assertions went through this screen's
+plain `<a>` — so no test had ever proved the four migrated lists could export at
+all. Driven on the shipped `/products` link: the download fires,
+`products-export-2026-08-18.csv`, `EF BB BF`, a real header row. `next/link`
+falls through to a document navigation for a non-RSC response. **A suspicion that
+survives a reading is still a suspicion**; this one cost one measurement and
+closed four screens' worth of doubt.
+
+**Teardown**: `primitives/ActionSheet.tsx` now has **zero** importers, and
+`primitives/Field.tsx`'s only remaining one is `patterns/RangeControl.tsx`, which
+itself has none. Neither is deleted here — teardown owns `primitives/`.
+
+---
+
 ## Carried forward — teardown owns these
+
+- **A refused export replaces the panel with a raw JSON body, and it has five
+  callers.** `app/api/export/[subject]/route.ts:108-114` answers
+  `application/json` with no `Content-Disposition`, and every caller is a
+  top-level navigation — so a 403 or a 400 navigates the tab away from the panel
+  and prints an envelope at the reader. `ProductsList.tsx:410-419` already
+  half-knows this ("a navigation to a route that cannot answer replaces the panel
+  with the browser's own error page") and only guards the offline case. The
+  honest fix is per screen, because each needs to render the refusal in its own
+  context, and this branch owns **one of the five** — `/transfer`, whose copy no
+  longer claims otherwise. `/orders`, `/products`, `/customers` and `/inventory`
+  still carry the claim implicitly by offering the control. Not reachable through
+  the panel's own controls today, since every caller filters by capability first;
+  the API is the authority and the capability list is a cache, which is exactly
+  the gap §18 recorded on settings.
+- **`tests/fixtures-admin.json`'s `exportProducts`/`exportAsManager` `first_line`
+  predate `fix/product-export-field-names`**, so `tests/admin-schema.test.ts:934`
+  asserts `startsWith("ID,")` — pinning a header the backend has since replaced
+  with field names. The assertion is **correct over the capture it reads**, which
+  is why it is here rather than fixed: editing a verbatim capture to say what
+  three other sources now record would be inventing a measurement. The mock
+  writes field names and `tests/mock-api.test.ts` says outright that it disagrees
+  with the fixture. Whoever re-captures the products export closes both.
+- **The mock's `support` identity holds `ac_manage_products` and the measured
+  Support Agent does not.** `[200,403,403,200]` against `[403,403,403,200]`
+  across the four export subjects (`lib/transfer.ts:36-39`), so it is more
+  permissive than the credential it is named for, and a `/transfer` capture under
+  it photographs a state that reader never sees — the §18 `no_settings` failure
+  shape. Left because dropping the capability re-captures `/dashboard` and
+  `/analytics`, which the transfer branch does not own; asserted at
+  `mock-api.mjs:646` so it goes red if changed. The per-subject state is
+  photographed through `no_customers` instead.
+- **`ButtonLink` drops `{...rest}` on its disabled branch** (`Button.tsx:172-183`),
+  so `data-testid` vanishes when a link is disabled while `title` survives.
+  Measured on the offline export links. Nothing depends on it today — the e2e runs
+  online — but a test asserting a disabled export by test id would fail for a
+  reason that has nothing to do with what it is testing.
+- **`CardSkeleton` and `FormSkeleton` have no footnote placeholder**, which is the
+  whole 147px residual on `/transfer`'s `loading.tsx` (73/46/28 across three
+  cards). Exactly the gap the settings branch closed one slot down the same
+  component when it added `described` for `Card.description`; the footnote is the
+  other end of the same box.
+- **`importBadMode` is live corroboration for the enum-sentence entry below**: the
+  wire's top-level message really is `"Invalid parameter(s): mode"` where the mock
+  writes the enum sentence there. `checkSort()` and `filterByStatus()` still owe
+  it.
 
 - ~~**Seventeen shipped screens still blank their rows on a failed *refetch*, and
   two of them poll.**~~ **Closed 2026-08-29 on `fix/stale-over-rows` — see §16.1.**
