@@ -121,3 +121,43 @@ export const NAV: NavGroup[] = [
 export function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
+
+/**
+ * The panel's front door for *this* reader — the first destination in the
+ * navigation they are actually allowed to open.
+ *
+ * ## Why this exists, and what it replaces
+ *
+ * Four files hard-coded `/orders`: the login form's redirect, the login page's
+ * already-signed-in redirect, the panel root's redirect and the 404's way back.
+ * DECISIONS.md §11 **measured** a Support Agent as 403 on `/orders` and
+ * `/inventory` and 200 on `/customers`, so all four sent that reader to a
+ * forbidden screen as the first thing they saw after typing a correct password.
+ *
+ * It reads `NAV` rather than a list of its own, which is the point rather than a
+ * convenience: the sidebar filters exactly this array by exactly this test, so
+ * the front door and the navigation **cannot disagree**. A destination that
+ * disappears from the nav disappears from here in the same edit, and the case
+ * that produced the defect — a reader for whom the first entry is not visible —
+ * is the case the sidebar already renders correctly.
+ *
+ * Group order is the answer's order, and that is deliberate: `NAV` is written
+ * commerce-first because orders is the screen staff actually open, so a reader
+ * who holds `ac_manage_orders` still lands on `/orders` and nothing about the
+ * common path changes. What moves is only the reader for whom it was wrong.
+ *
+ * ## `null` is a real answer
+ *
+ * An account holding **none** of the thirteen capabilities has no destination in
+ * this tree, and inventing one would be a link to a 403. `null` is the caller's
+ * cue to render the forbidden state instead of redirecting — see the login form.
+ * The path is locale-less, as `NavItem.href` is; the caller prefixes it.
+ */
+export function landingPath(capabilities: readonly string[]): string | null {
+  for (const group of NAV) {
+    for (const item of group.items) {
+      if (!item.capability || capabilities.includes(item.capability)) return item.href;
+    }
+  }
+  return null;
+}

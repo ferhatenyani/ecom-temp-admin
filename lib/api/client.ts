@@ -29,6 +29,25 @@ export type RequestOptions = {
   /** Server-rendered reads want a fresh answer; the API caches its own. */
   cache?: RequestCache;
   signal?: AbortSignal;
+  /**
+   * Opt this one request out of `acFetch`'s single retry. Default `true`, so
+   * every existing call site is unchanged.
+   *
+   * **Added for `/api/session`, and the reason is a measured ten-second hang.**
+   * `isRetryable` is true for a GET that answered 429, and `/auth/me` is a GET —
+   * so a sign-in against a locked-out address slept `min(retryAfter, 10)` and
+   * asked again. The failed-login bucket is **10 per 15 minutes**, so the second
+   * ask cannot succeed and the reader watched a spinner for ten seconds before
+   * being told to wait fifteen minutes.
+   *
+   * It is a per-call flag rather than a change to `isRetryable` because the retry
+   * is right in general: the read bucket is 600/min and its `Retry-After` is
+   * often a second or two, where asking again is exactly what a screen should do.
+   * What is different about the login route is that its 429 is a *different
+   * bucket* with a fifteen-minute window, and that its screen has a retry control
+   * of its own — so a hidden retry only delays a sentence the reader can act on.
+   */
+  retry?: boolean;
 };
 
 function url(path: string, query?: RequestOptions["query"]): string {
@@ -100,7 +119,7 @@ export async function acFetch<T>(
   try {
     return await once(schema, session, path, opts);
   } catch (error) {
-    if (!isRetryable(error, method)) throw error;
+    if (opts.retry === false || !isRetryable(error, method)) throw error;
     const wait =
       error instanceof ApiError && error.retryAfter ? Math.min(error.retryAfter, 10) : 1;
     await new Promise((r) => setTimeout(r, wait * 1000));

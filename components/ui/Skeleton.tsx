@@ -157,10 +157,25 @@ export function RecordListSkeleton({
  *
  * Shared by `CardSkeleton` and `FormSkeleton` so the two cannot disagree about a
  * geometry they both take from `Card`.
+ *
+ * ## `mark`, added on the login branch — and it is a node, not a flag
+ *
+ * The login card opens with a 24px icon above its heading, inside the card's own
+ * padding. A boolean here would have drawn a **grey square** in its place, and
+ * that is the one thing a skeleton must not do: the mark is a constant this
+ * screen already holds, and a placeholder standing in for something known is a
+ * shape guaranteed to be wrong rather than merely unknown. So the caller passes
+ * the real element and it renders as itself, exactly as `Card.footnote` takes a
+ * node rather than a line count.
+ *
+ * `mb-3` is the real block's own margin. Only `FormSkeleton` exposes it — no
+ * `CardSkeleton` caller has a mark, and adding the prop to one that cannot use it
+ * would be a shape invented ahead of a card that has it.
  */
-function TitleBlock({ described }: { described: number }) {
+function TitleBlock({ described, mark }: { described: number; mark?: ReactNode }) {
   return (
     <div className="px-4 sm:px-5">
+      {mark ? <div className="mb-3">{mark}</div> : null}
       <Skeleton className="h-6 w-32" />
       {described > 0 ? (
         <div className="mt-0.5">
@@ -389,6 +404,11 @@ export function FormSkeleton({
   titled = true,
   /** Lines of `Card.description` under the heading. See `TitleBlock`. */
   described = 0,
+  /**
+   * A mark above the heading, drawn **as itself** rather than as a placeholder —
+   * pass the real element. See `TitleBlock`.
+   */
+  mark,
   /** Lines of `Card.footnote` under the fields. See `FootnoteBlock`. */
   footnote = 0,
 }: {
@@ -396,6 +416,7 @@ export function FormSkeleton({
   label: string;
   titled?: boolean;
   described?: number;
+  mark?: ReactNode;
   footnote?: number;
 }) {
   const shapes: readonly FieldShape[] =
@@ -406,7 +427,7 @@ export function FormSkeleton({
       label={label}
       className="ui-card flex flex-col gap-3 overflow-hidden py-4 sm:py-5"
     >
-      {titled ? <TitleBlock described={described} /> : null}
+      {titled ? <TitleBlock described={described} mark={mark} /> : null}
       <div className="flex flex-col gap-4 px-4 sm:px-5">
         {shapes.map((shape, i) => (
           <div key={i} className="flex flex-col gap-1.5">

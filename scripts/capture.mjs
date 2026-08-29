@@ -1332,8 +1332,22 @@ const slugOf = (route) => route.replace(/^\//, "").replace(/[/?&=]/g, "-") || "r
  * member of this one. `ac-theme` is still set on both, because the theme is a
  * property of the browser rather than of the session and `/login` stamps
  * `data-theme` like every other screen under `[locale]/layout.tsx`.
+ *
+ * **Membership is by path, because a route string may carry a query.** Both sets
+ * below are keyed on the screen, and `/login?reason=expired` is the same screen
+ * as `/login` in both respects — no session, no API request. Matched as a whole
+ * string it was in neither set, so it drew a session cookie it does not use and
+ * then tripped the run-level mock-request assertion at the foot of this file:
+ * one route in the run expected an API call, none of the screens made one, and
+ * the run failed while all twelve of its captures passed. A **green capture
+ * inside a red run** is the shape this harness exists to make impossible, so the
+ * lookup folds the query off first rather than the set growing a second spelling
+ * of every screen.
  */
-const SIGNED_OUT = new Set(["/login", "/nope"]);
+const pathOf = (route) => route.split("?")[0];
+
+const SIGNED_OUT_PATHS = new Set(["/login", "/nope"]);
+const SIGNED_OUT = { has: (route) => SIGNED_OUT_PATHS.has(pathOf(route)) };
 
 /**
  * The routes whose **HTTP status is expected to be 404**.
@@ -1349,8 +1363,12 @@ const SIGNED_OUT = new Set(["/login", "/nope"]);
  * Membership does two things, and the pair is the point: it exempts the
  * browser's own console error about the status line (see `capture()`), and it
  * **requires** the status to be 404 (see the assertion beside `page.goto`).
+ *
+ * Keyed on the path for the reason `SIGNED_OUT` above gives: a query string
+ * makes a different *screen*, never a different status.
  */
-const EXPECTED_404 = new Set(["/nope"]);
+const EXPECTED_404_PATHS = new Set(["/nope"]);
+const EXPECTED_404 = { has: (route) => EXPECTED_404_PATHS.has(pathOf(route)) };
 
 /**
  * One capture: one route at one width, theme and locale.

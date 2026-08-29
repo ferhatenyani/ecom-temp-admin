@@ -323,8 +323,40 @@ Content is **not** uniformly capped. The cap follows the content:
 | Detail, two column | `1fr` + `360px` aside, `lg`+ | order, product, customer |
 | Form | `640px` | settings, coupon, user |
 | Analytics | full, capped `1440px` | all analytics views |
+| Auth | `400px` form column; split at `lg`+ | login |
 
 Gutters: **16px** base · **24px** `sm`+ · **32px** `xl`+.
+
+> **Amended on the login branch: a row for the one screen outside the shell.**
+>
+> Every width above is a **content column under a `PageHeader`, inside
+> `AppShell`**. Login is neither. It has no page column, no header, no sidebar and
+> no session; it is one card and the space around it, and the table had no row
+> that describes that. The screen was shipping `max-w-md` — 448px — which is not
+> one of the widths on this page at all, so it was a fifth measurement nobody had
+> agreed to.
+>
+> **400px, because the card holds two fields and a button.** 640 is the form
+> width and it is right for settings: fourteen fields, three of them textareas,
+> read side by side. Two labelled inputs at 640 are a line of control with 500px
+> of nothing in it, and a person's eye has to travel the whole width to get from
+> the label to the end of the box. 400 is the width at which `login.intro` sets on
+> two lines in French and the password hint on two — the measurement is the
+> **text**, which is the only thing on this card that has a natural width.
+>
+> **The split at `lg`+ is layout, not decoration.** The form column takes 480px
+> (the 400 cap plus its gutters) and a second panel fills the remainder on
+> `--color-surface-2` behind a `border-inline-start`, carrying the panel's name
+> and one line. Below `lg` that panel is `display: none` and the form column is
+> the page, centred on `--color-canvas` — `hidden lg:flex`, which is the
+> mechanism §2.2's shell already uses for its own two presentations, because a
+> Server Component cannot know the viewport. No image and no gradient: §0's
+> direction is restraint and `check-design.sh` fails the build on the second.
+>
+> Nothing else in the table moves. This row describes one screen and there is no
+> second auth screen — there is no sign-up, no password reset and no
+> two-factor step, because the credential is a WordPress Application Password
+> minted outside this panel.
 
 > **Amended on the audit branch: "audit entry" came off the 768px row, because
 > there is no such screen and there cannot be one.**
@@ -358,8 +390,18 @@ as it would be if the aside were not there.
 
 ### 2.4 The page header
 
-Every screen opens with the same block. No collapsing, no scroll observer, no
-animation.
+Every screen **inside the shell** opens with the same block. No collapsing, no
+scroll observer, no animation.
+
+> **Amended on the login branch: "every screen" was one screen too many.**
+>
+> `/login` ships no `PageHeader`, and it is a deviation recorded rather than an
+> oversight. This block is a title, an optional subtitle and actions laid over a
+> **page column** — and login has no page column, no actions, and no list or
+> record to name. Its heading is the card's, at `--text-heading`, which is where
+> the only object on the page already puts one; a second title above it would be
+> a page header for a page that is one card. §2.3's Auth row carries the layout.
+> DECISIONS.md §21 carries the decision.
 
 ```
 Orders                                    [ Export ]  [ + New order ]

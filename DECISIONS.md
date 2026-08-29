@@ -34,13 +34,16 @@ left looking like an oversight.
 [x] 17. Settings
 [x] 18. Transfer
 [x] 19. Audit
-[ ] 20. Login + not-found
+[x] 20. Login + not-found
 [ ] 21. TEARDOWN
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **14
-files left**, down from 31 after the notifications branch. Transfer removed three
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **10
+files left**, down from 31 after the notifications branch. Login removed four —
+`app/not-found.tsx`, the login page, its form and `(panel)/page.tsx` — and added
+none; two of the ten that remain (`app/layout.tsx`, `(panel)/layout.tsx`) hold no
+markup of their own and will never carry one. Transfer removed three
 of its own — all it had — and added none; audit removed three and added none, and
 the fourth it would have removed is `inventory/RowSkeleton.tsx`, which this branch
 **orphaned without deleting** — see §20. Read it as an **upper
@@ -3133,8 +3136,375 @@ across a page boundary. Not deleted here; recorded for the teardown pass.
 
 ---
 
+## 21. Login + not-found — the front door, and the four files that guessed it
+
+Checklist item **20**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **A split at `lg`+ and one column below it.** A 400px form column holding the
+  card, and a second panel filling the remainder on `--color-surface-2` behind a
+  `border-inline-start`, carrying `app.name` and one line. The screen was
+  `max-w-md` — **448**, a width that appears nowhere in §2.3 — so DESIGN.md §2.3
+  gained an **Auth** row in the same edit, with the reason: every width in that
+  table is a content column under a `PageHeader` inside `AppShell`, and this
+  screen is none of those. 400 is where `login.intro` sets on two lines in French;
+  640 would put 500px of nothing beside two inputs. Below `lg` the panel is
+  `hidden lg:flex`, which is `AppShell`'s own mechanism — a Server Component
+  cannot know the viewport.
+- **No `PageHeader`, recorded as a deviation in §2.4 rather than left looking
+  like an oversight.** That block is title/subtitle/actions over a page column;
+  this screen has no page column and no actions, and its heading is the card's at
+  `--text-heading`. §2.4's opening sentence said "every screen" and now says
+  "every screen inside the shell", which is what it always meant.
+- **No image, no gradient, no shop logo.** The first two fail `check-design.sh`.
+  The third would render a state nobody has measured: `logo` is `z.unknown()`
+  because the resolved-attachment shape was never captured, and both the mock's
+  default and its `populated` variant answer `logo_id: 0`/`logo: null` — the
+  carried-forward entry says whoever ships the picker owes that capture first.
+  The mark is `lock` from the existing sprite, in `--color-fg`, **inside** the
+  card above the heading — see finding 3 below, which is where it ended up.
+
+**`react-hook-form` is gone, and the byte argument it was standing on did not
+survive contact with the measurement.** `LoginForm.tsx:18-27` refused Zod because
+`/fr/login` measured 222.4 KB against a 180 KB budget, and the brief predicted
+that removing RHF would *reduce* the page. Measured on two clean builds, First
+Load JS as the browser pays for it — every script the document asks for, fetched
+once, `noModule` excluded because a modern engine never fetches it:
+
+```
+                    before            after
+/fr/login    531.6 KB / 161.8    535.1 KB / 160.5   gzip −1.3 KB
+/fr/nope     451.4 KB / 134.2    496.6 KB / 148.0   gzip +13.8 KB
+```
+
+**So the prediction was wrong in both directions and the decision is still
+right.** Login is *flat*: ~12 KB gzip of RHF left and ~11 KB of `Form.tsx`,
+`Card`, `States` and `nav-tree` arrived, because this screen was the only one in
+the panel not already paying for the form layer. The 404 got **heavier**, and
+that is the honest cost of `EmptyState`: it is `"use client"` and pulls `Button`
+and `Icon` onto a page that previously rendered a plain server `<a>`. Neither
+number is a reason to keep a page-local form library — the fork was the problem,
+not the bytes — but the ledger should not carry a saving that did not happen.
+
+**The 222.4 KB in the old docblock is not comparable to any figure above** and
+was not re-derived: it predates Turbopack, and Next 16 no longer prints the
+per-route table at all — `.next/server/app/**/build-manifest.json` carries only
+the root chunks under Turbopack, so the document itself is now the only honest
+source for what a page loads.
+
+**One defect in four places: `/orders` as the panel's front door.** §11 measured
+a Support Agent as **403 on `/orders` and `/inventory`, 200 on `/customers`**, so
+`LoginForm.tsx:56`, `login/page.tsx:18`, `(panel)/page.tsx:13` and
+`app/not-found.tsx:62` all sent that reader to a forbidden screen as the first
+thing they saw. One `landingPath(capabilities)` in `components/ui/nav-tree.ts`
+answers the first entry in `NAV` the reader holds — **the same array the sidebar
+filters**, so the front door and the navigation cannot disagree. A holder of
+`ac_manage_orders` still lands on `/orders`; only the reader for whom it was
+wrong moves.
+
+- **`/api/session` does carry the list**, which the brief asked to be verified
+  before building on it: `identity` at `lib/api/schemas/order.ts:158` parses
+  `capabilities: z.array(z.string())` and `route.ts:45` returns `{ data: me }`
+  whole.
+- **`login/page.tsx` now spends one `/auth/me` for it**, and the cost is the
+  point: `readSession()` only unseals the cookie, and a cookie outlives a revoked
+  Application Password. The old check bounced a reader whose credential no longer
+  worked into the panel, which bounced them straight back. A failure falls through
+  to the form. `redirect()` is called **outside** the `try` — inside one it is
+  swallowed by its own `catch`.
+- **The 404 is the exception and links to the panel root.** It has no session and
+  must render when something about the request is already wrong, so it cannot know
+  who is reading; the root resolves the front door on the other side.
+  `states.backToPanel` replaces `nav.orders`, which named a destination this
+  screen could not promise.
+- **Zero capabilities is a refusal, not a redirect.** `landingPath` answers
+  `null`, and `ForbiddenState` grew the empty-list case for it — `[]` used to
+  format through `Intl.ListFormat` to the empty string and render *"demande la
+  permission ."*, a lock-shaped refusal naming nothing. Reached from the form
+  after a correct credential, and seeded from the server on `/login` and
+  `(panel)/page.tsx`. Photographed under `MOCK_IDENTITY=no_capabilities`.
+
+**The refusals: two sentences became five, and the old collapse was a
+copy-lies-about-cause defect.** `route.ts` distinguishes four shapes and the
+screen rendered two — everything that was not a 429 or a suspension read *"wrong
+username or password"*, so an unreachable shop and a malformed request both
+accused the reader's password. Now `401 unauthenticated` → `failed`, `401
+account_suspended` → `suspended`, `429` → the countdown, **`503 network` → its own
+sentence with the only retry on the screen** (§3.7-4; it is the one refusal that
+is genuinely retryable), and `400 invalid_request` → a generic failure that says
+outright it is not the password. **`LoginForm.tsx:49` had no try/catch**, so an
+offline submit was an unhandled rejection and a spinner that never stopped; a
+throw is the same condition the 503 reports and renders identically.
+
+**Three more found by opening the PNGs, after everything above was green.** None
+was visible to any assertion in the repo, which is the same lesson §20 records
+about the sidebar clip and §19 about `FileField`: two readings of a report agreed
+with each other and the screenshot did not.
+
+1. **The banner was `danger` for all five causes.** One `tone="danger"` served
+   expired, signed out, suspended, wrong credential and rate-limited — so *"Votre
+   session a expiré. Reconnectez-vous."* rendered in the panel's colour for
+   **something is wrong**, at a person who did nothing wrong and whose session
+   simply aged out. **This is §8's shipping defect exactly**, where all four
+   terminal moves were flagged `destructive` and *"Livré"* painted in
+   `--color-danger-fg`, and it is the same fix: the flag follows the outcome. The
+   tone lives on the `refusal` object beside `retryable` rather than being derived
+   at the render site, so one place decides what a cause *is*. Expired and signed
+   out are `info`; wrong credential, rate-limited, unreachable and the 400 are
+   `danger`.
+
+   **Suspended is `warning`, and that was the judgement.** Not `info`, because the
+   reader is *stopped* — no attempt gets them in and the only way forward is a
+   Super Admin, which is precisely why `route.ts:48-50` distinguishes it from a
+   plain 401 rather than letting silence send them round the loop. Not `danger`,
+   because **nothing failed**: a suspension is an administrative state somebody
+   set on purpose and the panel is behaving as configured, so the colour reserved
+   for a failure would name a cause it has not established — the defect being
+   fixed here, one tone over. `warning` is what this system already uses for *a
+   condition that blocks you and that you act on outside this screen*; it is what
+   `StaleBanner` carries, and `Notice` pairs every tone with an icon so the colour
+   is never the only signal.
+
+   **`role` follows it for the same reason.** A banner seeded from `?reason=` is
+   on screen at first paint and is *why the person is looking at the page* — it is
+   read in document order, and `role="alert"` announces an emergency about a page
+   that has only just arrived. Seeded banners are `status`; a banner answering a
+   submit is an `alert`. `Notice`'s own docblock had drawn that distinction since
+   the run began and this screen was passing `alert` unconditionally.
+
+   Seven unit tests pin it, and they read the **rendered skin class** rather than
+   a prop, because a test that read the prop would pass on a `Notice` that ignored
+   it.
+
+2. **The aside's two lines hugged the divider, in both directions.** Measured off
+   the 1440 captures: the aside spans 480→1440 and the block sat at x=520–773 —
+   40px from the border with ~667px of empty surface beyond it — and RTL mirrored
+   it exactly, so the text was pinned to the divider on both sides and the outer
+   two thirds of the panel was dead. It read as text that failed to land rather
+   than as restraint. `px-10` was doing inset where the panel wants optical
+   centring. Re-measured after `items-center` on a `max-w-96` block: **fr gaps
+   355/354, ar 386/387** — symmetric to the subpixel. The text still sets from its
+   own start edge; a centred paragraph beside a start-aligned form column would be
+   a third alignment nobody asked for. `px-10` stays as the floor at the narrow
+   end of `lg`.
+
+3. **The mark was orphaned above the card.** It sat outside, on the card's *outer*
+   edge (x=44) while the heading it belongs to started at the card's content
+   (x=62), so at 1440 it read as an icon floating over the card rather than as
+   part of its header block. It is **inside the card above the `<h1>`** now, where
+   it inherits `Card`'s own padding — aligning it from outside would have meant a
+   second copy of `px-4 sm:px-5` living in the page, which is the drift `Card`
+   exists to prevent. Measured on the shared inline-start edge: **61/61 at 1440
+   fr, 1375/1375 at 1440 ar, 33/33 at 340**. The forbidden state replaces the
+   whole card and brings its own lock, so nothing is orphaned there either.
+
+   **`FormSkeleton` gained `mark`, and it takes a node rather than a flag** — the
+   one decision in it. A boolean would have drawn a grey square where the real
+   screen draws a constant this file already holds, and a placeholder standing in
+   for something *known* is a shape guaranteed to be wrong rather than merely
+   unknown. `Card.footnote` takes a node for the same reason. Only `FormSkeleton`
+   exposes it; no `CardSkeleton` caller has a mark, and `Card` itself has no mark
+   slot, so putting it on both would be a shape invented ahead of a card that has
+   one. Re-measured through the delaying proxy at 1440: **fr −16px, ar +21px** on
+   a ~380px card, and the mark's 24 + 12 is reserved exactly rather than
+   approximated.
+
+**Three things the harness found that a code review did not, all after the screen
+was built.**
+1. **The 404 had no `<h1>` at all.** `EmptyState`'s title is an `<h2>` and this
+   document has no `PageHeader` above it, so the state's heading was the only one
+   on the page and it was a level 2. `e2e/not-found.spec.ts` could not see it:
+   all three of its heading assertions are `getByRole("heading", { name })`, which
+   matches any of the six levels. `StateFrame` takes `titleAs` now, defaulting to
+   `h2` so all nine existing callers are byte-identical, and the three assertions
+   carry `level: 1`.
+2. **`login.rateLimited` printed the raw seconds**, so the real bucket — 10
+   failures per 15 minutes, `Retry-After: 900` — rendered as *"Réessayez dans 900
+   secondes"* in both locales. Under a minute stays in seconds; at or above it,
+   minutes, **rounded up**, because sending somebody back at 14 minutes when the
+   bucket clears at 14:30 is a second refusal with the panel's name on it. With no
+   header there is no figure to print at all — the old code invented `60`, which
+   is a claim about a bucket it had not read.
+3. **A locked-out sign-in hung for ten seconds before the refusal painted.**
+   `/auth/me` is a GET, `isRetryable` is true on a 429, so `client.ts:104-107`
+   slept `min(retryAfter, 10)` and asked again — against a fifteen-minute window
+   the second ask cannot succeed. `RequestOptions` gained `retry?: boolean`,
+   default `true`, and `/api/session` passes `false` with the reasoning at the
+   call site. **Not a change to `isRetryable`:** the read bucket is 600/min and
+   its `Retry-After` is often a second or two, where asking again is exactly right.
+   Measured in Chromium, locked-out sign-in to sentence: **10s → 126ms**.
+
+**`TextField` gained `type` and `autoComplete` rather than being forked**, which
+is the whole reason the form library went. A password field is a labelled text
+field in every respect §3.4 legislates and differs only in masking what is typed.
+`isolate` additionally turns off `autoCapitalize`, `autoCorrect` and `spellCheck`
+— an identifier is case-significant and is not a word, and iOS capitalises the
+first letter of a text input, which turns `ac_panel_manager` into
+`Ac_panel_manager` and answers 401 for no visible reason. That reaches every
+`isolate` caller — SKUs, prices, tracking numbers — where it is also right.
+
+**The hard contract held.** `#username`, `#password` and a single
+`button[type="submit"]` survive, and `tests/login.test.tsx` pins all three plus
+the four refusals and the destination — **22 tests**. Eleven e2e spec files
+duplicate a `signIn` helper on exactly those selectors and **none of them can run
+here**, so a unit test is the only defence available. Driven end to end against
+the mock: fill, click, land on `/fr/orders` in 481ms. **`Form.tsx`'s
+pre-hydration guard now applies to this form**, so the two inputs ship
+`disabled` until React hydrates; Playwright's `fill` waits for enabled as part of
+actionability, and the round trip above is the positive control.
+
+**`loading.tsx` on `/login` costs the already-signed-in redirect its 307**, and
+this is a trade rather than a defect nobody noticed. `loading.md`'s Status Codes
+section: *"The response body starts streaming when a Suspense fallback renders
+(for example, a `loading.tsx`)"*, and the status cannot change after that. So a
+signed-in reader hitting `/login` now gets **200** and a client-side redirect
+instead of a server one. Measured in Chromium: they still land on `/fr/orders`,
+in 1 513ms against 1 192ms for `/fr`, which has no fallback in its segment and
+still answers 307. Nothing in the repo depends on the status —
+`capture.mjs:1174` checks `status > 0` — and §3.6 asks for the file
+unconditionally. The **404** is where the same mechanism would do real damage,
+which is why there is no `app/loading.tsx`: three of `e2e/not-found.spec.ts`'s
+four tests assert a 404 *status*, and a boundary at `app/` would turn all three
+into a 200 with a `noindex` tag **and** wrap every route in the panel.
+
+**`global-not-found.js` declined with the citation rather than left
+unconsidered.** The Next 16 docs name this app's exact shape — *"your root layout
+is defined using top-level dynamic segments"* — and it is still the wrong tool:
+it needs `experimental.globalNotFound`, it *"bypasses your app's normal
+rendering"* so it re-inherits the hand-rolled `<html>`/`<body>` problem this file
+already solves plus the font preloads and the theme attribute, and the docs' own
+reason for reaching for it is "when you can't build a 404 from `layout.js` and
+`not-found.js`" — which this file does.
+
+**`app/not-found.tsx` never stamped `data-theme`**, so every mistyped URL was
+light-themed for a dark-mode reader: it sits above `app/[locale]/layout.tsx` and
+emits its own `<html>`, and the tokens branch on the attribute. Same cookie, same
+helper, one line — and `capture.mjs:1334` asserts it, which is what the twelve
+`/nope` captures now prove. Its French fallback literals are gone too: the
+fallback loads `messages/fr.json`, the default locale's own file, so the copy
+cannot drift from the message file the way `home = "Commandes"` had.
+
+**Also declined, each recorded where the next reader will find it:** no locale
+switcher and no theme toggle (`ThemeToggle` is imported once, by `AppShell` —
+shipping the run's first one on the last screen is a panel-wide change this item
+does not own), no `app/[locale]/not-found.tsx` (measured on 16.3.1: it changed
+nothing, and the docblock saying so stays), and no sign-out control — that is
+`AppShell`'s account menu. `login.signedOut` and its branch stay with it:
+`DELETE /api/session` has no caller and nothing produces `reason=signedout`, so
+removing the branch would mean writing it again.
+
+**`ErrorSummary` is deliberately absent, and it is the run's first form without
+one.** §3.4 asks a failed submission for a summary linking each failure to its
+field, and it exists because a submit button at the foot of a nine-section form is
+nowhere near the field that refused. This form is two fields and a button inside a
+400px card, all three in the viewport at the 340px floor. Focus goes to the first
+empty field instead — the thing the summary exists to reach. What the retired
+screen did was worse than either: `aria-invalid` and **no message at all**, so an
+empty submit looked ignored.
+
+**States.** Loading is `loading.tsx` — the real mark and the real aside, a
+`FormSkeleton` for the card, because a constant is not something a skeleton stands
+in for. **Empty is unreachable and the docblock says so** per §3.7-2's media
+amendment: there is no collection here and no control that could empty one.
+Forbidden is the zero-capability case. Error is the refusal notice, with a retry
+on the network case alone. **Stale: no marker, disable owed** — §3.7-5 as amended
+on transfer. The screen holds no data at all (two empty inputs and a translated
+sentence), so a `StaleBanner` would report the age of a constant; it *writes*, so
+the submit goes off offline carrying `states.offlineWrites`. **`not-found` owes
+neither half** — a static Server Component, no data and no writes — per the
+customers amendment, and says so.
+
+**`inventory/[id]/not-found.tsx` hand-rolled a `ui-card` with an `Icon`** where
+the other eight panel not-found files call `EmptyState` — the same box with the
+same padding, drawn twice. It is `EmptyState` now and its heading survives through
+the `title` slot. The other eight are untouched.
+
+**i18n**: **2 066 keys in each file, exact parity, zero orphans.** The `login`
+namespace 12 → 18: `aside`, `required`, `unreachable`, `unexpected`,
+`rateLimitedMinutes` and `rateLimitedUnknown` arrived and nothing lost its last
+caller. `states` gained `forbiddenBodyNone` and `backToPanel`. No literal survives
+in a component: `app/not-found.tsx:37-39`'s three French fallbacks are the default
+locale's message file now.
+
+**Verified**: `tsc` silent · lint **0 errors, 8 warnings** (baseline) ·
+`test:design` 14/14, floor 323 → **324** against 326 scanned · `test:unit`
+**1 012/1 012** (973 before; `tests/login.test.tsx` is 29 of the 39) · clean
+`rm -rf .next && npm run build` · **84 captures clean, both runs `PASS`** — 12
+each on `/login`, `/nope`, `/login?reason=expired`, `/login?reason=suspended`
+(the `warning` tone), `/inventory/9032` and `/audit`, plus 12 on the panel root
+under `MOCK_IDENTITY=no_capabilities`, which is the zero-capability refusal.
+`/audit` is the control this branch did not touch; `/inventory/9032` is the one
+panel screen it did.
+
+**These were re-taken after the three PNG findings, and the first 48 are gone.**
+An earlier draft of this block recorded 48 clean captures and then, four
+paragraphs on, that they predated the tone, the centring and the mark — three
+changes visible in exactly those frames. **A "Verified" block naming a number
+that a later paragraph retracts is not a verification**, and the ledger has been
+burnt by a figure travelling in prose three times now (§16's capture count, §20's
+84, the refetch count in the carried list). The count above is the re-run.
+
+~~**One capture run reports `FAIL` at the run level and every frame in it is
+clean.**~~ **Closed on this branch, in `capture.mjs`.** `SIGNED_OUT` and
+`EXPECTED_404` held literal route strings, so `"/login?reason=expired"` was in
+neither set: it drew a session cookie it does not use and then tripped the
+run-level "the mock received zero requests" assertion — a **green capture inside
+a red run**, which is the shape that harness exists to make impossible. Both sets
+fold the query off the route now, because a query makes a different *screen* and
+never a different session or status. Found by the build agent, fixed by the
+orchestrator, and it is the reason the count above says `PASS` twice rather than
+reporting clean frames inside a failing run.
+
+Driven in Chromium in three probes outside the repo, **61/61** — 47 for the
+screens and 14 for the fixes: the tone and role of all six causes across both
+themes and both entry paths (seeded and submitted); the aside block's symmetric
+gaps in both directions; the mark sharing the heading's inline-start edge at
+three frames; the aside laid out at 1440 and absent at 768 and 340; the card at
+its 25rem cap in both locales —
+**400px in French and 425px in Arabic**, which is `globals.css:71`'s deliberate
+106.25% root and the same arithmetic every `PageBody` width already does; **0px**
+document overflow at 340/768/1440 × fr/ar on both screens; the tab order
+`username → password → submit` at every frame; an empty submit rendering two
+messages, `aria-invalid`, and focus on the first empty field; the submit disabled
+offline carrying its reason and **no stale marker**; and the 404's sprite actually
+resolving — `IconSprite` had to be rendered here too, because this document is
+outside `app/[locale]/layout.tsx` and every `<use href="#icon-…">` would otherwise
+resolve against nothing.
+
+---
+
 ## Carried forward — teardown owns these
 
+- **`lib/api/browser.ts` has no 429 handling at all, and a comment two files over
+  says it does.** `QueryProvider.tsx:29-30` reads *"lib/api handles a 429 by its
+  Retry-After"* — that retry lives in `client.ts`, which is `server-only`, so
+  **every browser `useQuery` in the panel surfaces a 429 with zero backoff**
+  against a 600/min read bucket shared across tabs. Found by the login branch's
+  honesty audit while measuring the *other* 429, the failed-login one, which is
+  fixed (§21). This is the read bucket and it is untouched. The comment is the
+  dangerous half: it is the shape this ledger keeps recording — a note that reads
+  like a property of the system and is really a description of a different file.
+  The check is one command: `grep -n 'retryAfter\|429' lib/api/browser.ts`.
+- **`Notice` draws an alert triangle for `info`, `warning` and `danger` alike** —
+  `States.tsx:355` is `tone === "success" ? "check" : "alert"`, so a session that
+  merely expired carries the same glyph as a refused credential and only the
+  colour separates them. **Not a §1.2 failure and that is why it is here rather
+  than fixed**: the rule is that colour never carries meaning *alone*, and a
+  `Notice`'s meaning is its own sentence, which is present and specific in both
+  cases. It is a refinement, and the cost is real — the sprite has no info glyph
+  (`alert`, `check`, `clock`, `lock`, `note`… — no circle-`i`), so closing it
+  means a new sprite entry, and the mapping is shared by 38 call sites. Two of
+  them are `tone="info"` today and the login branch shipped one of them, which is
+  what made it visible. `grep -c 'tone="info"' -r app/ components/` is the check.
+- **The mock enforces three capabilities nowhere**, so a reader refused on the
+  wire is served by the harness: `ac_manage_products`, `ac_manage_coupons` (whose
+  403 `lib/api/allowlist.ts:123-125` records outright) and `ac_manage_shipping`.
+  Reachable today — under `MOCK_IDENTITY=no_transfer` the same capability is
+  refused at `/export/products` and served at `/products` **in one process**.
+  Found by the login branch's honesty audit and left because closing it re-captures
+  `/dashboard`, `/analytics` and `/products`, which that branch does not own; it is
+  pinned by a test that goes red when somebody closes one, so the next reader
+  inherits a failing assertion rather than a paragraph.
 - **The sidebar scrolls with no affordance, and the two entries it clips are the
   two newest screens in the run.** Found while reading this branch's captures and
   then measured in Chromium at 1440, all seventeen nav links rendering:
@@ -3736,8 +4106,12 @@ across a page boundary. Not deleted here; recorded for the teardown pass.
   **Closed on the content branch**; all 13 slugs in `lib/capabilities.ts` are now
   covered and none exists without a slug. Three branches found it three times,
   which suggests the check belongs in `check-design.sh` rather than in a person.
-- `@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
-  form.
+- ~~`@hookform/resolvers` is imported nowhere; `react-hook-form` only by the login
+  form.~~ **Closed on the login branch — both uninstalled.** The form is
+  `components/ui/Form.tsx` like every other screen's. The saving was **not** what
+  the entry implied: `/fr/login`'s First Load JS moved 161.8 → 160.5 KB gzip,
+  because this was the one screen not already paying for the form layer. See §21;
+  the fork was the reason, not the bytes.
 - ~~`movementReasonHint` has no caller in either message file. So do
   `cod.turnOff` and `cod.reasonPlaceholder`.~~ **Closed on the analytics branch —
   all three removed from both files, parity re-verified at 1 833 keys.** They

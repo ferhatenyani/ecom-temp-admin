@@ -13,11 +13,32 @@ import { Button, ButtonLink } from "./Button";
  * afterwards. Only the surfaces and the type scale move.
  */
 
-/** The shared frame — a card with a centred column, at a consistent height. */
+/**
+ * The shared frame — a card with a centred column, at a consistent height.
+ *
+ * ## `titleAs`, added on the login branch
+ *
+ * The heading was an unconditional `<h2>` and that is right for every state
+ * inside the shell: `PageHeader` renders the screen's `<h1>` above them, and a
+ * state that promoted itself to level 1 would give those documents two.
+ *
+ * `app/not-found.tsx` is the one screen with no header above it — it sits outside
+ * `app/[locale]/layout.tsx` and emits its own `<html>` — so its heading was the
+ * only one on the page and it was a level 2. That is a document with no `<h1>`,
+ * and **the e2e suite could not see it**: all three of its heading assertions are
+ * `getByRole("heading", { name })` with no `level`, which matches any of the six.
+ * They carry `level: 1` now, so the gap cannot reopen silently.
+ *
+ * The level is the *caller's* because only the caller knows what is above it, and
+ * it defaults to 2 so all nine existing callers are byte-identical. The size is
+ * deliberately **not** tied to it: `--text-subheading` is the state's own scale
+ * and a heading that grew because of its level would make the 404 shout.
+ */
 function StateFrame({
   icon,
   tone = "muted",
   title,
+  titleAs: Title = "h2",
   body,
   detail,
   action,
@@ -25,6 +46,7 @@ function StateFrame({
   icon: IconName;
   tone?: "muted" | "danger";
   title?: string;
+  titleAs?: "h1" | "h2";
   body: ReactNode;
   detail?: ReactNode;
   action?: ReactNode;
@@ -35,7 +57,7 @@ function StateFrame({
         name={icon}
         className={`size-6 ${tone === "danger" ? "text-ui-danger-fg" : "text-ui-subtle"}`}
       />
-      {title ? <h2 className="mt-3 text-ui-subheading text-ui-fg">{title}</h2> : null}
+      {title ? <Title className="mt-3 text-ui-subheading text-ui-fg">{title}</Title> : null}
       <p className="mt-1.5 max-w-96 text-ui-body text-ui-muted">{body}</p>
       {detail ? (
         <p className="mt-1 max-w-96 text-ui-label text-ui-subtle">{detail}</p>
@@ -52,6 +74,30 @@ function StateFrame({
  * empty states say nothing useful.
  */
 export function EmptyState({
+  /**
+   * A heading above the message.
+   *
+   * `StateFrame` has carried the slot since the redesign and only `ErrorState`
+   * and `ForbiddenState` exposed it — the same asymmetry `detail` had before the
+   * shipping branch closed it. Most empty states are right not to pass one: a
+   * heading over "no results for this filter" is a second way of saying the same
+   * sentence, and §8's rule is that a screen's own `PageHeader` is where a title
+   * belongs.
+   *
+   * The callers that need it are the two not-found screens with **no page
+   * header to put it in**: the root 404, which sits outside `app/[locale]` and
+   * has no page column at all, and the inventory item, whose header names the
+   * ledger it came from rather than the failure. Both were rendering
+   * `states.notFoundTitle` through markup of their own for exactly this reason.
+   */
+  title,
+  /**
+   * The heading's level. `h2` everywhere inside the shell, because `PageHeader`
+   * has already rendered the document's `<h1>`; `h1` on the root 404, which has
+   * no header above it and had **no level-1 heading at all** until this prop
+   * existed. See `StateFrame`.
+   */
+  titleAs,
   message,
   /**
    * A second line, below the message and above the action — what the absence
@@ -69,6 +115,8 @@ export function EmptyState({
   action,
   icon = "search",
 }: {
+  title?: string;
+  titleAs?: "h1" | "h2";
   message: string;
   detail?: string;
   /**
@@ -89,6 +137,8 @@ export function EmptyState({
   return (
     <StateFrame
       icon={icon}
+      title={title}
+      titleAs={titleAs}
       body={message}
       detail={detail}
       action={
@@ -129,6 +179,21 @@ export function EmptyState({
  * `A, B, C ou D` and Arabic wants `أ أو ب`, and a hard-coded `", "` also carries
  * the wrong comma in Arabic (`،`). The `disjunction` type is the honest one: the
  * reader needs *any* of the four, not all of them.
+ *
+ * ## An **empty** list, added on the login branch
+ *
+ * `/transfer` made the list form possible and `[]` was a latent bug in it:
+ * `Intl.ListFormat` formats nothing to the empty string, so `forbiddenBodyAny`
+ * would have rendered *"Cette section demande la permission ."* — a refusal
+ * naming no capability at all, which is exactly the blank page §3.7-3 forbids
+ * wearing a lock icon.
+ *
+ * It is a real state rather than a defensive branch: an account can hold **zero**
+ * of the thirteen, and the screen that meets it is the login form, where letting
+ * somebody through to an empty shell would be worse than saying so. There is no
+ * capability to name, so the sentence names the *kind* of thing to ask for and
+ * `forbiddenAsk` names who to ask — which is the whole of §3.7-3's contract
+ * discharged without inventing a permission this account might not want.
  */
 export function ForbiddenState({ capability }: { capability: string | readonly string[] }) {
   const t = useTranslations("states");
@@ -146,11 +211,13 @@ export function ForbiddenState({ capability }: { capability: string | readonly s
       icon="lock"
       title={t("forbiddenTitle")}
       body={
-        names.length === 1
-          ? t("forbiddenBody", { capability: names[0] })
-          : t("forbiddenBodyAny", {
-              capabilities: new Intl.ListFormat(locale, { type: "disjunction" }).format(names),
-            })
+        names.length === 0
+          ? t("forbiddenBodyNone")
+          : names.length === 1
+            ? t("forbiddenBody", { capability: names[0] })
+            : t("forbiddenBodyAny", {
+                capabilities: new Intl.ListFormat(locale, { type: "disjunction" }).format(names),
+              })
       }
       detail={t("forbiddenAsk")}
     />
