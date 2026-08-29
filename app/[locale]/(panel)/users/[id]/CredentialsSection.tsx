@@ -10,14 +10,14 @@ import type {
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import { credentialConflict, neverUsed } from "@/lib/staff";
 import { formatDate } from "@/lib/format/date";
-import { ListGroup, ListRow } from "@/components/primitives/GroupedList";
-import { TextField } from "@/components/primitives/Field";
-import { Button } from "@/components/primitives/Button";
-import { Icon } from "@/components/primitives/Icon";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { Button, IconButton } from "@/components/ui/Button";
+import { TextField } from "@/components/ui/Form";
+import { Modal } from "@/components/ui/Overlay";
+import { ConfirmDialog } from "@/components/ui/Confirm";
+import { Notice } from "@/components/ui/States";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
-import { Sheet } from "@/components/primitives/Sheet";
-import { ActionSheet } from "@/components/primitives/ActionSheet";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useToast } from "@/components/primitives/Toast";
 
 /**
@@ -36,15 +36,56 @@ import { useToast } from "@/components/primitives/Toast";
  * race that passed four runs before failing once. **A nested component holding
  * `useState` has that bug**, and this one holds the least recoverable state in
  * the panel: a credential that cannot be read again.
+ *
+ * ## The secret is a `Modal`, and the primitive change is the point
+ *
+ * It was a `Sheet`, which §3.1 deleted. The replacement is not mechanical: §3.1
+ * gives a `Modal` to *"a task that must be finished or abandoned"* and a `Drawer`
+ * to *"context beside the page"*, and this is the purest example of the first in
+ * the whole panel. The value **cannot be read again** — not on the collection,
+ * not on `GET /users/{id}`, not in the audit row, which was checked for it rather
+ * than assumed clean — so a person who dismisses this without copying has lost
+ * it, and a surface that reads as "context" beside a page invites exactly that.
+ * `sm` (400): it holds one line of prose and one 24-character string.
+ *
+ * There is no reveal affordance anywhere else in this panel, because there is
+ * nothing to reveal.
+ *
+ * ## The mint answers 201
+ *
+ * `UserController.php:267`, ADMIN_PANEL.md §87's own example, and the harness all
+ * agree; `lib/staff.ts` said 200 until 2026-08-29 and was the only source that
+ * did. Nothing branches on it — `acWrite` treats every 2xx alike — which is how a
+ * wrong comment survives a year.
+ *
+ * ## Two 409s on one route, and they are different sentences
+ *
+ * A duplicate name is a validation error on the field. A suspended account is a
+ * fact about the account: the credential would answer **401 at every route**
+ * including `/auth/me` and `/health`, so issuing one would be handing somebody a
+ * key to a locked door. It belongs at the top of the section with the reactivate
+ * action beside it — which is why this component takes `onReactivate` rather than
+ * telling the reader to scroll down and find the button themselves. Rendering
+ * both as a toast would make the second look like a typo.
+ *
+ * The refusal is also **pre-empted**: the controls are absent on a suspended
+ * account with the reason in their place, per §3.3, so the 409 is only reachable
+ * by a race. It is still handled, because that race is real — a second tab.
  */
 export function CredentialsSection({
   user,
   locale,
+  blocked,
   onChanged,
+  onReactivate,
 }: {
   user: StaffUserDetail;
   locale: string;
+  /** §3.7: the offline sentence, or `undefined`. Disables every write here. */
+  blocked?: string;
   onChanged: () => void;
+  /** Absent on the acting user's own account, where reactivation is refused. */
+  onReactivate?: () => void;
 }) {
   const t = useTranslations("staff");
   const toast = useToast();
@@ -52,9 +93,10 @@ export function CredentialsSection({
   const [name, setName] = useState("");
   const [minting, setMinting] = useState(false);
   const [nameError, setNameError] = useState<string | undefined>(undefined);
-  const [blocked, setBlocked] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<string | null>(null);
   const [minted, setMinted] = useState<MintedApplicationPassword | null>(null);
   const [revoking, setRevoking] = useState<ApplicationPassword | null>(null);
+  const [revokeBusy, setRevokeBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const suspended = user.status === "suspended";
@@ -62,7 +104,7 @@ export function CredentialsSection({
   async function mint() {
     setMinting(true);
     setNameError(undefined);
-    setBlocked(null);
+    setConflict(null);
 
     try {
       const created = await acWrite<MintedApplicationPassword>(
@@ -76,16 +118,11 @@ export function CredentialsSection({
       onChanged();
     } catch (error) {
       if (error instanceof BrowserApiError && error.status === 409) {
-        /*
-         * **Two 409s on one route, and they are different sentences.** A
-         * duplicate name is a validation error on the field; a suspended account
-         * is a fact about the account and belongs at the top of the section with
-         * the reactivate action beside it. Rendering both as a toast would make
-         * the second look like a typo.
-         */
-        const conflict = credentialConflict(error.details);
-        if (conflict.kind === "name") setNameError(error.message);
-        else setBlocked(error.message);
+        const kind = credentialConflict(error.details);
+        if (kind.kind === "name") setNameError(error.message);
+        else setConflict(error.message);
+      } else if (error instanceof BrowserApiError) {
+        setNameError(error.fields?.name ?? error.message);
       } else {
         setNameError((error as Error).message);
       }
@@ -95,6 +132,7 @@ export function CredentialsSection({
   }
 
   async function revoke(password: ApplicationPassword) {
+    setRevokeBusy(true);
     try {
       await acWrite("DELETE", `/users/${user.id}/application-passwords/${password.uuid}`);
       toast.show(t("credentialRevoked"));
@@ -102,158 +140,191 @@ export function CredentialsSection({
     } catch (error) {
       toast.show((error as Error).message);
     } finally {
+      setRevokeBusy(false);
       setRevoking(null);
     }
   }
 
+  const disabled = suspended || blocked !== undefined;
+
   return (
     <>
-      <ListGroup title={t("credentials")} footnote={t("credentialsNote")}>
-        {blocked !== null ? (
-          <ListRow className="tone-danger tonal">
-            <span className="text-footnote">{blocked}</span>
-          </ListRow>
-        ) : null}
+      <Card title={t("credentials")} footnote={t("credentialsNote")}>
+        <div className="flex min-w-0 flex-col gap-4">
+          {/*
+            The 409 that is a fact about the account, not about the field, with
+            the remedy beside it rather than a screen away. Only reachable by a
+            race now that the controls below are absent, and kept for that race.
+          */}
+          {conflict !== null ? (
+            <Notice role="alert" tone="danger" title={t("mintSuspended")}>
+              {onReactivate ? (
+                <div>
+                  <Button size="sm" variant="secondary" onClick={onReactivate}>
+                    {t("reactivate")}
+                  </Button>
+                </div>
+              ) : null}
+            </Notice>
+          ) : null}
 
-        {user.application_passwords.length === 0 ? (
-          <ListRow>
-            <span className="text-footnote text-label-secondary">{t("noCredentials")}</span>
-          </ListRow>
-        ) : (
-          user.application_passwords.map((password) => (
-            <ListRow key={password.uuid} className="flex items-center gap-3">
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5 py-1">
-                {/* A device name is prose somebody typed — `dir="auto"`, or
-                    `truncate` clips from the wrong end in the other locale. */}
-                <span className="min-w-0 truncate text-body text-label" dir="auto">
-                  {password.name}
-                </span>
-                <span className="flex items-center gap-2 text-caption text-label-secondary">
-                  <Isolate>{t("credentialCreated", { when: formatDate(password.created, locale) })}</Isolate>
-                  {neverUsed(password) ? (
-                    <StatusBadge tone="neutral">{t("neverUsed")}</StatusBadge>
-                  ) : (
-                    <Isolate>
-                      {t("lastUsed", { when: formatDate(password.last_used, locale, false) })}
-                    </Isolate>
-                  )}
-                </span>
-              </span>
-              <Button variant="destructive" onClick={() => setRevoking(password)}>
-                {t("revoke")}
-              </Button>
-            </ListRow>
-          ))
-        )}
+          {user.application_passwords.length === 0 ? (
+            <p className="text-ui-label text-ui-muted">{t("noCredentials")}</p>
+          ) : (
+            <ul className="flex min-w-0 flex-col">
+              {user.application_passwords.map((password) => (
+                <li
+                  key={password.uuid}
+                  className="flex min-w-0 items-center gap-3 border-b border-ui-line py-2 last:border-b-0"
+                >
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    {/* A device name is prose somebody typed — `dir="auto"`, or
+                        `truncate` clips from the wrong end in the other locale. */}
+                    <span dir="auto" className="min-w-0 truncate text-ui-compact text-ui-fg">
+                      {password.name}
+                    </span>
+                    <span className="flex flex-wrap items-center gap-2 text-ui-label text-ui-muted">
+                      <Isolate>
+                        {t("credentialCreated", {
+                          when: formatDate(password.created, locale, false),
+                        })}
+                      </Isolate>
+                      {neverUsed(password) ? (
+                        <Badge tone="neutral">{t("neverUsed")}</Badge>
+                      ) : (
+                        <Isolate>
+                          {t("lastUsed", {
+                            when: formatDate(password.last_used, locale, false),
+                          })}
+                        </Isolate>
+                      )}
+                    </span>
+                  </span>
+                  <IconButton
+                    label={t("revokeNamed", { name: password.name })}
+                    icon="trash"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setRevoking(password)}
+                    disabled={blocked !== undefined}
+                    title={blocked}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
 
-        <TextField
-          label={t("credentialName")}
-          value={name}
-          onChange={setName}
-          error={nameError}
-          hint={t("credentialNameHint")}
-          placeholder={t("credentialNamePlaceholder")}
-          disabled={suspended}
-        />
+          {/*
+            **Absent rather than disabled on a suspended account**, with the reason
+            in their place — §3.3, the same treatment the three self-refusals get
+            one card up. Measured: minting for a suspended account is a 409, and a
+            credential issued to one answers 401 at every route.
 
-        <ListRow>
-          <Button
-            variant="tinted"
-            onClick={() => void mint()}
-            loading={minting}
-            disabled={name.trim() === "" || suspended}
-            fullWidth
-          >
-            {t("mint")}
-          </Button>
-        </ListRow>
-
-        {/*
-          The refusal named rather than a greyed control with nothing beside it.
-          Measured: minting for a suspended account is a 409 — the credential
-          would answer 401 at every route, so a screen that issued one and said
-          nothing would be handing somebody a key to a locked door.
-        */}
-        {suspended ? (
-          <ListRow>
-            <span className="text-caption text-label-tertiary">{t("mintSuspended")}</span>
-          </ListRow>
-        ) : null}
-      </ListGroup>
+            Offline is the other gate and it is a *disabled* control rather than an
+            absent one, deliberately: the act is possible and the moment is not,
+            which is what `title` says. §3.7's fifth state, not §3.3's dead control.
+          */}
+          {suspended ? (
+            <p className="text-ui-label text-ui-muted">{t("mintSuspended")}</p>
+          ) : (
+            <>
+              <TextField
+                label={t("credentialName")}
+                value={name}
+                onChange={setName}
+                error={nameError}
+                hint={t("credentialNameHint")}
+                placeholder={t("credentialNamePlaceholder")}
+                disabled={minting || blocked !== undefined}
+              />
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => void mint()}
+                  loading={minting}
+                  disabled={name.trim() === "" || disabled}
+                  title={blocked ?? (name.trim() === "" ? t("credentialNameRequired") : undefined)}
+                >
+                  {t("mint")}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
 
       {/*
-        The secret, once. `Sheet` rather than a toast or an inline panel: it is
-        modal on purpose — the value cannot be read again, and a person who
-        scrolls past it has lost it. There is no reveal affordance anywhere else
-        in this panel, because there is nothing to reveal.
+        The secret, once. A `Modal` and not a `Drawer`: a task that must be
+        finished or abandoned. See the docblock.
       */}
-      <Sheet
+      <Modal
         open={minted !== null}
         onOpenChange={(open) => {
           if (!open) setMinted(null);
         }}
         title={t("secretTitle")}
         description={t("secretWarning")}
+        size="sm"
         footer={
-          <Button variant="filled" onClick={() => setMinted(null)} fullWidth>
-            {t("secretDone")}
-          </Button>
+          <Button onClick={() => setMinted(null)}>{t("secretDone")}</Button>
         }
       >
         {minted !== null ? (
-          <div className="flex flex-col gap-3">
-            <p className="text-footnote text-label-secondary" dir="auto">
+          <div className="flex min-w-0 flex-col gap-3">
+            <p dir="auto" className="text-ui-label text-ui-muted">
               {minted.name}
             </p>
 
-            <div className="flex items-center gap-2 rounded-md bg-surface-2 px-3 py-2">
+            <div className="flex items-center gap-2 rounded-ui-md border border-ui-line bg-ui-surface-2 px-3 py-2">
               {/* A credential is the purest identifier there is: `Ltr`, tabular,
-                  and it must never be reordered by an Arabic paragraph. */}
-              <Ltr className="min-w-0 flex-1 select-all break-all text-body text-label">
+                  and it must never be reordered by an Arabic paragraph.
+                  `select-all` so one click takes the whole string, and
+                  `break-all` because 24 characters with no space in them have no
+                  break opportunity at 340px. */}
+              <Ltr className="min-w-0 flex-1 select-all break-all text-ui-body text-ui-fg">
                 {minted.password}
               </Ltr>
-              <button
-                type="button"
+              <IconButton
+                label={t("copy")}
+                icon={copied ? "check" : "note"}
+                variant="secondary"
                 onClick={() => {
                   void navigator.clipboard?.writeText(minted.password);
                   setCopied(true);
                 }}
-                aria-label={t("copy")}
-                className="tap-44 press flex size-11 shrink-0 items-center justify-center rounded-full text-accent"
-              >
-                <Icon name={copied ? "check" : "note"} className="size-5" />
-              </button>
+              />
             </div>
 
             {copied ? (
-              <p role="status" className="text-caption tonal-fg tone-success">
+              <p role="status" className="text-ui-label text-ui-success-fg">
                 {t("copied")}
               </p>
             ) : null}
 
-            <p className="text-caption text-label-tertiary">{t("secretLost")}</p>
+            <p className="text-ui-label text-ui-subtle">{t("secretLost")}</p>
           </div>
         ) : null}
-      </Sheet>
+      </Modal>
 
-      <ActionSheet
+      {/*
+        Revoking is destructive and **not** irreversible in the sense §3.1's typing
+        guard protects: the credential is gone, but nothing is lost that minting
+        another does not replace, and the device name is not an identifier of the
+        record so much as a label on it. So: a `ConfirmDialog`, `danger`, cancel
+        focused, and no typing. The delete on the card below is the one act here
+        that types.
+      */}
+      <ConfirmDialog
         open={revoking !== null}
         onOpenChange={(open) => {
           if (!open) setRevoking(null);
         }}
         title={t("revokeTitle")}
-        description={revoking !== null ? t("revokeBody", { name: revoking.name }) : undefined}
-        actions={
-          revoking !== null
-            ? [
-                {
-                  label: t("revoke"),
-                  tone: "destructive" as const,
-                  onSelect: () => void revoke(revoking),
-                },
-              ]
-            : []
-        }
+        body={revoking === null ? "" : t("revokeBody", { name: revoking.name })}
+        confirmLabel={t("revoke")}
+        loading={revokeBusy}
+        onConfirm={() => {
+          if (revoking !== null) void revoke(revoking);
+        }}
       />
     </>
   );

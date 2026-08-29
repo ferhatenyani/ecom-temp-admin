@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * Settings, staff, the trail and the transfers — deliberately small.
@@ -60,6 +60,31 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
  */
 async function selectSegment(page: Page, label: string) {
   await page.locator("label", { hasText: new RegExp(`^${label}$`) }).click();
+}
+
+/**
+ * One row of a migrated list, at whichever width the project is running.
+ *
+ * **This file had no `rows()` helper while eight of the eleven other list specs
+ * do**, and the three staff tests each resolved rows through
+ * `page.locator('a[href*="/users/"]')` instead. That was already fragile — the
+ * comment at the mint test records a near-miss where the create button's own
+ * anchor matched before any row — and the staff redesign makes it wrong outright:
+ * `DataTable` renders **both** presentations into the DOM at every width and
+ * hides one with `md:` classes, so an unfiltered anchor selector counts every row
+ * twice the moment the record list is in the tree.
+ *
+ * Coupons' shape, and the `visible` filter is the load-bearing half: `tbody tr`
+ * is the table and `li.ui-card` is the record list, and exactly one of the two is
+ * rendered at any width.
+ */
+function rows(page: Page): Locator {
+  return page.locator("tbody tr, li.ui-card").filter({ visible: true });
+}
+
+/** The row for one account, found by the login the fixture pins. */
+function rowFor(page: Page, login: string): Locator {
+  return rows(page).filter({ hasText: login }).first();
 }
 
 test.describe("settings", () => {
@@ -140,34 +165,43 @@ test.describe("settings", () => {
 test.describe("staff", () => {
   test("suspends and reactivates, which had no fixture before the seed", async ({ page }) => {
     /*
-     * **Measured before `scripts/seed-staff.mjs`: all 70 accounts were
-     * `active`.** So this test is the seed's whole justification — without it
-     * the suspended badge, the reactivate action and the `?status=` filter are
-     * three controls with nothing to act on, which is 14b's "every row is
-     * pending" one collection over.
+     * **Measured before `scripts/seed-staff.mjs`: every account was `active`.**
+     * So this test is the seed's whole justification — without it the suspended
+     * badge, the reactivate action and the `?status=` filter are three controls
+     * with nothing to act on, which is 14b's "every row is pending" one
+     * collection over.
      *
      * It walks the pair in one direction and back, and the seed re-asserts the
      * suspended state on the next run, so this file can leave the shop as it
      * found it without needing to.
+     *
+     * **The second press is now the `ConfirmDialog`'s**, not an `ActionSheet`
+     * item. Both overlays put a second control with the same label on screen, so
+     * the `.last()` shape survives the primitive change — what changed is that
+     * the dialog's confirm is a real button in a focus trap with Cancel as the
+     * default focus, which is why the assertions below wait on the dialog's own
+     * heading before pressing.
      */
     await signIn(page, "fr");
     await page.goto("/fr/users?status=suspended");
     await page.waitForSelector('[data-testid="users-count"]');
 
-    const row = page.locator('a[href*="/users/"]').filter({ hasText: SUSPENDED }).first();
+    const row = rowFor(page, SUSPENDED);
     await expect(row).toBeVisible();
     await expect(row).toContainText("Suspendu");
-    await row.click();
+    await row.getByRole("link").first().click();
 
-    // Reactivate.
+    // Reactivate. The tone flips with the outcome, so this one is the primary.
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeEnabled();
     await page.getByRole("button", { name: "Réactiver" }).click();
+    await expect(page.getByRole("heading", { name: "Réactiver ce compte ?" })).toBeVisible();
     await page.getByRole("button", { name: "Réactiver" }).last().click();
     await expect(page.getByText("Compte réactivé.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Suspendre" })).toBeVisible();
 
     // And back, so the fixture survives a run that is not followed by the seed.
     await page.getByRole("button", { name: "Suspendre" }).first().click();
+    await expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible();
     await page.getByRole("button", { name: "Suspendre" }).last().click();
     await expect(page.getByText("Compte suspendu.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeVisible();
@@ -177,27 +211,47 @@ test.describe("staff", () => {
     page,
   }) => {
     /*
-     * ADMIN_PANEL.md is explicit: the five refusals **are** the security model,
-     * and a Super Admin should be able to see it. So three of them render as a
-     * disabled control with the reason beside it, on the caller's own row —
-     * which is the one account the panel can be certain about without asking.
+     * ADMIN_PANEL.md is explicit: the refusals **are** the security model, and a
+     * Super Admin should be able to see it. So each one's *reason* renders on the
+     * caller's own row — which is the one account the panel can be certain about
+     * without asking — and the three sentences below are asserted verbatim
+     * because they are the contract §87 describes.
+     *
+     * **What changed with the redesign is the control, not the subject.** The
+     * three used to be disabled buttons with the reason beside them; they are now
+     * absent, with the reason in their place, because DESIGN.md §3.3 is
+     * unconditional — a control that cannot act is not rendered — and this screen
+     * was the last one in the panel arguing the other way. So the two
+     * `toBeDisabled()` assertions became `toHaveCount(0)`. The test's title is
+     * unchanged and still true: it is about the refusals being *shown* rather
+     * than hidden, and all three sentences are still on screen. `UserDetail.tsx`
+     * carries the argument.
+     *
+     * The role assertion is unchanged and still non-vacuous: on an ordinary
+     * account the picker *is* the account's role and is labelled "Rôle", so the
+     * selector matches exactly one control there and none here. (It picks up
+     * "Nouveau rôle" too — `getByLabel` is a case-insensitive substring — which
+     * is the label the picker takes only on an account whose current role it
+     * cannot represent. Both are controls that must be absent on your own row.)
+     * The held role renders as a `ReadOnlyField`, which is two `<span>`s and no
+     * `<label>`, so it is not a false positive.
      */
     await signIn(page, "fr");
     await page.goto("/fr/users");
     await page.waitForSelector('[data-testid="users-count"]');
 
-    const mine = page.locator('a[href*="/users/"]').filter({ hasText: "Vous" }).first();
+    const mine = rows(page).filter({ hasText: "Vous" }).first();
     await expect(mine).toBeVisible();
-    await mine.click();
+    await mine.getByRole("link").first().click();
 
-    // The role picker is replaced by a value and a reason, not disabled.
+    // The role picker is replaced by a value and a reason. Not disabled: absent.
     await expect(page.getByText(/Vous ne pouvez pas changer votre propre rôle/)).toBeVisible();
     await expect(page.getByLabel("Rôle")).toHaveCount(0);
 
-    await expect(page.getByRole("button", { name: "Suspendre" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Suspendre" })).toHaveCount(0);
     await expect(page.getByText(/Vous ne pouvez pas suspendre votre propre compte/)).toBeVisible();
 
-    await expect(page.getByRole("button", { name: "Supprimer le compte" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Supprimer le compte" })).toHaveCount(0);
     await expect(page.getByText(/Vous ne pouvez pas supprimer votre propre compte/)).toBeVisible();
   });
 
@@ -216,23 +270,32 @@ test.describe("staff", () => {
     await page.goto("/fr/users?search=" + SUSPENDED);
     await page.waitForSelector('[data-testid="users-count"]');
     /*
-     * Filtered by the username, never `.first()`: the Scaffold's create button
-     * is an `<a href="/fr/users/new">`, so a bare `a[href*="/users/"]` matches
-     * it before any row — which is how the first version of this test ended up
-     * on the create form asserting a suspension notice.
+     * Found by the username through `rows()`, never by a bare
+     * `a[href*="/users/"]`: the header's create button is an
+     * `<a href="/fr/users/new">` and used to match before any row — which is how
+     * the first version of this test ended up on the create form asserting a
+     * suspension notice — and since the redesign `DataTable` puts both the table
+     * and the record list in the DOM at once, so that selector would also match
+     * every row twice.
      */
-    await page.locator('a[href*="/users/"]').filter({ hasText: SUSPENDED }).first().click();
+    await rowFor(page, SUSPENDED).getByRole("link").first().click();
 
     /*
      * A suspended account refuses a credential with its own 409 — the panel
      * pre-empts it with the reason, because a credential issued to a suspended
      * account answers 401 everywhere and would be a key to a locked door.
+     *
+     * **The control is absent rather than disabled** since the redesign, per
+     * DESIGN.md §3.3 — the sentence is what teaches the rule, and the dimmed
+     * button never was. Same subject, same reason, one assertion changed from
+     * `toBeDisabled()` to `toHaveCount(0)`.
      */
     await expect(page.getByText(/Ce compte est suspendu/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Générer un mot de passe" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Générer un mot de passe" })).toHaveCount(0);
 
     // Reactivate so the mint is reachable, then put it back at the end.
     await page.getByRole("button", { name: "Réactiver" }).click();
+    await expect(page.getByRole("heading", { name: "Réactiver ce compte ?" })).toBeVisible();
     await page.getByRole("button", { name: "Réactiver" }).last().click();
     await expect(page.getByText("Compte réactivé.")).toBeVisible();
 
@@ -241,8 +304,18 @@ test.describe("staff", () => {
     await page.getByLabel("Nom de l’appareil").fill(name);
     await page.getByRole("button", { name: "Générer un mot de passe" }).click();
 
-    // The secret, in a sheet, once.
-    await expect(page.getByText("Le mot de passe, une seule fois")).toBeVisible();
+    /*
+     * The secret, once — **in a `Modal` now, not a `Sheet`.** §3.1 gives a modal
+     * to "a task that must be finished or abandoned", and this value cannot be
+     * read again anywhere, which makes it the purest example of that in the
+     * panel. The assertion is on the dialog's own heading rather than on loose
+     * text, because a `Modal` gives it a real `role="heading"` and the old
+     * `getByText` would also match the visually hidden description Radix
+     * requires.
+     */
+    await expect(
+      page.getByRole("heading", { name: "Le mot de passe, une seule fois" }),
+    ).toBeVisible();
     const secret = await page.getByText(/^[A-Za-z0-9]{16,}$/).first().innerText();
     expect(secret.length).toBeGreaterThan(16);
     await page.getByRole("button", { name: "J’ai copié le mot de passe" }).click();
@@ -258,12 +331,22 @@ test.describe("staff", () => {
     await page.reload();
     await expect(page.locator("body")).not.toContainText(secret);
 
-    // Teardown: revoke the device and re-suspend the account.
+    /*
+     * Teardown: revoke the device and re-suspend the account.
+     *
+     * The row's revoke is an `IconButton` now, named "Révoquer « <device> »" so
+     * a list of three devices does not offer three controls with one name.
+     * `getByRole`'s `name` is a case-insensitive substring by default, so
+     * "Révoquer" still reaches it — `.first()` is the row's, `.last()` is the
+     * `ConfirmDialog`'s confirm.
+     */
     await page.getByRole("button", { name: "Révoquer" }).first().click();
+    await expect(page.getByRole("heading", { name: "Révoquer ce mot de passe ?" })).toBeVisible();
     await page.getByRole("button", { name: "Révoquer" }).last().click();
     await expect(page.getByText("Mot de passe révoqué.")).toBeVisible();
 
     await page.getByRole("button", { name: "Suspendre" }).first().click();
+    await expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible();
     await page.getByRole("button", { name: "Suspendre" }).last().click();
     await expect(page.getByText("Compte suspendu.")).toBeVisible();
   });

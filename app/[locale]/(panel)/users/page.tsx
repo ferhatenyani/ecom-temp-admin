@@ -5,8 +5,8 @@ import { ApiError } from "@/lib/api/errors";
 import { staffUserList, roleList } from "@/lib/api/schemas/staff";
 import { listMeta } from "@/lib/api/envelope";
 import { canManageUsers } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { UsersList } from "./UsersList";
 import { listParams, queryFromParams } from "./query";
 
@@ -17,6 +17,12 @@ import { listParams, queryFromParams } from "./query";
  * `GET /users/{id}` on a shopper is a 404 and `GET /customers/{id}` on a staff
  * account is the same. So this list shares no reader, no type and no capability
  * with the customers screen, and the two deliberately do not meet.
+ *
+ * `ac_manage_users` is the capability that makes a Super Admin different from an
+ * Admin — it is the one section of the panel most staff accounts can never open,
+ * which is why the forbidden state below is reached more often here than
+ * anywhere else and is captured as a route-state of its own
+ * (`MOCK_IDENTITY=no_users`).
  */
 export default async function UsersPage({
   params,
@@ -32,11 +38,17 @@ export default async function UsersPage({
   if (!canManageUsers(me)) {
     const t = await getTranslations("staff");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* The header still renders, so the refusal arrives on the screen the
+            person asked for rather than on a blank page — §3.7's third state. No
+            toolbar and no count: there is nothing behind the gate to filter or to
+            count, and `users-count` being absent is what the e2e suite asserts
+            the refusal by. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="full">
           <ForbiddenState capability="ac_manage_users" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -49,10 +61,15 @@ export default async function UsersPage({
 
   /*
    * Both reads on the server and in parallel. `/roles` is the label source for
-   * every row — 51 of 72 accounts hold a role that can no longer be assigned,
-   * so a list rendered without it would show a raw key beside three quarters of
-   * the shop's staff — and it changes about as often as the code does, so it is
+   * every row — 50 of 69 accounts hold a role that can no longer be assigned, so
+   * a list rendered without it would show a raw key beside three quarters of the
+   * shop's staff — and it changes about as often as the code does, so it is
    * fetched once here rather than per row.
+   *
+   * Each failure is swallowed independently, which is deliberate: a `/roles` that
+   * 500s costs the role *filter* and the role *labels'* first resolution, and
+   * `roleLabel()` falls through to the row's own `role_name` — so the list still
+   * renders every account with a readable role rather than not rendering at all.
    */
   const [initial, roles] = await Promise.all([
     acFetch(staffUserList, session, `/users?${listParams(query)}`).catch((error: unknown) => {

@@ -30,7 +30,7 @@ left looking like an oversight.
 [x] 13. Media
 [x] 14. Marketing — campaigns, composer, segments, config, templates
 [x] 15. Notifications — list + detail
-[ ] 16. Staff — list, detail, new
+[x] 16. Staff — list, detail, new
 [ ] 17. Settings
 [ ] 18. Transfer
 [ ] 19. Audit
@@ -39,8 +39,8 @@ left looking like an oversight.
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **31
-files left**, down from 37 after the marketing branch. Read it as an **upper
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **22
+files left**, down from 31 after the notifications branch. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
 primitive contains no `ui-` string of its own. Content added none, and neither
@@ -2454,6 +2454,139 @@ claiming offline.
 
 ---
 
+## 17. Staff — the run's first honest sort, and a control that would have been dead
+
+Checklist item **16**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **List**: `PageBody width="full"`, `DataTable`/`RecordList` over one
+  `columns.tsx` — name (a real anchor) · identifier · role · registered · status,
+  with email `optional`. **Detail and create are two components at
+  `width="form"`**, which `NewUserForm.tsx` had already argued with three measured
+  reasons: `username` is write-once then read-only, `role` is required on create
+  and optional on update, and the credential/suspend/delete half is meaningless
+  before the account exists. §2.3 puts "user" in the form row, so the width was
+  never what decided it.
+- **Sorting ships, and it is the strongest control the run has measured.**
+  `UserController.php:135-140` passes `UserRepository::ORDERBY` through
+  `rest_validate_request_arg`, so `?orderby=zzz` and `?order=zzz` are both **400**
+  where the same request on `/shipping` and `/payments` is a silent 200. Measured
+  over **all 69 rows rather than a head window**: five fields × two directions =
+  ten requests and **ten distinct id sequences**, no ties anywhere. `display_name`,
+  `user_email`, `user_login` and `registered` carry a `sortKey`; `ID` sorts and
+  gets no column, as coupons treats `date` and marketing treats `id`.
+
+  **And the default cycle would have shipped a provably dead control.**
+  `registered desc` *is* the resting order, so `asc → desc → none` puts a second
+  click on "restore exactly the order I claim to be leaving". The column declares
+  `["desc","asc"]` instead. Driven in Chromium: descending → ascending →
+  descending, rows re-ordering both times, and the first click sends `?order=asc`
+  alone because `registered` is already the default field. **This is the sort rule
+  reaching one layer deeper than it ever has** — the standing rule says a control
+  must not be the collection's *default ordering*, and until now that was a
+  question about which fields get a `sortKey`. It is also a question about which
+  direction a cycle starts in.
+- **The role filter ships on `/roles`'s seven and `administrator` is deliberately
+  not added**, which refines the standing rule rather than bending it. The rule
+  wants a complete enumeration *because* a wrong value is normally a silent 200
+  with 0 rows, making the picker the only guard against a typo. Here
+  `?role=nonsense` is a **400** — the validator is the guard, so the picker is not
+  load-bearing for that job. What is left is reachability: `/roles` publishes seven
+  rows and no `administrator`, while `?role=administrator` returns **two real
+  accounts**. Adding an eighth option the API does not publish would be the panel
+  copying a server constant, which is exactly what removed the notifications
+  channel filter one branch earlier. The two accounts stay visible unfiltered with
+  their role named on the row, and `query.ts` carries the request that would close
+  the gap. **The enumeration test survives; what changed is knowing which job the
+  picker was doing.**
+- **Only two of seven roles are still assignable**, and 50 of 69 accounts hold a
+  retired one. The picker offers the assignable roles; an account already holding a
+  retired role renders it read-only with the reason, never as a disabled option.
+  The list says it once, in a footnote, where it applies.
+- **Every self-refusal is an absent control.** `UserService.php` guards own-role
+  (`:335-341`), own-suspend (`:147`) and own-delete (`:170`, before the id is even
+  resolved). Driven on the acting user's own record: zero role controls, zero
+  delete, zero suspend, **nothing merely disabled**, and a line in each place
+  saying why. Two e2e assertions moved from `toBeDisabled()` to `toHaveCount(0)`
+  for exactly this — §3.3, and the titles stayed true.
+- **Delete types the `user_login`**, §3.1 as amended on shipping: a shipping rule
+  had no identifier a person would recognise and a username is unique, always
+  present and already on the row. Verified: confirm disabled at open, disabled on a
+  wrong string, live on the right one. Suspend and reactivate are reversible —
+  confirmed, not typed. The one-time secret is a `Modal` (§3.1: a task that must be
+  finished or abandoned), replacing a retired `Sheet`.
+- **Capabilities render translated.** `UserDetail.tsx` printed raw slugs
+  (`ac_manage_orders`) as badges while `states.capability.<slug>` has held a French
+  and Arabic name for all thirteen since the content branch. The **fifth** time
+  this run has fixed that class.
+- **No poll, and the absence is stated in the docblock** — a staff list changes
+  when somebody in the room changes it, not on its own. But it holds a client cache
+  and refetches, so it owes §3.7-4: `isError && rows.length === 0`, and the marker
+  gated on `!online || isError` with `reason`.
+- Omitted: `first_name`/`last_name` controls — writable, but in no `search_columns`,
+  on no row, on no other screen, and empty on 67 of 69; editing them renames nobody,
+  because `staffName()` reads `display_name`, which *is* the editable field. No
+  bulk, no export, no peek, no sort below `md`.
+
+**The screen shipped without a refresh control and that was wrong, which the
+browser found and the code review did not.** The argument was that a list which
+does not poll has no clock to race. But every filter change here is a
+`router.push`, so the *server* re-fetches and the client is seeded from
+`initialData` — the browser issues no request of its own. Measured with
+`/api/ac/users` aborted: 20 rows → 20 rows and **no stale marker**, because no
+client fetch had failed. §3.7-4's entire second half was unreachable code on the
+one screen written to it. The refresh control is what gives the amended rule
+something to bite on; re-measured, the marker reads *"la dernière actualisation a
+échoué"*. **A rule that cannot be reached is not satisfied by a screen that
+cannot reach it.**
+
+**Two `lib/` measurements were wrong, and `ADMIN_PANEL.md` carries the
+correction** in its own convention. Both creates answer **201** — `POST /users`
+at `UserController.php:200` and the credential mint at `:267` — against
+`lib/staff.ts:225` and `lib/api/schemas/staff.ts:81`, which both documented 200
+while §87's own example had printed 201 all along: two sources against one, and
+the one that was wrong was never checked. Nothing branches on either number,
+which is exactly how it survived — `acWrite` treats every 2xx alike, so the cost
+falls entirely on the next reader who trusts the comment. That is the
+carried-forward "last create pinned at 200 and never measured" family arriving
+twice more in one section.
+
+**And the panel's five refusals were a different five from §87's.**
+`lib/staff.ts` dropped *granting a role holding capabilities the caller lacks* and
+*the fields refused by name*, promoting two the spec calls additional. The
+consequence was not cosmetic: the capability guard had **no mirror in the panel at
+all**, so a credential granted `ac_manage_users` without the rest would meet
+`guardAssignable()`'s 403 from a role picker that had just offered the role.
+`grantableRoles()`/`missingForGrant()` now filter both pickers. Unreachable for a
+Super Admin, who holds `Capabilities::ALL`, and reproducible against the harness.
+
+**i18n**: **2 038 keys in each file, exact parity, zero orphans.** The `staff`
+namespace 91 → 116: thirty-one added, seven removed — five of them
+(`save`, `revert`, `cancel`, `nextPage`, `previousPage`) were **shadowing
+`ui.form.*` and `ui.table.*`**, a namespace re-spelling the primitive's own words.
+
+**`e2e/admin.spec.ts`: 9 tests before, 9 after** — the scout said eight and the
+file's own docblock says nine. None deleted, titles unchanged. It had no `rows()`
+helper while eight of the twelve other specs do, and all three staff tests
+resolved rows through `a[href*="/users/"]`, which doubles the moment both
+presentations render; `:220-224` already recorded a near-miss where the create
+button's anchor matched first.
+
+**Verified**: `tsc` silent · lint 0/10 · `test:design` 14/14, floor 315 → **318**
+against 320 scanned · `test:unit` **918/918** · clean build · 48 captures clean
+plus 12 forbidden. Driven in Chromium beyond the captures: `aria-sort` on exactly
+the four sortable headers and absent on role and status, all three sort cycles
+re-ordering, the self-refusals absent rather than disabled, the delete gate, the
+failed refresh, and 0px overflow at 340 across six route/locale pairs.
+
+**One report I checked and did not act on.** A disabled "Générer un mot de passe"
+carries `title="Nommez l'appareil avant de générer un mot de passe."` — §3.3's
+requirement exactly, and a control that acts the moment a name is typed. My own
+probe flagged it by asserting "nothing disabled anywhere", which is the wrong
+test: §3.3 removes a control that *cannot* act, not one that is waiting on input.
+
+---
+
 ## Carried forward — teardown owns these
 
 - ~~**Seventeen shipped screens still blank their rows on a failed *refetch*, and
@@ -2598,10 +2731,10 @@ claiming offline.
 - **`.save-bar` stays in `globals.css`** — **six** unmigrated forms use it, and
   they are `fixed` with no block-end, so deleting the rule would unstick their
   bars rather than remove them.
-- **`RowSkeleton.tsx` stays** — ~~**seven**~~ **two** unmigrated screens import it,
-  `users/UsersList.tsx` and `audit/AuditList.tsx`. The count had been stale by
+- **`RowSkeleton.tsx` stays** — ~~**seven**~~ ~~**two**~~ **one** unmigrated screen
+  imports it, `audit/AuditList.tsx`, which is checklist item 19. The count had been stale by
   four before the notifications branch removed the fifth, and nobody had recounted
-  it since it was written; it is checklist items 16 and 19 away from being zero.
+  it since it was written; item 16 removed the second, so only item 19 is left.
   **The notifications list was importing it across a page boundary** — from
   `../inventory/RowSkeleton`, a migrated screen's neighbour — which is how a
   retired primitive keeps an importer that no directory listing suggests.
