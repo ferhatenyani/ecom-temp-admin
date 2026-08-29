@@ -36,8 +36,8 @@ export default async function NewUserLoading() {
       />
 
       <PageBody width="form" className="flex flex-col gap-4">
-        <FormSkeleton fields={3} label={label} />
-        <FormSkeleton fields={1} label={label} />
+        <FormSkeleton fields={3} footnote={1} label={label} />
+        <FormSkeleton fields={1} footnote={1} label={label} />
 
         {/* Capabilities before a role is chosen: a heading over one line. */}
         <SkeletonRegion

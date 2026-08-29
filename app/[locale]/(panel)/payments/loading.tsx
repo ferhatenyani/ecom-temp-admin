@@ -91,7 +91,7 @@ export default async function PaymentsLoading() {
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <CardSkeleton rows={5} label={label} />
           <CardSkeleton rows={5} label={label} />
-          <CardSkeleton rows={5} label={label} />
+          <CardSkeleton rows={5} footnote={1} label={label} />
         </div>
       </PageBody>
     </div>

@@ -38,7 +38,7 @@ export default async function MenusLoading() {
         }
       />
       <PageBody width="detail">
-        <CardSkeleton rows={5} label={label} titled={false} />
+        <CardSkeleton rows={5} label={label} titled={false} footnote={1} />
       </PageBody>
     </div>
   );

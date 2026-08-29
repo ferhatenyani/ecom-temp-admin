@@ -37,9 +37,9 @@ export default async function NewContentPageLoading() {
       <PageBody width="form">
         <div className="flex flex-col gap-4">
           <FormSkeleton fields={3} label={label} />
+          <FormSkeleton fields={2} footnote={2} label={label} />
           <FormSkeleton fields={2} label={label} />
-          <FormSkeleton fields={2} label={label} />
-          <FormSkeleton fields={5} label={label} />
+          <FormSkeleton fields={5} footnote={1} label={label} />
         </div>
       </PageBody>
     </div>

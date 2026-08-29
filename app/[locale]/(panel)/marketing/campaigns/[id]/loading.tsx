@@ -44,7 +44,7 @@ export default async function CampaignLoading() {
       />
       <PageBody width="detail">
         <div className="flex flex-col gap-4">
-          <CardSkeleton rows={3} label={t("loading")} />
+          <CardSkeleton rows={3} footnote={2} label={t("loading")} />
           <CardSkeleton rows={2} label={t("loading")} />
         </div>
       </PageBody>

@@ -185,7 +185,7 @@ export function CategoriesScreen({
           ) : null}
 
           {isPending && categories.length === 0 ? (
-            <CardSkeleton rows={4} label={t("loading")} />
+            <CardSkeleton rows={4} label={t("loading")} footnote={1} />
           ) : isError && categories.length === 0 ? (
             <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
           ) : categories.length === 0 ? (

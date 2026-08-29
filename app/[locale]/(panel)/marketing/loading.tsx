@@ -16,7 +16,7 @@ export default async function MarketingLoading() {
     <div className="min-h-dvh bg-ui-canvas">
       <PageHeader title={t("hubTitle")} subtitle={t("loading")} />
       <PageBody width="detail">
-        <CardSkeleton rows={4} titled={false} label={t("loading")} />
+        <CardSkeleton rows={4} titled={false} footnote={1} label={t("loading")} />
       </PageBody>
     </div>
   );

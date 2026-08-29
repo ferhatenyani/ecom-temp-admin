@@ -30,7 +30,7 @@ export default async function FaqCategoriesLoading() {
       />
       <PageBody width="detail">
         <div className="flex flex-col gap-4">
-          <CardSkeleton rows={4} label={label} titled={false} />
+          <CardSkeleton rows={4} label={label} titled={false} footnote={1} />
           <FormSkeleton fields={1} label={label} />
         </div>
       </PageBody>

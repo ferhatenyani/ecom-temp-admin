@@ -87,7 +87,7 @@ export default async function AnalyticsLoading() {
         <div className="flex flex-col gap-6">
           <StatSkeleton count={4} label={label} />
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-            <CardSkeleton rows={4} label={label} />
+            <CardSkeleton rows={4} footnote={2} label={label} />
             <CardSkeleton rows={4} label={label} />
           </div>
         </div>

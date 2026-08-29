@@ -49,7 +49,7 @@ export default async function UserDetailLoading() {
 
       <PageBody width="form" className="flex flex-col gap-4">
         {/* Identity: four label-over-control blocks under a heading. */}
-        <FormSkeleton fields={4} label={label} />
+        <FormSkeleton fields={4} footnote={2} label={label} />
 
         {/* Role: two blocks, which is the majority shape rather than every shape.
             **50 of 69 accounts hold a retired role**, and those get the held role
@@ -110,7 +110,7 @@ export default async function UserDetailLoading() {
         </SkeletonRegion>
 
         {/* Status: one `DataRow` and a button. */}
-        <CardSkeleton rows={1} label={label} />
+        <CardSkeleton rows={1} footnote={3} label={label} />
 
         {/* Delete: a heading, a footnote and a button — no rows at all, which is
             why this one is drawn by hand rather than as a `CardSkeleton`. */}

@@ -43,20 +43,31 @@ import { FormSkeleton } from "@/components/ui/Skeleton";
  * 340 wraps every hint a line further and Arabic wraps differently again, so no
  * single count is right at all three viewports.
  *
- * ## The residual is 147px and it has **one** cause
+ * ## The 147px residual was the footnote, and it is now reserved
  *
- * **Neither `CardSkeleton` nor `FormSkeleton` draws a footnote**, and all three
+ * **Neither `CardSkeleton` nor `FormSkeleton` drew a footnote**, and all three
  * of this screen's cards carry one — the two caveats about the exported bytes,
- * and the import safety property on each of the other two. That is 90 / 48 / 48
+ * and the import safety property on each of the other two. That was 90 / 48 / 48
  * px of paragraph unreserved, against which the four `field` boxes over-draw the
  * export rows by ~29 and each import card's trailing `field` over-draws its
- * button row by ~24. The three deficits are what is left: 73 / 46 / 28.
+ * button row by ~24, leaving the three deficits this file used to record: 73 /
+ * 46 / 28.
  *
- * This is exactly the gap `described` was added to close on the settings branch,
- * one slot down the same component, and it is **not fixed here**:
- * `components/ui/Skeleton.tsx` is not this branch's to edit, and standing an
- * extra `field` in for a paragraph would buy the pixels by drawing a shape the
- * card does not have. Recorded rather than fudged.
+ * `Skeleton.tsx` grew `footnote` for it — the slot one below `described`, and
+ * the same shape: a line count, `Card`'s own `gap-3` plus 18px a line. Measured
+ * the same way, the three cards are now **-11 / -2 / -20**, and the sign is the
+ * point: what is left is the *field* over-draw above, which this branch recorded
+ * and did not cause. `footnote={4}` on the export card rather than 5 because its
+ * footnote is two `<span className="block">` with `mt-1.5` between them — four
+ * lines of text and a 6px margin a line count cannot model, which is 6px of the
+ * 11.
+ *
+ * The reference frame named above is the reference frame here too, and the
+ * footnote is where it bites hardest: that same export paragraph measures **9
+ * lines at 340** and **2 in Arabic**. So the four reserved here leave -50 / -40
+ * / -41 in Arabic at this width and +293 / +52 / +34 at 340 in French — a line
+ * count cannot be right in all six frames, and this one is right in the frame
+ * the rest of this file is measured in.
  *
  * **Three things are deliberately absent**, all conditional and none of them
  * knowable before the identity arrives: the fourth export row and the second
@@ -75,9 +86,9 @@ export default async function TransferLoading() {
 
       <PageBody width="detail">
         <div className="flex flex-col gap-4">
-          <FormSkeleton fields={4} described={2} label={label} />
-          <FormSkeleton fields={["hinted", "hinted", "field"]} label={label} />
-          <FormSkeleton fields={["hinted", "field"]} label={label} />
+          <FormSkeleton fields={4} described={2} footnote={4} label={label} />
+          <FormSkeleton fields={["hinted", "hinted", "field"]} footnote={2} label={label} />
+          <FormSkeleton fields={["hinted", "field"]} footnote={2} label={label} />
         </div>
       </PageBody>
     </div>

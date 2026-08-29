@@ -38,7 +38,7 @@ export default async function ShippingRulesLoading() {
       />
       <PageBody width="split">
         <DetailGrid
-          main={<CardSkeleton rows={3} label={label} />}
+          main={<CardSkeleton rows={3} footnote={1} label={label} />}
           aside={<CardSkeleton rows={2} label={label} />}
         />
       </PageBody>
