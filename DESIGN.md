@@ -319,12 +319,30 @@ Content is **not** uniformly capped. The cap follows the content:
 | Page kind | Width | Examples |
 | --- | --- | --- |
 | Table / list | full, capped `1600px` | orders, products, customers, audit |
-| Detail, single column | `768px` | notification, audit entry |
+| Detail, single column | `768px` | notification |
 | Detail, two column | `1fr` + `360px` aside, `lg`+ | order, product, customer |
 | Form | `640px` | settings, coupon, user |
 | Analytics | full, capped `1440px` | all analytics views |
 
 Gutters: **16px** base · **24px** `sm`+ · **32px** `xl`+.
+
+> **Amended on the audit branch: "audit entry" came off the 768px row, because
+> there is no such screen and there cannot be one.**
+>
+> The table above named it beside "notification" as though the two were the same
+> shape. They are not. `GET /notifications/{id}` exists and carries a key the list
+> row does not, which is what a detail route is *for*; `GET /audit-logs/{id}` does
+> not exist — `AuditLogController.php:33-41` registers one route, GET on the
+> collection, and says the reason in its own docblock: *"Read-only by design.
+> Audit records are append-only, so there is no POST, PATCH or DELETE here and
+> there never should be."* `lib/api/allowlist.ts` carries the single rule and
+> `tests/boundary.test.ts:333` asserts the single-row route refused.
+>
+> So the list row **is** the whole record, and the trail's ninth field — its
+> `metadata`, which is the only one that says what actually changed and the only
+> one with no fixed height — is shown in a `Drawer` off the list. A row in this
+> table is a promise that a screen exists; this one was a promise about an
+> endpoint. Nothing else in the table moves.
 
 Two-column detail collapses to one below `lg`, aside content moving **below**
 main — never above. On an order screen the reader came for the items, not for

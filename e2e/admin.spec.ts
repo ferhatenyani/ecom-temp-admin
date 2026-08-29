@@ -392,8 +392,16 @@ test.describe("the trail", () => {
      * And the action renders as itself. It is an identifier, not prose: 85
      * distinct values on this install, every one carrying a `.` that would be a
      * `next-intl` path separator if it were ever used as a message key.
+     *
+     * Through `rows()` rather than `page.getByText(…).first()`, which is the
+     * redesign's own hazard arriving on this file's last unconverted locator:
+     * `DataTable` puts **both** presentations in the DOM at every width and hides
+     * one with `md:` classes, so `.first()` resolves the table's cell on the four
+     * phone projects — where the table is `display: none` — and
+     * `toBeVisible()` would fail on a row that is on screen. Same assertion,
+     * scoped to whichever presentation the project's viewport actually renders.
      */
-    await expect(page.getByText("user.created").first()).toBeVisible();
+    await expect(rows(page).filter({ hasText: "user.created" }).first()).toBeVisible();
   });
 });
 

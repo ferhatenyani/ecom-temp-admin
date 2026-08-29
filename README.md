@@ -690,8 +690,15 @@ found by measuring the API rather than by reading it:
   pages**: no way to reach yesterday, and no way to get from an audited object to its own history.
   The `resource_id` clause had been in `AuditRepository::buildWhere()` since the table existed; the
   route never declared the argument, so `WP_REST_Request` dropped it before the controller looked. It
-  is registered as a **string**, because a page is audited by path and a menu by location and `absint`
-  would turn `conditions` into 0. `tests/Api/audit.php` is the route's first suite — its assertions had
+  is registered as a **string**, because `absint` would turn a non-numeric id into 0.
+
+  > **Corrected in the build:** this said *"because a page is audited by path and a menu by location"*.
+  > A page is audited by its numeric `ID` and a FAQ category by its numeric term id
+  > (`CmsService.php:156,224,296` and `:436,479,512`); the path and the slug go in `metadata`. The real
+  > non-numeric ids are `cms` → `ac_cms_homepage`, `menu` → `primary` and
+  > `shipping_provider` → `yalidine`, so the column still must not be `absint`ed.
+
+  `tests/Api/audit.php` is the route's first suite — its assertions had
   lived scattered across the eight suites whose *writes* it records, which covers the writing
   thoroughly and the reading not at all. 35 assertions, floored on the filtered set being **strictly
   smaller** than the whole; 14 of them fail against the previous version.

@@ -2949,9 +2949,18 @@ never stored.
 > Fixed in `ecom-temp` on `feat/audit-filters` before a line of this screen existed. The `resource_id`
 > clause had been in `AuditRepository::buildWhere()` since the table did; the route simply never
 > declared the argument, so `WP_REST_Request` dropped it before the controller looked. It is registered
-> as a **string**: the column is `varchar(64)` because a page is audited by path, a FAQ category by
-> slug and a menu by location, and `absint` would turn `conditions` into 0 and match every row that has
-> no resource id at all. `tests/Api/audit.php` is the route's first suite — **35 assertions**, floored
+> as a **string**: the column is `varchar(64)` and `absint` would turn a non-numeric id into 0 and match
+> every row that has no resource id at all.
+>
+> > **Corrected on the audit redesign: the examples were wrong and the conclusion was right.** This
+> > sentence used to read *"because a page is audited by path, a FAQ category by slug and a menu by
+> > location"*. Measured against the source: `CmsService.php:156,224,296` record `(int) $page->ID` and
+> > `:436,479,512` the numeric term id — the path and the slug go in `metadata`. The genuinely
+> > non-numeric ids are `cms` → `ac_cms_homepage`, `menu` → `primary` and
+> > `shipping_provider` → `yalidine`, so the column still cannot be an integer. Four other copies of
+> > the false sentence were corrected in the same pass.
+>
+> `tests/Api/audit.php` is the route's first suite — **35 assertions**, floored
 > on the filtered set being *strictly smaller* than the whole rather than merely a 200, with the three
 > already-working filters asserted in the same run as the control. 14 of the 35 fail against the
 > previous version.

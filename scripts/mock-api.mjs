@@ -569,6 +569,7 @@ const CAPABILITIES = [
  *   MOCK_IDENTITY=no_customers … /marketing/campaigns/318        twelve others
  *   MOCK_IDENTITY=no_marketing … /marketing                      eleven
  *   MOCK_IDENTITY=no_transfer  … /transfer                       nine
+ *   MOCK_IDENTITY=no_audit     … /audit                          twelve
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
@@ -589,6 +590,10 @@ const CAPABILITIES = [
  * same two arguments one section over: the first is the fixture for the panel's
  * only **compound** capability rule, the second is the section's forbidden
  * state. Their own blocks say what was measured and what was not.
+ *
+ * `no_audit` is the tenth and the seventh time the same hole has been found —
+ * all nine before it hold `ac_view_audit_logs`, so the trail's forbidden state
+ * was unphotographable. Its own block says what was read and from where.
  *
  * Read **once, at module load**, so `respond()` stays pure and a capture run is
  * one identity from beginning to end. An unrecognised value throws rather than
@@ -921,6 +926,51 @@ const IDENTITIES = {
         capability !== "ac_manage_inventory" &&
         capability !== "ac_manage_customers",
     ),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The tenth, and it is the seventh time this hole has been found ────────
+   *
+   * **All nine identities above hold `ac_view_audit_logs`.** Every one of them
+   * is `CAPABILITIES` minus one to four entries and not one of those entries
+   * was this — `reduced` drops shipping and payments, `support` orders and
+   * inventory, `no_content` content, `no_customers` customers, `no_users`
+   * users, `no_marketing` marketing and customers, `no_settings` settings, and
+   * `no_transfer` the four subject capabilities. So `/audit` had **no
+   * capturable forbidden state**, which DESIGN.md §3.7 requires of every
+   * screen, and `app/[locale]/(panel)/audit/page.tsx:35` renders
+   * `ForbiddenState` on a branch nothing in this harness could take.
+   *
+   * That is the §18 `no_settings` failure shape exactly: a capture taken under
+   * an identity that still holds the capability photographs the *served*
+   * screen and files it as the forbidden one. `no_transfer` looks like the
+   * closest fit and is not it — it keeps `ac_view_audit_logs` like the rest.
+   *
+   * Read from source rather than measured, and said so rather than left to
+   * read as a measurement: `src/API/AuditLogController.php:38` registers the
+   * one route with
+   * `Permissions::callback(Capabilities::VIEW_AUDIT_LOGS)`, and its own
+   * docblock calls this "the one that proves the authorization layer works end
+   * to end: without ac_view_audit_logs it returns 403, signed out it returns
+   * 401". `lib/api/allowlist.ts:406-410` records the same capability. The
+   * refusal body is the flat `{"code":"forbidden","message":"You are not
+   * allowed to perform this action."}` with no `details` key — the shape
+   * `forbidden()` already emits for the nine gates beside it.
+   *
+   * **A credential with a measured shape, not a claim about the shop's roles.**
+   * The delta from `full` is exactly the one capability the gate turns on and
+   * nothing else — the rule `reduced` set and every identity since has
+   * followed. `ac_view_audit_logs` is Super Admin's alone after the two-tier
+   * collapse (ADMIN_PANEL.md:3349), so this is a credential most of the staff
+   * hold.
+   */
+  no_audit: {
+    id: 523,
+    username: "harness-no-audit",
+    display_name: "Harness No-Audit",
+    email: "harness-no-audit@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter((capability) => capability !== "ac_view_audit_logs"),
     auth_method: "application_password",
   },
 };
@@ -16977,6 +17027,524 @@ function postImport(subject, params, body) {
     : importInventory(csv, dryRun);
 }
 
+/* ----------------------------------------------------------- the audit trail --- */
+
+/**
+ * ── `GET /audit-logs`, and it is ONE route ──────────────────────────────────
+ *
+ * Read from `~/projects/ecom-temp` on 2026-08-29 rather than measured, and said
+ * so: `src/API/AuditLogController.php:33-41` registers exactly one route, `GET`,
+ * and the class docblock says why — *"Read-only by design. Audit records are
+ * append-only, so there is no POST, PATCH or DELETE here and there never should
+ * be."* **There is no `GET /audit-logs/{id}`.** `lib/api/allowlist.ts:406-410`
+ * carries the single `rule("/audit-logs", "GET")` and `tests/boundary.test.ts:330,333`
+ * asserts both halves refused, so the single-row route and every write verb stay
+ * 404s here — the verb half falls out of `WRITES` above and the depth half is
+ * stated in the `case` below.
+ *
+ * ── The row: nine fields, and `created_at` has no `T` and no offset ─────────
+ *
+ * `AuditRepository::hydrate()` (`:136-156`) casts all nine explicitly, so the
+ * shape is fixed rather than whatever the column happened to hold:
+ *
+ *   id int · actor_id int · actor_login string · action · resource_type ·
+ *   resource_id **string** · ip_address · metadata object · created_at
+ *
+ * `created_at` is `"2026-08-18 02:41:09"` — `AuditEvent` stamps
+ * `gmdate('Y-m-d H:i:s')` and nothing else writes this table — which is what
+ * `stamp()` already emits for the inventory ledger, so it is reused rather than
+ * re-derived. `parseApiDate()` reads an offsetless stamp as UTC; `new Date()`
+ * would shift every row by the host's offset with nothing on screen to say so.
+ *
+ * `metadata` is `{}` on a row whose writer recorded nothing —
+ * `hydrate()` decodes `''` to `[]`, which `json_encode`s as `{}` through
+ * `Response`. It is never null.
+ *
+ * ── Five parameters honoured, two accepted and ignored ─────────────────────
+ *
+ *   actor_id       honoured, `actor_id = %d`
+ *   action         honoured, and validated by **pattern** `^[a-z0-9._-]+$`
+ *   resource_type  honoured, and validated by the **same pattern** — see below
+ *   resource_id    honoured, string, `maxLength` 64
+ *   date_from/to   honoured, `Y-m-d`, **whole-day UTC both ends**
+ *
+ *   search         ACCEPTED AND IGNORED — never declared in `indexArgs()`
+ *   orderby/order  ACCEPTED AND IGNORED — `AuditRepository.php:50` is a literal
+ *                  `ORDER BY id DESC` with no branch anywhere near it
+ *
+ * **The two ignored ones are ignored here by nothing reading them**, which is
+ * the only way to reproduce "accepted and ignored", and it is §0's whole
+ * argument: a mock that sorted or searched would let somebody verify a control
+ * against this harness and ship one that does nothing. The table is append-only,
+ * so its id order *is* its time order and there is no second ordering to offer;
+ * writes are audited by field name, so there is no column a free-text box could
+ * search. `app/[locale]/(panel)/audit/query.ts` ships neither control.
+ */
+
+/**
+ * **`resource_type` carries the same `^[a-z0-9._-]+$` pattern `action` does, and
+ * the brief for this branch said it was merely "honoured".**
+ *
+ * `AuditLogController.php:66-71` declares it beside `action` with an identical
+ * `pattern`/`validate_callback` pair. So `?resource_type=Product` and
+ * `?resource_type=` are **400s**, not the 200-with-0-rows an unvalidated filter
+ * would answer — which is the `channel`-versus-`status` distinction the
+ * notification queue already records one collection over, arriving on a filter
+ * nobody expected to validate. A mock that honoured it without validating would
+ * be the *more permissive* direction on a control the screen renders as a
+ * picker.
+ *
+ * `ac_banner` matches the pattern — `_` is inside the class — which is what
+ * keeps the unnamed twenty-third resource type reachable through the filter as
+ * well as renderable in a row.
+ */
+const AUDIT_KEY = /^[a-z0-9._-]+$/;
+const AUDIT_KEY_PATTERN = "^[a-z0-9._-]+$";
+
+/**
+ * The five accounts that appear as actors, and the system.
+ *
+ * Real `/users` rows rather than invented ids, so the trail's actor links at
+ * something the staff collection can actually resolve — `ac_audit_super` (762)
+ * and `ac_audit_manager` (763) were already in `STAFF_SEED` for this route.
+ *
+ * **`0` with an empty login is the system** — a CLI drain or a migration — and
+ * `AuditEvent` produces it by construction: `currentUserId()` is 0 with no
+ * logged-in user and `max(0, …)` floors it. `isSystemActor()` in lib/audit.ts is
+ * what renders it as a named state rather than as a zero.
+ */
+const AUDIT_ACTORS = new Map([
+  [475, "ac_panel_super_admin"],
+  [762, "ac_audit_super"],
+  [536, "ac_coupon_marketing"],
+  [474, "ac_panel_support_agent"],
+  [0, ""],
+]);
+
+/**
+ * A day off the shop's epoch, with the wall clock written out.
+ *
+ * The other fixtures here take `minutesAgo` because nothing reads their exact
+ * hour. This one does: `date_from`/`date_to` cover the **whole day** at both
+ * ends, so which side of midnight a row falls on is the property the filter is
+ * verified with, and a minute offset would hide it behind arithmetic. The day
+ * still comes off `EPOCH` rather than a literal, so the fixture moves with the
+ * rest of the shop if the epoch ever does.
+ */
+const auditStamp = (daysAgo, time) =>
+  `${new Date(EPOCH - daysAgo * 86_400_000).toISOString().slice(0, 10)} ${time}`;
+
+/**
+ * ── 28 rows, and every one of them has to discriminate ──────────────────────
+ *
+ * DECISIONS.md:62's standing rule, which has produced real defects four times: a
+ * fixture where a filter's result equals the whole set proves nothing, and one
+ * that ties on every row proves nothing either. So:
+ *
+ *   28 rows        → paging past page one is real, `total_pages` is 2, and the
+ *                    default `per_page` of 20 leaves 8 on the second page
+ *   actor_id       → 11 / 5 / 5 / 4 / 3 across five actors
+ *   action         → 3 / 3 / 2 / 2 / 2 and singletons
+ *   resource_type  → `product` is **4** where `action=product.updated` is **3**,
+ *                    because `inventory.adjusted` is recorded against a
+ *                    `product`. The two filters are independent, not aliases,
+ *                    and this is the pair that proves it.
+ *   resource_id    → `"104"` 2, `"1023"` 2, `"303"` 2, `"774"` 2, `"0"` 3
+ *   created_at     → six days, 5/5/5/6/4/3
+ *
+ * and a regression that made `search` or `orderby` *work* changes the response
+ * visibly rather than subtly: `?search=coupon` would cut 28 to 3, and
+ * `?order=asc` would replace all twenty rows of page one.
+ *
+ * **Every action and every metadata shape below is read from the writer**, not
+ * invented — `ProductService.php:137`, `OrderService.php:151`,
+ * `SettingsService.php:101`, `NotificationService.php:215`,
+ * `InventoryService.php:126`, `UserService.php:415,260`, `CouponService.php:142`,
+ * `CustomerService.php:100`, `AccountService.php:252`, `CmsService.php:99,224,355,479,574,594`,
+ * `ImportService.php:463`, `CampaignService.php:407`,
+ * `DestinationSyncService.php:83`. A fixture whose shapes were guessed would let
+ * the panel be built to metadata the shop never writes, which is the coupons
+ * `"Read-only."` failure one screen over.
+ *
+ * The four `metadataShape()` kinds in lib/audit.ts:209-270 are all present —
+ * `change` 4, `transition` 4, `fields` 8, `plain` 12 — because the panel renders
+ * **by shape** and a suite that exercised one arm would prove nothing about the
+ * three an operator actually meets.
+ */
+const AUDIT_SEED = [
+  /* ── day 0, 2026-08-18 ─────────────────────────────────────────────────── */
+  [16852, 0, "02:41:09", 475, "product.updated", "product", "104", {
+    fields: ["name", "regular_price"],
+    before: { name: "Miel de jujubier, 500 g", regular_price: "3200.00", status: "publish" },
+    after: { name: "Miel de jujubier, 500 g", regular_price: "2950.00", status: "publish" },
+  }],
+  [16851, 0, "02:18:44", 475, "order.status_changed", "order", "1023", {
+    from: "processing",
+    to: "completed",
+    stock_reduced: true,
+  }],
+  [16850, 0, "01:57:31", 762, "settings.updated", "settings", "0", {
+    blocks: ["contact"],
+    fields: ["contact.phone", "contact.hours"],
+  }],
+  /*
+   * **The `[redacted]` row, and it is a fact to render rather than a gap.**
+   * `Logger::redact()` masks any key containing `key`, so `dedupe_key` comes
+   * back the literal string `Logger::MASK` — `"[redacted]"`, which lib/audit.ts
+   * exports as `REDACTED`. A row rendering a blank here would say the key was
+   * absent, which is untrue: the writer stored that string on purpose.
+   */
+  [16849, 0, "01:12:04", 0, "notification.retried", "notification", "4102", {
+    channel: "email",
+    event: "order.placed",
+    dedupe_key: "[redacted]",
+    status_from: "failed",
+    attempts_before: 2,
+  }],
+  [16848, 0, "00:33:12", 474, "customer.updated", "customer", "24", {
+    fields: ["email", "first_name"],
+    before: { email: "nadia.cherif@example.test", first_name: "Nadia", last_name: "Chérif" },
+    after: { email: "n.cherif@example.test", first_name: "Nadia", last_name: "Chérif" },
+  }],
+
+  /* ── day 1, 2026-08-17 ─────────────────────────────────────────────────── */
+  [16847, 1, "22:41:55", 475, "coupon.updated", "coupon", "303", {
+    code: "BIENVENUE10",
+    fields: ["amount", "date_expires"],
+  }],
+  [16846, 1, "19:05:18", 536, "campaign.sent", "campaign", "322", {
+    recipients: 184,
+    frozen: true,
+    audience_type: "segment",
+    segment_id: 43,
+  }],
+  [16845, 1, "16:22:07", 475, "product.updated", "product", "104", {
+    fields: ["status"],
+    before: { name: "Miel de jujubier, 500 g", regular_price: "3200.00", status: "draft" },
+    after: { name: "Miel de jujubier, 500 g", regular_price: "3200.00", status: "publish" },
+  }],
+  [16844, 1, "11:48:36", 762, "user.role_changed", "user", "774", {
+    login: "ac_usr_new",
+    from: "ac_support_agent",
+    to: "ac_manager",
+    promoted_from_customer: false,
+  }],
+  [16843, 1, "09:14:50", 474, "order.status_changed", "order", "1019", {
+    from: "pending",
+    to: "processing",
+    stock_reduced: true,
+  }],
+
+  /* ── day 2, 2026-08-16 ─────────────────────────────────────────────────── */
+  // 23:51 UTC, and the last row of its day. `?date_to=2026-08-16` keeps it only
+  // because the bound is `<= 'D 23:59:59'` rather than midnight.
+  [16842, 2, "23:51:02", 475, "media.deleted", "media", "5007", {
+    file: "2026/07/tapis-berbere.jpg",
+    mime_type: "image/jpeg",
+    title: "Tapis berbère",
+  }],
+  /*
+   * `cms.homepage_updated` carries a **list**, and lib/audit.ts:266-269 names
+   * this row by action: `plainEntries()` renders a nested array as compact JSON
+   * rather than dropping it, because a row that said the page changed and not
+   * what about it would be showing less than arrived.
+   *
+   * Its `resource_id` is `CmsRepository::HOMEPAGE_OPTION` — the option name, not
+   * a number — which is one of the three rows here that prove the argument is a
+   * string.
+   */
+  [16841, 2, "20:30:41", 536, "cms.homepage_updated", "cms", "ac_cms_homepage", {
+    sections: 6,
+    types: ["hero", "featured_products", "categories", "banner"],
+  }],
+  [16840, 2, "17:09:23", 475, "cms.banner_updated", "banner", "612", {
+    fields: ["title", "link"],
+  }],
+  [16839, 2, "13:44:58", 0, "import.products", "import", "0", {
+    dry_run: false,
+    rows: 262,
+    created: 14,
+    updated: 246,
+    skipped: 2,
+    failed: 0,
+  }],
+  [16838, 2, "08:26:11", 762, "cms.page_updated", "page", "58", {
+    fields: ["title", "content", "status"],
+    path_from: null,
+    path_to: null,
+    status_from: "draft",
+  }],
+
+  /* ── day 3, 2026-08-15 ─────────────────────────────────────────────────── */
+  // 23:47 UTC, the whole-day boundary at the *other* end: `?date_to=2026-08-15`
+  // must keep this row, and an implementation comparing against midnight drops it.
+  [16837, 3, "23:47:10", 475, "coupon.created", "coupon", "319", {}],
+  /*
+   * **The same action as 16848 with a different metadata shape**, and both are
+   * real: `CustomerService.php:100` writes `{fields, before, after}` when staff
+   * edit a shopper, and `AccountService.php:252` writes `{fields, by: "self"}`
+   * when the shopper edits themselves. So `metadataShape()` cannot be keyed off
+   * the action, and this pair is why.
+   */
+  [16836, 3, "21:03:29", 474, "customer.updated", "customer", "31", {
+    fields: ["phone", "billing_address"],
+    by: "self",
+  }],
+  /*
+   * **The unnamed twenty-third resource type, and it is a real typo rather than
+   * a fixture flourish.** `CmsService::deleteContent()` (`:594`) records
+   * `$postType` where every other banner path records `$label`, so a banner
+   * *delete* lands in the table as `ac_banner` while a banner *update* lands as
+   * `banner` — 16840 above is the pair. `RESOURCE_TYPES` in lib/audit.ts names
+   * 22 and deliberately omits this one, so the row exercises the panel's
+   * raw-string fallback.
+   */
+  [16835, 3, "18:37:44", 475, "cms.banner_deleted", "ac_banner", "609", { forced: true }],
+  [16834, 3, "14:12:06", 536, "campaign.created", "campaign", "318", {
+    name: "Soldes d'été",
+    audience_type: "segment",
+  }],
+  [16833, 3, "10:55:37", 762, "user.app_password_created", "user", "774", {
+    login: "ac_usr_new",
+    name: "Panneau d'administration",
+    uuid: "5f2c1a90-8b3d-4e17-9a44-6c0e2d8b7f31",
+  }],
+  [16832, 3, "07:41:19", 475, "product.updated", "product", "112", {
+    fields: ["regular_price"],
+    before: { name: "Bijou en argent de Beni Yenni", regular_price: "9800.00", status: "publish" },
+    after: { name: "Bijou en argent de Beni Yenni", regular_price: "8900.00", status: "publish" },
+  }],
+
+  /* ── day 4, 2026-08-14 ─────────────────────────────────────────────────── */
+  [16831, 4, "22:19:53", 474, "order.status_changed", "order", "1023", {
+    from: "pending",
+    to: "processing",
+    stock_reduced: false,
+  }],
+  /*
+   * **`before` and `after` that are NOT a change**, and this is the row that
+   * proves `metadataShape()`'s object test is load-bearing rather than
+   * decorative. `InventoryService.php:126-134` writes the two as *integers* —
+   * `quantityBefore` and `quantityAfter` — so the `change` arm's
+   * `typeof … === "object"` check rejects it and the row renders `plain`. A
+   * classifier that merely checked the two keys were present would render a
+   * stock adjustment as a field-by-field diff of two numbers.
+   *
+   * It is also the `actionSubject() !== resource_type` case lib/audit.ts:142
+   * documents: the action is `inventory.*` and the resource is a `product`.
+   * Deriving the filter from the action would send a request the API answers
+   * with nothing.
+   */
+  [16830, 4, "16:48:02", 475, "inventory.adjusted", "product", "201", {
+    mode: "set",
+    quantity: 11,
+    reason: "recount",
+    note: "Inventaire trimestriel",
+    stock_managed_by_id: 201,
+    before: 14,
+    after: 11,
+  }],
+  [16829, 4, "12:33:27", 0, "settings.updated", "settings", "0", {
+    blocks: ["legal"],
+    fields: ["legal.rc", "legal.nif"],
+  }],
+  [16828, 4, "09:07:15", 536, "shipping.destinations_synced", "shipping_provider", "yalidine", {
+    written: 1541,
+    wilayas: 58,
+    communes: 1483,
+  }],
+
+  /* ── day 5, 2026-08-13 ─────────────────────────────────────────────────── */
+  [16827, 5, "20:58:41", 475, "cms.menu_updated", "menu", "primary", { items: 7 }],
+  [16826, 5, "15:22:09", 762, "cms.faq_category_updated", "faq_category", "7", {
+    fields: ["name", "description"],
+    slug_from: null,
+    slug_to: null,
+  }],
+  [16825, 5, "11:04:33", 474, "coupon.updated", "coupon", "303", {
+    code: "BIENVENUE10",
+    fields: ["usage_limit"],
+  }],
+];
+
+/**
+ * The trail as it reads.
+ *
+ * **`ORDER BY id DESC` and nothing else** — `AuditRepository.php:50` is a
+ * literal with no branch — so the sort is applied once, here, and no request
+ * parameter can reach it. That is what makes `?orderby=` and `?order=` ignored
+ * rather than merely undeclared.
+ *
+ * `ip_address` is `127.0.0.1` on the system rows, which is what `ClientIp`
+ * returns for a CLI drain with no request behind it, and the docker bridge on
+ * the rest — the two values lib/api/schemas/audit.ts:44 records.
+ */
+const AUDIT_LOGS = [...AUDIT_SEED]
+  .sort((a, b) => b[0] - a[0])
+  .map(([id, daysAgo, time, actorId, action, resourceType, resourceId, metadata]) => ({
+    id,
+    actor_id: actorId,
+    actor_login: AUDIT_ACTORS.get(actorId) ?? "",
+    action,
+    resource_type: resourceType,
+    resource_id: resourceId,
+    ip_address: actorId === 0 ? "127.0.0.1" : "172.18.0.1",
+    metadata,
+    created_at: auditStamp(daysAgo, time),
+  }));
+
+/**
+ * ── PHP's falsy filter, and it is why `?resource_id=0` returns EVERY row ────
+ *
+ * `AuditLogController::index()` runs the six filters through `array_filter()`
+ * before the repository sees them, and `AuditRepository::buildWhere()` guards
+ * each clause again with `!empty()`. **Both drop `"0"`**, because `"0"` is falsy
+ * in PHP — the controller's own comment at `:121-124` says it is deliberate and
+ * gets the reason slightly wrong (*"`0` is not an id anything here records"*)
+ * while `lib/api/schemas/audit.ts:40-42` records that `"0"` is exactly what
+ * `settings.updated` rows carry. Three rows in the fixture above hold it.
+ *
+ * So the behaviour is: `?resource_id=0` is **accepted, silently ignored, and
+ * answers the whole collection** — a filter that matches three rows in the table
+ * and cannot be asked for. This is reproduced rather than tidied for §0's
+ * reason: a screen that linked a `settings.updated` row to its own history would
+ * get the entire trail back and look like it was working.
+ *
+ * `""` reaches this only for `resource_id`. `action` and `resource_type` carry a
+ * pattern that an empty string fails, so those are 400s before `array_filter`
+ * ever runs, and `actor_id` is refused by `minimum: 1` for the same reason one
+ * step earlier.
+ */
+const phpTruthy = (value) => value !== "" && value !== "0";
+
+/**
+ * ── `?actor_id=0` does NOT discriminate the system rows — it is a 400 ───────
+ *
+ * The brief for this branch asked which way this went, because the screen's
+ * actor picker depends on the answer. It is refused, and by **two independent
+ * guards**, either of which alone would settle it:
+ *
+ *   1. `AuditLogController::indexArgs()` ends with `$this->idArg('actor_id',
+ *      false)`, and `AbstractController::idArg()` (`:77-88`) declares
+ *      `'minimum' => 1`. `rest_validate_request_arg` runs before the sanitiser,
+ *      so `?actor_id=0` never reaches the controller body — it is a **400**,
+ *      the same shape `/notifications?subject_id=0` already answers here.
+ *   2. Even with the minimum lifted, `array_filter()` and `!empty()` would each
+ *      drop the zero, so it would answer the whole collection rather than the
+ *      three system rows.
+ *
+ * **So the system actor is unreachable by the actor filter in both directions**,
+ * and a picker offering "System" as a filter value would be a control that
+ * cannot act — DECISIONS.md:67's standing rule. The rows still render as a named
+ * state through `isSystemActor()`; they simply cannot be filtered *to*.
+ * `app/[locale]/(panel)/audit/query.ts:91,108` already sends `actor_id` only
+ * when it is `> 0`, so the panel never provokes this today — which is precisely
+ * why the mock has to hold the refusal rather than assume nobody will.
+ */
+function auditListing(params) {
+  /*
+   * `action` and `resource_type` share one pattern and therefore one refusal.
+   * `""` fails it — a value, not an absence — which is the finding the
+   * notification queue recorded on four of its six parameters and which holds
+   * here for the same reason: only a parameter that is not sent at all reaches
+   * a default.
+   */
+  for (const name of ["action", "resource_type"]) {
+    const raw = params.get(name);
+    if (raw !== null && !AUDIT_KEY.test(raw)) {
+      return invalidParam(name, notMatching(name, AUDIT_KEY_PATTERN));
+    }
+  }
+
+  /*
+   * `maxLength: 64` — the column is `varchar(64)`, and the route declares it, so
+   * a 65-character value is **refused rather than clipped**. `tests/Api/audit.php:312`
+   * is the backend's own assertion of it. The sentence is the `rest_too_long`
+   * family the notification queue already writes out.
+   */
+  const resourceId = params.get("resource_id");
+  if (resourceId !== null && resourceId.length > 64) {
+    return invalidParam("resource_id", "resource_id must be at most 64 characters long.");
+  }
+
+  // `minimum: 1`, so `0` is a 400 and not the unset value it looks like — see
+  // the block above for why that answer is the whole of the actor picker's brief.
+  const actorRead = pagingNumber(params, "actor_id", null, (value) =>
+    value >= 1 ? null : "actor_id must be greater than or equal to 1",
+  );
+  if (actorRead.error) return actorRead.error;
+
+  for (const name of ["date_from", "date_to"]) {
+    const raw = params.get(name);
+    if (raw !== null && !YMD.test(raw)) {
+      return invalidParam(name, notMatching(name, YMD_PATTERN));
+    }
+  }
+
+  /*
+   * `WHERE col = %s` against a `utf8mb4_unicode_520_ci` column, so the
+   * comparison is case-insensitive — the notification queue's measured finding,
+   * and the same collation. It is reachable on `resource_id` alone: `action` and
+   * `resource_type` carry a lowercase-only pattern, so an uppercase value is
+   * refused by the validator long before MySQL sees it.
+   *
+   * Still `=` and never `LIKE`. A `resource_id` that is a prefix of another must
+   * not collect its history.
+   */
+  const equals = (name, key) => {
+    const value = params.get(name);
+    if (value === null || !phpTruthy(value)) return null;
+    const wanted = value.toLowerCase();
+    return (row) => String(row[key]).toLowerCase() === wanted;
+  };
+
+  /*
+   * **Whole day at both ends**, which for a `Y-m-d H:i:s` column is exactly a
+   * comparison on the date half: `created_at >= 'D 00:00:00'` is `day >= D`, and
+   * `created_at <= 'D 23:59:59'` is `day <= D` because no stamp this writer
+   * produces goes past `23:59:59`.
+   *
+   * The `realDate()` guard is the notification queue's, and it is needed for the
+   * same measured reason: `?date_to=2026-13-45` passes the pattern, reaches MySQL
+   * as a `DATETIME` comparison that is never true, and answers 200 with 0 rows.
+   * A plain string comparison would answer **every row** on that bound instead —
+   * a filter that widens rather than narrows, which is the shape a screen never
+   * notices.
+   */
+  const realDate = (value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return (
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() === month - 1 &&
+      parsed.getUTCDate() === day
+    );
+  };
+  const bound = (name, compare) => {
+    const value = params.get(name);
+    if (value === null || value === "") return null;
+    return realDate(value) ? (row) => compare(row.created_at.slice(0, 10), value) : () => false;
+  };
+
+  const actorId = actorRead.value;
+  const tests = [
+    actorId === null ? null : (row) => row.actor_id === actorId,
+    equals("action", "action"),
+    equals("resource_type", "resource_type"),
+    equals("resource_id", "resource_id"),
+    bound("date_from", (created, value) => created >= value),
+    bound("date_to", (created, value) => created <= value),
+  ].filter((test) => test !== null);
+
+  /*
+   * `?search=`, `?orderby=` and `?order=` are read by nothing above and nothing
+   * below. That absence is the feature — see this section's header.
+   */
+  const rows = AUDIT_LOGS.filter((row) => tests.every((test) => test(row)));
+  const page = paginate(rows, params);
+  return page.error ?? ok(page.rows, page.meta);
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -17729,6 +18297,33 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       return segments[2] === "retry" && method === "POST"
         ? retryNotification(id)
         : notificationNoRoute();
+    }
+
+    /*
+     * ── The trail: one route, one capability, and no single-row read ─────────
+     *
+     * **The shape check goes BEFORE the gate here, and that is deliberate.**
+     * Every other `case` in this switch gates first, where the wire's
+     * `permission_callback` sits — but `permission_callback` only runs on a
+     * route that *matched*, and `/audit-logs/{id}` matches nothing: WordPress
+     * raises `rest_no_route` in the router, before authorization is consulted.
+     * So a credential without `ac_view_audit_logs` gets a **404** on
+     * `/audit-logs/16825` and a **403** on `/audit-logs`, and gating first would
+     * answer 403 to both. It is one line either way; this is the order the shop
+     * has.
+     *
+     * The verb half is already settled above — `audit-logs` is deliberately
+     * absent from `WRITES`, so `POST`, `PATCH` and `DELETE` fall to the routing
+     * 404 without this `case` deciding anything. `tests/boundary.test.ts:330,333`
+     * asserts both halves at the panel's own allowlist.
+     */
+    case "audit-logs": {
+      if (segments.length > 1) return notFound();
+
+      const refused = gatedOn("ac_view_audit_logs");
+      if (refused !== null) return refused;
+
+      return auditListing(searchParams);
     }
 
     /*

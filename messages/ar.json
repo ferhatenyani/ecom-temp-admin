@@ -239,7 +239,8 @@
     "recipientEmail": "المستلم {email}",
     "templateName": "النموذج {name}",
     "notification": "إشعار {event} بتاريخ {date}",
-    "staffAccount": "الحساب {name}، المعرّف {login}"
+    "staffAccount": "الحساب {name}، المعرّف {login}",
+    "auditEntry": "مدخلة {action} بتاريخ {date}"
   },
   "statusShort": {
     "pending": "الانتظار",
@@ -2262,32 +2263,47 @@
   },
   "audit": {
     "title": "السجل",
+    "loading": "جارٍ التحميل…",
     "refresh": "تحديث",
     "count": "{total, plural, =0 {لا توجد مدخلات} one {مدخلة واحدة} two {مدخلتان} few {# مدخلات} many {# مدخلة} other {# مدخلة}}",
-    "filters": "المرشِّحات",
-    "filtersOn": "مفعَّلة",
-    "clearFilters": "مسح المرشِّحات",
-    "actionLabel": "التصفية حسب الإجراء",
+    "actionLabel": "الإجراء",
     "actionPlaceholder": "product.updated",
-    "resourceLabel": "التصفية حسب نوع الكائن",
-    "resourceIdLabel": "التصفية حسب معرّف الكائن",
-    "resourceIdPlaceholder": "4529 أو conditions",
-    "actorLabel": "التصفية حسب الفاعل",
+    "actionInvalid": "حروف لاتينية صغيرة وأرقام ونقطة وشرطة وشرطة سفلية فقط — مثل product.updated.",
+    "resourceLabel": "نوع الكائن",
+    "resourceIdLabel": "معرّف الكائن",
+    "resourceIdPlaceholder": "104 أو yalidine",
+    "resourceIdZero": "لا يمكن التصفية بالقيمة 0: المدخلات التي تحملها لا تخص كائنًا بعينه.",
+    "resourceIdTooLong": "‏64 حرفًا كحد أقصى.",
+    "actorLabel": "الفاعل",
     "actorAll": "كل الفاعلين",
+    "actorSystemNote": "المدخلات التي يكتبها النظام لا يمكن تصفيتها من هنا.",
     "dateFrom": "من تاريخ",
     "dateTo": "إلى تاريخ",
-    "dateScope": "من {from} إلى {to}، بتوقيت UTC.",
+    "dateHint": "أيام كاملة بتوقيت UTC: مدخلة مسجَّلة في وقت متأخر من مساء الجزائر تُحسب على اليوم التالي.",
+    "field": {
+      "action": "الإجراء",
+      "actor": "الفاعل",
+      "resource": "الكائن",
+      "resourceId": "المعرّف",
+      "ip": "عنوان IP",
+      "when": "التاريخ",
+      "metadata": "ما جرى تسجيله"
+    },
     "systemActor": "النظام",
     "redacted": "محجوب",
     "fieldsChanged": "الحقول المعدَّلة: {fields}",
-    "scaleNote": "{pages, plural, one {صفحة واحدة} two {صفحتان} few {# صفحات} many {# صفحة} other {# صفحة}} إجمالًا. السجل لا يُمحى أبدًا: صفِّ حسب التاريخ للوصول إلى لحظة بعينها.",
+    "metadataEmpty": "لم يُسجَّل شيء مع هذه المدخلة.",
+    "peek": {
+      "filterResource": "عرض سجل هذا الكائن",
+      "noResource": "هذه المدخلة لا تخص كائنًا بعينه، فلا يوجد سجل لفتحه."
+    },
     "empty": {
       "none": "السجل فارغ.",
       "noResults": "لا توجد مدخلات بهذه المرشِّحات.",
-      "clear": "مسح المرشِّحات"
+      "clear": "مسح المرشِّحات",
+      "pastEnd": "هذه الصفحة فارغة؛ لا شيء بعدها.",
+      "firstPage": "العودة إلى الصفحة الأولى"
     },
-    "previousPage": "الصفحة السابقة",
-    "nextPage": "الصفحة التالية",
     "resource": {
       "all": "كل الأنواع",
       "product": "منتج",

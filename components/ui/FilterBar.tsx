@@ -293,19 +293,41 @@ export function FilterChips({
  * `end` puts every control's own box on one line and lets the labels stack above
  * it. Below `sm` the row wraps to a column and the choice stops mattering, which
  * is why it is one prop rather than a responsive variant.
+ *
+ * ## `start`, added on the audit branch, because a **hint** breaks `end`
+ *
+ * `end` aligns the bottom of each item, which is the control's box only while
+ * nothing hangs below it. `FieldFrame` renders help text *under* the control, so
+ * a row mixing hinted and unhinted fields aligns the hint's last line with the
+ * unhinted field's box — and the boxes, which are what the eye reads across,
+ * land two or three lines apart. Measured on the trail's toolbar at 1440 in
+ * French: six controls on **three** different label baselines, the date picker's
+ * label sitting 36px above the resource picker's. That is precisely the defect
+ * `end` was added to fix, arriving from the other side.
+ *
+ * `start` aligns the tops instead. Every field's label is one line and every
+ * gap is `FieldFrame`'s, so the labels line up and the boxes line up with them;
+ * the hints hang below at whatever length the reader's language gives them,
+ * which is what a paragraph does.
+ *
+ * A `start` row's *unlabelled* controls — a clear button, `TableControls` — then
+ * need to be pushed down to the boxes' line, which is `mt-6` at the call site:
+ * `--text-ui-label`'s 1.125rem line box plus `FieldFrame`'s 0.375rem gap, both
+ * off the spacing scale, so Arabic's 106.25% root scales the offset and the
+ * label it clears by the same factor.
  */
 export function FilterRow({
   children,
   align = "center",
 }: {
   children: ReactNode;
-  align?: "center" | "end";
+  align?: "center" | "end" | "start";
 }) {
-  return (
-    <div
-      className={`flex flex-wrap gap-2 ${align === "end" ? "items-end" : "items-center"}`}
-    >
-      {children}
-    </div>
-  );
+  const ALIGN = {
+    center: "items-center",
+    end: "items-end",
+    start: "items-start",
+  } as const;
+
+  return <div className={`flex flex-wrap gap-2 ${ALIGN[align]}`}>{children}</div>;
 }

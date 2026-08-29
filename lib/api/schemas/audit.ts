@@ -36,9 +36,20 @@ export const auditRow = z.looseObject({
   resource_type: z.string(),
   /**
    * **A string, not a number**, and the column is `varchar(64)` because the
-   * things this trail records are not all numbered: a page is audited by path, a
-   * FAQ category by slug, a menu by location. `"0"` appears on `settings.updated`
-   * rows, where there is no resource to point at.
+   * things this trail records are not all numbered: `cms` is audited as
+   * `ac_cms_homepage`, `menu` as `primary`, `shipping_provider` as `yalidine`.
+   *
+   * *(This used to say "a page is audited by path, a FAQ category by slug".
+   * Measured against the source on 2026-08-29, that is false —
+   * `CmsService.php:156,224,296` record `(int) $page->ID` and `:436,479,512` the
+   * numeric term id, and the path and the slug go in `metadata`. The conclusion
+   * survives with the right examples: `absint` on this column would turn
+   * `primary` into 0 and match every row that has no resource id at all.)*
+   *
+   * `"0"` appears on `settings.updated` and `import.products` rows, where there
+   * is no resource to point at — and `?resource_id=0` answers the **whole
+   * collection**, because PHP's `array_filter` drops the falsy string. See
+   * `isFilterableResourceId` in `lib/audit.ts`.
    */
   resource_id: z.string(),
   /** `127.0.0.1` from the CLI, the docker bridge from a proxied request. */

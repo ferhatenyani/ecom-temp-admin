@@ -600,9 +600,13 @@ describe("the audit trail", () => {
     expect(auditRow.parse({ ...row, request_id: "abc" })).toMatchObject({ request_id: "abc" });
 
     /*
-     * **`resource_id` is a string.** The column is varchar(64) because a page is
-     * audited by path and a menu by location; a number here would be a schema
-     * that only accepts the numbered half of the trail.
+     * **`resource_id` is a string.** The column is varchar(64) because a menu is
+     * audited by location and a shipping provider by its own name; a number here
+     * would be a schema that only accepts the numbered half of the trail.
+     *
+     * *(This said "a page is audited by path" — a sixth copy of the sentence the
+     * audit branch corrected. `CmsService.php:156,224,296` records
+     * `(int) $page->ID`; the path goes in `metadata`.)*
      */
     expect(() => auditRow.parse({ ...row, resource_id: 4529 })).toThrow();
     expect(auditRow.parse({ ...row, resource_id: "conditions" }).resource_id).toBe("conditions");

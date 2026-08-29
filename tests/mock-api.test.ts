@@ -298,6 +298,20 @@ import {
   positionWrites,
   unknownSectionTypes,
 } from "@/lib/cms";
+import { type AuditRow, auditList, auditRow } from "@/lib/api/schemas/audit";
+import {
+  PER_PAGE as AUDIT_PER_PAGE,
+  REDACTED,
+  RESOURCE_TYPES,
+  actionSubject,
+  changedPairs,
+  isActionQuery,
+  isRedacted,
+  isResourceType,
+  isSystemActor,
+  metadataShape,
+  plainEntries,
+} from "@/lib/audit";
 
 function get(path: string, query = ""): MockResponse {
   return respond("GET", `${BASE_PATH}${path}`, new URLSearchParams(query));
@@ -354,16 +368,41 @@ function apiError(response: MockResponse): ApiError {
 describe("the envelope", () => {
   it("answers an unmocked path with a well-formed rest_no_route error", () => {
     /*
-     * `/audit`, and this assertion has now moved three times for the same
-     * reason: a 404 test is only worth anything while its path is genuinely
-     * unmocked. It stood on `/analytics/overview` until the dashboard branch
-     * served that, then on `/analytics/revenue` until the payments branch served
-     * all six, then on `/campaigns` until the marketing branch served the whole
-     * section. `audit` is in UNCOVERED below with a reason, which is what makes
-     * it the right anchor — the two lists move together or this line goes stale
-     * a fourth time.
+     * ── `/audit-logs/{id}`, and this is the fourth anchor and the last one ────
+     *
+     * It stood on `/analytics/overview` until the dashboard branch served that,
+     * then on `/analytics/revenue` until the payments branch served all six,
+     * then on `/campaigns` until the marketing branch served the whole section,
+     * then on `/audit` — coupled to the `UNCOVERED` entry beside it, on the
+     * theory that "the two lists move together".
+     *
+     * **That coupling is what failed, and it failed in the quiet direction.**
+     * The audit branch removed `audit` from `UNCOVERED` and `/audit` is *still*
+     * a 404 — the panel's route is `/audit`, the API's is `/audit-logs`, and
+     * nothing was ever going to serve the former. So the assertion would have
+     * gone on passing while its stated reason evaporated, leaving a 404 test
+     * anchored one hyphen away from a live collection and a comment that pointed
+     * at a list the path was no longer on. A stale justification on a green test
+     * is worse than a red one.
+     *
+     * The fix is to stop anchoring on **"not built yet"** — which is what went
+     * stale three times, because everything in this panel eventually gets built
+     * — and anchor on **"cannot exist"**. `GET /audit-logs/{id}` is that:
+     *
+     *   1. `src/API/AuditLogController.php:33-41` registers exactly one route on
+     *      the collection, and its class docblock gives the reason as a design
+     *      constraint rather than a backlog item — audit records are append-only.
+     *   2. `lib/api/allowlist.ts:406-410` carries the single
+     *      `rule("/audit-logs", "GET")`, with the same reason written out.
+     *   3. `tests/boundary.test.ts:333` already asserts the panel refuses it.
+     *   4. The mock's own `case "audit-logs"` refuses a second segment.
+     *
+     * Four independent sources pin it, and a branch that served it would have to
+     * break all four rather than merely get around to writing one. The row id is
+     * a real one from the fixture, so this is the exact URL a peek drawer or a
+     * mis-built row link would produce — the mistake worth catching.
      */
-    const response = get("/audit");
+    const response = get("/audit-logs/16825");
     expect(response.status).toBe(404);
 
     // Loudly, and through the same code path a real 404 would take. A mock that
@@ -10639,11 +10678,33 @@ const COVERED = [
    * in its own first paragraph.
    */
   "transfer",
+  /*
+   * **Both schemas in the module are exercised, and the module had no mock at
+   * all until 2026-08-29** — `grep -n "audit-logs" scripts/mock-api.mjs`
+   * returned nothing and this entry read "/audit is not mocked yet".
+   *
+   * `auditRow` on every row of every assertion below and `auditList` on the
+   * collection, which is the whole module — it is the smallest here, two
+   * schemas over nine plain fields, because all the interesting work is in
+   * `lib/audit.ts` and that file has no Zod in it.
+   *
+   * The two schema facts worth naming are the ones a hand-written copy would
+   * have got wrong. `resource_id` is `z.number()` nowhere and `z.string()`
+   * everywhere, so the fixture's `"ac_cms_homepage"`, `"primary"`, `"yalidine"`
+   * and `"0"` rows parse and a numeric one would not have proved anything; and
+   * `auditRow` is a `looseObject` because `action` and `resource_type` are open
+   * vocabularies, which is what lets the `ac_banner` row through the boundary
+   * instead of being rejected as an unknown enum member.
+   */
+  "audit",
 ];
 
-const UNCOVERED: Record<string, string> = {
-  audit: "/audit is not mocked yet",
-};
+/**
+ * Empty, and it has to stay honest rather than stay empty: a module belongs here
+ * the moment the panel calls an endpoint this file does not serve, with the
+ * reason written out. `audit` was the last entry and left on 2026-08-29.
+ */
+const UNCOVERED: Record<string, string> = {};
 
 /**
  * The bookkeeping the two lists above cannot do: a module counts as covered when
@@ -12419,6 +12480,570 @@ describe("the transfer capability gate", () => {
      * that identity records the choice rather than taking it.
      */
     expect(await grid("support")).toEqual([200, 403, 403, 200]);
+  });
+});
+
+/**
+ * ── The trail, and the rule that a fixture has to discriminate ──────────────
+ *
+ * DECISIONS.md:62, which has produced real defects four times: a filter whose
+ * result equals the whole set proves nothing, and one that ties on every row
+ * proves nothing either. So every assertion below compares a **count against
+ * the collection's own count** rather than checking a 200, and every honoured
+ * filter has to come back strictly smaller and non-empty.
+ *
+ * The two ignored parameters are asserted the same way and in the opposite
+ * direction — `?search=` and `?orderby=` must change **nothing**, and the
+ * fixture is built so that a regression making either work would move the
+ * numbers visibly rather than subtly.
+ */
+describe("GET /audit-logs", () => {
+  const rows = (query = "") => parseList(auditList, get("/audit-logs", query));
+  const total = (query = "") => rows(query).meta.total;
+  const ids = (query = "") => rows(query).data.map((row) => row.id);
+
+  /** The whole collection, and the number every assertion below is held against. */
+  const ALL = 28;
+
+  it("serves the collection through the real schema, with more rows than one page", () => {
+    const { data, meta } = rows();
+    expect(meta.total).toBe(ALL);
+
+    /*
+     * **Paging past page one has to be real.** A fixture that fitted on one page
+     * exercises neither `total_pages` nor an offset, and the pager renders as a
+     * single disabled control — which is a screenshot of a component that never
+     * did anything. 28 at 20 a page is two pages with 8 on the second.
+     */
+    expect(meta.per_page).toBe(AUDIT_PER_PAGE);
+    expect(meta.total_pages).toBe(2);
+    expect(data).toHaveLength(20);
+    expect(rows("page=2").data).toHaveLength(8);
+
+    // And the two pages are disjoint — an off-by-one in the offset would repeat
+    // the boundary row rather than fail loudly.
+    expect(new Set([...ids(), ...ids("page=2")]).size).toBe(ALL);
+  });
+
+  /**
+   * **`ORDER BY id DESC` and nothing else.** `AuditRepository.php:50` is a
+   * literal with no branch, which is why the screen ships no sort control: the
+   * table is append-only, so its id order *is* its time order.
+   */
+  it("orders newest first, and the id order is the time order", () => {
+    const page = ids();
+    expect(page).toEqual([...page].sort((a, b) => b - a));
+
+    const stamps = rows().data.map((row) => row.created_at);
+    expect(stamps).toEqual([...stamps].sort().reverse());
+  });
+
+  /**
+   * **`created_at` has no `T` and no offset**, and this is the third route in
+   * this API with the convention. `new Date()` reads it as local time and shifts
+   * every row by the host's offset with nothing on screen to say so;
+   * `parseApiDate()` reads it as UTC, which is what `gmdate()` means.
+   */
+  it("stamps created_at with no T and no offset, and parseApiDate reads it as UTC", () => {
+    for (const row of rows().data) {
+      expect(row.created_at, String(row.id)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(row.created_at).not.toContain("T");
+    }
+
+    const newest = rows().data[0];
+    expect(newest.created_at).toBe("2026-08-18 02:41:09");
+    expect(parseApiDate(newest.created_at)?.toISOString()).toBe("2026-08-18T02:41:09.000Z");
+  });
+
+  /* ------------------------------------------------ the five honoured ones --- */
+
+  /**
+   * Each filter, held against the collection. `strictly()` is the rule itself:
+   * non-empty, smaller than the whole, and every row it returned actually
+   * matches — the third clause is what separates "the filter ran" from "the
+   * filter ran on the right column".
+   */
+  const strictly = (query: string, count: number, matches: (row: AuditRow) => boolean) => {
+    const { data, meta } = rows(`${query}&per_page=100`);
+    expect(meta.total, query).toBe(count);
+    expect(meta.total, query).toBeGreaterThan(0);
+    expect(meta.total, query).toBeLessThan(ALL);
+    expect(data.every(matches), query).toBe(true);
+  };
+
+  it("honours actor_id, action, resource_type and resource_id, each a strict subset", () => {
+    strictly("actor_id=475", 11, (row) => row.actor_id === 475);
+    strictly("action=product.updated", 3, (row) => row.action === "product.updated");
+    strictly(
+      "resource_type=order",
+      3,
+      (row) => row.resource_type === "order",
+    );
+    strictly(
+      "resource_id=1023",
+      2,
+      (row) => row.resource_id === "1023",
+    );
+
+    /*
+     * **`resource_type=product` is 4 where `action=product.updated` is 3**, and
+     * this pair is the one that proves the two filters are independent rather
+     * than aliases for each other. `inventory.adjusted` is recorded against a
+     * `product` — `InventoryService.php:126` — so the resource type carries a
+     * row the action does not. lib/audit.ts:142 is built on exactly this:
+     * deriving the filter from the action would send a request the API answers
+     * with nothing.
+     */
+    strictly("resource_type=product", 4, () => true);
+    expect(actionSubject("inventory.adjusted")).toBe("inventory");
+    expect(total("resource_type=product")).toBeGreaterThan(total("action=product.updated"));
+
+    // And the two compose rather than colliding: one row is both.
+    expect(total("resource_type=product&action=inventory.adjusted")).toBe(1);
+  });
+
+  /**
+   * **`resource_id` is a string and the column is `varchar(64)`**, because the
+   * things this trail records are not all numbered: the homepage is audited by
+   * option name, a menu by location, a shipping provider by its own name.
+   * `absint` on the argument would turn every one of them into 0 and match the
+   * rows that have no resource id at all.
+   */
+  it("filters resource_id as a string, on values that are not numbers", () => {
+    for (const [value, count] of [
+      ["ac_cms_homepage", 1],
+      ["primary", 1],
+      ["yalidine", 1],
+    ] as const) {
+      strictly(
+        `resource_id=${value}`,
+        count,
+        (row) => row.resource_id === value,
+      );
+    }
+
+    // An unmatched one is an empty page, not a refusal — the same answer an
+    // unknown action gets, and the reason a stale URL here is a blank list.
+    const { data, meta } = rows("resource_id=no-such-thing-anywhere");
+    expect(data).toEqual([]);
+    expect(meta.total).toBe(0);
+  });
+
+  /**
+   * **The date range covers the whole day at both ends**, and the two rows that
+   * prove it are at 23:47 and 23:51 UTC. An implementation comparing `date_to`
+   * against midnight rather than `23:59:59` drops them, and the count moves by
+   * exactly one each time — which is why they are in the fixture at all.
+   */
+  it("covers the whole UTC day at both ends of the range", () => {
+    // Six days, and each bound cuts a strict subset.
+    strictly("date_from=2026-08-16", 15, () => true);
+    strictly("date_to=2026-08-15", 13, () => true);
+    strictly("date_from=2026-08-15&date_to=2026-08-16", 11, () => true);
+
+    // A single day is a single day, not an empty set — the `>=` and the `<=`
+    // both have to be inclusive for this to be non-zero at all.
+    strictly("date_from=2026-08-14&date_to=2026-08-14", 4, () => true);
+
+    /*
+     * The boundary rows themselves. 16837 is `2026-08-15 23:47:10`, so it is in
+     * `date_to=2026-08-15` and out of `date_to=2026-08-14`; a bound written as
+     * `<= '2026-08-15 00:00:00'` would lose it and take the count to 12.
+     */
+    expect(ids("date_to=2026-08-15&per_page=100")).toContain(16837);
+    expect(ids("date_to=2026-08-14&per_page=100")).not.toContain(16837);
+    expect(ids("date_from=2026-08-16&per_page=100")).toContain(16842);
+  });
+
+  /**
+   * **A date that passes the pattern and is not a date matches nothing.**
+   * `^\d{4}-\d{2}-\d{2}$` is the whole of the validation, so `2026-13-45`
+   * reaches MySQL as a `DATETIME` comparison that is never true and answers 200
+   * with 0 rows. The trap is `date_to`: a plain string comparison would answer
+   * **every row**, because `"2026-08-18" <= "2026-13-45"`.
+   */
+  it("answers 0 rows for a well-formed date that is not a date, on both bounds", () => {
+    expect(total("date_from=2026-13-45")).toBe(0);
+    expect(total("date_to=2026-13-45")).toBe(0);
+  });
+
+  /* -------------------------------------------------- the two ignored ones --- */
+
+  /**
+   * **`?search=` and `?orderby=` are accepted and ignored, and that is the
+   * point.** §0: the harness reproduces the API's dishonesty deliberately so
+   * nobody can verify a control against it and ship one that does nothing.
+   *
+   * Both assertions are built to *fail loudly* if the mock ever grew the
+   * feature: `search=coupon` would cut 28 rows to 3, and `order=asc` would
+   * replace every one of page one's twenty ids.
+   */
+  it("accepts and ignores search, orderby and order", () => {
+    for (const query of ["search=coupon", "search=zzzz", "search=Chérif"]) {
+      expect(total(query), query).toBe(ALL);
+      expect(ids(query), query).toEqual(ids());
+    }
+
+    // The proof that the term was discriminating: it matches rows, so a working
+    // search would have returned fewer.
+    const wouldMatch = rows("per_page=100").data.filter((row) =>
+      row.action.includes("coupon"),
+    );
+    expect(wouldMatch.length).toBeGreaterThan(0);
+    expect(wouldMatch.length).toBeLessThan(ALL);
+
+    for (const query of ["orderby=id&order=asc", "orderby=created_at&order=asc", "orderby=zzz"]) {
+      expect(ids(query), query).toEqual(ids());
+    }
+
+    // And `order=asc` really would have been visible: page one reversed shares
+    // no row with page one.
+    const ascending = [...ids()].reverse();
+    expect(ascending).not.toEqual(ids());
+  });
+
+  /* --------------------------------------------------------- the refusals --- */
+
+  /**
+   * **`?actor_id=0` is a 400, and it is the answer the screen's actor picker
+   * turns on.** `AbstractController::idArg()` declares `minimum: 1`, and
+   * `rest_validate_request_arg` runs before the sanitiser — so the system rows
+   * are unreachable through this filter. Even with the minimum lifted, the
+   * controller's `array_filter()` and the repository's `!empty()` would each
+   * drop the zero and answer the whole collection.
+   *
+   * So a picker offering "System" as a filter value would be a control that
+   * cannot act, which is DECISIONS.md:67's standing rule.
+   */
+  it("refuses actor_id=0 rather than filtering the system rows with it", () => {
+    const refused = get("/audit-logs", "actor_id=0");
+    expect(refused.status).toBe(400);
+    try {
+      parse(auditList, refused);
+      expect.unreachable("a 400 must throw at the panel's boundary");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).apiMessage).toBe("Invalid parameter(s): actor_id");
+      expect((error as ApiError).params?.actor_id).toBe(
+        "actor_id must be greater than or equal to 1",
+      );
+    }
+
+    // `""` is a value and not an absence, and it refuses in the *type* family
+    // rather than the range one — the distinction a form would quote back.
+    const empty = apiError(get("/audit-logs", "actor_id="));
+    expect(empty.params?.actor_id).toBe("actor_id is not of type integer.");
+
+    // A real but unheld id is an empty page, not a refusal.
+    expect(total("actor_id=99999999")).toBe(0);
+
+    // And the rows it cannot reach are in the fixture, rendered as a named state.
+    const system = rows("per_page=100").data.filter(isSystemActor);
+    expect(system).toHaveLength(3);
+    for (const row of system) {
+      expect(row.actor_id).toBe(0);
+      expect(row.actor_login).toBe("");
+    }
+  });
+
+  /**
+   * **`resource_type` is validated by the same pattern `action` is**, which the
+   * brief for this branch had as merely "honoured".
+   * `AuditLogController.php:66-71` declares it beside `action` with an identical
+   * `pattern`. So an unknown-but-well-formed value is a 200 with 0 rows and a
+   * *malformed* one is a 400 — the `channel`-versus-`status` distinction the
+   * notification queue records, on a filter nobody expected to validate.
+   */
+  it("validates action and resource_type by pattern, not by enum", () => {
+    // Well-formed and unknown: a 200 with nothing in it, never a refusal. This
+    // is what makes the action a free-text box rather than a picker.
+    expect(total("action=nonsense.invented")).toBe(0);
+    expect(total("resource_type=nonsense")).toBe(0);
+    expect(isActionQuery("nonsense.invented")).toBe(true);
+
+    for (const [name, value] of [
+      ["action", "Product.Updated"],
+      ["action", ""],
+      ["action", "order status"],
+      ["resource_type", "Product"],
+      ["resource_type", ""],
+    ] as const) {
+      const error = apiError(get("/audit-logs", `${name}=${encodeURIComponent(value)}`));
+      expect(error.status, `${name}=${value}`).toBe(400);
+      expect(error.params?.[name], `${name}=${value}`).toBe(
+        `${name} does not match pattern ^[a-z0-9._-]+$.`,
+      );
+    }
+  });
+
+  /**
+   * **`maxLength: 64` — over the column width is refused rather than clipped.**
+   * `tests/Api/audit.php:312` is the backend's own assertion of it, and the
+   * panel's `query.ts` drops an over-long value client-side for the same reason.
+   */
+  it("refuses a resource_id over the column width", () => {
+    expect(total(`resource_id=${"x".repeat(64)}`)).toBe(0);
+
+    const error = apiError(get("/audit-logs", `resource_id=${"x".repeat(65)}`));
+    expect(error.status).toBe(400);
+    expect(error.params?.resource_id).toBe("resource_id must be at most 64 characters long.");
+  });
+
+  /**
+   * ── PHP's falsy filter, and it is the mock reproducing a real defect ────────
+   *
+   * `AuditLogController::index()` runs the filters through `array_filter()` and
+   * `AuditRepository::buildWhere()` guards each clause with `!empty()`. Both
+   * drop `"0"`, so **`?resource_id=0` is accepted, ignored, and answers the
+   * whole collection** — while three rows in the table actually carry `"0"`,
+   * which is what `settings.updated` and `import.*` record.
+   *
+   * A screen that linked a settings row to "its own history" would get the
+   * entire trail back and look like it was working. Reproduced rather than
+   * tidied, for §0's reason, and asserted so nobody quietly "fixes" it.
+   */
+  it("ignores resource_id=0 and answers the whole collection, as PHP's array_filter does", () => {
+    expect(total("resource_id=0")).toBe(ALL);
+    expect(total("resource_id=")).toBe(ALL);
+
+    // And the rows it cannot reach exist — three of them, which is what makes
+    // this a filter that lies rather than a filter with nothing to find.
+    const zeros = rows("per_page=100").data.filter((row) => row.resource_id === "0");
+    expect(zeros).toHaveLength(3);
+    expect(zeros.map((row) => row.action).sort()).toEqual([
+      "import.products",
+      "settings.updated",
+      "settings.updated",
+    ]);
+  });
+
+  it("refuses a malformed date, and a datetime is malformed", () => {
+    for (const query of ["date_from=yesterday", "date_to=2026-03-05 08:00:00", "date_from="]) {
+      const error = apiError(get("/audit-logs", query));
+      expect(error.status, query).toBe(400);
+      expect(error.apiMessage, query).toMatch(/^Invalid parameter\(s\): date_(from|to)$/);
+    }
+  });
+
+  /**
+   * `paginate()` refuses the way it does everywhere else — this route inherits
+   * the shared helper rather than declaring its own bounds, which is what
+   * `AuditLogController`'s `paginationArgs()` does one layer down.
+   */
+  it("refuses an out-of-range per_page and page the way every other list does", () => {
+    expect(apiError(get("/audit-logs", "per_page=500")).params?.per_page).toBe(
+      "per_page must be between 1 (inclusive) and 100 (inclusive)",
+    );
+    expect(apiError(get("/audit-logs", "page=0")).params?.page).toBe(
+      "page must be greater than or equal to 1",
+    );
+    expect(apiError(get("/audit-logs", "per_page=")).params?.per_page).toBe(
+      "per_page is not of type integer.",
+    );
+  });
+
+  /* ------------------------------------------------------------ the rows --- */
+
+  /**
+   * **All four `metadataShape()` kinds, because the panel renders by shape.** A
+   * suite that exercised one arm would prove nothing about the three an operator
+   * actually meets, and every shape below is read from the writer that produces
+   * it rather than invented.
+   */
+  it("carries all four metadata shapes, and each classifies as the writer intends", () => {
+    const all = rows("per_page=100").data;
+    const byId = new Map(all.map((row) => [row.id, row]));
+    const kindOf = (id: number) => metadataShape(byId.get(id)!.metadata).kind;
+
+    expect(kindOf(16852)).toBe("change"); // product.updated  {fields, before, after}
+    expect(kindOf(16851)).toBe("transition"); // order.status_changed {from, to, …}
+    expect(kindOf(16850)).toBe("fields"); // settings.updated {blocks, fields}
+    expect(kindOf(16849)).toBe("plain"); // notification.retried
+
+    // Every one of the four is represented, and none of them only once.
+    const kinds = all.map((row) => metadataShape(row.metadata).kind);
+    for (const kind of ["change", "transition", "fields", "plain"] as const) {
+      expect(kinds.filter((k) => k === kind).length, kind).toBeGreaterThan(1);
+    }
+
+    /*
+     * **`change` is tested before `fields`, and `product.updated` carries
+     * both** — lib/audit.ts:229 says the order matters and this is the row it
+     * matters on. `changedPairs()` leads with the submitted field list rather
+     * than diffing `before` against `after`, because a save that sent a field
+     * unchanged is a save that sent it.
+     */
+    const change = metadataShape(byId.get(16852)!.metadata);
+    expect(change.kind).toBe("change");
+    if (change.kind === "change") {
+      const pairs = changedPairs(change);
+      expect(pairs.map((pair) => pair.field)).toEqual(["name", "regular_price"]);
+      expect(pairs[1]).toEqual({ field: "regular_price", before: "3200.00", after: "2950.00" });
+      // `status` is on both sides and unchanged, and is deliberately not a pair.
+      expect(pairs.map((pair) => pair.field)).not.toContain("status");
+    }
+
+    /*
+     * **`before`/`after` that are NOT a change.** `InventoryService.php:126-134`
+     * writes the two as integers, so the object test in `metadataShape()` is
+     * what keeps a stock adjustment from rendering as a field-by-field diff of
+     * two numbers. A classifier that merely checked the keys were present would
+     * get this wrong, and this row is the only thing that would catch it.
+     */
+    const adjustment = byId.get(16830)!;
+    expect(adjustment.metadata.before).toBe(14);
+    expect(adjustment.metadata.after).toBe(11);
+    expect(metadataShape(adjustment.metadata).kind).toBe("plain");
+
+    /*
+     * **One action, two shapes.** `CustomerService.php:100` writes
+     * `{fields, before, after}` when staff edit a shopper and
+     * `AccountService.php:252` writes `{fields, by}` when the shopper edits
+     * themselves — so `metadataShape()` cannot be keyed off the action, and this
+     * pair is the reason.
+     */
+    expect(kindOf(16848)).toBe("change");
+    expect(kindOf(16836)).toBe("fields");
+    expect(byId.get(16848)!.action).toBe(byId.get(16836)!.action);
+
+    // `{}` on a row whose writer recorded nothing — `plain` with no pairs, and
+    // never null.
+    expect(byId.get(16837)!.metadata).toEqual({});
+    expect(plainEntries(byId.get(16837)!.metadata)).toEqual([]);
+
+    // A nested list renders as compact JSON rather than being dropped: a row
+    // saying the homepage changed and not what about it shows less than arrived.
+    const homepage = plainEntries(byId.get(16841)!.metadata);
+    expect(homepage).toContainEqual([
+      "types",
+      '["hero","featured_products","categories","banner"]',
+    ]);
+  });
+
+  /**
+   * **`[redacted]` is a fact to render, not a missing value.** `Logger::redact()`
+   * masks any key containing `key`, so `dedupe_key` comes back the literal
+   * string — the writer stored it on purpose, and a row showing a blank would
+   * say the key was absent, which is untrue.
+   */
+  it("carries the redacted value as the literal string the writer stored", () => {
+    const row = rows("action=notification.retried").data[0];
+    expect(row.metadata.dedupe_key).toBe(REDACTED);
+    expect(REDACTED).toBe("[redacted]");
+    expect(isRedacted(row.metadata.dedupe_key)).toBe(true);
+
+    // Its neighbours on the same row are not redacted, which is what makes the
+    // one that is legible as a decision rather than as a broken payload.
+    expect(isRedacted(row.metadata.channel)).toBe(false);
+    expect(row.metadata.channel).toBe("email");
+  });
+
+  /**
+   * **`ac_banner` is the twenty-third resource type and `RESOURCE_TYPES` names
+   * 22.** It is a real typo rather than a fixture flourish:
+   * `CmsService::deleteContent()` records `$postType` where every other banner
+   * path records `$label`, so a banner *delete* lands as `ac_banner` and a
+   * banner *update* lands as `banner`. Naming it in the vocabulary would
+   * translate a typo into two languages; it renders as itself, which is what
+   * makes it visible as the oddity it is.
+   */
+  it("carries a resource type the build has no name for, beside the one it does", () => {
+    const odd = rows("resource_type=ac_banner").data;
+    expect(odd).toHaveLength(1);
+    expect(isResourceType(odd[0].resource_type)).toBe(false);
+    expect(odd[0].action).toBe("cms.banner_deleted");
+
+    // The pair: the same subsystem, one segment apart, and only one of them named.
+    const named = rows("resource_type=banner").data;
+    expect(named).toHaveLength(1);
+    expect(isResourceType(named[0].resource_type)).toBe(true);
+    expect(named[0].action).toBe("cms.banner_updated");
+
+    expect(RESOURCE_TYPES).toHaveLength(22);
+    expect(RESOURCE_TYPES).not.toContain("ac_banner");
+
+    /*
+     * And the whole fixture stays inside the vocabulary apart from that one row
+     * — otherwise "the fallback is exercised" would be indistinguishable from a
+     * fixture full of names nobody wrote.
+     */
+    const unnamed = rows("per_page=100").data.filter((row) => !isResourceType(row.resource_type));
+    expect(unnamed.map((row) => row.resource_type)).toEqual(["ac_banner"]);
+  });
+
+  it("carries actor_login on every row, which the inventory ledger does not", () => {
+    for (const row of rows("per_page=100").data) {
+      // Parsed once more on its own, so the row schema is exercised and not only
+      // the list that contains it.
+      expect(() => auditRow.parse(row)).not.toThrow();
+      expect(typeof row.actor_login, String(row.id)).toBe("string");
+      // Every non-system row names a person; that is what makes this screen work
+      // where `movementActor()` cannot.
+      if (row.actor_id !== 0) expect(row.actor_login, String(row.id)).not.toBe("");
+    }
+  });
+});
+
+/**
+ * ── The tenth identity, and the seventh time this hole has been found ───────
+ *
+ * All nine identities before `no_audit` hold `ac_view_audit_logs`, so `/audit`'s
+ * `ForbiddenState` — `app/[locale]/(panel)/audit/page.tsx:35` — was a branch
+ * nothing in this harness could take. A capture under any of them photographs
+ * the *served* screen and files it as the forbidden one, which is the §18
+ * `no_settings` failure shape.
+ */
+describe("MOCK_IDENTITY=no_audit", () => {
+  it("refuses the trail for a credential without ac_view_audit_logs", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_audit");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const ask = (path: string) =>
+        mock.respond("GET", `${mock.BASE_PATH}${path}`, new URLSearchParams());
+
+      const me = unwrap(identity, ask("/auth/me").body, 200);
+      // Exactly one capability off `full`, and it is the one the name says.
+      expect(me.data.capabilities).toHaveLength(12);
+      expect(me.data.capabilities).not.toContain("ac_view_audit_logs");
+
+      const refused = ask("/audit-logs");
+      expect(refused.status).toBe(403);
+      try {
+        unwrap(auditList, refused.body, refused.status);
+        expect.unreachable("a 403 must throw at the panel's boundary");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).code).toBe("forbidden");
+        expect((error as ApiError).apiMessage).toBe(
+          "You are not allowed to perform this action.",
+        );
+        expect((error as ApiError).isForbidden).toBe(true);
+      }
+
+      /*
+       * **The single-row path stays a 404 for this credential, not a 403**, and
+       * the ordering is the point: WordPress routes before it authorizes, so a
+       * path that matches no route never reaches `permission_callback`. Gating
+       * first would have answered 403 to both and quietly invented a route.
+       */
+      expect(ask("/audit-logs/16825").status).toBe(404);
+
+      // And nothing else moved: the delta is one capability, so the collections
+      // beside it are still served.
+      expect(ask("/orders").status).toBe(200);
+      expect(ask("/users").status).toBe(200);
+      expect(ask("/settings").status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("is the only identity that drops the capability, and full still holds it", () => {
+    const { data } = parse(identity, get("/auth/me"));
+    expect(data.capabilities).toContain("ac_view_audit_logs");
+    expect(get("/audit-logs").status).toBe(200);
   });
 });
 
