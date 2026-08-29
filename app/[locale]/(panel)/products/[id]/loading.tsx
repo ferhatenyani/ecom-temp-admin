@@ -52,12 +52,12 @@ export default async function ProductDetailLoading() {
         <DetailGrid
           main={
             <>
-              <FormSkeleton fields={4} label={label} />
+              <FormSkeleton fields={4} footnote={2} label={label} />
               <FormSkeleton fields={4} label={label} />
               <FormSkeleton fields={3} label={label} />
-              <FormSkeleton fields={2} label={label} />
+              <FormSkeleton fields={2} footnote={1} label={label} />
               <FormSkeleton fields={4} label={label} />
-              <CardSkeleton rows={1} label={label} />
+              <CardSkeleton rows={1} footnote={2} label={label} />
             </>
           }
           aside={

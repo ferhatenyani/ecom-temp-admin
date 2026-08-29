@@ -193,7 +193,7 @@ export function MenuEditor({
           {isError ? (
             <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />
           ) : (
-            <CardSkeleton rows={5} label={t("loading")} titled={false} />
+            <CardSkeleton rows={5} label={t("loading")} titled={false} footnote={1} />
           )}
         </PageBody>
       </div>

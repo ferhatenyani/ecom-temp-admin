@@ -2961,11 +2961,47 @@ itself has none. Neither is deleted here — teardown owns `primitives/`.
   Measured on the offline export links. Nothing depends on it today — the e2e runs
   online — but a test asserting a disabled export by test id would fail for a
   reason that has nothing to do with what it is testing.
-- **`CardSkeleton` and `FormSkeleton` have no footnote placeholder**, which is the
-  whole 147px residual on `/transfer`'s `loading.tsx` (73/46/28 across three
-  cards). Exactly the gap the settings branch closed one slot down the same
-  component when it added `described` for `Card.description`; the footnote is the
-  other end of the same box.
+- ~~**`CardSkeleton` and `FormSkeleton` have no footnote placeholder**, which is
+  the whole 147px residual on `/transfer`'s `loading.tsx` (73/46/28 across three
+  cards).~~ **Closed 2026-08-29 on `fix/skeleton-footnote`** — `footnote?: number`
+  on both, defaulting to 0 so every existing caller is byte-identical, geometry
+  taken from `Card.tsx:69-71` rather than guessed. Sixteen `loading.tsx` files
+  pass it.
+
+  **"147px" was a number about one frame, and the entry should not have written
+  it as a number about the screen.** The same three cards measured
+  skeleton-minus-real across locale and width:
+
+  ```
+                    fr 1440      ar 1440      ar 340
+  export card      73 →  11     34 →  50    261 → 177
+  products card    46 →   2      8 →  40    103 →  55
+  stock card       28 →  20      7 →  41     84 →  36
+                                    total |error|  644 → 432
+  ```
+
+  The *same* footnote string is 78px in French at 1440, **45px in Arabic** — which
+  wraps it to two lines where French takes four — and **121px in Arabic at 340**.
+  So a line count cannot be right in six frames, and this one is calibrated on the
+  frame with the most text. The trade is explicit: Arabic at 1440, where the text
+  is shortest, gets **worse** by up to 33px; Arabic at 340, the tightest frame in
+  the panel, gets **better** by up to 84px. Net 212px less shift across the nine
+  cells, so it ships — but the property is the reusable part, and **`described`
+  has had it since the settings branch without anyone writing it down.**
+
+  **The prop was deliberately withheld from four cards it would fit**, which is
+  the judgement worth keeping: `analytics:91`, `coupons/[id]`, `coupons/new` and
+  `orders/[id]` each have a *body* already over-drawn by more than the footnote is
+  worth, so reserving it would expose an error the missing footnote was
+  cancelling. A skeleton that matches by two mistakes agreeing is worth less than
+  one whose difference is understood. Those four want the body fixed first.
+
+  **Six hand-drawn loading regions stand in for footnoted cards and cannot take
+  the prop at all** — `notifications/[id]`, `users/[id]`, `users/new`,
+  `inventory/movements` and `orders/[id]` draw their own markup instead of calling
+  the primitive. `content/loading.tsx:26` is the one that does it right, with a
+  real `<Card footnote={<Skeleton …>}>`, and is the pattern the other five should
+  move to.
 - **`importBadMode` is live corroboration for the enum-sentence entry below**: the
   wire's top-level message really is `"Invalid parameter(s): mode"` where the mock
   writes the enum sentence there. `checkSort()` and `filterByStatus()` still owe

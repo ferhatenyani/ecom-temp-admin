@@ -177,6 +177,51 @@ function TitleBlock({ described }: { described: number }) {
 }
 
 /**
+ * The caveat under the block — `Card.footnote`'s placeholder.
+ *
+ * **The slot one below `described`, and it had the identical defect.** `Card`
+ * renders `footnote` as the last child of its own `flex flex-col gap-3` column:
+ * `Card.tsx:69-71` is a `<p className="px-4 sm:px-5 text-ui-label text-ui-subtle">`,
+ * so a footnote costs the card the column's **12px gap plus 18px a line** —
+ * `--text-ui-label--line-height` is 1.125rem (`tokens.css:307`), which is the
+ * same `h-4.5` a description line gets. Nothing here is a chosen number: the
+ * gap arrives from the parent because this is a sibling of the body rather than
+ * a child of it, exactly as the real `<p>` is, and the padding is `Card`'s own
+ * `inline` constant.
+ *
+ * Measured before it existed, on `/transfer`, whose three cards all carry one:
+ * 90 / 48 / 48 px of paragraph nothing reserved, which the route's own docblock
+ * had already written down and could not fix from there. That is §3.6's "layout
+ * shift with extra steps" in the component §3.6 exists to prevent — the third
+ * time this file has been caught at it, after `Stat` on the dashboard branch and
+ * `Card.description` on the settings branch.
+ *
+ * A **line count**, defaulting to 0, for the same reason `described` is one: the
+ * paragraph's height is its own, and every caller's count is taken at 1440 in
+ * French — the house reference, and the only honest way to state it, because no
+ * one number is right everywhere. `/transfer`'s export footnote measures **4
+ * lines at 768+ in French, 9 at 340, and 2 in Arabic**: the same string, the
+ * same card. So a count is a reserve tuned to the reference frame, not a
+ * promise, and the residual it leaves is stated per caller rather than chased.
+ *
+ * **`footnote` is a `ReactNode`, and one caller uses that.** `TransferScreen`
+ * stacks two `<span className="block">` with `mt-1.5` between them, so its real
+ * footnote is 4 lines *plus 6px* — a line count under-draws it by that margin
+ * and cannot do otherwise. Modelling inter-block margins here would be a second
+ * axis on a shared primitive to serve one screen; the 6px is recorded as the
+ * residual instead. Every other footnote in the panel is a single string.
+ */
+function FootnoteBlock({ lines }: { lines: number }) {
+  return (
+    <div className="px-4 sm:px-5">
+      {Array.from({ length: lines }, (_, i) => (
+        <Skeleton key={i} className={`h-4.5 ${i === lines - 1 ? "w-2/3" : "w-full"}`} />
+      ))}
+    </div>
+  );
+}
+
+/**
  * A card of label/value rows — the shape a detail screen's aside is made of, and
  * the one §3.6 listed and nobody had built.
  *
@@ -198,11 +243,14 @@ export function CardSkeleton({
   titled = true,
   /** Lines of `Card.description` under the heading. See `TitleBlock`. */
   described = 0,
+  /** Lines of `Card.footnote` under the body. See `FootnoteBlock`. */
+  footnote = 0,
 }: {
   rows?: number;
   label: string;
   titled?: boolean;
   described?: number;
+  footnote?: number;
 }) {
   return (
     <SkeletonRegion
@@ -223,6 +271,7 @@ export function CardSkeleton({
           </div>
         ))}
       </div>
+      {footnote > 0 ? <FootnoteBlock lines={footnote} /> : null}
     </SkeletonRegion>
   );
 }
@@ -340,11 +389,14 @@ export function FormSkeleton({
   titled = true,
   /** Lines of `Card.description` under the heading. See `TitleBlock`. */
   described = 0,
+  /** Lines of `Card.footnote` under the fields. See `FootnoteBlock`. */
+  footnote = 0,
 }: {
   fields?: number | readonly FieldShape[];
   label: string;
   titled?: boolean;
   described?: number;
+  footnote?: number;
 }) {
   const shapes: readonly FieldShape[] =
     typeof fields === "number" ? Array.from({ length: fields }, () => "field") : fields;
@@ -372,6 +424,7 @@ export function FormSkeleton({
           </div>
         ))}
       </div>
+      {footnote > 0 ? <FootnoteBlock lines={footnote} /> : null}
     </SkeletonRegion>
   );
 }

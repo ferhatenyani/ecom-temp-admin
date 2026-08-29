@@ -39,15 +39,15 @@ export default async function CustomerDetailLoading() {
         <DetailGrid
           main={
             <>
+              <CardSkeleton rows={4} footnote={2} label={label} />
               <CardSkeleton rows={4} label={label} />
-              <CardSkeleton rows={4} label={label} />
-              <CardSkeleton rows={3} label={label} />
+              <CardSkeleton rows={3} footnote={2} label={label} />
             </>
           }
           aside={
             <>
               <CardSkeleton rows={6} label={label} />
-              <CardSkeleton rows={2} label={label} />
+              <CardSkeleton rows={2} footnote={2} label={label} />
               <CardSkeleton rows={4} label={label} />
             </>
           }

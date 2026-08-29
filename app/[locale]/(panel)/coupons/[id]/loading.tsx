@@ -48,7 +48,7 @@ export default async function CouponLoading() {
           <FormSkeleton fields={4} label={label} />
           <FormSkeleton fields={3} label={label} />
           <FormSkeleton fields={4} label={label} />
-          <FormSkeleton fields={1} label={label} />
+          <FormSkeleton fields={1} footnote={1} label={label} />
           <FormSkeleton fields={3} label={label} />
         </div>
       </PageBody>

@@ -21,9 +21,9 @@ export default async function MarketingConfigLoading() {
       <PageBody width="detail">
         <div className="flex flex-col gap-4">
           <Skeleton className="h-17 w-full rounded-ui-lg" />
-          <CardSkeleton rows={2} label={label} />
-          <CardSkeleton rows={1} label={label} />
-          <CardSkeleton rows={1} label={label} />
+          <CardSkeleton rows={2} footnote={2} label={label} />
+          <CardSkeleton rows={1} footnote={1} label={label} />
+          <CardSkeleton rows={1} footnote={1} label={label} />
         </div>
       </PageBody>
     </div>

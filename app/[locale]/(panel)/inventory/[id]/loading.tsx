@@ -60,7 +60,7 @@ export default async function InventoryItemLoading() {
               </SkeletonRegion>
 
               <FormSkeleton fields={4} label={label} />
-              <FormSkeleton fields={4} label={label} />
+              <FormSkeleton fields={4} footnote={2} label={label} />
               <CardSkeleton rows={5} label={label} />
             </>
           }
