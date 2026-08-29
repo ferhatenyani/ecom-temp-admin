@@ -456,6 +456,28 @@ export function TextField({
   label,
   value,
   onChange,
+  /**
+   * The value is *committed* rather than bound — Enter, and leaving the field.
+   *
+   * **Added on the audit branch, and it is the labelled counterpart of
+   * `FilterBar`'s `SearchField`.** That control is submit-gated for a measured
+   * reason (a request per keystroke against a 600/min shared cap) but it is a
+   * `role="search"` form with an `aria-label` and no visible one, which is right
+   * for a search box and wrong for a *filter on an identifier*: the audit trail
+   * filters on an exact `action` and an exact `resource_id`, each of which has a
+   * rule the API enforces and therefore a reason to give when it refuses. §3.4
+   * asks for a visible label, help text written before the error, and the error
+   * wired through `aria-describedby` — all of which live in this frame and none
+   * of which `SearchField` has.
+   *
+   * So the caller holds a draft in `value`/`onChange` and acts on `onSubmit`.
+   * **Both** Enter and blur fire it, because a filter somebody typed and then
+   * clicked away from has been asked for; the caller's handler is expected to be
+   * idempotent and to decline a value its own `validate` refuses — the same
+   * split `useField` already makes, where the rule is the caller's and the
+   * timing is the layer's.
+   */
+  onSubmit,
   placeholder,
   hint,
   error,
@@ -479,6 +501,8 @@ export function TextField({
   label: string;
   value: string;
   onChange: (next: string) => void;
+  /** Enter, and leaving the field. See above. */
+  onSubmit?: (value: string) => void;
   placeholder?: string;
   hint?: string;
   error?: string;
@@ -512,7 +536,26 @@ export function TextField({
         disabled={disabled || !field.hydrated}
         aria-busy={!field.hydrated || undefined}
         onChange={(event) => onChange(event.target.value)}
-        onBlur={field.onBlur}
+        onBlur={() => {
+          field.onBlur();
+          onSubmit?.(value);
+        }}
+        /* `enterKeyHint="done"` only where Enter actually does something: on a
+           soft keyboard the key's label is the only cue that this field is
+           committed rather than bound. */
+        enterKeyHint={onSubmit ? "done" : undefined}
+        onKeyDown={
+          onSubmit
+            ? (event) => {
+                if (event.key !== "Enter") return;
+                /* This input is not inside a `<form>` on any caller, so there is
+                   no implicit submission to suppress — but a caller that puts
+                   one inside one later must not get a page navigation. */
+                event.preventDefault();
+                onSubmit(value);
+              }
+            : undefined
+        }
         aria-invalid={field.shown ? true : undefined}
         aria-describedby={describedBy(hint, field.hintId, field.shown, field.errorId)}
         /*

@@ -6,15 +6,21 @@
  * pulling Zod into the browser. `lib/api/schemas/audit.ts` imports this, never
  * the reverse.
  *
- * Measured against the live API and the live table on 2026-08-21.
+ * Measured against the live API and the live table on 2026-08-21, and re-measured
+ * on **2026-08-29** after the backend's `feat/audit-filters` landed: **17 732
+ * rows** (887 pages at 20), 85 distinct actions, 23 distinct `resource_type`,
+ * 222 distinct actors, 1 021 rows carrying the system actor. Every figure in a
+ * comment here is a *dated observation* and not a property of the API; the
+ * screen's own copy takes its numbers from `meta.total` instead.
  */
 
 /* --------------------------------------------------------------- filters --- */
 
 /**
- * **Five filters, and two of them did not work until this branch.**
+ * **Five filters, and all five work now.**
  *
- * Measured before the backend's `feat/audit-filters`, over 16 632 rows:
+ * Measured *before* the backend's `feat/audit-filters`, over 16 632 rows — kept
+ * because it is why two of them exist at all:
  *
  *   ?actor_id=475                    873   honoured
  *   ?action=notification.retried      84   honoured
@@ -22,24 +28,30 @@
  *   ?resource_id=4640             16 632   ACCEPTED AND IGNORED
  *   ?date_from= / ?date_to=       16 632   ACCEPTED AND IGNORED
  *   ?search=                      16 632   ACCEPTED AND IGNORED
- *   ?action=nonsense                   0   200, not validated
  *
  * §65's failure mode: a filter that does not filter looks exactly like a
- * collection that all matches. ADMIN_PANEL.md names all five as though they
+ * collection that all matches. ADMIN_PANEL.md named all five as though they
  * worked, so two clauses went into `AuditRepository` on a narrow backend branch
- * before a line of this screen existed — 16 632 rows at 20 a page is **832
- * pages**, which makes the date range the difference between a screen and a
- * scroll, and `?resource_id=` is how somebody gets from an audited object to its
- * own history.
+ * before a line of this screen existed. That branch landed (`ecom-temp`
+ * `bcd4437`, 2026-08-21) and `?resource_id=` and both date bounds are honoured
+ * as of 2026-08-29 — `app/[locale]/(panel)/audit/query.ts` carries the current
+ * table.
  *
  * **`?search=` stays unfilterable and the panel offers no search box**, which is
- * the honest answer rather than an omission: writes are audited by field *name*,
- * never by value, so there is no column holding the thing a free-text box would
- * be searching for.
+ * the honest answer rather than an omission: it is never declared in
+ * `indexArgs()`, so it is not a parameter of this route, and writes are audited
+ * by field *name* rather than by value — there is no column holding the thing a
+ * free-text box would be searching for.
  *
- * **`?orderby=` and `?order=` are not parameters** — measured, `?order=asc`
- * returns the identical first rows — because the table is append-only and its id
- * order is its time order. No sort control, same as the notification queue.
+ * **`?orderby=` and `?order=` are not parameters, and this is read from the
+ * source rather than inferred from a response.** `AuditRepository.php:50` ends
+ * in a literal `ORDER BY id DESC` with no branch anywhere near it, and
+ * `tests/Api/audit.php:376-379` is the backend's own positive control. That is a
+ * property of the query builder, which the notifications branch records as a
+ * stronger kind of fact than a pair of responses that happened to agree. The
+ * table is append-only, so its id order *is* its time order and there is no
+ * second ordering worth offering: no sort control, no `sortKey`, and no
+ * `aria-sort` anywhere on the screen.
  */
 
 /**
@@ -94,11 +106,14 @@ export const ACTION_COUNT = 85;
  * The 22 resource types this build has a name for, in descending order of how
  * often they appear.
  *
- * `ac_banner` is the twenty-third and is **deliberately absent**: one row out of
- * 16 632, written by a CMS delete path that recorded the WordPress post type
- * where every other banner row records `banner`. Naming it here would translate
- * a typo into two languages; it renders as itself, which is what makes it
- * visible as the oddity it is.
+ * `ac_banner` is the twenty-third and is **deliberately absent**: 2 rows out of
+ * 17 732 as of 2026-08-29, written by a CMS delete path that recorded the
+ * WordPress post type where every other banner row records `banner`. Naming it
+ * here would translate a typo into two languages; it renders as itself, which is
+ * what makes it visible as the oddity it is.
+ *
+ * The count is a dated observation and the exclusion is not — a third such row
+ * would not make the spelling any less of a typo.
  */
 export const RESOURCE_TYPES = [
   "product",
@@ -323,6 +338,47 @@ function printable(value: unknown): string {
  */
 export function isSystemActor(row: { actor_id: number; actor_login: string }): boolean {
   return row.actor_id === 0 || row.actor_login.trim() === "";
+}
+
+/**
+ * **`?actor_id=0` is a 400, so the system is not filterable *to*.**
+ *
+ * Two independent guards, either of which settles it: `indexArgs()` ends with
+ * `idArg('actor_id', false)` and `AbstractController::idArg()` declares
+ * `'minimum' => 1`, so `rest_validate_request_arg` refuses the zero before the
+ * controller body runs; and even with the minimum lifted, PHP's `array_filter()`
+ * and `!empty()` would each drop it and answer the whole collection.
+ *
+ * So the actor picker offers no "System" option — it would be a control that
+ * cannot act (§3.3) — while `isSystemActor()` above still renders those 1 021
+ * rows as a named state. The screen says that once, on the picker.
+ */
+export const SYSTEM_ACTOR_IS_FILTERABLE = false;
+
+/* ----------------------------------------------------------- resource id --- */
+
+/**
+ * **Whether a `resource_id` can be *asked for*, which is not the same as whether
+ * a row has one.**
+ *
+ * `AuditLogController::index()` runs the six filters through `array_filter()`
+ * and `AuditRepository::buildWhere()` guards each clause again with `!empty()`.
+ * **Both drop `"0"`**, because `"0"` is falsy in PHP — so `?resource_id=0` and
+ * `?resource_id=` are each accepted, silently ignored, and answer **the whole
+ * collection**. Verified against the harness on 2026-08-29.
+ *
+ * And rows genuinely carry `"0"`: `settings.updated` and `import.products` both
+ * write it, because there is no single object they point at. So a control that
+ * sent it would report a narrowing that did not happen, which is this run's
+ * oldest rule — a filter that does not filter is indistinguishable from a
+ * collection that all matches.
+ *
+ * Hence: the value is never sent when this is false, and the affordance that
+ * would send it is **not rendered** on such a row. The id still renders; it is
+ * simply not a link.
+ */
+export function isFilterableResourceId(value: string): boolean {
+  return value !== "" && value !== "0";
 }
 
 /* ------------------------------------------------------------ pagination --- */

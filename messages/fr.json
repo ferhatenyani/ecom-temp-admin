@@ -239,7 +239,8 @@
     "recipientEmail": "Destinataire {email}",
     "templateName": "Modèle {name}",
     "notification": "Notification {event} du {date}",
-    "staffAccount": "Compte {name}, identifiant {login}"
+    "staffAccount": "Compte {name}, identifiant {login}",
+    "auditEntry": "Entrée {action} du {date}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -2262,32 +2263,47 @@
   },
   "audit": {
     "title": "Journal",
+    "loading": "Chargement…",
     "refresh": "Actualiser",
     "count": "{total, plural, =0 {Aucune entrée} one {# entrée} other {# entrées}}",
-    "filters": "Filtres",
-    "filtersOn": "Actifs",
-    "clearFilters": "Effacer les filtres",
-    "actionLabel": "Filtrer par action",
+    "actionLabel": "Action",
     "actionPlaceholder": "product.updated",
-    "resourceLabel": "Filtrer par type d’objet",
-    "resourceIdLabel": "Filtrer par identifiant d’objet",
-    "resourceIdPlaceholder": "4529 ou conditions",
-    "actorLabel": "Filtrer par auteur",
+    "actionInvalid": "Minuscules, chiffres, point, tiret et tiret bas uniquement — par exemple product.updated.",
+    "resourceLabel": "Type d’objet",
+    "resourceIdLabel": "Identifiant d’objet",
+    "resourceIdPlaceholder": "104 ou yalidine",
+    "resourceIdZero": "0 n’est pas filtrable : les entrées qui le portent ne visent aucun objet précis.",
+    "resourceIdTooLong": "64 caractères au maximum.",
+    "actorLabel": "Auteur",
     "actorAll": "Tous les auteurs",
+    "actorSystemNote": "Les entrées écrites par le système ne peuvent pas être filtrées ici.",
     "dateFrom": "À partir du",
     "dateTo": "Jusqu’au",
-    "dateScope": "Du {from} au {to}, en UTC.",
+    "dateHint": "Journées entières en UTC : une entrée de fin de soirée à Alger compte pour le lendemain.",
+    "field": {
+      "action": "Action",
+      "actor": "Auteur",
+      "resource": "Objet",
+      "resourceId": "Identifiant",
+      "ip": "Adresse IP",
+      "when": "Date",
+      "metadata": "Ce qui a été enregistré"
+    },
     "systemActor": "Le système",
     "redacted": "masqué",
     "fieldsChanged": "Champs modifiés : {fields}",
-    "scaleNote": "{pages, plural, one {# page} other {# pages}} au total. Le journal ne s’efface jamais : filtrez par date pour retrouver un moment précis.",
+    "metadataEmpty": "Rien n’a été enregistré avec cette entrée.",
+    "peek": {
+      "filterResource": "Voir l’historique de cet objet",
+      "noResource": "Cette entrée ne vise aucun objet précis, il n’y a donc pas d’historique à ouvrir."
+    },
     "empty": {
       "none": "Le journal est vide.",
       "noResults": "Aucune entrée pour ces filtres.",
-      "clear": "Effacer les filtres"
+      "clear": "Effacer les filtres",
+      "pastEnd": "Cette page est vide : il n’y a plus rien au-delà.",
+      "firstPage": "Revenir à la première page"
     },
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "resource": {
       "all": "Tous les types",
       "product": "Produit",

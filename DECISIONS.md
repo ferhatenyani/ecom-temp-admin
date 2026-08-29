@@ -33,15 +33,17 @@ left looking like an oversight.
 [x] 16. Staff — list, detail, new
 [x] 17. Settings
 [x] 18. Transfer
-[ ] 19. Audit
+[x] 19. Audit
 [ ] 20. Login + not-found
 [ ] 21. TEARDOWN
 ```
 
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **17
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **14
 files left**, down from 31 after the notifications branch. Transfer removed three
-of its own — all it had — and added none. Read it as an **upper
+of its own — all it had — and added none; audit removed three and added none, and
+the fourth it would have removed is `inventory/RowSkeleton.tsx`, which this branch
+**orphaned without deleting** — see §20. Read it as an **upper
 bound**: the heuristic starts producing false positives exactly as the migration
 succeeds, because a fully migrated screen whose every class comes from a
 primitive contains no `ui-` string of its own. Content added none, and neither
@@ -2893,7 +2895,281 @@ itself has none. Neither is deleted here — teardown owns `primitives/`.
 
 ---
 
+## 20. Audit — one route, no detail, and the record is the peek
+
+Checklist item **19**; the section numbers still run one ahead because §10 is
+`DataTable`'s row opener, which is not a screen.
+
+- **`PageBody width="full"`, `DataTable`/`RecordList` over one `columns.tsx`** —
+  action (the identifying cell and the peek's opener) · actor · resource · when.
+  The retired screen was `max-w-3xl`, which §8 retires by name. **`#id` gets no
+  column and no row in the peek**: §3.1's shipping amendment is that a primary
+  key rendered at a shopkeeper is a key pretending to be a name, and this one is
+  not even a handle — there is no route it addresses.
+- **The metadata is a peek `Drawer`, and this is the strongest free peek in the
+  run.** The standing rule frees one when `GET /{id}` returns the list row
+  exactly; here **there is no `GET /audit-logs/{id}` at all**, so the list row
+  *is* the whole record, all nine fields, and the drawer costs zero requests. It
+  is what the shape of the screen turns on: the retired row rendered `metadata`
+  as a variable-height third tier, so twenty rows stood at twenty heights, which
+  is the one thing a table exists to prevent.
+- **The peek is not URL-addressable, and that is the carried-forward
+  orders/products defect designed out rather than inherited.** `?peek=` on those
+  two resolves only an id already on the page; media fixed its own by falling
+  through to `GET /{id}`, and that door is closed here. At **887 pages** a peeked
+  id is off the current page in very nearly every case, so the parameter would be
+  a link that silently resolves to nothing. State lives in the component.
+  `rowOpenerId` + `useLatchedOpener`, and both focus paths were driven.
+- **DESIGN.md §2.3 amended in the same edit.** Its table listed "audit entry" in
+  the 768px single-column row. There is no such screen and there cannot be one —
+  `AuditLogController.php:33-41` registers one route and says why, and
+  `tests/boundary.test.ts:333` asserts the single-row route refused. A row in
+  that table is a promise that a screen exists; that one was a promise about an
+  endpoint.
+- **Nothing sorts, and the note cites the source rather than a response.**
+  `AuditRepository.php:50` is a literal `ORDER BY id DESC` with no branch;
+  `tests/Api/audit.php:376-379` is the backend's own positive control. No
+  `sortKey`, nothing passes `onSortChange`, and `DataTable` gates `aria-sort` on
+  both — measured in Chromium: **24 `<th>`, 0 `aria-sort`, 0 header buttons**.
+  No request was spent re-proving it.
+- **Five dimensions, all visible, no drawer and no chips.** Five is above
+  payments' four and the answer is still a row: a drawer puts a modal between a
+  person and controls that were already on screen, and narrowing 887 pages *is*
+  this screen. Nothing is hidden, so nothing needs a chip restating it.
+- **The four controls draw a line worth recording as a rule.** A **picker** ships
+  only over a complete published enumeration — the standing rule. A **free-text
+  filter** ships on a different test: whether the reader *carries* the value or
+  must *guess* it. An order number, a coupon code, a resource id and an action are
+  carried — read off a row, followed from another record, quoted out of a bug
+  report. A provider slug and a channel name are neither carried nor enumerable,
+  so nothing ships for them.
+- **`action` is free text and validated on the control, saying why.** A picker is
+  impossible for three recorded reasons: 85 open-ended values, 170 messages over a
+  vocabulary nobody publishes, and a `.` is a `next-intl` path separator — which
+  every one of the 85 carries. `queryFromParams` still coerces a bad value to no
+  filter so a hand-edited URL cannot raise an error screen, but a **control** that
+  did that silently would turn what somebody typed into the unfiltered list.
+  Driven: `Product.Updated` does not navigate, `aria-invalid="true"`, the pattern
+  named in the reader's language on blur; `user.role_changed` commits on Enter.
+- **`resource_type` ships as a picker and it is no longer a deviation.**
+  `AuditLogController.php:66-71` gives it the *same* pattern `action` has, so
+  `?resource_type=Product` and `?resource_type=` are **400s** — the validator is
+  the guard against a typo, which is the job the standing rule wanted the picker
+  for. §17's refinement exactly. `ac_banner` stays out of `RESOURCE_TYPES`: it is
+  a **typo** one CMS delete path writes, and naming it would translate a typo into
+  two languages. The row renders it as itself, which is what keeps it visible.
+- **`resource_id` never sends `"0"` or `""`, and this is the sharpest thing the
+  honesty audit found.** Both answer the **whole collection** — PHP's
+  `array_filter` and `!empty()` each drop the falsy string — while
+  `settings.updated` and `import.products` rows genuinely carry `"0"`. So a
+  control sending it would report a narrowing that did not happen. `"0"` is
+  dropped at `queryFromParams` so nothing downstream holds an unsendable value,
+  the control refuses it with its own sentence, and the peek's *filter on this
+  object* button is **absent** on such a row with one line saying why. The id
+  still renders on the row; it is simply not a link. All three driven.
+- **The actor picker offers no System option**, because `?actor_id=0` is a 400
+  (`minimum: 1`, and `array_filter` would drop it anyway) — a control that cannot
+  act. The 1 021 system rows still render as a named state through
+  `isSystemActor()`. Said once, as the picker's own hint. Residue recorded: the
+  trail carries 222 actors and `/users` publishes 70, so a deleted account is
+  visible on rows and not filterable.
+- **Two `DateField`s with `echo`**, the only defence against Chromium rendering
+  `mm/dd/yyyy` under an Arabic label. Both ends are whole-day UTC; the
+  consequence is one hint on the first picker of the pair and nowhere else.
+- **Three empty states, not two, and the third is why.** The brief specified two.
+  `?page=999` is a 200 with an empty array, the table is not drawn, and the only
+  control that could page back goes with it — at 887 pages that is an ordinary
+  URL, and `empty.none` there would print *"the journal is empty"* over a table
+  holding 17 732 rows. `empty.pastEnd` + `empty.firstPage`, the notification
+  queue's shape.
+- **Stale marker yes, disable half empty, and no new amendment needed.** §3.7-5
+  as amended on transfer: the marker follows the *data*, the disable follows the
+  *writes*. This screen is that one's exact mirror — a client cache and a refresh
+  control, and not one write anywhere, because the route is GET-only by design.
+  The **refresh control is what makes §3.7-4 reachable at all**, which is §17's
+  finding: every filter change is a `router.push`, so without it the browser never
+  issues a request of its own and the amended rule has nothing to bite on.
+- Omitted, each measured: **no search** (`?search=` is never declared in
+  `indexArgs()`), no bulk, no export (audit is not in `EXPORT_SUBJECTS`), no
+  poll, no write of any kind, and **no `ip_address` column** — it is on the
+  record in the peek, `Ltr`-wrapped, where a forensic field belongs and where it
+  is not scan noise on rows that are two hosts.
+- **The stamp is absolute and never `formatWhen`.** A relative stamp cannot be
+  server-rendered — the notifications branch's hydration finding — and this table
+  is where it would bite hardest, because the trail's newest rows are *seconds*
+  old: every authenticated request the panel makes can write one. It is also the
+  wrong reading; "il y a 2 minutes" is not something anybody lines up against a
+  server log. The peek carries the same stamp **once**, as the drawer's
+  description, and a `Date` row saying the identical string six inches lower came
+  out after a screenshot showed the pair.
+- **Recorded rather than fixed: at 768–1050 the table is about 3px too wide and
+  scrolls inside its own container.** Measured in French at 768: the four columns
+  want ~723px of the ~720 available on the longest row, so the DATE column is
+  partly out of view until the reader scrolls the card. That is §3.2's documented
+  behaviour and not a defect — *"the container scrolls inline and the first column
+  is sticky; the page never scrolls"* — the first column **is** sticky, the
+  capture harness's document-overflow assertion passes at every width, and the
+  column picker is the affordance for a reader who would rather drop one. Every
+  candidate for shaving those three pixels clips something a reader needs: the
+  action, the login, the object's id, or the time.
+
+**Two primitives extended rather than forked.** `TextField` gained `onSubmit`
+(Enter, and leaving the field): `SearchField` is submit-gated for a measured
+reason but is a `role="search"` box with no visible label, no hint and no
+validation, and a filter on an identifier the API validates needs all three.
+`FilterRow` gained `align="start"`, and that one is a **defect fix found in a
+screenshot**: `end` aligns the bottom of an item, which is the *hint's* last line
+rather than the control's box, so six controls landed on three label baselines —
+precisely the defect `end` was added on the payments branch to fix, arriving from
+the other side. The unlabelled controls in such a row carry `mt-6`, which is
+`--text-ui-label`'s line box plus `FieldFrame`'s gap.
+
+**Two layout defects the captures found and a code review would not have.**
+1. Six controls do not fit one line at any width this panel supports, so the
+   sixth wrapped — and in a `flex-wrap` row the second line starts below the
+   *tallest* item of the first. The "Jusqu'au" picker sat **146px** below its
+   five siblings over an empty gap. The toolbar is two deliberate rows now, split
+   where it means something: *what and who* above, *when* below.
+2. **The record's three lines took three attempts and one real measurement, and
+   the two guesses agreed with each other and were both wrong.** Attempt one put
+   the stamp beside the action, which is the table's arrangement and reads
+   perfectly at 1440; at 340 the identifier truncated at eleven characters and
+   `cms.banner_updated` and `cms.banner_deleted` both rendered `cms.banne…`.
+   Attempt two moved it beside the actor, and `ac_panel_super_admin` and
+   `ac_panel_support_agent` both rendered `ac_panel_su…` — a row naming the wrong
+   person is worse than one naming nobody. Attempt three measured the `<li>`
+   instead of estimating it: the card's content box is **264px in French and
+   260px in Arabic**, and the three lines were using 256 / 264 / 90 of it. Line
+   two was clipping two of six logins while line three carried one short phrase
+   and 150px of nothing. So the stamp went on **line three** beside the object
+   (`Compte d'équipe 774` + `17 août 2026, 12:48` is 251 of 264) and the actor
+   took a line to itself. Re-measured across all twenty rows in both locales:
+   **one clip in twenty**, `Contenu ac_cms_homepage`, and it gives up the *type*
+   rather than the id, because `resourceCell` shrinks the translated word and
+   never the identifier.
+
+**A false measurement corrected in six places, one more than the brief named.**
+*"A page is audited by path, a FAQ category by slug"* is false:
+`CmsService.php:156,224,296` record `(int) $page->ID` and `:436,479,512` the
+numeric term id, and the path and the slug go in `metadata`. The **conclusion**
+survives — the column must never be `absint`ed — because the genuinely
+non-numeric ids are `cms` → `ac_cms_homepage`, `menu` → `primary` and
+`shipping_provider` → `yalidine`. Fixed in `lib/api/schemas/audit.ts`,
+`audit/query.ts`, `ADMIN_PANEL.md`, `README.md` (both in that file's own
+`> **Corrected in the build:**` convention) and — the site the brief missed —
+`tests/admin-schema.test.ts:604`. `tests/mock-api.test.ts:12608` already carried
+the corrected sentence and was left alone.
+
+**`scaleNote` was dropped rather than corrected, and the brief was half right
+about it.** It was said to hard-code "832 pages"; it does not — it is
+`{pages, plural, …}` off `meta.total`, and the hard-coded 16 632/832 pairs were
+all in comments. What was wrong with it is what §11 and §19 both record: a grey
+paragraph under the table restating two things already on screen. The pager says
+how many pages there are and the labelled date controls are the advice. The
+count in the header is the only figure this screen prints about its own scale,
+and it comes from `meta.total`.
+
+**i18n**: **2 058 keys in each file, exact parity, zero orphans.** The `audit`
+namespace 48 → 59: seven lost their last caller and went (`filters`, `filtersOn`
+and `clearFilters` with the disclosure and its chip; `dateScope`, replaced by
+`DateField`'s own `echo`; `scaleNote`; and `previousPage`/`nextPage`, which were
+re-spelling `ui.table.*` — §17's shadowing find, a second time). Eighteen
+arrived, plus `a11y.auditEntry`. All 23 `resource.*` names are untouched: the
+vocabulary is not what changed.
+
+**`e2e/admin.spec.ts`: 9 tests before, 9 after, titles byte-identical, and one
+selector changed.** `data-testid="audit-count"` survives on the header subtitle,
+*"Aucune entrée pour ces filtres."* is asserted literally and is byte-identical,
+and both URL-driven filters still work. The one edit is this file's **last
+unconverted locator**: `page.getByText("user.created").first()` resolved through
+the `hidden md:block` table on the four phone projects, where it is
+`display: none` — the hazard `rows()` was added to this file to prevent, arriving
+on the test the helper had not reached. Same assertion, scoped to whichever
+presentation the viewport renders.
+
+**Verified**: `tsc` silent · lint **0 errors, 8 warnings** (baseline) ·
+`test:design` 14/14, floor 321 → **323** against 325 scanned · `test:unit`
+**973/973** · clean `rm -rf .next && npm run build` · **84 captures clean** — 12
+each on `/audit`, the `no_audit` refusal, `/audit?resource_type=order`, a
+single-day range and `?page=99`, which is 60, and 12 each on `/settings` and
+`/notifications`, which this branch does not own but whose `TextField` and
+`FilterRow` it changed.
+
+**This line said 72 for one draft, and 12 × 7 is 84.** Counted off disk rather
+than re-derived from the sentence. It is the capture-count slip §16 records and
+the refetch-count slip the carried-forward list records, in the paragraph whose
+whole job is to carry verified numbers — which is the argument for counting
+every figure in a "Verified" block against the thing itself, including the ones
+that look like arithmetic.
+
+Driven in Chromium in two probes outside the repo, **43/43**: 24 `<th>` and
+**zero** `aria-sort`; **0px** horizontal overflow at 340 across three route
+states × two locales; the peek trapping focus and restoring it to its opener from
+a **pointer** open as well as a keyboard one, in both locales, 25/25 tabs inside
+the dialog; exactly **one focusable per row** and it is the opener; every disabled
+control carrying a reason or a name across three route states × two locales; the
+action and resource-id refusals; and the peek's object filter present, acting, and
+**absent** on a `"0"`.
+
+**And the skeleton probe contradicted itself first, which is worth recording.**
+The first version intercepted `**/api/ac/**` and reported a perfect 0px at all
+four frames. That is the *client* read; `loading.tsx` is on screen while the
+**Server Component** fetches, so it had measured the real page twice. Re-taken
+with a delaying proxy in front of the mock — header height, skeleton minus real:
+
+```
+              1440 fr   1440 ar   768 fr   340 fr   340 ar
+audit header      0         0        0      -14       +4
+```
+
+Calibrated at 1440 in French, the house reference frame, exactly as
+`fix/skeleton-footnote` calibrates a footnote count. The two hint line counts are
+the only judgement in it. **A number that agrees with itself in every frame is
+the shape of a probe that is not measuring anything.**
+
+**Teardown residue**: `app/[locale]/(panel)/inventory/RowSkeleton.tsx` is now
+**orphaned entirely** — `audit/AuditList.tsx:17` was its last importer, reaching
+across a page boundary. Not deleted here; recorded for the teardown pass.
+
+---
+
 ## Carried forward — teardown owns these
+
+- **The sidebar scrolls with no affordance, and the two entries it clips are the
+  two newest screens in the run.** Found while reading this branch's captures and
+  then measured in Chromium at 1440, all seventeen nav links rendering:
+
+  ```
+  1440×900   nav scrollHeight 826  clientHeight 749  overflow  77px
+             clipped: "Import et export", "Journal"
+  1440×1080  overflow 0px          clipped: none
+  1440×768   overflow 209px        clipped: "Analyses", "Équipe", "Réglages",
+                                            "Import et export", "Journal"
+  ```
+
+  `AppShell.tsx:101`'s `<nav className="ui-scroll flex-1">` is doing exactly what
+  it says; what is missing is any sign that it *has* scrolled — no fade, no
+  shadow, nothing at the cut. So on a 900px-tall screen the panel silently
+  presents fifteen destinations out of seventeen, and the two it drops are
+  `/transfer` and `/audit`, checklist items 18 and 19. **The cost falls on the
+  newest screen every time**, because the clip is at the end of the last group,
+  which is where a new entry lands.
+
+  **Nothing about this is audit's**, which is why it is here: it is an `AppShell`
+  property that has been true of every screen since the shell landed, and closing
+  it re-captures the whole panel. Recorded now because this branch is what made
+  it bite — item 19 shipped into the second clipped slot.
+
+  **And it cost a wrong reading before it cost anything else.** From the
+  screenshot alone I recorded that the two entries were *"defined but not
+  rendering"* and went looking for a capability filter or a missing icon. Both
+  render: `grep` found them in the rendered HTML, and only measuring
+  `scrollHeight` against `clientHeight` said what was actually happening. **A
+  full-page screenshot shows a viewport-height scroll container at its scroll
+  origin**, so "absent from the picture" and "below the fold of a nested
+  scroller" look identical in a PNG — which is the same trap as the one-page
+  Arabic pager in §8, where the broken order and the correct one rendered the
+  same string.
 
 - ~~**A refused export replaces the panel with a raw JSON body, and it has five
   callers.**~~ **Closed 2026-08-29 on `fix/export-refusal`.** The route answers a
@@ -3132,7 +3408,26 @@ itself has none. Neither is deleted here — teardown owns `primitives/`.
   measurement that produced it. Scratch segments 47/48 and campaigns 323/324 were
   created and deleted cleanly.
 
-- **Every French timestamp in the panel reads "6:32 AM", and it is one line in
+- ~~**Every French timestamp in the panel reads "6:32 AM", and it is one line in
+  `lib/format/date.ts`.**~~ **Struck 2026-08-29 on the audit branch: the fix has
+  landed and this entry outlived it.** `DATE_LOCALE.fr` is
+  `"fr-DZ-u-hc-h23"` (`lib/format/date.ts:40`), the docblock above it carries the
+  measurement and the reasoning, and Arabic is untouched at `ar-DZ` as the entry
+  required. Seen first in this branch's own captures — the audit table renders
+  `18 août 2026, 03:41` in French and `2026/08/18، 3:41 ص` in Arabic — and then
+  confirmed in the source rather than inferred from the screenshot.
+
+  **Nobody struck it when it was fixed, so it read as an open defect for at least
+  a branch.** That is this file's own recurring failure mode arriving from the
+  pleasant direction: the ledger is wrong in the direction of *understating* what
+  works, exactly as it was for `/notifications`' and `/customers`' `orderby` and
+  for `GET /analytics/shipping`. A carried-forward entry needs re-reading when a
+  branch touches its subject, not only when somebody sets out to close it — and
+  the cheapest defence is the one those three entries already prescribe: the
+  entry should have carried the one-line check that decides it, here
+  `grep -n 'hc-h23' lib/format/date.ts`. The original follows.
+
+  **Every French timestamp in the panel reads "6:32 AM", and it is one line in
   `lib/format/date.ts`.** Found on the media drawer's `Téléversé` row and then
   measured properly: `DATE_LOCALE.fr` is **`fr-DZ`**, and CLDR's `fr-DZ` resolves
   to `hourCycle: h12` with the English `AM`/`PM` day-period names. `fr` and

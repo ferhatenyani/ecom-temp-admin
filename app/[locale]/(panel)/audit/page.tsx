@@ -6,8 +6,8 @@ import { auditList } from "@/lib/api/schemas/audit";
 import { staffUserList } from "@/lib/api/schemas/staff";
 import { listMeta } from "@/lib/api/envelope";
 import { has } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { AuditList } from "./AuditList";
 import { listParams, queryFromParams } from "./query";
 
@@ -35,11 +35,17 @@ export default async function AuditPage({
   if (!has(me, "ac_view_audit_logs")) {
     const t = await getTranslations("audit");
     return (
-      <Scaffold title={t("title")}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        {/* The header still renders, so the refusal arrives on the screen the
+            person asked for rather than on a blank page — §3.7's third state. No
+            toolbar and no count: there is nothing behind the gate to filter or to
+            count, and `audit-count` being absent is what distinguishes the
+            refusal from a served screen with zero rows. */}
+        <PageHeader title={t("title")} />
+        <PageBody width="full">
           <ForbiddenState capability="ac_view_audit_logs" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -58,8 +64,17 @@ export default async function AuditPage({
    * ledger has and cannot close: `ac_manage_inventory` is held by four roles and
    * `/users` by one, so its rows cannot name a colleague.
    *
-   * 100 is the cap. This shop has 72 accounts and the picker is a convenience
-   * over `?actor_id=`, which the URL carries whether or not the name resolves.
+   * 100 is the cap, and the residue is recorded rather than papered over: the
+   * trail carries 222 distinct actors against the 70 `/users` publishes, so an
+   * actor whose account has since been deleted appears on rows and cannot be
+   * filtered to. `?actor_id=` still carries whatever the URL holds.
+   *
+   * **Neither read ends in `.catch(() => null)`.** An `ApiError` becomes a null
+   * seed, so the client query issues the request itself and renders the API's
+   * own refusal through `ErrorState` with a retry — §11's dashboard defect and
+   * §18's settings defect were a *swallowed* failure rendering a degraded screen
+   * with no error state at all. Anything that is not an `ApiError` rethrows and
+   * reaches the route's error boundary.
    */
   const [initial, actors] = await Promise.all([
     acFetch(auditList, session, `/audit-logs?${listParams(query)}`).catch((error: unknown) => {
