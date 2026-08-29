@@ -173,6 +173,7 @@
   "states": {
     "forbiddenTitle": "Accès refusé",
     "forbiddenBody": "Cette section demande la permission {capability}.",
+    "forbiddenBodyAny": "Cette section demande l’une de ces permissions : {capabilities}.",
     "forbiddenAsk": "Demandez à un Super Admin de vous l’accorder.",
     "capability": {
       "ac_manage_orders": "Commandes",
@@ -2308,9 +2309,8 @@
   },
   "transfer": {
     "title": "Import et export",
-    "nothingPermitted": "Aucun de vos droits ne couvre les produits, les commandes, le stock ou les clients : il n’y a rien à exporter ni à importer ici.",
     "exportTitle": "Exporter",
-    "exportNote": "Un fichier CSV, tel que l’API le nomme. Une erreur d’export s’affiche à l’écran plutôt que d’être enregistrée sous products.csv.",
+    "exportNote": "Un fichier CSV, tel que l’API le nomme. Un export refusé n’est jamais enregistré sous products.csv : le téléchargement est remplacé par la réponse brute de l’API dans l’onglet.",
     "download": "Télécharger",
     "roundTrips": "Réimportable",
     "bomNote": "Les fichiers commencent par une marque d’ordre d’octets UTF-8, nécessaire pour qu’Excel lise correctement les noms en arabe. Ce n’est pas un défaut : ne la retirez pas.",
@@ -2328,7 +2328,7 @@
       "customers": "Une ligne par compte client."
     },
     "importNote": {
-      "products": "Le fichier doit comporter une colonne sku sur sa première ligne. L’export produits utilise les intitulés de WooCommerce et n’est pas réimportable tel quel.",
+      "products": "Le fichier doit comporter une colonne sku sur sa première ligne. L’export produits en écrit une : il se réimporte tel quel.",
       "inventory": "Le fichier doit comporter les colonnes sku et stock_quantity. L’import de stock ne crée jamais de produit."
     },
     "chooseFile": "Choisir un fichier CSV",
@@ -2345,7 +2345,7 @@
     "apply": "Appliquer",
     "applied": "Import appliqué.",
     "applyTitle": "Appliquer cet import ?",
-    "applyBody": "{created} création(s), {updated} mise(s) à jour, {skipped} ignorée(s). Cette action écrit dans la boutique.",
+    "applyBody": "{subject} — {created} création(s), {updated} mise(s) à jour, {skipped} ignorée(s). Cette action écrit dans la boutique.",
     "startOver": "Recommencer",
     "wasPreview": "Prévisualisation",
     "wasApplied": "Appliqué",
@@ -2369,7 +2369,11 @@
     "columnsRequired": "Colonnes attendues : {columns}",
     "columnsFound": "Colonnes lues sur la première ligne : {columns}",
     "importSafety": "La prévisualisation n’écrit jamais rien : le mode simulation est celui par défaut de l’API, et appliquer est une action distincte.",
-    "noFile": "Aucun fichier choisi"
+    "perSubject": "Chaque ligne dépend de la permission de son sujet : vos droits n’en couvrent qu’une partie.",
+    "applyFile": "Fichier :",
+    "applyConfirm": "Appliquer l’import",
+    "chooseFileFirst": "Choisissez d’abord un fichier CSV.",
+    "refused": "Fichier refusé"
   },
   "ui": {
     "close": "Fermer",
@@ -2416,6 +2420,10 @@
       "of": "Étape {current} sur {total}",
       "goTo": "Étape : {step}",
       "locked": "Terminez l’étape en cours pour l’atteindre."
+    },
+    "file": {
+      "browse": "Parcourir",
+      "none": "Aucun fichier choisi"
     }
   }
 }

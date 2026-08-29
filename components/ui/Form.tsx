@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
-import { Isolate } from "@/components/primitives/Ltr";
+import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Button } from "@/components/ui/Button";
 import { useHydrated } from "@/lib/use-hydrated";
 
@@ -985,6 +985,50 @@ export function Select<T extends string = string>({
  * `accept` is **advisory in both directions**: the operating system's picker
  * treats it as a filter a person can override, and the server is the authority
  * on what it will take. `lib/media.ts` argues that at length.
+ *
+ * ## The UA's own words are the panel's only untranslated chrome, and they are
+ * ## drawn over rather than styled — corrected on the transfer branch
+ *
+ * This used to style the UA button with `file:` and let the control render its
+ * own text, on the argument recorded below: replacing it means a `<label>`
+ * driving a hidden input, which loses the control's own keyboard behaviour on
+ * two engines. **The measurement was right and the conclusion was wrong**, and
+ * the captures say so — `/transfer` renders two file fields, so a French screen
+ * showed *"Choose File"* and *"No file chosen"* twice, and the Arabic screen
+ * showed the same two English strings laid out left-to-right directly under the
+ * correct Arabic label `اختيار ملف CSV`. The reader is told the same thing twice,
+ * once in their language and once not. This run has fixed *the API's English
+ * reaching both localised panels* five times; this is the **browser's** English
+ * doing it, one layer down, and it is the most visible thing on the screen.
+ *
+ * The shape that satisfies both facts is neither of the two that were considered:
+ *
+ *   the input      stays a real `<input type="file">`, in the accessibility tree
+ *                  and **in the tab order**, `sr-only` and never `hidden` or
+ *                  `display: none`. So Tab reaches it and Enter or Space opens
+ *                  the platform picker — the behaviour the note below was
+ *                  written to protect, kept rather than traded away.
+ *   the row        a `<label htmlFor>` drawn as the control. A pointer press
+ *                  anywhere on it opens the same picker, because that is what a
+ *                  label does; nothing calls `.click()` and no ref is needed.
+ *   the ring       `.peer` / `.ui-ring-peer` in globals.css, which exists for
+ *                  exactly this — a real input carrying focus while a drawn
+ *                  element beside it carries the ring. `CheckRow` has used it
+ *                  since the redesign began.
+ *
+ * The label's text is `ui.file.*`, so it is the **layer's** string rather than a
+ * caller's: `media/UploadModal.tsx` inherits the repair without being edited for
+ * it, and the next caller cannot ship an untranslated one by omission. The
+ * chosen file's name renders here too, `Ltr`-wrapped as an identifier and
+ * truncated — it is inside the `<label>`, so it is part of the control's
+ * accessible name rather than beside it where a screen reader would never reach
+ * it, which is the same rule `CheckRow`'s count follows.
+ *
+ * `sr-only` and not `opacity-0` stretched over the row, which is what `Box`
+ * uses: that trick exists so a *pointer* can reach a checkbox directly, and here
+ * the pointer is meant to land on the label — an invisible file input covering
+ * the row would swallow the press and open the picker with no visible affordance
+ * having been pressed.
  */
 export function FileField({
   id: givenId,
@@ -1004,11 +1048,18 @@ export function FileField({
   onChange: (file: File | null) => void;
   disabled?: boolean;
 }) {
+  const t = useTranslations("ui");
   const auto = useId();
   const id = givenId ?? auto;
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
   const hydrated = useHydrated();
+  /* The control has no readable value of its own once its chrome is drawn over,
+     so the name of the chosen file is held here. A caller clearing the field
+     remounts with a `key`, which resets this with it. */
+  const [chosen, setChosen] = useState<string | null>(null);
+
+  const inert = disabled || !hydrated;
 
   return (
     <FieldFrame
@@ -1019,22 +1070,41 @@ export function FileField({
       error={error}
       errorId={errorId}
     >
+      {/* The input comes first so `.peer` can reach the row: the ring selector is
+          a following-sibling one. */}
       <input
         id={id}
         type="file"
         accept={accept}
-        disabled={disabled || !hydrated}
+        disabled={inert}
         aria-busy={!hydrated || undefined}
-        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+        onChange={(event) => {
+          const file = event.target.files?.[0] ?? null;
+          setChosen(file?.name ?? null);
+          onChange(file);
+        }}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy(hint, hintId, error, errorId)}
-        /* The UA button inside is styled rather than hidden: replacing it with
-           our own means a `<label>` driving a hidden input, which loses the
-           control's own keyboard behaviour on two engines. */
-        className={`${CONTROL} cursor-pointer file:me-3 file:cursor-pointer file:rounded-ui-md file:border-0 file:bg-ui-surface-3 file:px-2 file:py-1 file:text-ui-label file:text-ui-fg ${borderFor(
-          Boolean(error),
-        )}`}
+        className="peer sr-only"
       />
+
+      <label
+        htmlFor={id}
+        className={`${CONTROL} ui-ring-peer flex items-center gap-2.5 ${borderFor(
+          Boolean(error),
+        )} ${inert ? ROW_OFF : "cursor-pointer"}`}
+      >
+        <span className="shrink-0 rounded-ui-md bg-ui-surface-3 px-2 py-1 text-ui-label text-ui-fg">
+          {t("file.browse")}
+        </span>
+        {chosen === null ? (
+          <span className="min-w-0 truncate text-ui-muted">{t("file.none")}</span>
+        ) : (
+          <Ltr numeric={false} className="min-w-0 truncate">
+            {chosen}
+          </Ltr>
+        )}
+      </label>
     </FieldFrame>
   );
 }

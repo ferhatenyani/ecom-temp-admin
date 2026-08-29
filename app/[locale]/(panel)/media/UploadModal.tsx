@@ -291,14 +291,16 @@ export function UploadModal({
         />
 
         {file ? (
-          <div className="flex min-w-0 flex-col gap-0.5 rounded-ui-md bg-ui-surface-2 px-3 py-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 rounded-ui-md bg-ui-surface-2 px-3 py-2">
+            {/* **The name moved up into the field and is no longer repeated
+                here.** `FileField` draws its own chrome as of the transfer
+                branch, so it prints the chosen name in the panel's language
+                where the UA used to print it in the browser's — and this block
+                was rendering the same string a second time, ten pixels below.
+                What it still carries is the size, which is the fact the field
+                does not have and the one `MAX_BYTES` is about. */}
             <span className="text-ui-caption text-ui-muted">{t("chosenFile")}</span>
-            {/* The *chosen* name, and it is labelled as such — the stored name is
-                generated server-side and appears only after the upload. */}
-            <Ltr numeric={false} className="block truncate text-ui-label text-ui-fg">
-              {file.name}
-            </Ltr>
-            <Isolate className="text-ui-caption text-ui-muted">
+            <Isolate className="text-ui-label text-ui-fg">
               {formatBytes(file.size, locale)}
             </Isolate>
           </div>

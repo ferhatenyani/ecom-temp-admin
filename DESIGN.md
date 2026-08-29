@@ -885,6 +885,34 @@ system, restyled per §1.
    > `StaleBanner` behind `!navigator.onLine`, which is an offline marker on a
    > page with no writes to disable and no cache to go stale.
 
+   > **Amended on the transfer branch: the marker follows the data and the
+   > disable follows the writes, and a screen can owe one without the other.**
+   >
+   > This item and both amendments above are written as though the two halves
+   > travel together, because until now they did. The customer detail had neither
+   > — no data that could age, no write to disable — and settings had both, so
+   > the marker and the disabled save arrived in the same commit. Neither case
+   > separates them.
+   >
+   > `/transfer` is the first that does. It holds **no data at all**: four fixed
+   > export rows and two import cards, nothing fetched into a client cache,
+   > nothing polling, no refresh control. There is no `time` for a `StaleBanner`
+   > to carry, and a banner reporting the age of a constant would be a marker
+   > naming a condition it has not established — the defect `reason` was added to
+   > `StaleBanner` to stop. But the screen **writes**: the import is a POST, and
+   > the export is a real navigation that replaces the panel with the browser's
+   > own error page when it cannot answer. So the half of the rule that does the
+   > real work has three controls to disable, each carrying
+   > `states.offlineWrites` on its `title` exactly as settings' `SaveBar` and
+   > `ProductsList`'s export link do.
+   >
+   > So: **the marker is owed by a screen whose pixels can outlive the fetch that
+   > produced them; the disable is owed by a screen that writes.** A screen that
+   > can do neither says so in its docblock, per the customers amendment. A screen
+   > that does one of the two ships that half and says which — and, as with every
+   > exemption on this page, "this screen holds no data" is a fact about today's
+   > screen and has to be re-read the day one of these cards grows a list.
+
 ---
 
 ## 4. Motion

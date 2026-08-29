@@ -878,17 +878,25 @@ return `total - 1`. The count version passed at ten rows and would have failed s
 
 ### Found on the admin branch, and not fixed here
 
-- **A product export cannot be re-imported without editing its header**, and that is a WooCommerce
-  fact rather than a defect in this stack. The header carries WooCommerce's *display* labels — `ID`,
-  `SKU`, `GTIN, UPC, EAN, or ISBN` — because that is the file every other WooCommerce tool reads, and
-  the table mapping those onto field names lives in `includes/admin/importers/mappings/`, inside
-  `admin/`, which `WooCsv` deliberately does not load: the whole argument of that class is that only
-  the *loader* is admin-gated and the engine is not. Measured after the header fix, a re-import parses
-  every row and resolves an **empty `sku` on each**, while the same file with a lowercased header
-  previews `updated: 2`. The fix is either loading the mapping files — which crosses the line
-  `WooCsv`'s docblock draws — or building the map ourselves, which is reimplementing the contract §64
-  exists not to reimplement. So the screen states it per subject: the **inventory** export uses our own
-  writer and our own field names and round-trips as it stands.
+- ~~**A product export cannot be re-imported without editing its header.**~~ **Closed in `ecom-temp`
+  on `fix/product-export-field-names`, and this paragraph was one repair behind the screen it
+  describes.** It read as a WooCommerce fact: the header carried WooCommerce's *display* labels —
+  `ID`, `SKU`, `GTIN, UPC, EAN, or ISBN` — and the table mapping those onto field names lives in
+  `includes/admin/importers/mappings/`, inside `admin/`, which `WooCsv` deliberately does not load.
+  That described the symptom accurately and defended the wrong half. **The real defect was a green
+  preview**: `created: 33, failed: 0` over a file in which every field had resolved empty, because
+  `CsvReader` lower-cases headers on purpose (so `requireColumns(['sku'])` was satisfied by `SKU`)
+  while `WC_Product_CSV_Importer::map_headers()` matches exactly and, given no mapping, resolved
+  nothing at all. The export writes field names now (`id,type,sku,global_unique_id,name,…`), the
+  precondition asks the importer's own `get_mapped_keys()`, and a label-headed file is a **400 naming
+  `sku`** rather than a cheerful 33. Measured after the fix on the same 33-product file: default mode
+  `skipped 33`, `?mode=update` `updated 33, failed 0` with every `sku` and `name` resolved. So
+  `ROUND_TRIPS.products` is `true` and `/transfer` renders the badge; `ADMIN_PANEL.md:2722-2760` and
+  `lib/transfer.ts:106-139` carry the full account. `orders` and `customers` stay false for an
+  unrelated reason — they have no importer at all.
+  **`tests/admin-schema.test.ts:934-935` still asserts the old header and is correct to**: it reads a
+  *verbatim capture* in `tests/fixtures-admin.json` that predates the fix, and editing a capture to
+  say what we believe would be inventing a measurement. The re-capture is carried forward.
 - **The product export uses LF while the other three use CRLF.** `CsvWriter` emits CRLF (RFC 4180, and
   what Excel on Windows expects); `WC_CSV_Exporter` emits LF. Not fixed, for the same reason: every
   reader in play handles both, and rewriting WooCommerce's output forks the format. Pinned in

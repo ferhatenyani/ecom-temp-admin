@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Icon, type IconName } from "@/components/primitives/Icon";
 import { Button, ButtonLink } from "./Button";
 
@@ -109,19 +109,49 @@ export function EmptyState({
 /**
  * 3. Forbidden — names the capability required and who to ask. Never a blank
  * page, never a logout, never a disappearing toast. It stays on screen.
+ *
+ * ## One capability or several, added on the transfer branch
+ *
+ * Every screen before it refuses on **one** capability, so `capability: string`
+ * and `states.forbiddenBody`'s singular sentence were the whole contract.
+ * `/transfer` is the panel's only screen whose gate is per *subject*: four export
+ * cards behind four different capabilities (`SUBJECT_CAPABILITY` in
+ * `lib/transfer.ts`), and the page as a whole is refused only to a reader holding
+ * **none** of them. Naming one of the four would be false — any one of them opens
+ * the screen — and naming none is the blank page §3.7-3 forbids.
+ *
+ * So an array names them all, through `states.forbiddenBodyAny`, which is a
+ * second sentence beside the singular one rather than a rewrite of it: the
+ * thirteen screens passing a string are untouched and read exactly as before.
+ *
+ * The names are joined with `Intl.ListFormat` in the reader's own locale rather
+ * than with a comma, because the separator is the locale's — French wants
+ * `A, B, C ou D` and Arabic wants `أ أو ب`, and a hard-coded `", "` also carries
+ * the wrong comma in Arabic (`،`). The `disjunction` type is the honest one: the
+ * reader needs *any* of the four, not all of them.
  */
-export function ForbiddenState({ capability }: { capability: string }) {
+export function ForbiddenState({ capability }: { capability: string | readonly string[] }) {
   const t = useTranslations("states");
+  const locale = useLocale();
+
+  const slugs = typeof capability === "string" ? [capability] : capability;
   /* An unlabelled capability is a missing translation, not a reason to render
      nothing — so it falls back to its own identifier. */
-  const known = t.has(`capability.${capability}`);
-  const name = known ? t(`capability.${capability}`) : capability;
+  const names = slugs.map((slug) =>
+    t.has(`capability.${slug}`) ? t(`capability.${slug}`) : slug,
+  );
 
   return (
     <StateFrame
       icon="lock"
       title={t("forbiddenTitle")}
-      body={t("forbiddenBody", { capability: name })}
+      body={
+        names.length === 1
+          ? t("forbiddenBody", { capability: names[0] })
+          : t("forbiddenBodyAny", {
+              capabilities: new Intl.ListFormat(locale, { type: "disjunction" }).format(names),
+            })
+      }
       detail={t("forbiddenAsk")}
     />
   );

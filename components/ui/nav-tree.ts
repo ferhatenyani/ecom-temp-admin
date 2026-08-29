@@ -82,7 +82,30 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "staff", href: "/users", icon: "user", capability: "ac_manage_users" },
       { key: "settings", href: "/settings", icon: "note", capability: "ac_manage_settings" },
-      { key: "transfer", href: "/transfer", icon: "download", capability: "ac_manage_settings" },
+      /*
+       * **`ac_manage_products`, and `ac_manage_settings` was wrong in both
+       * directions.** This is `dashboard`'s defect two lines up the same file
+       * (DECISIONS.md §11), and `more/page.tsx:95-113` had already spent fourteen
+       * lines arguing the right gate — the two files were silently disagreeing.
+       *
+       * `/transfer` has **no capability of its own**: capability follows the
+       * resource, so `/export/products` is `ac_manage_products` and
+       * `/export/customers` is `ac_manage_customers`, and the screen renders the
+       * subjects the reader holds. `ac_manage_settings` is not one of the four.
+       * Photographed under `MOCK_IDENTITY=no_transfer`: the entry was present and
+       * highlighted for a reader who can do nothing here — and a Manager holding
+       * `ac_manage_products` but not `ac_manage_settings` got **no entry at all**
+       * for a screen serving them all four exports.
+       *
+       * `ac_manage_products` is the widest of the four and the closest honest
+       * approximation, which is `more/page.tsx`'s conclusion. **The residue is
+       * real and is recorded rather than papered over:** no single capability
+       * expresses a per-subject gate, so a reader holding only
+       * `ac_manage_customers` still reaches the screen by URL and gets their one
+       * export. That is the honest outcome — the screen refuses nobody it can
+       * serve — and it is why this entry is an approximation rather than a gate.
+       */
+      { key: "transfer", href: "/transfer", icon: "download", capability: "ac_manage_products" },
       { key: "audit", href: "/audit", icon: "clock", capability: "ac_view_audit_logs" },
     ],
   },
