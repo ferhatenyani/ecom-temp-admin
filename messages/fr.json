@@ -2040,8 +2040,6 @@
   "settings": {
     "title": "Réglages",
     "unreadable": "Les réglages n’ont pas pu être lus.",
-    "save": "Enregistrer",
-    "revert": "Annuler les modifications",
     "saved": "Réglages enregistrés.",
     "block": {
       "store": "Boutique",
@@ -2116,8 +2114,7 @@
     "storefrontMissing": "L’adresse de la boutique n’est pas renseignée, et trois choses ne fonctionnent pas tant qu’elle ne l’est pas :",
     "storefrontReset": "la réinitialisation de mot de passe répond par une erreur ;",
     "storefrontTracking": "les liens de suivi n’ont pas d’adresse ;",
-    "storefrontUnsubscribe": "le lien de désinscription des e-mails pointe vers l’API et non vers la boutique.",
-    "auditNote": "Chaque enregistrement est journalisé par nom de champ, jamais par valeur : le journal indique qu’un numéro du registre du commerce a changé, pas ce qu’il est devenu."
+    "storefrontUnsubscribe": "le lien de désinscription des e-mails pointe vers l’API et non vers la boutique."
   },
   "staff": {
     "title": "Équipe",
