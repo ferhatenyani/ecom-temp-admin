@@ -6154,6 +6154,14 @@ describe("GET /coupons", () => {
     const refusedOrderby = apiError(get("/coupons", "orderby="));
     expect(refusedOrderby.status).toBe(400);
     expect(refusedOrderby.params?.orderby).toBe("orderby is not one of date, id, code, and usage.");
+    /*
+     * `checkSort()` is the second of the three sites that hand-rolled `fail()`
+     * with the enum sentence in the top-level `message`. Pinned here because it
+     * is shared by every sortable collection in this file — coupons, campaigns,
+     * customers, products and staff all refuse through it, so one assertion
+     * defends five.
+     */
+    expect(refusedOrderby.apiMessage).toBe("Invalid parameter(s): orderby");
 
     const refusedOrder = apiError(get("/coupons", "order="));
     expect(refusedOrder.status).toBe(400);
@@ -6742,6 +6750,21 @@ describe("query parameters", () => {
     } catch (error) {
       expect((error as ApiError).code).toBe("invalid_request");
       expect((error as ApiError).status).toBe(400);
+      /*
+       * **The shape, not just the code.** This test compared the code and never
+       * the sentence, which is the mirror of the failure that let every error
+       * `code` in this file be WordPress's for months — one half of the refusal
+       * asserted, the other free to drift.
+       *
+       * `filterByStatus()` was the last of the three sites owing DECISIONS.md's
+       * enum-sentence entry and it owed three corrections: the sentence sat in
+       * the top-level `message`, where the wire puts `"Invalid parameter(s):
+       * status"`; `join(", ")` dropped the Oxford `and`; and it had no full stop.
+       */
+      expect((error as ApiError).apiMessage).toBe("Invalid parameter(s): status");
+      expect((error as ApiError).params?.status).toBe(
+        "status is not one of pending, processing, on-hold, completed, cancelled, refunded, and failed.",
+      );
     }
   });
 

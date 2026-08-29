@@ -2993,8 +2993,29 @@ itself has none. Neither is deleted here — teardown owns `primitives/`.
   wire answers 403.~~ **Closed 2026-08-29 — and it was hiding a live defect, which
   is why it was worth doing rather than deferring.** See §16.1.
 
-- **Every parameter refusal in the mock puts the enum sentence in the top-level
-  `message`, and the wire puts `"Invalid parameter(s): <name>"` there.** Found by
+- ~~**Every parameter refusal in the mock puts the enum sentence in the top-level
+  `message`, and the wire puts `"Invalid parameter(s): <name>"` there.**~~
+  **Closed 2026-08-29 — all three sites now call `invalidParam()`.** The entry as
+  written follows, because the *shape* of the slip is the reusable part.
+
+  `checkSort()` and `filterByStatus()` were the last two, and `filterByStatus()`
+  owed **three** corrections rather than one: the sentence in the top-level
+  `message`, a `join(", ")` that dropped the Oxford `and` `oxford()` writes, and
+  no full stop. Both are now one call to the helper that had been sitting two
+  hundred lines up the same file the whole time — so the total cost of the entry,
+  across three narrowings and two branches, was two lines.
+
+  **What kept it alive was the assertions, not the code.** Neither site's refusal
+  was unasserted — `/orders?status=processing,pending` had a test and so did
+  `/coupons?orderby=` — but the orders one compared the **code and never the
+  sentence**, and the coupons one compared the **sentence and never the top-level
+  message**. Each test checked the half that was right. That is the mirror of the
+  failure that let every error `code` in this file be WordPress's for months, and
+  the fix is the same: assert the whole refusal, not the half you were thinking
+  about. Both tests now pin `message` *and* `details.params`, and the `checkSort`
+  one defends five collections at once because they all refuse through it.
+
+  Found by
   the marketing honesty audit, verified live on `/coupons`, `/products`,
   `/customers`, `/media`, `/notifications` and `/orders` — so it is **five
   collections**, not one, and `mock-api.mjs`'s `checkSort()` and
