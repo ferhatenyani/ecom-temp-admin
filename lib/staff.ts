@@ -1,11 +1,17 @@
 /**
- * Staff accounts, roles, and the five refusals that are the security model.
+ * Staff accounts, roles, and the refusals that are the security model.
  *
  * No dependencies, so a client component can import a value from here without
  * pulling Zod into the browser. `lib/api/schemas/staff.ts` imports this, never
  * the reverse.
  *
- * Measured against the live API on 2026-08-21. **`/users` is staff and
+ * **"the five refusals" until 2026-08-29, and it was never five.** ADMIN_PANEL.md
+ * §87 names five *escalation* refusals and two further ones it calls additional;
+ * this file listed a mixture of both and called the mixture "§87's five". See
+ * `SelfRefusal` below, which now says what it is and cites §87 for the taxonomy.
+ *
+ * Measured against the live API on 2026-08-21, and re-measured against the
+ * harness on 2026-08-29 wherever a count appears. **`/users` is staff and
  * `/customers` is shoppers, and no account is in both** — `GET /users/{id}` on a
  * shopper is a 404 and vice versa — so nothing here is shared with
  * `lib/customers.ts` and the two types deliberately do not meet.
@@ -14,13 +20,27 @@
 /* ----------------------------------------------------------------- roles --- */
 
 /**
- * **Seven roles are published and two are assignable**, and 51 of the 70
- * accounts on this install hold one of the five that are not.
+ * **Seven roles are published and two are assignable**, and most accounts on
+ * this install hold one of the five that are not.
  *
  *   GET /roles → 7 rows, `assignable` true on ac_super_admin and ac_manager only
- *   GET /users → super_admin 11, admin 14, manager 6, order_manager 7,
- *                product_manager 6, support_agent 19, marketing_manager 5,
- *                administrator 2
+ *
+ * The distribution, counted against the harness on 2026-08-29 — 69 rows, of
+ * which **50 hold a retired role**:
+ *
+ *   support_agent 19 · admin 14 · super_admin 12 · order_manager 7 ·
+ *   product_manager 6 · manager 5 · marketing_manager 4 · administrator 2
+ *
+ *   node scripts/mock-api.mjs &
+ *   curl -s '…/users?per_page=100' | jq -r '.data[].role' | sort | uniq -c
+ *
+ * **This paragraph used to read "51 of the 70" against the live shop and was
+ * never re-counted.** The figure above is the fixture every screen in this
+ * repository is verified against, and it carries the command that produced it;
+ * the live shop was last counted on 2026-08-21 at 70 accounts and this branch
+ * had no credential to re-count it with. Where the two can disagree, the number
+ * that is checkable is the one written down — DECISIONS.md has twice corrected a
+ * figure that read like a measurement and was a recollection.
  *
  * So the picker filters on the flag while a **row label must still resolve a
  * retired role**, and the two are different questions asked of the same list.
@@ -49,7 +69,10 @@ export function assignableRoles<T extends { role: string; assignable: boolean }>
  * publishes.
  *
  * **Two accounts are WordPress `administrator` with `is_administrator: true`**,
- * and `administrator` is not one of the seven. `UserRoles::staff()` counts them
+ * and `administrator` is not one of the seven. It *is* in the API's own `?role=`
+ * enum, so `?role=administrator` answers those two while `GET /roles` publishes
+ * no row a picker could offer — the asymmetry `users/query.ts` records as the
+ * role filter's one blind spot. `UserRoles::staff()` counts them
  * as staff — an account is staff when it holds one of §45's seven *or* is a
  * WordPress administrator — so they appear in the list and no entry in `/roles`
  * describes them.
@@ -104,7 +127,7 @@ export function isWordPressAdministrator(row: { is_administrator: boolean }): bo
 /**
  * Two, and the API refuses a third by name in `details.params`.
  *
- * **All 70 accounts were `active` before `scripts/seed-staff.mjs`**, so the
+ * **Every account was `active` before `scripts/seed-staff.mjs`**, so the
  * suspended badge, the reactivate action and this filter had nothing to act on —
  * 14b's "every row is pending", one collection over. The seed creates one
  * throwaway account and suspends it through `POST /users` and `PATCH
@@ -137,29 +160,48 @@ export function suspensionClosesWordPress(): boolean {
   return false;
 }
 
-/* --------------------------------------------------- the five refusals --- */
+/* -------------------------------------------- the refusals a session meets --- */
 
 /**
- * §87's five escalation refusals, each rendered as a **disabled control with the
- * reason** rather than a hidden one. ADMIN_PANEL.md is explicit: the refusals
- * are the security model, and a Super Admin should be able to see it.
+ * **The refusals a session can actually reach from this panel — which is not the
+ * same list as §87's five, and this file used to claim it was.**
  *
- * All five measured 2026-08-21 against the live API, with the caller's own
- * account as the subject where the rule is about self:
+ * ADMIN_PANEL.md:165-173 tabulates the five *escalation* refusals: assigning a
+ * core WordPress role · granting a role holding capabilities the caller lacks ·
+ * changing your own role · deleting yourself · the fields refused by name
+ * (`user_pass`, `capabilities`, `user_login`). This docblock listed five things
+ * and **two of them were different ones**: it dropped the capability guard and
+ * the refused fields, and promoted own-suspension and owns-orders, which §87
+ * calls *additional* rather than counting among the five.
+ *
+ * Corrected here rather than renumbered, because the honest list is the one a
+ * screen has to render and it is six. §87 is the authority on the taxonomy;
+ * this is the authority on what reaches a person:
  *
  *   PATCH /users/{me} {"role"}      403 "You cannot change your own role.
- *                                       Ask another Super Admin."
+ *                                       Ask another Super Admin."   in §87
  *   PATCH /users/{me} {"status"}    403 "You cannot suspend your own account."
+ *                                       §87 lists this as *additional*
  *   DELETE /users/{me}              403 "You cannot delete your own account."
- *   POST /users {"role":"administrator"}
+ *                                       in §87 — and the guard runs **before the
+ *                                       id is resolved**, so it answers 403 even
+ *                                       for an id that is not a staff account
+ *   POST/PATCH {"role":"administrator"}
  *                                   400 details.fields.role — a WordPress role
  *                                       carries platform access no capability
- *                                       in this matrix models
+ *                                       in this matrix models        in §87
+ *   POST/PATCH a role the caller lacks
+ *                                   403 — `guardAssignable()` below  in §87
  *   DELETE /users/{id} owning orders
- *                                   409 details.orders — the count
+ *                                   409 details.orders — the count. §87 calls
+ *                                       this *additional* too
+ *
+ * §87's fifth — the fields refused by name — is unreachable by construction and
+ * is documented at `REFUSED_USER_FIELDS` below, where it belongs: the panel
+ * offers a control for none of them, so no screen can provoke it.
  *
  * The panel disables the first three locally, because it knows who it is; the
- * last two it *asks* and renders the answer, because it cannot know either
+ * rest it *asks* and renders the answer, because it cannot know any of them
  * without the request. That split is the same one the analytics money gate
  * makes.
  */
@@ -167,6 +209,63 @@ export type SelfRefusal = "role" | "suspend" | "delete";
 
 export function isSelf(rowId: number, meId: number | null): boolean {
   return meId !== null && rowId === meId;
+}
+
+/**
+ * **The capability guard, mirrored — §87's second refusal, which had no mirror
+ * here at all until this branch.**
+ *
+ * `UserService::guardAssignable()` (`UserService.php:311-325`) refuses a grant of
+ * any role holding a capability the caller does not hold, with a 403 that names
+ * both:
+ *
+ *   403 forbidden
+ *   "You cannot grant \"ac_super_admin\": it holds capabilities you do not have
+ *    (ac_manage_content)."
+ *
+ * No `details`, so there is nothing to bind to a field — the sentence *is* the
+ * information, and it names the capabilities, which is why a translated "rôle
+ * refusé" would throw the useful half away. `Field` makes the same argument
+ * about the retired-role 400.
+ *
+ * **It is unreachable for a Super Admin and reachable for anybody else**, which
+ * is exactly why it had no mirror: `ac_manage_users` is Super Admin's alone
+ * today, a Super Admin holds `Capabilities::ALL`, and every subset test passes.
+ * The guard exists for the eighth role and the second credential — §87 calls it
+ * "what stops a future eighth role from being an escalation path" — and a
+ * refusal the panel cannot explain is the defect this run exists to prevent.
+ *
+ * Reproducible against the harness today, because the mock models the guard
+ * rather than the shop:
+ *
+ *   MOCK_IDENTITY=no_content node scripts/mock-api.mjs
+ *   curl -X POST …/users -d '{"…","role":"ac_super_admin"}'   → the 403 above
+ *
+ * The picker filters on **both** this and `assignable`: they are two independent
+ * reasons a role cannot be given, and a control offering a choice the API
+ * answers with a paragraph is the thing §3.3 removes.
+ */
+export function grantableRoles<T extends { role: string; capabilities: readonly string[] }>(
+  roles: readonly T[],
+  mine: readonly string[],
+): T[] {
+  const held = new Set(mine);
+  return roles.filter((role) => role.capabilities.every((capability) => held.has(capability)));
+}
+
+/**
+ * The capabilities a role holds that the caller does not — the `(%s)` half of
+ * the sentence above, computed locally so the panel can say *why* a role is
+ * missing from the picker instead of silently shortening the list.
+ *
+ * Empty for every role a Super Admin sees, which is the whole shop today.
+ */
+export function missingForGrant(
+  role: { capabilities: readonly string[] },
+  mine: readonly string[],
+): string[] {
+  const held = new Set(mine);
+  return role.capabilities.filter((capability) => !held.has(capability));
 }
 
 /**
@@ -222,8 +321,17 @@ export const REFUSED_USER_FIELDS = [
  * **The password appears in one response and nowhere else, ever.**
  *
  *   POST /users/{id}/application-passwords {"name": "…"}
- *   → 200 {uuid, name, created, last_used: null,
+ *   → 201 {uuid, name, created, last_used: null,
  *          password: "gwJ1p4NDOdhU90hteeaM6ldT"}
+ *
+ * **That said 200 until 2026-08-29 and the API has always sent 201.**
+ * `UserController.php:267` passes 201, ADMIN_PANEL.md §87 prints 201 in the one
+ * example it gives, and the harness returns 201 — three sources agreeing against
+ * one docblock that had never been checked. `POST /users` is the same correction
+ * one route over (`UserController.php:200`), and both are the carried-forward
+ * "last create pinned at 200 and never measured" family arriving again. Nothing
+ * branched on either number, which is how both survived: `acWrite` treats any
+ * 2xx alike, so the cost of being wrong here is a reader who trusts the comment.
  *
  * Not on the collection, not on `GET /users/{id}`, not in the audit row — the
  * audit event carries `{login, name, uuid}` and was checked for the secret
@@ -280,24 +388,55 @@ export function neverUsed(password: { last_used: string | null }): boolean {
  * `UserRepository::paginate()` sets `search_columns` to `user_login`,
  * `user_email`, `user_nicename` and `display_name`, where the customers list
  * matches login and email only — which is why that field carries a note saying
- * a customer cannot be found by typing their name. This one can be, and the
- * field says nothing, because there is nothing surprising to say.
+ * a customer cannot be found by typing their name.
  *
- * Measured: `?search=nadia` returns the one account whose display name is
- * "Nadia Cherif" and whose username is `ac_panel_suspended`.
+ * **But it does not reach a first or last name either, and that is the half
+ * worth saying out loud.** `first_name` and `last_name` are stored as user meta
+ * and are not `search_columns`; they are published on every row, which makes
+ * them exactly the thing somebody types. Measured against the harness:
+ *
+ *   ?search=nadia    1 row — display name "Nadia Cherif", login
+ *                    `ac_panel_suspended`
+ *   ?search=Karim    1 row — account 774, matched on its *display name*
+ *                    ("Karim B."), not on `first_name`
+ *   ?search=Benali   **0 rows** — and 774's `last_name` is Benali
+ *
+ * So the placeholder names the scope rather than being generic: a field that
+ * silently cannot answer the question it invites is the customers-list defect
+ * (§7) which shipped for three branches and made a whole empty state
+ * unreachable. `?search=` empty is an **absence** here, not a 400 — unlike
+ * `?status=` and `?role=`, which are both 400s on this collection.
  */
 export const SEARCHED_COLUMNS = ["username", "email", "display_name"] as const;
 
 /**
- * `?orderby=` takes five values and defaults to `registered`, descending.
+ * `?orderby=` takes five values and defaults to `registered`, descending — and
+ * **it is the strongest sort control measured on this run.**
  *
- * Unlike `/notifications`, where the parameter is accepted and ignored, this one
- * is a real enum — `UserRepository::ORDERBY` — and a sixth value is a 400. The
- * panel offers **none of them**, and that is a screen decision rather than a
- * measurement: newest-first is the order somebody onboarding an account wants,
- * a name sort over 70 rows of which 12 have no name at all would sort mostly by
- * username, and the search field answers "find this person" better than any
- * ordering does.
+ * `UserController.php:135-140` declares `'enum' => UserRepository::ORDERBY` and
+ * runs it through `rest_validate_request_arg`; `UserRepository.php:31` is the
+ * list, `:89` the `in_array`, `:90` the direction. So unlike `/notifications`,
+ * where the parameter is accepted and ignored, and unlike `/shipping` and
+ * `/payments`, where garbage is a silent 200, **`?orderby=zzz` and `?order=zzz`
+ * are both 400** — the value reaches a validator.
+ *
+ * Measured 2026-08-29 against the harness, every combination sent on its own and
+ * compared over **all** 69 rows rather than over a head window:
+ *
+ *   5 fields × 2 directions = 10 requests → **10 distinct id sequences**
+ *   `registered desc` is byte-identical to the bare listing — the resting order
+ *   no tie anywhere: every row has a distinct login, address, display name and
+ *   registration minute, so a tie cannot be mistaken for a refusal to sort
+ *
+ * That last line is what §7 paid for: a control taken on a collection's *default*
+ * ordering proves nothing, and this file previously declined the whole feature on
+ * the strength of a screen decision rather than a measurement.
+ *
+ * **This docblock used to say the panel offers none of them.** It now offers four
+ * — `display_name`, `user_email`, `user_login` and `registered` — as header
+ * controls with `aria-sort`. `ID` sorts and gets no column: a column of primary
+ * keys is nothing anybody scans, and adding one to hang a sort on is chrome. It
+ * stays reachable by URL, which is how coupons treats `date` and marketing `id`.
  */
 export const ORDERBY_VALUES = [
   "registered",
@@ -317,6 +456,19 @@ export const ORDERBY_VALUES = [
  * blank. The username is still rendered beside it as the identifier, because it
  * is what the audit trail records in `actor_login` and it is what somebody types
  * into the sign-in form.
+ *
+ * **The "never blank" claim is right; the count beside it was not.** Counted
+ * against the harness on 2026-08-29: **0 of 69** rows have a blank
+ * `display_name` — `wp_insert_user()` substitutes the login, so the guarantee is
+ * structural rather than a property of this shop's data — while **67 of 69**
+ * have neither a first nor a last name and **64 of 69** have a display name that
+ * *is* the login. Those are three different facts and this file used to carry
+ * only a muddle of the first two.
+ *
+ * The third is what shapes the list: on nine rows in ten the name column and the
+ * login column say the same string, so the row has to earn its second line some
+ * other way — which is why the identifying cell is the display name and the
+ * login is a column beside it rather than a subtitle under it.
  */
 export function staffName(row: { display_name: string; username: string }): string {
   return row.display_name.trim() !== "" ? row.display_name : row.username;

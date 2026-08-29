@@ -173,6 +173,32 @@ Deactivation is the operation people actually want: `PATCH` the role to none is 
 provide `status: active|suspended` as user meta, and a suspended account's credentials answer **401**
 at every route.
 
+> **Corrected in the build: the panel's own list of these refusals was a different five, and both
+> creates answer 201.** Two corrections from the panel side, found while migrating `/users` to the
+> redesigned system on 2026-08-29. Neither is a correction to this section — the section was right
+> both times — which is why they are recorded here rather than silently patched downstream.
+>
+> **The refusal list.** `lib/staff.ts` claimed to enumerate "§87's five" and enumerated a different
+> five: it dropped *granting a role holding capabilities the caller lacks* and *the fields refused by
+> name*, and promoted *suspending your own account* and *deleting an account that owns orders*, which
+> the paragraph above calls **additional**. The consequence was not cosmetic — the capability guard
+> had **no mirror in the panel at all**, so a credential granted `ac_manage_users` without the rest
+> would have met `guardAssignable()`'s 403 from a role picker that had just offered the role. That is
+> "a refusal the panel cannot explain", which is the defect the redesign run exists to prevent. The
+> mirror now lives in `lib/staff.ts` as `grantableRoles()`/`missingForGrant()`, the picker filters on
+> it, and the docblock says what it actually is: the refusals a session can *reach*, six of them,
+> citing this section for the taxonomy. It is unreachable for a Super Admin — who holds
+> `Capabilities::ALL` — and is reproducible against the harness with `MOCK_IDENTITY=no_content`.
+>
+> **The 201s.** `lib/staff.ts:225` and `lib/api/schemas/staff.ts:81` both documented `POST
+> /users/{id}/application-passwords` as answering **200**. It answers **201** — `UserController.php`
+> passes 201 at `:267`, and the example in the next section of this document has printed 201 all
+> along. `POST /users` (`UserController.php:200`) is the same, and was documented the same way. Two
+> sources against one, and the one that was wrong was never checked. Nothing branched on either
+> number, which is exactly how it survived: `acWrite` treats every 2xx alike, so being wrong here
+> costs only the next reader who trusts the comment. This is the panel ledger's carried-forward
+> "last create pinned at 200 and never measured" family arriving twice more in one section.
+
 > **Corrected in the build: the check is a `rest_pre_dispatch` guard, not `AuthService`.** That
 > service only answers `/auth/me`, so a check there would leave every other route open. The obvious
 > alternative, `rest_authentication_errors`, is where core reports a bad credential — but

@@ -14,7 +14,7 @@ import { STAFF_STATUSES } from "@/lib/staff";
  * A row from `GET /users`.
  *
  * **`application_passwords` is absent, and the absence is the contract.** The
- * single read adds it; a list of 70 accounts does not enumerate everybody's
+ * single read adds it; a list of 69 accounts does not enumerate everybody's
  * devices. Verified by key on a captured pair rather than inferred.
  */
 export const staffUser = z.looseObject({
@@ -78,7 +78,14 @@ export type StaffUserDetail = z.infer<typeof staffUserDetail>;
  * `POST /users/{id}/application-passwords` — **the only response carrying the
  * secret**, and the only one this panel ever renders it from.
  *
- *   200 {uuid, name, created, last_used: null, password: "gwJ1p4NDOdhU90hteeaM6ldT"}
+ *   201 {uuid, name, created, last_used: null, password: "gwJ1p4NDOdhU90hteeaM6ldT"}
+ *
+ * **This line said 200 until 2026-08-29.** `UserController.php:267` passes 201,
+ * §87's own example prints 201, and the harness answers 201; the docblock was
+ * the only source saying otherwise and had never been checked. `POST /users`
+ * (`UserController.php:200`) is the same correction one route over, and
+ * `lib/staff.ts` carries both. Nothing branches on the number — `acWrite` treats
+ * every 2xx alike — which is exactly how a wrong comment survives.
  *
  * `password` is required here, unlike everywhere else, because a mint that
  * answered without one would be a sheet showing a copy button over nothing —
@@ -95,7 +102,9 @@ export type MintedApplicationPassword = z.infer<typeof mintedApplicationPassword
  *
  * **Seven rows, `assignable` true on two.** The flag is the whole reason this
  * route is not just a list of strings: a picker filters on it while a label must
- * still resolve one of the five it excludes, because 51 of 70 accounts hold one.
+ * still resolve one of the five it excludes, because **50 of 69** accounts hold
+ * one — and must additionally resolve `administrator`, which those two extra
+ * accounts hold and which this route does not publish at all.
  */
 export const role = z.looseObject({
   role: z.string(),

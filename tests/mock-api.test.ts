@@ -202,6 +202,37 @@ import {
   testDelivered,
   unsubscribeNote,
 } from "@/lib/campaigns";
+import {
+  applicationPassword,
+  applicationPasswordList,
+  deleteConflictDetails,
+  duplicateDetails,
+  mintedApplicationPassword,
+  role,
+  roleList,
+  staffUser,
+  staffUserDeleted,
+  staffUserDetail,
+  staffUserList,
+} from "@/lib/api/schemas/staff";
+import {
+  ORDERBY_VALUES,
+  REFUSED_USER_FIELDS,
+  SEARCHED_COLUMNS,
+  STAFF_STATUSES,
+  assignableRoles,
+  credentialConflict,
+  deleteConflictCount,
+  hasSecret,
+  isRetiredRole,
+  isSelf,
+  isStaffStatus,
+  isWordPressAdministrator,
+  neverUsed,
+  roleLabel,
+  staffName,
+  suspensionClosesWordPress,
+} from "@/lib/staff";
 import { mediaItem, mediaList, mediaSizes, mediaUsage } from "@/lib/api/schemas/media";
 import {
   ACCEPTED_MIME,
@@ -8805,6 +8836,1035 @@ describe("MOCK_MEDIA", () => {
   });
 });
 
+/* ------------------------------------------------------------------ staff --- */
+
+/**
+ * ── §87's eight routes, none of which existed in this file before ───────────
+ *
+ * `staff` was declared `UNCOVERED` — "/users and /roles are not mocked yet" —
+ * so every request the screen makes fell to `notFound()` and the three screens
+ * could not be photographed at any width, theme or locale.
+ *
+ * Everything below parses with the real Zod schema through the real `unwrap()`,
+ * and every sentence quoted is one that was taken off the live shop or out of
+ * the PHP source on 2026-08-29 rather than transcribed by eye.
+ */
+const staffPage = (query = "") => parseList(staffUserList, get("/users", query));
+const staffIds = (query = "") => staffPage(query).data.map((row) => row.id);
+
+/** `MOCK_IDENTITY` is `full` under vitest, so the acting account is 514. */
+const ME = 514;
+
+describe("GET /roles", () => {
+  it("publishes the matrix, seven rows and two of them assignable", () => {
+    const response = get("/roles");
+    const { data, meta } = parse(roleList, response);
+
+    /*
+     * **No `meta` key at all** — `enumeration()`, measured against the live
+     * response on 2026-08-29. The three envelope shapes are a thing this file
+     * has already been wrong about once, so it was diffed rather than assumed:
+     * `/roles` pages nothing and `Response::successPayload()` omits an empty
+     * `meta`, so a screen reading `meta.total` off it would get a number the
+     * shop does not send.
+     */
+    expect(meta).toBeNull();
+    expect(Object.keys(response.body as object)).toEqual(["success", "data"]);
+
+    expect(data.map((row) => [row.role, row.name, row.capabilities.length, row.assignable])).toEqual(
+      [
+        ["ac_super_admin", "Super Admin", 13, true],
+        ["ac_admin", "Admin", 11, false],
+        ["ac_manager", "Manager", 7, true],
+        ["ac_product_manager", "Product Manager", 3, false],
+        ["ac_order_manager", "Order Manager", 4, false],
+        ["ac_marketing_manager", "Marketing Manager", 4, false],
+        ["ac_support_agent", "Support Agent", 2, false],
+      ],
+    );
+
+    // The row schema on its own, so a fixture that grew a key is caught here and
+    // not only in aggregate.
+    expect(() => role.parse(data[0])).not.toThrow();
+
+    /*
+     * **`administrator` is not one of the seven and the role filter reaches it.**
+     * That asymmetry is the reason `roleLabel()` exists, and a mock that
+     * "helpfully" published an eighth row would make its fallback unreachable.
+     */
+    expect(data.map((row) => row.role)).not.toContain("administrator");
+    expect(staffPage("role=administrator").meta.total).toBe(2);
+  });
+
+  it("is the list a picker filters and a label reads whole", () => {
+    const { data } = parse(roleList, get("/roles"));
+
+    // The picker's half: two options over a matrix of seven.
+    expect(assignableRoles(data).map((row) => row.role)).toEqual([
+      "ac_super_admin",
+      "ac_manager",
+    ]);
+
+    // The label's half. 50 of the 69 accounts hold a retired role, so a picker
+    // built from `assignableRoles()` and a label built from the same list would
+    // leave more than half the shop with a blank beside their name.
+    expect(isRetiredRole("ac_support_agent", data)).toBe(true);
+    expect(isRetiredRole("ac_manager", data)).toBe(false);
+    // …and `administrator` is in neither list, so it is not "retired" either.
+    expect(isRetiredRole("administrator", data)).toBe(false);
+
+    const admins = staffPage("role=administrator&per_page=5").data;
+    expect(admins.every(isWordPressAdministrator)).toBe(true);
+    // The published matrix first, then the row's own `role_name`, never a blank.
+    expect(roleLabel(admins[0].role, admins[0].role_name, data)).toBe("administrator");
+    const manager = staffPage("role=ac_support_agent&per_page=1").data[0];
+    expect(roleLabel(manager.role, manager.role_name, data)).toBe("Support Agent");
+  });
+
+  it("has no write, and refuses one", () => {
+    // `UserRoles` argues it: a role invented at runtime would be a capability
+    // set no test enumerates and no review has seen.
+    expect(write("POST", "/roles", { role: "ac_new" }).status).toBe(404);
+    expect(write("PATCH", "/roles", {}).status).toBe(404);
+    expect(get("/roles/ac_manager").status).toBe(404);
+  });
+});
+
+describe("GET /users", () => {
+  it("serves 69 accounts over four pages, with the shop's own role spread", () => {
+    const { data, meta } = staffPage("per_page=100");
+    expect(meta.total).toBe(69);
+    expect(data).toHaveLength(69);
+
+    // Four pages at the default `per_page`, which is what makes the Arabic
+    // capture of `TableFooter` worth taking — "1 / 1" is symmetric.
+    expect(staffPage().meta).toMatchObject({ page: 1, per_page: 20, total_pages: 4 });
+
+    const histogram: Record<string, number> = {};
+    for (const row of data) histogram[row.role] = (histogram[row.role] ?? 0) + 1;
+    expect(histogram).toEqual({
+      ac_support_agent: 19,
+      ac_admin: 14,
+      ac_super_admin: 12,
+      ac_order_manager: 7,
+      ac_product_manager: 6,
+      ac_manager: 5,
+      ac_marketing_manager: 4,
+      administrator: 2,
+    });
+
+    /*
+     * **`display_name` is never blank**, and this is not an assumption the
+     * fixture inherited: every user row on the live install was counted, staff
+     * and shopper alike, and zero were blank. `wp_insert_user()` substitutes the
+     * login, so the API cannot emit one even through `PATCH {"display_name":""}`.
+     * `lib/staff.ts:312-320` says so and this is what makes the claim testable.
+     */
+    expect(data.filter((row) => row.display_name.trim() === "")).toEqual([]);
+    expect(data.every((row) => staffName(row) === row.display_name)).toBe(true);
+
+    // Two accounts the `/roles` matrix does not describe, and they are real.
+    expect(data.filter(isWordPressAdministrator).map((row) => row.role)).toEqual([
+      "administrator",
+      "administrator",
+    ]);
+
+    // Every status is one of the two, and the third the API refuses by name.
+    expect(data.every((row) => isStaffStatus(row.status))).toBe(true);
+    expect(STAFF_STATUSES).toEqual(["active", "suspended"]);
+  });
+
+  it("carries the acting user, without which three refusals are unreachable", () => {
+    /*
+     * The self-refusals are keyed on `get_current_user_id()`, so a fixture that
+     * did not contain the caller would leave all three as paths nothing could
+     * take — the hole `no_customers` was added to close one section over.
+     */
+    const me = parse(staffUserDetail, get(`/users/${ME}`)).data;
+    expect(me.id).toBe(ME);
+    expect(isSelf(me.id, ME)).toBe(true);
+    // A credential that can read this list is a Super Admin by construction:
+    // `ac_manage_users` is that role's alone.
+    expect(me.role).toBe("ac_super_admin");
+    expect(staffIds("per_page=100")).toContain(ME);
+  });
+
+  it("honours status and role, and refuses the empty string in both", () => {
+    expect(staffPage("status=active").meta.total).toBe(68);
+    expect(staffPage("status=suspended").meta.total).toBe(1);
+    expect(staffIds("status=suspended")).toEqual([770]);
+
+    // Measured verbatim, both of them, including the two-item enum's missing
+    // Oxford comma — `wp_sprintf_l` writes "a and b" with no comma.
+    const status = refusedWith(get("/users", "status=disabled"), 400, "invalid_request");
+    expect(status.apiMessage).toBe("Invalid parameter(s): status");
+    expect(status.params?.status).toBe("status is not one of active and suspended.");
+    // `""` is not a member of the enum the router validates against, so it is a
+    // refusal and not "no filter" — the distinction `checkSort` records.
+    expect(apiError(get("/users", "status=")).params?.status).toBe(
+      "status is not one of active and suspended.",
+    );
+
+    const role = refusedWith(get("/users", "role=nonsense"), 400, "invalid_request");
+    expect(role.apiMessage).toBe("Invalid parameter(s): role");
+    // All eight, `administrator` last, because the filter enum is
+    // `UserRoles::staff()` and not the list `/roles` publishes.
+    expect(role.params?.role).toBe(
+      "role is not one of ac_super_admin, ac_admin, ac_manager, ac_product_manager," +
+        " ac_order_manager, ac_marketing_manager, ac_support_agent, and administrator.",
+    );
+    expect(apiError(get("/users", "role=")).params?.role).toBe(role.params?.role);
+
+    for (const value of ["ac_super_admin", "administrator", "ac_support_agent"]) {
+      expect(get("/users", `role=${value}`).status, value).toBe(200);
+    }
+  });
+
+  it("searches login, address and display name — and never a first or last name", () => {
+    /*
+     * **The positive control and the negative one, on the same account.** 774 is
+     * `ac_usr_new`, display name "Karim B.", first name "Karim", last name
+     * "Benali". `?search=Karim` finds it *through the display name*;
+     * `?search=Benali` — that account's last name and nothing else — finds
+     * nothing. Measured on the live shop, both of them.
+     *
+     * Without a row shaped like 774 the claim is unfalsifiable, which is the trap
+     * `CONTROL_CUSTOMER` exists for one collection over.
+     */
+    expect(staffIds("search=Karim")).toEqual([774]);
+    expect(staffPage("search=Benali").meta.total).toBe(0);
+
+    expect(staffIds("search=nadia")).toEqual([770]);
+    // Case- and accent-insensitive, because MySQL's collation is both.
+    expect(staffIds("search=NADIA")).toEqual([770]);
+    expect(staffIds("search=Chérif")).toEqual([770]);
+    expect(staffPage("search=zzzzqqq").meta.total).toBe(0);
+    // Not an enum, so `""` really is absence here — unlike `role` and `status`.
+    expect(staffPage("search=").meta.total).toBe(69);
+
+    // The three published columns the API searches. `user_nicename` is the
+    // fourth and is derived from the login on every row, so nothing can match it
+    // without matching the login first.
+    expect(SEARCHED_COLUMNS).toEqual(["username", "email", "display_name"]);
+    const byLogin = staffIds("search=ac_panel_suspended");
+    const byEmail = staffIds("search=ac_panel_suspended@example.test");
+    expect(byLogin).toEqual([770]);
+    expect(byEmail).toEqual([770]);
+  });
+
+  it("really sorts, in five fields and both directions", () => {
+    /*
+     * ── The run's strongest measured sort ────────────────────────────────────
+     *
+     * `UserController.php:137-142` declares `'enum' => UserRepository::ORDERBY`
+     * with `rest_validate_request_arg`; `:89` is the `in_array` that applies it.
+     * So unlike `/notifications`, this one both refuses and reorders — and a
+     * harness that ignored it would let somebody ship a dead control, which is
+     * the failure §0 exists to prevent.
+     *
+     * Compared against the **default** rather than against a sibling value,
+     * because two values agreeing with each other is the error this file has now
+     * recorded five times.
+     */
+    const head = (query: string) => staffIds(`per_page=5&${query}`);
+    const fallback = staffIds("per_page=5");
+    expect(fallback).toEqual([776, 778, 774, 770, 762]);
+
+    const sequences = new Map<string, number[]>();
+    for (const orderby of ORDERBY_VALUES) {
+      for (const order of ["asc", "desc"]) {
+        sequences.set(`${orderby} ${order}`, head(`orderby=${orderby}&order=${order}`));
+      }
+    }
+
+    // `registered desc` is the default, which is what "defaults to registered,
+    // descending" means and is the one pair that must agree.
+    expect(sequences.get("registered desc")).toEqual(fallback);
+
+    /*
+     * **`registered` and `ID` do not agree**, which is the check DECISIONS.md's
+     * standing rule asks for: 776 registered after 778 while 778 holds the
+     * higher id. A collection whose ids and registration order matched could not
+     * tell a working sort from an ignored one.
+     */
+    expect(sequences.get("ID desc")).toEqual([778, 776, 774, 770, 763]);
+    expect(sequences.get("ID desc")).not.toEqual(sequences.get("registered desc"));
+    expect(sequences.get("ID asc")).not.toEqual(sequences.get("registered asc"));
+
+    /*
+     * **Three heads reproduce the live response byte for byte**, which is what
+     * makes the mock's collation a verified rule rather than a plausible one:
+     *
+     *   display_name asc / user_login asc  live [11, 12, 59, 60, 288]
+     *   user_email asc                     live [11, 12, 60, 59, 288]
+     *
+     * The `user_email` one is the interesting pair. It differs from the other
+     * two by a **single swap**, because `_` sorts before `@` under MySQL's UCA
+     * collation and after it under code-point order — so a mock that folded and
+     * compared naively would answer 59 before 60 here and disagree with the shop
+     * on the one pair that can tell the two orderings apart.
+     */
+    expect(sequences.get("display_name asc")).toEqual([11, 12, 59, 60, 288]);
+    expect(sequences.get("user_login asc")).toEqual([11, 12, 59, 60, 288]);
+    expect(sequences.get("user_email asc")).toEqual([11, 12, 60, 59, 288]);
+    expect(sequences.get("user_email asc")).not.toEqual(sequences.get("user_login asc"));
+
+    /*
+     * **Nine distinct sequences over ten spellings**, where the live shop
+     * answers seven — and the two extra are the fixture being *harder* rather
+     * than different: `ID desc` is pulled off `registered desc` on purpose, and
+     * `user_login desc` off `user_email desc` because the overflow row's login
+     * and address sort to different places. Only one pair still collapses, and
+     * it is the one that collapses live too: `display_name asc` is
+     * `user_login asc`, because 65 of the 69 accounts have no display name that
+     * is not their login.
+     *
+     * The count is what a fixture tying on every row would fail. It is asserted
+     * alongside the individual heads above rather than instead of them, because
+     * nine wrong sequences would also be nine.
+     */
+    expect(new Set([...sequences.values()].map((ids) => ids.join(","))).size).toBe(9);
+    expect([...sequences.values()].filter((ids) => ids.join(",") === fallback.join(","))).toHaveLength(1);
+
+    // And the whole ordering rather than its head, on the two directions of one
+    // field: a sort that only got the first page right is a sort that is wrong.
+    const asc = staffIds("per_page=100&orderby=ID&order=asc");
+    expect(asc).toEqual([...asc].sort((a, b) => a - b));
+    expect(staffIds("per_page=100&orderby=ID&order=desc")).toEqual([...asc].reverse());
+  });
+
+  it("refuses a sort it does not have, and ignores a parameter it never registered", () => {
+    const orderby = refusedWith(get("/users", "orderby=zzz"), 400, "invalid_request");
+    expect(orderby.apiMessage).toBe("Invalid parameter(s): orderby");
+    expect(orderby.params?.orderby).toBe(
+      "orderby is not one of registered, ID, display_name, user_email, and user_login.",
+    );
+    // `""` is a value and not an absence, on both halves of the pair.
+    expect(apiError(get("/users", "orderby=")).params?.orderby).toBe(orderby.params?.orderby);
+    expect(apiError(get("/users", "order=zzz")).params?.order).toBe(
+      "order is not one of asc and desc.",
+    );
+    expect(apiError(get("/users", "order=")).params?.order).toBe(
+      "order is not one of asc and desc.",
+    );
+
+    /*
+     * **The other half, and it matters as much.** `sort=` is not a registered
+     * argument, so it is accepted and silently ignored — measured, byte-identical
+     * to the bare listing. A screen that emitted the wrong parameter name would
+     * look like it worked.
+     */
+    expect(staffIds("per_page=5&sort=user_login")).toEqual(staffIds("per_page=5"));
+    expect(staffIds("per_page=5&bogus_param=1")).toEqual(staffIds("per_page=5"));
+  });
+
+  it("pages, and refuses the paging edges every collection refuses", () => {
+    expect(staffIds("per_page=5&page=2")).toEqual([763, 536, 475, 514, 474]);
+    // Past the end is a 200 with no rows, not a 404 — measured.
+    const beyond = staffPage("per_page=5&page=99");
+    expect(beyond.data).toEqual([]);
+    expect(beyond.meta).toMatchObject({ total: 69, page: 99, total_pages: 14 });
+
+    expect(refusedWith(get("/users", "per_page=0"), 400, "invalid_request").params?.per_page).toBe(
+      "per_page must be between 1 (inclusive) and 100 (inclusive)",
+    );
+    expect(apiError(get("/users", "per_page=abc")).params?.per_page).toBe(
+      "per_page is not of type integer.",
+    );
+    expect(apiError(get("/users", "page=0")).params?.page).toBe(
+      "page must be greater than or equal to 1",
+    );
+    expect(apiError(get("/users", "page=")).params?.page).toBe("page is not of type integer.");
+  });
+
+  it("carries the string a 340px table has to survive", () => {
+    // Live's longest login is 27 characters and its longest address is 39, so
+    // this is the harness's own fixture and it is on **page one** of the default
+    // listing — an overflow fixture on page four is one no capture photographs.
+    const long = staffPage().data.find((row) => row.id === 413)!;
+    expect(long.username.length).toBeGreaterThan(50);
+    expect(long.email.length).toBeGreaterThan(70);
+    expect(long.username).not.toContain(" ");
+  });
+});
+
+describe("GET /users/{id}", () => {
+  it("adds exactly one key to the list row", () => {
+    const row = staffPage("per_page=100").data.find((candidate) => candidate.id === 774)!;
+    const { data, meta } = parse(staffUserDetail, get("/users/774"));
+    expect(meta).toBeNull();
+
+    /*
+     * The list row plus `application_passwords` and nothing else. Written out
+     * rather than compared to itself: the measured key set is what decides
+     * whether a peek drawer is free on this collection — it is **not**, under
+     * §0's rule — and a fixture that grew a twelfth key would silently stop
+     * proving it.
+     */
+    expect(Object.keys(data).sort()).toEqual([
+      "application_passwords",
+      "date_created",
+      "display_name",
+      "email",
+      "first_name",
+      "id",
+      "is_administrator",
+      "last_name",
+      "role",
+      "role_name",
+      "status",
+      "username",
+    ]);
+    const { application_passwords: passwords, ...rest } = data;
+    expect(rest).toEqual(row);
+    // …and the list must not carry it, which is the one place the two differ.
+    expect(row).not.toHaveProperty("application_passwords");
+
+    expect(() => applicationPasswordList.parse(passwords)).not.toThrow();
+    expect(passwords.map((item) => item.name)).toEqual([
+      "Ordinateur portable",
+      "Téléphone de service",
+    ]);
+    // The only place `neverUsed()`'s other arm is reachable: no live account has
+    // a never-used credential, because every one was minted by a script that
+    // authenticated with it immediately.
+    expect(passwords.map(neverUsed)).toEqual([false, true]);
+    // No `password` and no `last_ip` — the first appears in the mint alone, the
+    // second is deliberately not published.
+    for (const item of passwords) {
+      expect(item).not.toHaveProperty("password");
+      expect(item).not.toHaveProperty("last_ip");
+      expect(() => applicationPassword.parse(item)).not.toThrow();
+    }
+  });
+
+  it("answers one sentence for an id nobody holds and for a shopper alike", () => {
+    const missing = refusedWith(get("/users/9999"), 404, "not_found");
+    expect(missing.apiMessage).toBe("No staff account with that id.");
+
+    /*
+     * **`/users` is staff and `/customers` is shoppers, and no account is in
+     * both.** Customer 24 is a real row one collection over and is byte-identical
+     * to an id nobody holds here — neither route tells you the other exists,
+     * which is the property `lib/staff.ts:8-11` turns on.
+     */
+    expect(get("/customers/24").status).toBe(200);
+    expect(refusedWith(get("/users/24"), 404, "not_found").apiMessage).toBe(
+      "No staff account with that id.",
+    );
+
+    // The routing shapes, all measured on the same day.
+    expect(apiError(get("/users/abc")).code).toBe("rest_no_route");
+    expect(apiError(get("/users/774/nonsense")).code).toBe("rest_no_route");
+    expect(apiError(get("/users/9999/nonsense")).code).toBe("rest_no_route");
+    // `0` matches `\d+`, reaches `idArg()`'s `minimum: 1` and is a **400**.
+    const zero = refusedWith(get("/users/0"), 400, "invalid_request");
+    expect(zero.apiMessage).toBe("Invalid parameter(s): id");
+    expect(zero.params?.id).toBe("id must be greater than or equal to 1");
+    expect(apiError(get("/users/0/application-passwords")).params?.id).toBe(
+      "id must be greater than or equal to 1",
+    );
+    expect(refusedWith(get("/users/9999/application-passwords"), 404, "not_found").apiMessage).toBe(
+      "No staff account with that id.",
+    );
+  });
+});
+
+describe("POST /users", () => {
+  it("creates at 201, and the row it answers with is the list shape", () => {
+    const response = write("POST", "/users", {
+      username: "ac_zz_new",
+      email: "zz@example.test",
+      role: "ac_manager",
+      first_name: "Amel",
+    });
+    expect(response.status).toBe(201);
+    const { data } = parse(staffUser, response);
+    expect(data).toMatchObject({
+      id: 810,
+      username: "ac_zz_new",
+      role: "ac_manager",
+      role_name: "Manager",
+      status: "active",
+      is_administrator: false,
+    });
+    // `wp_insert_user()` substitutes the login when `display_name` is empty,
+    // which is why this collection has no blank one anywhere.
+    expect(data.display_name).toBe("ac_zz_new");
+    // A create goes through the presenter with the argument omitted, so the
+    // shape is the *list* row. A screen rebinding its detail state to this
+    // response would find the key gone.
+    expect(data).not.toHaveProperty("application_passwords");
+    expect(staffPage("per_page=100").meta.total).toBe(70);
+  });
+
+  it("requires a username, an address and a role, and names all three at once", () => {
+    const error = refusedWith(write("POST", "/users", {}), 400, "invalid_request");
+    expect(error.apiMessage).toBe("The user data is invalid.");
+    expect(error.fields).toEqual({
+      username: "Required.",
+      email: "Required.",
+      // A role is the boundary between this endpoint and `/customers`, and the
+      // message says so — an account created with no role is a customer created
+      // through the wrong door.
+      role: "Required. An account with no role is a customer, and customers are managed at /customers.",
+    });
+
+    /*
+     * **A missing role and an empty one are different sentences.** A form
+     * quoting the wrong one back would tell somebody to fill in a field they
+     * did fill in. Both taken verbatim off `UserRoles::assignmentError()`.
+     */
+    expect(
+      apiError(write("POST", "/users", { username: "ac_zz", email: "a@b.test", role: "" })).fields,
+    ).toEqual({
+      role: "A role is required. An account with no role is a customer, and customers are managed at /customers.",
+    });
+
+    // Not emptiable, unlike the three name fields: a WordPress user with no
+    // address cannot be sent a reset and the account becomes unrecoverable.
+    expect(
+      apiError(write("POST", "/users", { username: "ac_zz", email: "", role: "ac_manager" })).fields,
+    ).toEqual({ email: "Must be a valid email address." });
+  });
+
+  it("refuses a core role, a retired role and an unknown one, each in its own words", () => {
+    const of = (role: string) =>
+      apiError(write("POST", "/users", { username: "ac_zz", email: "a@b.test", role })).fields?.role;
+
+    expect(of("administrator")).toBe(
+      'This API manages commerce roles and does not grant "administrator". A WordPress role' +
+        " carries platform access — installing plugins, editing files — that no capability in" +
+        " this matrix models.",
+    );
+    /*
+     * **Three refusals, not two**, and the retired one is the reason. It is not
+     * unknown: it exists, it is defined, and 50 of the 69 accounts here hold
+     * one. Telling an operator `Unknown role "ac_support_agent"` while the
+     * account in front of them visibly holds it is a message that reads "no such
+     * thing" when the truth is "it exists and you may not have it".
+     */
+    expect(of("ac_support_agent")).toBe(
+      'The role "ac_support_agent" is retired and is no longer assigned. Accounts already' +
+        " holding it keep it and are unaffected; new assignments choose one of:" +
+        " ac_super_admin, ac_manager.",
+    );
+    expect(of("zzz")).toBe('Unknown role "zzz". Choose one of: ac_super_admin, ac_manager.');
+    // Every core role, so the refusal reads as a boundary rather than a typo.
+    for (const core of ["editor", "shop_manager", "customer", "subscriber"]) {
+      expect(of(core), core).toContain("This API manages commerce roles and does not grant");
+    }
+    // And the two that work.
+    for (const ok of ["ac_super_admin", "ac_manager"]) {
+      expect(of(ok), ok).toBeUndefined();
+    }
+  });
+
+  it("refuses five fields by name and everything else as unknown", () => {
+    for (const field of REFUSED_USER_FIELDS) {
+      const error = apiError(
+        write("POST", "/users", {
+          username: "ac_zz",
+          email: "a@b.test",
+          role: "ac_manager",
+          [field]: "x",
+        }),
+      );
+      expect(error.fields?.[field], field).toBeTruthy();
+      expect(error.fields?.[field], field).not.toBe("Unknown field.");
+    }
+    // Verbatim, because the panel offers a control for none of them and
+    // `user_login` is what decides the shape of the **edit** form: a username is
+    // set once at creation and read-only after.
+    expect(
+      apiError(
+        write("POST", "/users", {
+          username: "ac_zz",
+          email: "a@b.test",
+          role: "ac_manager",
+          user_login: "x",
+        }),
+      ).fields,
+    ).toEqual({
+      user_login: "A login is an identity, not a field. Create the account with the username you want.",
+    });
+
+    expect(
+      apiError(
+        write("POST", "/users", { username: "ac_zz", email: "a@b.test", role: "ac_manager", wibble: 1 }),
+      ).fields,
+    ).toEqual({ wibble: "Unknown field." });
+    // `status` is a real field on a PATCH and "Unknown field." on a POST — a new
+    // account is active because `UserStatus` stores only the suspension.
+    expect(
+      apiError(
+        write("POST", "/users", {
+          username: "ac_zz",
+          email: "a@b.test",
+          role: "ac_manager",
+          status: "active",
+        }),
+      ).fields,
+    ).toEqual({ status: "Unknown field." });
+
+    // Read-only keys are **dropped**, never refused, which is what makes a GET →
+    // edit one field → PATCH the whole object round trip work.
+    expect(
+      write("POST", "/users", {
+        username: "ac_zz",
+        email: "a@b.test",
+        role: "ac_manager",
+        id: 9,
+        role_name: "x",
+        is_administrator: true,
+        date_created: "x",
+        application_passwords: [],
+      }).status,
+    ).toBe(201);
+  });
+
+  it("validates the username's shape, and names one bad field per mistake", () => {
+    const of = (username: unknown) =>
+      apiError(write("POST", "/users", { username, email: "a@b.test", role: "ac_manager" })).fields
+        ?.username;
+
+    expect(of("ab")).toBe("Must be between 3 and 60 characters.");
+    expect(of("a".repeat(61))).toBe("Must be between 3 and 60 characters.");
+    expect(of("ac/probe!")).toBe("May contain letters, digits, spaces and _ . - @ only.");
+    // Spaces are inside `sanitize_user()`'s strict vocabulary, so this is legal.
+    expect(of("amel benali")).toBeUndefined();
+
+    // One response names every bad field. A validator that stopped at the first
+    // would make a form with three mistakes take three round trips — and the
+    // order is `UserInput::common()`'s, measured by calling it directly.
+    const many = apiError(
+      write("POST", "/users", { password: "x", role: "editor", email: "nope", username: "ac_zz" }),
+    );
+    expect(Object.keys(many.fields ?? {})).toEqual(["password", "email", "role"]);
+  });
+
+  it("refuses a username or an address the shop already holds, keyed by the field", () => {
+    const login = refusedWith(
+      write("POST", "/users", { username: "ac_usr_new", email: "a@b.test", role: "ac_manager" }),
+      409,
+      "conflict",
+    );
+    expect(login.apiMessage).toBe("That username is already taken.");
+    expect(duplicateDetails.parse(login.details)).toEqual({ username: "ac_usr_new" });
+
+    const email = refusedWith(
+      write("POST", "/users", {
+        username: "ac_zz",
+        email: "ac_usr_new@example.test",
+        role: "ac_manager",
+      }),
+      409,
+      "conflict",
+    );
+    expect(email.apiMessage).toBe("That email address is already in use.");
+    // `looseObject` with everything optional: one key arrives, never all three,
+    // which is what lets the error land on the control rather than in a toast.
+    expect(duplicateDetails.parse(email.details)).toEqual({ email: "ac_usr_new@example.test" });
+  });
+});
+
+describe("PATCH /users/{id}", () => {
+  it("writes a field and answers the row", () => {
+    const { data } = parse(staffUser, write("PATCH", "/users/774", { display_name: "Karim Ben." }));
+    expect(data.display_name).toBe("Karim Ben.");
+    expect(parse(staffUserDetail, get("/users/774")).data.display_name).toBe("Karim Ben.");
+
+    // Suspension is what a shop wants on the day somebody leaves, and it is the
+    // alternative the delete conflict names.
+    const suspended = parse(staffUser, write("PATCH", "/users/240", { status: "suspended" }));
+    expect(suspended.data.status).toBe("suspended");
+    expect(staffPage("status=suspended").meta.total).toBe(2);
+    // It does **not** revoke wp-admin, which is why the screen says so.
+    expect(suspensionClosesWordPress()).toBe(false);
+  });
+
+  it("names nothing when nothing survives, and drops the username rather than refusing it", () => {
+    const empty = refusedWith(write("PATCH", "/users/774", {}), 400, "invalid_request");
+    expect(empty.apiMessage).toBe("No supported fields were provided.");
+    // **No `details` key at all**, not an empty one. A mock emitting `{}` here
+    // would let a screen read `details.fields` and never find out.
+    expect(empty.fields).toBeNull();
+    expect((empty.details as Record<string, unknown>)).toEqual({});
+
+    /*
+     * **`username` is READ_ONLY and `user_login` is REFUSED**, so the first is
+     * stripped and reaches the empty-payload 400 while the second is named. That
+     * asymmetry is what lets a client GET an account, change one field and PATCH
+     * the whole object back — measured through `UserInput::forUpdate()` directly.
+     */
+    expect(apiError(write("PATCH", "/users/774", { username: "x" })).apiMessage).toBe(
+      "No supported fields were provided.",
+    );
+    expect(apiError(write("PATCH", "/users/774", { user_login: "x" })).fields?.user_login).toBe(
+      "A login is an identity, not a field. Create the account with the username you want.",
+    );
+
+    // A body-field enum, which is a different family from the query-parameter
+    // one above: a colon, no "and", and it names no parameter.
+    expect(apiError(write("PATCH", "/users/774", { status: "disabled" })).fields?.status).toBe(
+      "Must be one of: active, suspended.",
+    );
+    expect(apiError(write("PATCH", "/users/774", { status: "" })).fields?.status).toBe(
+      "Must be one of: active, suspended.",
+    );
+  });
+
+  it("refuses the two self-writes, and the order the guards run in is visible", () => {
+    /*
+     * §87's escalation refusals. The panel disables all three locally because it
+     * knows who it is; the mock has to answer them anyway, or the disabled
+     * controls are guarding a path nobody has seen the far side of.
+     */
+    const role = refusedWith(write("PATCH", `/users/${ME}`, { role: "ac_manager" }), 403, "forbidden");
+    expect(role.apiMessage).toBe("You cannot change your own role. Ask another Super Admin.");
+
+    const suspend = refusedWith(
+      write("PATCH", `/users/${ME}`, { status: "suspended" }),
+      403,
+      "forbidden",
+    );
+    expect(suspend.apiMessage).toBe("You cannot suspend your own account.");
+
+    /*
+     * **`UserInput` never learns whose account it is**, so a core role on your
+     * own account is the 400 vocabulary refusal and not the 403 — the field
+     * validator runs before every guard. A screen that expected 403 here would
+     * render the wrong reason on the one path it is most likely to take.
+     */
+    expect(write("PATCH", `/users/${ME}`, { role: "administrator" }).status).toBe(400);
+
+    // Everything else on your own account is ordinary.
+    expect(write("PATCH", `/users/${ME}`, { email: "new@example.test" }).status).toBe(200);
+    expect(write("PATCH", `/users/${ME}`, { status: "active" }).status).toBe(200);
+    // And the same writes on somebody else are not refused at all.
+    expect(write("PATCH", "/users/774", { role: "ac_super_admin" }).status).toBe(200);
+  });
+
+  it("refuses an address another account holds, and allows an account its own", () => {
+    const clash = refusedWith(
+      write("PATCH", "/users/774", { email: "admin@example.test" }),
+      409,
+      "conflict",
+    );
+    expect(clash.apiMessage).toBe("That email address is already in use.");
+    expect(duplicateDetails.parse(clash.details)).toEqual({ email: "admin@example.test" });
+
+    // `emailExists($email, $ignoreId)` excludes the account being written, so a
+    // PATCH that sends the whole object back is not a 409 against itself.
+    expect(write("PATCH", "/users/774", { email: "ac_usr_new@example.test" }).status).toBe(200);
+  });
+
+  it("404s an id that is not staff, whether it is a shopper or nobody", () => {
+    expect(refusedWith(write("PATCH", "/users/9999", { status: "suspended" }), 404, "not_found").apiMessage).toBe(
+      "No staff account with that id.",
+    );
+    expect(write("PATCH", "/users/24", { status: "suspended" }).status).toBe(404);
+    // A field refusal precedes the lookup, so a bad body on a missing id is 400.
+    expect(write("PATCH", "/users/9999", { status: "zzz" }).status).toBe(400);
+  });
+});
+
+describe("DELETE /users/{id}", () => {
+  it("answers two keys, not the row", () => {
+    const response = write("DELETE", "/users/240");
+    expect(response.status).toBe(200);
+    const { data } = parse(staffUserDeleted, response);
+    expect(data).toEqual({ id: 240, deleted: true });
+    // Worth pinning: the obvious implementation rebinds the detail screen to
+    // this response and finds a two-key object where an account was.
+    expect(data).not.toHaveProperty("username");
+    expect(get("/users/240").status).toBe(404);
+    expect(staffPage("per_page=100").meta.total).toBe(68);
+  });
+
+  it("refuses your own account before it resolves the id", () => {
+    const self = refusedWith(write("DELETE", `/users/${ME}`), 403, "forbidden");
+    expect(self.apiMessage).toBe("You cannot delete your own account.");
+    /*
+     * **`guardNotSelf()` runs ahead of `requireStaff()`** — `UserService.php:170`
+     * before `:172` — so the refusal is about who you are and never about what
+     * exists. A screen that read a 404 here as "already deleted" would be wrong
+     * about the one case it matters in.
+     */
+    expect(isSelf(ME, ME)).toBe(true);
+    expect(refusedWith(write("DELETE", "/users/9999"), 404, "not_found").apiMessage).toBe(
+      "No staff account with that id.",
+    );
+  });
+
+  it("refuses an account that owns orders, and hands back the count", () => {
+    const conflict = refusedWith(write("DELETE", "/users/778"), 409, "conflict");
+    expect(conflict.apiMessage).toBe(
+      'That account owns orders and cannot be deleted. Suspend it instead: PATCH /users/{id} with {"status":"suspended"}.',
+    );
+    expect(deleteConflictDetails.parse(conflict.details)).toEqual({ orders: 3 });
+
+    /*
+     * A count, not a list. The panel deliberately does **not** predict this —
+     * nothing on a user row says whether an account owns orders, and
+     * `/orders?customer_id=` is `ac_manage_orders`, a capability this screen's
+     * own gate does not imply — so it asks and renders `details.orders`.
+     */
+    expect(deleteConflictCount(conflict.details)).toBe(3);
+    expect(deleteConflictCount({})).toBeNull();
+
+    // And the alternative the sentence names really works on that account.
+    expect(write("PATCH", "/users/778", { status: "suspended" }).status).toBe(200);
+  });
+});
+
+describe("application passwords", () => {
+  it("serves a bare enumeration, and an empty one for most accounts", () => {
+    const response = get("/users/774/application-passwords");
+    const { data, meta } = parse(applicationPasswordList, response);
+    // No `meta` key at all — the collection pages nothing.
+    expect(meta).toBeNull();
+    expect(Object.keys(response.body as object)).toEqual(["success", "data"]);
+    expect(data).toHaveLength(2);
+
+    // 67 of the 69 accounts have none, and the empty array is a state too.
+    expect(parse(applicationPasswordList, get("/users/770/application-passwords")).data).toEqual([]);
+  });
+
+  it("mints at 201, and it is the only response that carries a secret", () => {
+    const response = write("POST", "/users/778/application-passwords", { name: "Poste" });
+    expect(response.status).toBe(201);
+    const { data } = parse(mintedApplicationPassword, response);
+
+    /*
+     * **24 characters, no spaces**, which is `WP_Application_Passwords::PW_LENGTH`
+     * and `wp_generate_password(24, false)`. `docs/API.md` shows the six-group
+     * spaced form wp-admin renders; both authenticate, and the panel renders
+     * whatever arrived rather than re-grouping it.
+     */
+    expect(hasSecret(data)).toBe(true);
+    expect(data.password).toHaveLength(24);
+    expect(data.password).not.toContain(" ");
+    expect(data.password).toMatch(/^[A-Za-z0-9]{24}$/);
+    expect(neverUsed(data)).toBe(true);
+
+    /*
+     * **And nowhere else, ever.** Not on the collection, not on the detail — this
+     * is the assertion behind a sheet that shows the value once and offers no
+     * reveal affordance, because there is nothing to reveal.
+     */
+    const listed = parse(applicationPasswordList, get("/users/778/application-passwords")).data;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).not.toHaveProperty("password");
+    expect(listed[0].uuid).toBe(data.uuid);
+    const detail = parse(staffUserDetail, get("/users/778")).data;
+    expect(detail.application_passwords[0]).not.toHaveProperty("password");
+
+    // Deterministic, because a screenshot of the one value nobody can fetch
+    // twice has to be byte-stable between runs.
+    resetState();
+    expect(
+      parse(mintedApplicationPassword, write("POST", "/users/778/application-passwords", { name: "Poste" }))
+        .data.password,
+    ).toBe(data.password);
+  });
+
+  it("answers two different 409s on one route", () => {
+    /*
+     * `credentialConflict()` tells them apart by `details.name`, and the split
+     * is the whole reason it exists: the first is a validation error on the name
+     * field, the second is a fact about the account and belongs at the top of
+     * the section with the reactivate action beside it. Rendering both as a
+     * toast would make the second look like a typo.
+     */
+    const duplicate = refusedWith(
+      // Case-insensitive: `strcasecmp`, because two entries called "iPhone" are
+      // two entries nobody can tell apart and revoking the wrong one signs out
+      // the wrong phone.
+      write("POST", "/users/774/application-passwords", { name: "ordinateur PORTABLE" }),
+      409,
+      "conflict",
+    );
+    expect(duplicate.apiMessage).toBe(
+      "That account already has an application password with this name.",
+    );
+    expect(duplicateDetails.parse(duplicate.details)).toEqual({ name: "ordinateur PORTABLE" });
+    expect(credentialConflict(duplicate.details)).toEqual({
+      kind: "name",
+      name: "ordinateur PORTABLE",
+    });
+
+    const suspended = refusedWith(
+      write("POST", "/users/770/application-passwords", { name: "Poste" }),
+      409,
+      "conflict",
+    );
+    expect(suspended.apiMessage).toBe(
+      "That account is suspended. Reactivate it before issuing a credential.",
+    );
+    // No `details` at all on this one, which is what `credentialConflict()`
+    // branches on.
+    expect(suspended.details).toEqual({});
+    expect(credentialConflict(suspended.details)).toEqual({ kind: "suspended" });
+
+    // And the alternative the sentence names unblocks it.
+    expect(write("PATCH", "/users/770", { status: "active" }).status).toBe(200);
+    expect(write("POST", "/users/770/application-passwords", { name: "Poste" }).status).toBe(201);
+  });
+
+  it("refuses a nameless mint before it looks the account up", () => {
+    /*
+     * **The controller raises this, not the service** — `UserController.php:257`
+     * runs ahead of `UserService::createApplicationPassword()`'s
+     * `requireStaff()` — so a nameless mint against an id nobody holds is a 400
+     * and not a 404. And the message has **no full stop**, where every
+     * `UserInput` refusal beside it does. Reproduced rather than tidied.
+     */
+    const nameless = refusedWith(
+      write("POST", "/users/9999/application-passwords", {}),
+      400,
+      "invalid_request",
+    );
+    expect(nameless.apiMessage).toBe("The application password data is invalid");
+    expect(nameless.fields).toEqual({
+      name: "Required. Name the device or client this credential is for.",
+    });
+    expect(apiError(write("POST", "/users/774/application-passwords", { name: "   " })).apiMessage).toBe(
+      "The application password data is invalid",
+    );
+    // With a name, the same id is the account's 404.
+    expect(refusedWith(write("POST", "/users/9999/application-passwords", { name: "x" }), 404, "not_found")
+      .apiMessage).toBe("No staff account with that id.");
+  });
+
+  it("revokes one, and tells a malformed identifier from an unknown one", () => {
+    const response = write(
+      "DELETE",
+      "/users/774/application-passwords/3f2d18b0-6c41-4a9e-8f77-2b5c0a91d4e6",
+    );
+    expect(response.status).toBe(200);
+    expect(parse(z.looseObject({ uuid: z.string(), revoked: z.boolean() }), response).data).toEqual({
+      uuid: "3f2d18b0-6c41-4a9e-8f77-2b5c0a91d4e6",
+      revoked: true,
+    });
+    expect(parse(applicationPasswordList, get("/users/774/application-passwords")).data).toHaveLength(1);
+
+    /*
+     * The uuid is constrained **in the route pattern**, so a malformed
+     * identifier is a routing 404 that never reaches a lookup — which is one
+     * fewer place a caller can learn whether an account exists. A well-formed
+     * uuid that belongs to nobody gets the credential's own sentence, which is
+     * not the account's.
+     */
+    expect(apiError(write("DELETE", "/users/774/application-passwords/not-a-uuid")).code).toBe(
+      "rest_no_route",
+    );
+    expect(
+      refusedWith(
+        write("DELETE", "/users/774/application-passwords/00000000-0000-0000-0000-000000000000"),
+        404,
+        "not_found",
+      ).apiMessage,
+    ).toBe("No application password with that identifier.");
+    // The route is DELETE-only.
+    expect(get("/users/774/application-passwords/3f2d18b0-6c41-4a9e-8f77-2b5c0a91d4e6").status).toBe(404);
+  });
+});
+
+/**
+ * ── The gate, and the identity that had to be added to reach it ─────────────
+ *
+ * All eight routes are `ac_manage_users`, which is Super Admin's alone —
+ * `UserController.php:19-22`, and measured on 2026-08-29 with three real
+ * credentials rather than trusted: a Manager, a Support Agent and a Marketing
+ * Manager each answered 403 on `/users`, `/users/{id}`, `/roles` and the
+ * credential collection alike, with no `details` key.
+ *
+ * **All six identities that existed before this branch held the capability**, so
+ * this gate would have been a refusal nothing in the harness could reach — and
+ * an ungated mock does not merely miss a defect, it manufactures a passing
+ * screenshot of a screen the credential cannot see. §16.1 is that lesson.
+ */
+describe("MOCK_IDENTITY=no_users", () => {
+  it("refuses all eight routes with the wire's own 403", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_users");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const call = (method: string, path: string, body?: unknown) =>
+        mock.respond(method, `${mock.BASE_PATH}${path}`, new URLSearchParams(), body ?? null);
+
+      for (const [method, path] of [
+        ["GET", "/users"],
+        ["POST", "/users"],
+        ["GET", "/users/774"],
+        ["PATCH", "/users/774"],
+        ["DELETE", "/users/774"],
+        ["GET", "/users/774/application-passwords"],
+        ["POST", "/users/774/application-passwords"],
+        ["DELETE", "/users/774/application-passwords/3f2d18b0-6c41-4a9e-8f77-2b5c0a91d4e6"],
+        ["GET", "/roles"],
+      ] as const) {
+        const response = call(method, path, {});
+        expect(response.status, `${method} ${path}`).toBe(403);
+        expect(response.body, `${method} ${path}`).toEqual({
+          success: false,
+          // No `details` key at all — measured, and the shape `forbidden()`
+          // already emits everywhere else in this file.
+          error: { code: "forbidden", message: "You are not allowed to perform this action." },
+        });
+      }
+
+      // The refusal is about the credential, not about whether the path
+      // resolves: an id nobody holds is still 403 and not 404.
+      expect(call("GET", "/users/9999").status).toBe(403);
+      // And nothing else moved.
+      expect(call("GET", "/customers").status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * `guardAssignable()` is **inert for every credential this shop can issue** —
+   * `ac_manage_users` is Super Admin's and Super Admin holds `Capabilities::ALL`,
+   * so `capabilitiesBeyond()` is empty for anybody past the gate. It is
+   * reproduced because a guard unreachable on the wire and absent from the
+   * harness is one nobody re-checks, and it is reachable here only because the
+   * harness's reduced identities are constructed rather than measured.
+   */
+  it("answers the escalation refusal from a credential the shop does not have", async () => {
+    vi.stubEnv("MOCK_IDENTITY", "no_content");
+    try {
+      vi.resetModules();
+      const mock = await import("@/scripts/mock-api.mjs");
+      const create = (role: string) =>
+        mock.respond("POST", `${mock.BASE_PATH}/users`, new URLSearchParams(), {
+          username: "ac_zz_new",
+          email: "zz@example.test",
+          role,
+        });
+
+      const refused = create("ac_super_admin");
+      expect(refused.status).toBe(403);
+      expect(refused.body).toEqual({
+        success: false,
+        error: {
+          code: "forbidden",
+          message:
+            'You cannot grant "ac_super_admin": it holds capabilities you do not have (ac_manage_content).',
+        },
+      });
+      // A role inside the caller's own set is not an escalation.
+      expect(create("ac_manager").status).toBe(201);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
 /**
  * The mock grows one collection per redesign branch, and the promise this suite
  * makes — every schema the mock serves is validated against it — only stays true
@@ -8923,12 +9983,33 @@ const COVERED = [
    * What the module cannot express is named below rather than left implied.
    */
   "campaign",
+  /*
+   * **Every schema in the module is exercised**, which is the standard the
+   * `analytics`, `cms` and `campaign` entries set — and this one had to meet it
+   * from a standing start, because the whole subject was `notFound()` until
+   * 2026-08-29 and this entry read "/users and /roles are not mocked yet".
+   *
+   * `staffUser`/`staffUserList` on the listing, every filter it honours and the
+   * one it ignores, and on the `POST`'s 201 — which is the *list* shape, not the
+   * detail's; `staffUserDetail` on the single read, where the key set is written
+   * out because it is what decides a peek drawer is not free here;
+   * `applicationPassword`/`applicationPasswordList` on the sub-collection in
+   * both its arms, used and never-used; `mintedApplicationPassword` on the one
+   * response in this API that carries a secret; `role`/`roleList` on the matrix,
+   * including the eighth role it deliberately does not publish;
+   * `staffUserDeleted` on the two-key delete; `deleteConflictDetails` on the 409
+   * an order-owning account answers; and `duplicateDetails` on all four of the
+   * conflicts that key by the field that collided — username, address twice, and
+   * a credential name.
+   *
+   * What the module cannot express is named below rather than left implied.
+   */
+  "staff",
 ];
 
 const UNCOVERED: Record<string, string> = {
   audit: "/audit is not mocked yet",
   settings: "/settings is not mocked yet",
-  staff: "/users and /roles are not mocked yet",
   transfer: "the import/export endpoints are not mocked yet",
 };
 

@@ -5,8 +5,8 @@ import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { staffUserDetail, roleList } from "@/lib/api/schemas/staff";
 import { canManageUsers } from "@/lib/capabilities";
-import { ForbiddenState } from "@/components/patterns/States";
-import { Scaffold } from "@/components/patterns/Scaffold";
+import { ForbiddenState } from "@/components/ui/States";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { UserDetail } from "./UserDetail";
 
 export default async function UserPage({
@@ -16,15 +16,20 @@ export default async function UserPage({
 }) {
   const { locale, id } = await params;
   const { session, me } = await requireSession(locale);
+  const t = await getTranslations("staff");
 
   if (!canManageUsers(me)) {
-    const t = await getTranslations("staff");
     return (
-      <Scaffold title={t("title")} back={{ href: `/${locale}/users`, label: t("title") }}>
-        <div className="px-4">
+      <div className="min-h-dvh bg-ui-canvas">
+        <PageHeader
+          title={t("title")}
+          back={{ href: `/${locale}/users`, label: t("title") }}
+          divided={false}
+        />
+        <PageBody width="form">
           <ForbiddenState capability="ac_manage_users" />
-        </div>
-      </Scaffold>
+        </PageBody>
+      </div>
     );
   }
 
@@ -55,6 +60,14 @@ export default async function UserPage({
     <UserDetail
       locale={locale}
       meId={me?.id ?? null}
+      /*
+       * The caller's own capabilities, for `guardAssignable()`'s mirror — the
+       * role picker must not offer a role whose capabilities the caller does not
+       * hold. Empty reads as "unknown" on the other side and skips the guard
+       * rather than emptying the picker: the panel does not get to be stricter
+       * than the API it is a client of.
+       */
+      myCapabilities={me?.capabilities ?? []}
       initial={detail.data}
       roles={roles?.data ?? []}
     />

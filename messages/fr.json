@@ -230,7 +230,8 @@
     "segmentName": "Segment {name}",
     "recipientEmail": "Destinataire {email}",
     "templateName": "Modèle {name}",
-    "notification": "Notification {event} du {date}"
+    "notification": "Notification {event} du {date}",
+    "staffAccount": "Compte {name}, identifiant {login}"
   },
   "statusShort": {
     "pending": "Attente",
@@ -2123,10 +2124,10 @@
     "notFound": "Aucun compte d’équipe avec cet identifiant. Un compte client n’apparaît pas ici : les clients ont leur propre écran.",
     "newUser": "Nouveau compte",
     "count": "{total, plural, =0 {Aucun compte} one {# compte} other {# comptes}}",
-    "searchPlaceholder": "Nom, identifiant ou e-mail",
+    "searchPlaceholder": "Nom affiché, identifiant ou e-mail",
     "searchLabel": "Rechercher dans l’équipe",
     "clearSearch": "Effacer la recherche",
-    "searchScope": "La recherche porte sur le nom, l’identifiant et l’e-mail.",
+    "searchScope": "La recherche porte sur le nom affiché, l’identifiant et l’e-mail — jamais sur le prénom ni sur le nom de famille.",
     "statusLabel": "Filtrer par état",
     "roleLabel": "Filtrer par rôle",
     "status": {
@@ -2136,7 +2137,8 @@
     },
     "role": {
       "all": "Tous les rôles",
-      "choose": "Choisir un rôle…"
+      "choose": "Choisir un rôle…",
+      "keep": "Conserver le rôle actuel"
     },
     "retired": "Retiré",
     "retiredNote": "{assignable, plural, one {# rôle seulement peut encore être attribué} other {# rôles seulement peuvent encore être attribués}}. Les autres restent en place sur les comptes qui les détiennent.",
@@ -2146,10 +2148,10 @@
     "empty": {
       "none": "Aucun compte d’équipe.",
       "noResults": "Aucun compte ne correspond.",
-      "clear": "Effacer les filtres"
+      "clear": "Effacer les filtres",
+      "pastEnd": "Cette page est vide : il n’y a plus rien au-delà.",
+      "firstPage": "Revenir à la première page"
     },
-    "previousPage": "Page précédente",
-    "nextPage": "Page suivante",
     "identity": "Identité",
     "roleSection": "Rôle",
     "roleNote": "Un compte détient exactement un rôle, et ses permissions en découlent.",
@@ -2165,11 +2167,17 @@
       "last_name": "Nom",
       "email": "E-mail",
       "role": "Rôle",
-      "date_created": "Créé le"
+      "date_created": "Créé le",
+      "display_name": "Nom affiché",
+      "newRole": "Nouveau rôle",
+      "status": "État"
     },
     "hint": {
       "username": "Sans espace. C’est ce que la personne saisira pour se connecter.",
-      "role": "Ce que le rôle accorde s’affiche en dessous."
+      "role": "Ce que le rôle accorde s’affiche en dessous.",
+      "display_name": "C’est le nom qui apparaît partout dans le panneau.",
+      "display_nameOptional": "Facultatif. Laissé vide, l’identifiant devient le nom affiché.",
+      "newRole": "Les rôles retirés ne sont pas proposés ; les comptes qui en détiennent un le conservent."
     },
     "readOnly": {
       "username": "Un identifiant est une identité, pas un champ. Il se choisit à la création."
@@ -2180,9 +2188,6 @@
       "ownDelete": "Vous ne pouvez pas supprimer votre propre compte : une boutique sans Super Admin n’a plus d’autre porte que wp-admin.",
       "wordpress": "Ce compte est un administrateur WordPress. Cette API gère des rôles de commerce et n’accorde pas l’accès à la plateforme."
     },
-    "save": "Enregistrer",
-    "revert": "Annuler les modifications",
-    "cancel": "Annuler",
     "create": "Créer",
     "created": "Compte créé.",
     "saved": "Compte enregistré.",
@@ -2194,16 +2199,15 @@
     "delete": "Supprimer le compte",
     "deleted": "Compte supprimé.",
     "deleteNote": "Définitif. Un compte qui détient des commandes ne peut pas être supprimé — suspendez-le à la place.",
-    "ownsOrders": "{count, plural, one {# commande rattachée} other {# commandes rattachées}}.",
     "dangerous": "Actions sensibles",
-    "dangerousNote": "Les refus sont affichés plutôt que masqués : ce sont eux qui font la sécurité de cet écran.",
     "confirm": {
       "suspendTitle": "Suspendre ce compte ?",
       "suspendBody": "{name} ne pourra plus utiliser ses identifiants sur cette API.",
       "activateTitle": "Réactiver ce compte ?",
       "activateBody": "{name} pourra de nouveau se connecter.",
       "deleteTitle": "Supprimer ce compte ?",
-      "deleteBody": "{name} sera supprimé définitivement. Cette action est irréversible."
+      "deleteBody": "{name} sera supprimé définitivement. Cette action est irréversible.",
+      "typeLogin": "Saisissez « {login} » pour confirmer"
     },
     "credentials": "Mots de passe d’application",
     "credentialsNote": "Un mot de passe par appareil, nommé pour qu’il puisse être révoqué sans se tromper.",
@@ -2225,7 +2229,31 @@
     "secretDone": "J’ai copié le mot de passe",
     "secretLost": "S’il est perdu, révoquez-le et générez-en un autre : il n’existe aucun moyen de le récupérer.",
     "copy": "Copier le mot de passe",
-    "copied": "Copié."
+    "copied": "Copié.",
+    "applyRole": "Appliquer le rôle",
+    "backToList": "Revenir à l’équipe",
+    "capabilitiesOf": "Ce que le rôle « {role} » accorde.",
+    "capabilitiesPending": "Le rôle n’est pas encore appliqué : voici ce qu’il accorderait.",
+    "columns": {
+      "name": "Nom",
+      "username": "Identifiant",
+      "email": "E-mail",
+      "role": "Rôle",
+      "registered": "Inscrit le",
+      "status": "État"
+    },
+    "createIncomplete": "Renseignez l’identifiant, l’e-mail et le rôle.",
+    "credentialNameRequired": "Nommez l’appareil avant de générer un mot de passe.",
+    "deleteOwnsOrdersTitle": "Ce compte ne peut pas être supprimé",
+    "deleteOwnsOrdersBody": "{count, plural, one {# commande est rattachée à ce compte} other {# commandes sont rattachées à ce compte}} : le supprimer les laisserait sans propriétaire. Suspendez-le plutôt — ses identifiants sont refusés partout et l’historique reste intact.",
+    "deleteOwnsOrdersBodyUnknown": "Des commandes sont rattachées à ce compte : le supprimer les laisserait sans propriétaire. Suspendez-le plutôt — ses identifiants sont refusés partout et l’historique reste intact.",
+    "loading": "Chargement…",
+    "namesNote": "Le prénom et le nom de famille existent dans l’API mais n’apparaissent nulle part dans le panneau et ne sont pas cherchés : c’est le nom affiché qui sert partout.",
+    "revokeNamed": "Révoquer « {name} »",
+    "roleChanged": "Rôle modifié.",
+    "roleWithheld": "Non proposés : {roles}. Ces rôles accordent des permissions que vous n’avez pas ({capabilities}).",
+    "statusSection": "État du compte",
+    "refresh": "Actualiser"
   },
   "audit": {
     "title": "Journal",

@@ -1,6 +1,6 @@
 import { getLocale, getTranslations } from "next-intl/server";
-import { Scaffold } from "@/components/patterns/Scaffold";
-import { Icon } from "@/components/primitives/Icon";
+import { PageHeader, PageBody } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/States";
 
 /**
  * A 404 on a staff id.
@@ -10,6 +10,12 @@ import { Icon } from "@/components/primitives/Icon";
  * from the same WordPress user table and answer 404 for each other's ids, so a
  * shopper's id pasted into this URL lands here — and a screen saying only "not
  * found" would send somebody looking for a deleted colleague.
+ *
+ * `EmptyState` rather than a hand-rolled box: this is the panel's "nothing here"
+ * shape and the previous version drew its own card, its own icon and its own two
+ * type sizes. The action is an `href` rather than an `onClick`, which is what
+ * that prop was added for — this is a Server Component and cannot pass a handler
+ * through the client boundary.
  */
 export default async function StaffNotFound() {
   const locale = await getLocale();
@@ -17,14 +23,20 @@ export default async function StaffNotFound() {
   const tStaff = await getTranslations({ locale, namespace: "staff" });
 
   return (
-    <Scaffold title={tStaff("title")} back={{ href: `/${locale}/users`, label: tStaff("title") }}>
-      <div className="px-4">
-        <div className="rounded-lg bg-surface px-6 py-12 text-center">
-          <Icon name="alert" className="mx-auto size-8 text-label-tertiary" />
-          <h2 className="mt-4 text-title-3 text-label">{t("notFoundTitle")}</h2>
-          <p className="mt-2 text-body text-label-secondary">{tStaff("notFound")}</p>
-        </div>
-      </div>
-    </Scaffold>
+    <div className="min-h-dvh bg-ui-canvas">
+      <PageHeader
+        title={tStaff("title")}
+        back={{ href: `/${locale}/users`, label: tStaff("title") }}
+        divided={false}
+      />
+      <PageBody width="form">
+        <EmptyState
+          icon="alert"
+          message={t("notFoundTitle")}
+          detail={tStaff("notFound")}
+          action={{ label: tStaff("backToList"), href: `/${locale}/users` }}
+        />
+      </PageBody>
+    </div>
   );
 }

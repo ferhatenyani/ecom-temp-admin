@@ -130,6 +130,22 @@ export declare function parseMultipart(buffer: Buffer, contentType: string): unk
  * makes the status picker, the cancel button and the sync refusal reachable at
  * all. Without the rebuild, the first test to finish that parcel would leave
  * every later one with the all-terminal shop the API actually has.
+ *
+ * **Staff joined on 2026-08-29, and it is the collection with the most writes
+ * and the most destructive ones.** `DELETE /users/{id}` removes an account
+ * outright — there is no trash — so `staffGone` is the whole of its memory, and
+ * the accounts a delete would take are the fixture's own load-bearing rows: 770
+ * is the only suspended account and the only 409 the credential route's second
+ * arm has, 778 is the only account that owns orders, and 774 is the only one
+ * with two application passwords. Each is one request from being gone, which is
+ * the notification queue's argument one collection over.
+ *
+ * The credentials come back with them, and for a second reason: a mint and a
+ * revoke both write `state.appPasswords`, and `state.mintedCredentials` is the
+ * counter both the uuid and the 24-character secret are derived from — so
+ * resetting it is what keeps a screenshot of the one value nobody can fetch
+ * twice byte-identical between runs. `nextStaffId` is fixed at 810 for the same
+ * reason `nextCouponId` is fixed at 320.
  */
 export declare function resetState(): void;
 
