@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/DataTable";
 import { FilterRow, SearchField } from "@/components/ui/FilterBar";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { ExportNotice, exportHref, useExportFrom } from "@/components/ui/ExportNotice";
 import { RecordListSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
 import { ButtonLink, IconButton } from "@/components/ui/Button";
 import { Isolate } from "@/components/primitives/Ltr";
@@ -95,6 +96,7 @@ export function CustomersList({
     () => queryFromParams(new URLSearchParams(searchParams.toString())),
     [searchParams],
   );
+  const from = useExportFrom();
 
   /*
    * The fifth state. When the browser is certain it is offline, the rows on
@@ -201,9 +203,13 @@ export function CustomersList({
 
                 Disabled while the browser reports itself offline: this one
                 genuinely leaves the page, and navigating to a route that cannot
-                answer replaces the panel with the browser's own error page. */}
+                answer replaces the panel with the browser's own error page.
+
+                `from` is where a refusal comes back to: the route answers a 303
+                to this list, search intact, and `ExportNotice` below says what
+                happened. Before it, a 403 replaced the panel with raw JSON. */}
             <ButtonLink
-              href="/api/export/customers"
+              href={exportHref("customers", from)}
               variant="secondary"
               icon="download"
               prefetch={false}
@@ -238,6 +244,10 @@ export function CustomersList({
       />
 
       <PageBody width="full">
+        {/* Inside `<main>`, where the reader was looking. Above the stale marker
+            because it reports the thing they just did, not the age of the rows. */}
+        <ExportNotice />
+
         {(!online || isError) && dataUpdatedAt > 0 ? (
           <StaleBanner time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}
             reason={online ? "refreshFailed" : "offline"}

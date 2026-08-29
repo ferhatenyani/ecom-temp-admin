@@ -2895,20 +2895,50 @@ itself has none. Neither is deleted here — teardown owns `primitives/`.
 
 ## Carried forward — teardown owns these
 
-- **A refused export replaces the panel with a raw JSON body, and it has five
-  callers.** `app/api/export/[subject]/route.ts:108-114` answers
-  `application/json` with no `Content-Disposition`, and every caller is a
-  top-level navigation — so a 403 or a 400 navigates the tab away from the panel
-  and prints an envelope at the reader. `ProductsList.tsx:410-419` already
-  half-knows this ("a navigation to a route that cannot answer replaces the panel
-  with the browser's own error page") and only guards the offline case. The
-  honest fix is per screen, because each needs to render the refusal in its own
-  context, and this branch owns **one of the five** — `/transfer`, whose copy no
-  longer claims otherwise. `/orders`, `/products`, `/customers` and `/inventory`
-  still carry the claim implicitly by offering the control. Not reachable through
-  the panel's own controls today, since every caller filters by capability first;
-  the API is the authority and the capability list is a cache, which is exactly
-  the gap §18 recorded on settings.
+- ~~**A refused export replaces the panel with a raw JSON body, and it has five
+  callers.**~~ **Closed 2026-08-29 on `fix/export-refusal`.** The route answers a
+  **303 back into the panel** instead of an envelope, carrying `export_error` and
+  `export_status` and nothing else — never the API's sentence, which is §11's
+  mirror rule and also keeps foreign text out of a reflected parameter. The
+  caller passes `from=<path+search>`, so the reader lands back on the screen they
+  left with their filters intact. `returnPath()` is the open-redirect guard, and
+  it settles the hostile cases by **comparing origins after parsing** rather than
+  by pattern-matching spellings; with no `from`, or a `from` it refuses, the old
+  JSON is returned byte-for-byte, because `lib/transfer.ts:80-83` records that an
+  export error arriving in the envelope is the API's own guarantee to a non-panel
+  client.
+
+  **The entry's own prescription was wrong, and the correction is the reusable
+  part.** It said *"the honest fix is per screen, because each needs to render the
+  refusal in its own context"* — and what each screen needs to supply is the
+  **position**, not the copy: one `components/ui/ExportNotice.tsx` inside each
+  screen's own `<main>` served all five, and the sentence is the same on every one
+  because the refusal is about the export and not about the screen. A defect
+  carried forward with a plan attached is a defect whose plan nobody has tested;
+  this file has now been wrong about the *remedy* as well as about the symptom.
+
+  **No identity can reach the state, and that is a fact about the panel rather
+  than a gap in the harness.** Every caller filters on the same capability the API
+  gates the route on, so a mock identity cannot hold the disagreement — under
+  `no_customers` the customers export is refused *and* its control is absent.
+  Provoking it needs the production condition itself: a capability list that is a
+  **cache** while the API is the **authority**. Driven with a shim in front of the
+  mock refusing `/export/*` while `/auth/me` still granted the capability.
+  Verified independently of the build agent: eleven hostile `from` values all
+  refused with no `Location` — including `/\evil.example`, a CRLF payload, a
+  userinfo-`@` authority and `/api/export/customers`, which is the redirect loop —
+  a valid path redirecting relative with the filters preserved, dismiss dropping
+  exactly the two parameters, and a successful export still downloading with its
+  BOM and the API's filename. The four lists were checked for the hazard that
+  would have made this worse: all build their API query by **naming** parameters
+  (`orders/query.ts:66-74`, `products/query.ts:153-186`,
+  `customers/query.ts:117-127`, `inventory/query.ts:111-127`), so `export_error`
+  is never forwarded upstream.
+
+  `transfer.exportNote` was rewritten a second time in both locales. The transfer
+  branch had corrected it to describe the JSON behaviour honestly; this change
+  made that description false, which is worth noticing — **copy that documents a
+  defect becomes a lie the moment the defect is fixed.**
 - **`tests/fixtures-admin.json`'s `exportProducts`/`exportAsManager` `first_line`
   predate `fix/product-export-field-names`**, so `tests/admin-schema.test.ts:934`
   asserts `startsWith("ID,")` — pinning a header the backend has since replaced

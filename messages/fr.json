@@ -190,6 +190,13 @@
       "ac_manage_payments": "Paiements",
       "ac_manage_marketing": "Marketing"
     },
+    "export": {
+      "refusedTitle": "Export refusé",
+      "refusedBody": "Cet export demande la permission {capability}.",
+      "failedTitle": "L’export n’a pas abouti",
+      "failedBody": "Le fichier n’a pas été produit. Réessayez.",
+      "dismiss": "Masquer ce message"
+    },
     "notFoundTitle": "Introuvable",
     "notFoundBody": "Cette commande n’existe plus.",
     "errorTitle": "Une erreur est survenue",
@@ -2310,7 +2317,7 @@
   "transfer": {
     "title": "Import et export",
     "exportTitle": "Exporter",
-    "exportNote": "Un fichier CSV, tel que l’API le nomme. Un export refusé n’est jamais enregistré sous products.csv : le téléchargement est remplacé par la réponse brute de l’API dans l’onglet.",
+    "exportNote": "Un fichier CSV, tel que l’API le nomme. Un export refusé n’est jamais enregistré sous products.csv : la page revient ici et dit pourquoi.",
     "download": "Télécharger",
     "roundTrips": "Réimportable",
     "bomNote": "Les fichiers commencent par une marque d’ordre d’octets UTF-8, nécessaire pour qu’Excel lise correctement les noms en arabe. Ce n’est pas un défaut : ne la retirez pas.",

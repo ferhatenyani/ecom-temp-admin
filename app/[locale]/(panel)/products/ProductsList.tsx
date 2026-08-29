@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/DataTable";
 import { FilterTabs, SearchField, FilterChips, FilterRow } from "@/components/ui/FilterBar";
 import { EmptyState, ErrorState, StaleBanner } from "@/components/ui/States";
+import { ExportNotice, exportHref, useExportFrom } from "@/components/ui/ExportNotice";
 import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { CountBadge } from "@/components/ui/Badge";
@@ -134,6 +135,7 @@ export function ProductsList({
   );
   const query: ProductsQuery = { ...filters, page, perPage };
   const peekId = searchParams.get("peek");
+  const from = useExportFrom();
 
   /*
    * The fifth state. When the browser is certain it is offline, the rows on
@@ -416,9 +418,14 @@ export function ProductsList({
                 genuinely leaves the page, and a navigation to a route that
                 cannot answer replaces the panel with the browser's own error
                 page. The selection export beside it keeps working, because it is
-                built from rows already in memory. */}
+                built from rows already in memory.
+
+                `from` is where a refusal comes back to. This comment used to say
+                the route "cannot answer" was the only such case; a 403 was the
+                other, and it printed an envelope at the reader until the route
+                learned to answer a 303 to this list instead. */}
             <ButtonLink
-              href={`/api/export/products`}
+              href={exportHref("products", from)}
               variant="secondary"
               icon="download"
               prefetch={false}
@@ -486,6 +493,10 @@ export function ProductsList({
       />
 
       <PageBody width="full">
+        {/* Inside `<main>`, where the reader was looking. Above the stale marker
+            because it reports the thing they just did, not the age of the rows. */}
+        <ExportNotice />
+
         {(!online || isError) && dataUpdatedAt > 0 ? (
           <StaleBanner
             time={formatWhen(new Date(dataUpdatedAt).toISOString(), locale)}

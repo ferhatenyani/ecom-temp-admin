@@ -993,6 +993,33 @@ const DEFAULT_ROUTES = [
    * three; this mock's `support` keeps `ac_manage_products`, so it is 200 on two
    * exports and importable on products. The mock's own block beside that
    * identity says why it was left alone.
+   *
+   * ── A *refused export*, which is none of the above and needs no switch ────
+   *
+   * `app/api/export/[subject]/route.ts` answers a refusal with a **303 back into
+   * the panel** carrying `export_error` and `export_status`, and
+   * `components/ui/ExportNotice.tsx` renders them on all five screens that offer
+   * an export. That state is at a URL, so it is captured like any other route —
+   * `slugOf()` already folds `?`, `&` and `=` into the directory name, the way
+   * `/shipping?view=parcels` is captured:
+   *
+   *     node scripts/capture.mjs "/transfer?export_error=orders&export_status=403"
+   *     node scripts/capture.mjs "/inventory?export_error=inventory&export_status=502"
+   *
+   * The first is the refusal that names a capability, the second the one-line
+   * "it did not go through". Both are worth taking on two different screens: the
+   * notice sits inside `<main>`, so its width is the screen's rather than its
+   * own, and 340 in Arabic is where it is worth looking.
+   *
+   * **No `MOCK_IDENTITY` reaches this state, and that is a measurement rather
+   * than an omission.** Every caller filters the export controls by the same
+   * capability the mock gates the route on, so a credential that would be
+   * refused is never shown the control: under `no_customers` the customers card
+   * is absent from `/transfer` and `/customers` is a whole forbidden screen,
+   * and under `no_transfer` all five screens refuse and render no export link at
+   * all. The live path is a capability revoked **mid-session** — the panel's list
+   * is a cache and the API is the authority — which is a disagreement this mock
+   * cannot hold, since one identity answers both questions. Hence the URL.
    */
   "/transfer",
 ];
