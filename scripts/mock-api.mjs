@@ -9243,14 +9243,15 @@ function filterByStatus(rows, params) {
   const status = params.get("status");
   if (status === null || status === "") return { rows };
   if (!ORDER_STATUSES.includes(status)) {
-    return {
-      error: fail(
-        400,
-        "invalid_request",
-        `status is not one of ${ORDER_STATUSES.join(", ")}`,
-        { params: { status: `status is not one of ${ORDER_STATUSES.join(", ")}` } },
-      ),
-    };
+    /*
+     * The third and last site owing DECISIONS.md's enum-sentence entry, and it
+     * owed **three** corrections rather than one: the sentence sat in the
+     * top-level `message` where the wire puts `"Invalid parameter(s): status"`,
+     * and `join(", ")` dropped both the Oxford `and` that `oxford()` writes and
+     * the full stop every enum refusal in this file ends with. All three are one
+     * call to the helper that was already here.
+     */
+    return { error: invalidParam("status", notOneOf("status", ORDER_STATUSES)) };
   }
   return { rows: rows.filter((row) => row.status === status) };
 }
@@ -10283,8 +10284,17 @@ function checkSort(params, orderbyValues) {
     const raw = params.get(name);
     if (raw === null) continue;
     if (!allowed.includes(raw)) {
-      const message = notOneOf(name, allowed);
-      return fail(400, "invalid_request", message, { params: { [name]: message } });
+      /*
+       * `invalidParam()` rather than a hand-rolled `fail()`. This site put the
+       * enum sentence in the **top-level `message`**, where the wire puts
+       * `"Invalid parameter(s): <name>"` and keeps the sentence in
+       * `details.params.<name>` — the divergence the marketing honesty audit
+       * found across five collections and DECISIONS.md carried forward. It was
+       * never a rewrite: `invalidParam()` two hundred lines up already emitted
+       * the right shape and this call site simply did not use it, which is the
+       * same slip `notificationsListing()` was fixed for on 2026-08-28.
+       */
+      return invalidParam(name, notOneOf(name, allowed));
     }
   }
   return null;
