@@ -20,6 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_PATH,
   createServer,
+  parseCsvBody,
   parseMultipart,
   resetState,
   respond,
@@ -247,6 +248,25 @@ import {
   settingsFieldDetails,
   settingsWriteResponse,
 } from "@/lib/api/schemas/settings";
+import {
+  importError,
+  importReport,
+  missingColumnsDetails,
+  previewRow,
+} from "@/lib/api/schemas/transfer";
+import {
+  DRY_RUN_DEFAULT,
+  EXPORT_LIMIT_MAX,
+  EXPORT_SUBJECTS,
+  IMPORT_MODES,
+  IMPORT_SUBJECTS,
+  ROUND_TRIPS,
+  SUBJECT_CAPABILITY,
+  isImportable,
+  missingColumns,
+  previewIsNotARehearsal,
+  reportIsNoOp,
+} from "@/lib/transfer";
 import {
   FLAGS_WITHOUT_PROVIDERS,
   READ_ONLY_STORE_KEYS,
@@ -10292,6 +10312,7 @@ describe("MOCK_IDENTITY=no_settings", () => {
       "no_customers",
       "no_users",
       "no_marketing",
+      "no_transfer",
     ]) {
       vi.stubEnv("MOCK_IDENTITY", identity);
       try {
@@ -10572,11 +10593,33 @@ const COVERED = [
    * this suite.
    */
   "settings",
+  /*
+   * **Every schema in the module is exercised, and the module is the smallest
+   * here** — the standard `analytics`, `cms`, `campaign`, `staff` and `settings`
+   * set, met from a standing start: all six routes were `rest_no_route` until
+   * this branch and this entry read "the import/export endpoints are not mocked
+   * yet".
+   *
+   * `importReport` on both arms of both subjects and on the round trip;
+   * `previewRow` on all **four** measured shapes, which is the whole point of
+   * that schema — only `line` and `action` are on all of them, so a suite that
+   * exercised one arm would prove nothing about the one an operator reaches
+   * after trusting a preview; `importError` on the two measured row failures;
+   * and `missingColumnsDetails` on the file-level refusal, where the assertion
+   * that matters is that `columns_found` sits **beside** `fields` rather than
+   * inside it.
+   *
+   * **The export has no schema and cannot have one**, which is why the
+   * assertions below are byte assertions instead: an export is a file, so what
+   * is checked is the BOM, the header row, a record after it, the line ending
+   * and the `Content-Disposition` filename. lib/api/schemas/transfer.ts says so
+   * in its own first paragraph.
+   */
+  "transfer",
 ];
 
 const UNCOVERED: Record<string, string> = {
   audit: "/audit is not mocked yet",
-  transfer: "the import/export endpoints are not mocked yet",
 };
 
 /**
@@ -11770,6 +11813,589 @@ describe("what the newly-covered modules still do not serve", () => {
 
     const { data } = parse(couponDetail, get("/coupons/301"));
     expect(data).not.toHaveProperty("used_by");
+  });
+});
+
+/**
+ * ── The exports, which are files and must not be envelopes ──────────────────
+ *
+ * The only responses in this mock that are bytes rather than JSON, and the
+ * reason every assertion here is a byte assertion: there is no schema for an
+ * export and there cannot be one.
+ *
+ * Both halves of the defect ADMIN_PANEL.md:2695-2720 records are pinned below,
+ * in the shape `scripts/test-api.sh` was corrected into after two assertions
+ * aimed straight at them passed over a broken body — the first three bytes are
+ * a **real** byte-order mark rather than the six characters a JSON encoder
+ * writes, and there is a record *after* the header rather than one quoted line
+ * with `sku` somewhere in it.
+ */
+describe("GET /export/{subject}", () => {
+  const fileOf = (response: MockResponse) => {
+    expect(Buffer.isBuffer(response.body), "an export is a file, not an envelope").toBe(true);
+    return response.body as Buffer;
+  };
+
+  const textOf = (response: MockResponse) =>
+    fileOf(response).subarray(3).toString("utf8");
+
+  it("answers text/csv with the API's own filename, and the BOM is three bytes", () => {
+    for (const subject of EXPORT_SUBJECTS) {
+      const response = get(`/export/${subject}`);
+      expect(response.status, subject).toBe(200);
+
+      // Not an envelope: no `success`, no `data`, nothing for `unwrap()` to read.
+      const file = fileOf(response);
+      expect(file.toString("utf8").startsWith('{"success"'), subject).toBe(false);
+      expect([...file.subarray(0, 3)], subject).toEqual([0xef, 0xbb, 0xbf]);
+      // And not the six characters a JSON-encoded string would carry instead.
+      expect(file.toString("utf8").startsWith("ï»¿"), subject).toBe(false);
+
+      const headers = response.headers as Record<string, string>;
+      expect(headers["content-type"], subject).toBe("text/csv; charset=utf-8");
+      expect(headers["cache-control"], subject).toBe("no-store, private");
+      /*
+       * The filename is the API's and the date comes from the mock's fixed
+       * epoch, never from a clock — a filename built from `Date.now()` would put
+       * a moving byte in front of every assertion here and in `capture.mjs`.
+       * The pattern is the one `e2e/admin.spec.ts:401` asserts against the live
+       * shop.
+       */
+      expect(headers["content-disposition"], subject).toMatch(
+        new RegExp(`^attachment; filename="${subject}-export-\\d{4}-\\d{2}-\\d{2}\\.csv"$`),
+      );
+    }
+  });
+
+  it("names its columns on line 1 and has records after it, all four", () => {
+    for (const subject of EXPORT_SUBJECTS) {
+      const lines = textOf(get(`/export/${subject}`)).split(/\r?\n/).filter((line) => line !== "");
+      // A JSON-encoded body is one line however many rows it holds — the
+      // assertion the backend's own suite was blind to.
+      expect(lines.length, subject).toBeGreaterThan(1);
+      expect(lines[0].startsWith('"'), subject).toBe(false);
+      expect(lines[0].split(",").length, subject).toBeGreaterThan(1);
+    }
+
+    // `e2e/admin.spec.ts:401` asserts exactly this against the live shop, so the
+    // mock is honest to the same shape rather than to a shape of its own.
+    const inventory = textOf(get("/export/inventory"));
+    expect(inventory.split(/\r?\n/)[0]).toContain("sku,stock_quantity");
+  });
+
+  /**
+   * **The products header is field names, and `tests/fixtures-admin.json` still
+   * holds the labels.**
+   *
+   * That fixture's `exportProducts.first_line` reads `ID,Type,SKU,"GTIN, UPC,
+   * EAN, or ISBN",…` — captured 2026-08-21, *before*
+   * `fix/product-export-field-names`, and never re-taken. The same commit's own
+   * fixtures prove it stale: `exportProductsRoundTrip` resolves every `sku` from
+   * a re-imported export, which a label-headed file cannot do because
+   * `map_headers()` matches exactly, and `importLabelHeader.columns_found` is
+   * the new header with two cells put back to labels.
+   *
+   * So this asserts the repaired shape, and it is the one assertion in this file
+   * that deliberately disagrees with a committed fixture.
+   * `tests/admin-schema.test.ts:934-935` still pins `startsWith("ID,")` off that
+   * stale line.
+   */
+  it("writes field names on the products export, not WooCommerce's display labels", () => {
+    const header = textOf(get("/export/products")).split(/\r?\n/)[0];
+
+    expect(header.startsWith("id,type,sku,global_unique_id,name,")).toBe(true);
+    expect(header.startsWith("ID,")).toBe(false);
+    expect(header).not.toContain("GTIN");
+    // Which is what makes the badge the screen renders true, rather than a
+    // promise the file cannot keep.
+    expect(ROUND_TRIPS.products).toBe(true);
+  });
+
+  /**
+   * **CRLF everywhere except products.** Measured, and pinned by
+   * `tests/admin-schema.test.ts:960-968` from the same capture: `CsvWriter`
+   * emits CRLF while `WC_CSV_Exporter` emits LF, so the one export that is
+   * WooCommerce's own disagrees with the three that are ours.
+   *
+   * **Not re-measured after the field-name repair.** The mock reproduces the
+   * last measurement of this subject rather than tidying the inconsistency away
+   * — a harness that standardised on CRLF would be `list()` flattening three
+   * envelope shapes into one, which is the quiet direction §0 warns about.
+   */
+  it("ends its lines the way each exporter does, LF on products and CRLF on the rest", () => {
+    expect(textOf(get("/export/products")).includes("\r\n")).toBe(false);
+    for (const subject of ["orders", "inventory", "customers"] as const) {
+      expect(textOf(get(`/export/${subject}`)).includes("\r\n"), subject).toBe(true);
+    }
+  });
+
+  /**
+   * **An export error is still the envelope, with its 4xx** — which is what
+   * stops a client saving an error message as `products.csv`. Measured
+   * (`exportOverCap`), including the missing full stop: a range refusal is the
+   * one family in this API that does not end in one.
+   */
+  it("refuses a limit over the cap inside the envelope, never as a download", () => {
+    const refused = get("/export/products", `limit=${EXPORT_LIMIT_MAX + 1}`);
+    expect(refused.status).toBe(400);
+    expect(Buffer.isBuffer(refused.body)).toBe(false);
+    expect(refused.headers).toBeUndefined();
+
+    const error = apiError(refused);
+    expect(error.code).toBe("invalid_request");
+    expect(error.apiMessage).toBe("Invalid parameter(s): limit");
+    expect(error.params?.limit).toBe("limit must be between 1 (inclusive) and 2000 (inclusive)");
+
+    // And the parameter works where it is legal, so the refusal is a bound
+    // rather than the parameter being ignored.
+    const two = textOf(get("/export/inventory", "limit=2")).split("\r\n").filter(Boolean);
+    expect(two.length).toBe(3);
+  });
+
+  it("is not a route for a subject nobody wrote, or for a verb it has no handler for", () => {
+    expect(get("/export/audit").status).toBe(404);
+    expect(get("/export").status).toBe(404);
+    expect(write("POST", "/export/products").status).toBe(404);
+    // There is no importer for either, which is a different fact from a broken
+    // one — and the export exists for both.
+    expect(isImportable("orders")).toBe(false);
+    expect(get("/export/orders").status).toBe(200);
+  });
+});
+
+/**
+ * ── The imports, and the safety property the whole screen is built on ───────
+ *
+ * `dry_run` defaults to **true**: a request that lost the parameter previews and
+ * never writes. Everything below parses through the panel's real schemas, and
+ * the four preview shapes are asserted separately because only `line` and
+ * `action` are common to all four.
+ */
+describe("POST /import/{subject}", () => {
+  const csv = (text: string) => parseCsvBody(Buffer.from(text, "utf8"), "text/csv");
+
+  const send = (subject: string, text: string, query = "") =>
+    respond("POST", `${BASE_PATH}/import/${subject}`, new URLSearchParams(query), csv(text));
+
+  const reportOf = (response: MockResponse) => importReport.parse(parse(importReport, response).data);
+
+  const INVENTORY_FILE = "sku,stock_quantity\r\nAC-CAT-0201,25\r\nAC-NOT-A-REAL-SKU,4\r\n";
+  const PRODUCT_FILE = "sku,name\nAC-CAT-0201,Chèche en coton\nAC-NEW-SEED,Nouveau\n";
+
+  const stockOf = (id: number) =>
+    (parse(inventoryItem, get(`/inventory/${id}`)).data as { stock_quantity: number | null })
+      .stock_quantity;
+
+  /**
+   * **The safety property, asserted on the shelf and not only on the flag.** A
+   * dry run that quietly wrote would still echo `dry_run: true`, so the figure
+   * the write would have moved is read back either side of it.
+   */
+  it("defaults dry_run to true, and only dry_run=false writes", () => {
+    expect(DRY_RUN_DEFAULT).toBe(true);
+    const before = stockOf(201);
+
+    for (const query of ["", "mode=create", "dry_run=true"]) {
+      const report = reportOf(send("inventory", INVENTORY_FILE, query));
+      expect(report.dry_run, query).toBe(true);
+      expect(stockOf(201), query).toBe(before);
+    }
+
+    const applied = reportOf(send("inventory", INVENTORY_FILE, "dry_run=false"));
+    expect(applied.dry_run).toBe(false);
+    expect(stockOf(201)).toBe(25);
+    expect(stockOf(201)).not.toBe(before);
+  });
+
+  /**
+   * The four measured shapes, on one key. A fixed column set shows four empty
+   * columns on a products apply — the one request an operator makes after
+   * reading a preview they trusted — which is why the schema requires two fields
+   * and the table renders what it has.
+   */
+  it("answers each of the four preview shapes, and only line and action are on all four", () => {
+    const shapes = {
+      productsDry: reportOf(send("products", PRODUCT_FILE)),
+      productsApplied: reportOf(send("products", PRODUCT_FILE, "dry_run=false")),
+      inventoryDry: reportOf(send("inventory", INVENTORY_FILE)),
+      inventoryApplied: reportOf(send("inventory", INVENTORY_FILE, "dry_run=false")),
+    };
+
+    for (const [name, report] of Object.entries(shapes)) {
+      for (const row of report.preview) {
+        const parsed = previewRow.parse(row);
+        expect(typeof parsed.line, name).toBe("number");
+        expect(typeof parsed.action, name).toBe("string");
+      }
+      // Always present, `[]` when empty — verified rather than assumed, because
+      // code that destructured a missing `preview` would throw on the healthy
+      // case.
+      expect(Array.isArray(report.errors), name).toBe(true);
+      expect(Array.isArray(report.preview), name).toBe(true);
+    }
+
+    // products, dry — {line, action, sku, name, reason?}
+    expect(shapes.productsDry.preview[0]).toEqual({
+      line: 2,
+      action: "skipped",
+      sku: "AC-CAT-0201",
+      name: "Chèche en coton",
+      reason: "a product with that SKU already exists",
+    });
+    expect(shapes.productsDry.preview[1]).toEqual({
+      line: 3,
+      action: "created",
+      sku: "AC-NEW-SEED",
+      name: "Nouveau",
+    });
+
+    /*
+     * products, applied — {line, action, product_id} / {line, action, reason},
+     * and **`line: 2` on every row**. WooCommerce's importer reports it that
+     * way, measured on a two-row file, which is why the screen keys its table by
+     * index and renders the line as a label.
+     */
+    expect(shapes.productsApplied.preview.map((row) => row.line)).toEqual([2, 2]);
+    expect(shapes.productsApplied.preview[0]).toEqual({
+      line: 2,
+      action: "skipped",
+      reason: "a product with that SKU already exists",
+    });
+    expect(shapes.productsApplied.preview[1].product_id).toBeTypeOf("number");
+    expect(shapes.productsApplied.preview[1]).not.toHaveProperty("sku");
+
+    // inventory, dry — {line, action, sku, product_id, from, to}, no `reason`.
+    expect(shapes.inventoryDry.preview[0]).toEqual({
+      line: 2,
+      action: "updated",
+      sku: "AC-CAT-0201",
+      product_id: 201,
+      from: 18,
+      to: 25,
+    });
+
+    // inventory, applied — the same plus `reason?`, which is the key that
+    // separates the two arms.
+    const unchanged = reportOf(
+      send("inventory", "sku,stock_quantity\r\nAC-CAT-0202,4\r\n", "dry_run=false"),
+    );
+    expect(unchanged.preview[0]).toEqual({
+      line: 2,
+      action: "skipped",
+      sku: "AC-CAT-0202",
+      product_id: 202,
+      from: 4,
+      to: 4,
+      reason: "unchanged",
+    });
+  });
+
+  /**
+   * **`preview_only` is present on a products dry run and on nothing else.** Its
+   * presence is the signal and its English text is never rendered — the panel
+   * writes its own translated sentence beside it, which is the analytics
+   * branch's rule about an API that speaks one language and a panel that speaks
+   * two.
+   */
+  it("carries preview_only on a products dry run only", () => {
+    const productsDry = reportOf(send("products", PRODUCT_FILE));
+    expect(previewIsNotARehearsal(productsDry)).toBe(true);
+    expect(productsDry.preview_only).toContain("has no dry-run mode");
+
+    for (const [name, report] of [
+      ["products applied", reportOf(send("products", PRODUCT_FILE, "dry_run=false"))],
+      ["inventory dry", reportOf(send("inventory", INVENTORY_FILE))],
+      ["inventory applied", reportOf(send("inventory", INVENTORY_FILE, "dry_run=false"))],
+    ] as const) {
+      expect(report.preview_only, name).toBeUndefined();
+      expect(previewIsNotARehearsal(report), name).toBe(false);
+    }
+  });
+
+  /**
+   * A row that could not be read is an `errors[]` entry and never a preview row
+   * — `failed` is not one of the four actions — and the useful half is keyed by
+   * the column, the same `details.fields` split this API has everywhere else.
+   */
+  it("puts an unknown SKU in errors with the sentence the e2e asserts", () => {
+    const report = reportOf(send("inventory", INVENTORY_FILE));
+    expect(report.failed).toBe(1);
+
+    const error = importError.parse(report.errors[0]);
+    expect(error.line).toBe(3);
+    expect(error.message).toBe("No product with that SKU.");
+    // `e2e/admin.spec.ts:471` asserts this sentence against the live shop.
+    expect(error.fields?.sku).toBe("Not found. An inventory import never creates products.");
+
+    // Nothing failed lands in the preview, and the report says the file would
+    // write something — one row updates — so this is not the no-op case.
+    expect(report.preview.every((row) => row.action !== "failed")).toBe(true);
+    expect(reportIsNoOp(report)).toBe(false);
+
+    // The e2e's own file, which writes nothing at all: every row fails, and
+    // `reportIsNoOp` must still say so — the correction that entry records.
+    const allBad = reportOf(send("inventory", "sku,stock_quantity\nAC-NOT-A-REAL-SKU,4\n"));
+    expect(allBad.failed).toBe(1);
+    expect(reportIsNoOp(allBad)).toBe(true);
+  });
+
+  /**
+   * ── The three file-level refusals, and where `columns_found` sits ───────────
+   *
+   * **Beside `fields`, never inside it.** A form binding only to `fields` throws
+   * away the half that turns the refusal into an answer: somebody who uploaded a
+   * headerless export sees their own product name where a column name should be.
+   */
+  it("refuses a JSON body, an empty file and a missing column, each by name", () => {
+    const json = respond(
+      "POST",
+      `${BASE_PATH}/import/products`,
+      new URLSearchParams(),
+      { sku: "AC-CAT-0201" },
+    );
+    expect(json.status).toBe(400);
+    expect(apiError(json).fields?.body).toBe(
+      "Content-Type must be text/csv, and the body the file itself — not JSON.",
+    );
+
+    for (const body of [null, csv(""), csv("\n\n")]) {
+      const empty = respond("POST", `${BASE_PATH}/import/products`, new URLSearchParams(), body);
+      expect(empty.status).toBe(400);
+      expect(apiError(empty).fields?.file).toBe("A CSV with a header row is required.");
+    }
+
+    const refused = send("products", "a,b,c\n1,2,3\n");
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).apiMessage).toBe("The file is missing required columns.");
+
+    const details = missingColumnsDetails.parse(apiError(refused).details);
+    expect(details.fields.file).toBe("Missing: sku.");
+    expect(details.columns_required).toEqual(["sku"]);
+    expect(details.columns_found).toEqual(["a", "b", "c"]);
+    // Siblings, not members — asserted from both sides, because the placement is
+    // what the panel's own reader depends on.
+    expect(details.fields).not.toHaveProperty("columns_found");
+    expect(missingColumns(apiError(refused).details ?? {})).toEqual({
+      found: ["a", "b", "c"],
+      required: ["sku"],
+    });
+  });
+
+  /**
+   * **The control that keeps `fix/product-export-field-names` honest.** A
+   * label-headed file is a 400 naming `sku` rather than a green `created: 33,
+   * failed: 0` over fields nothing was read into — two readers disagreeing about
+   * one header, and only the lenient one consulted.
+   *
+   * The products header is matched **exactly** and the inventory one is not,
+   * which is the measured asymmetry rather than an oversight: that route is our
+   * own `CsvReader`, which lower-cases on purpose.
+   */
+  it("matches the products header exactly and the inventory header case-insensitively", () => {
+    const refused = send("products", "id,type,SKU,Name\n1,simple,AC-CAT-0201,Tapis\n");
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).apiMessage).toBe(
+      "The header does not name WooCommerce's import fields.",
+    );
+    expect(apiError(refused).fields?.file).toContain("Missing: sku.");
+    expect(missingColumnsDetails.parse(apiError(refused).details).columns_found).toContain("SKU");
+
+    // The same file against the other route is read, because that reader
+    // lower-cases.
+    const inventory = send("inventory", "SKU,Stock_Quantity\nAC-CAT-0201,25\n");
+    expect(inventory.status).toBe(200);
+    expect(reportOf(inventory).updated).toBe(1);
+  });
+
+  /**
+   * `mode` is products-only, `create` or `update`, and **neither does both** —
+   * measured on the same two-row file in both directions. The refusal is
+   * `details.params`, not `details.fields`: the one-endpoint-two-shapes trap,
+   * and `invalidParam()` is what keeps the enum sentence out of the top-level
+   * message the way the wire does.
+   */
+  it("honours mode on products, ignores it on inventory, and refuses a value outside it", () => {
+    expect([...IMPORT_MODES]).toEqual(["create", "update"]);
+
+    const created = reportOf(send("products", PRODUCT_FILE, "mode=create"));
+    expect([created.created, created.updated, created.skipped]).toEqual([1, 0, 1]);
+    expect(created.preview[1].action).toBe("created");
+
+    const updated = reportOf(send("products", PRODUCT_FILE, "mode=update"));
+    expect([updated.created, updated.updated, updated.skipped]).toEqual([0, 1, 1]);
+    expect(updated.preview[1].reason).toBe("no product with that SKU to update");
+
+    // No `mode` at all is `create` — measured, and the reason the screen's
+    // default is a choice rather than an absence.
+    expect(reportOf(send("products", PRODUCT_FILE)).created).toBe(1);
+
+    for (const query of ["mode=nonsense", "mode="]) {
+      const refused = send("products", PRODUCT_FILE, query);
+      expect(refused.status, query).toBe(400);
+      expect(apiError(refused).apiMessage, query).toBe("Invalid parameter(s): mode");
+      expect(apiError(refused).params?.mode, query).toBe(
+        "mode is not one of create and update.",
+      );
+      // `params`, not `fields` — `ApiError` exposes the two separately for
+      // exactly this, and a form reading only one of them renders nothing.
+      expect(apiError(refused).fields, query).toBeNull();
+    }
+
+    /*
+     * **The inventory import takes no `mode` and therefore ignores one**, the
+     * way every collection here ignores a parameter nobody registered. It only
+     * ever updates, which is what the unknown-SKU sentence says.
+     */
+    expect(send("inventory", INVENTORY_FILE, "mode=nonsense").status).toBe(200);
+    expect(reportOf(send("inventory", INVENTORY_FILE, "mode=update")).updated).toBe(1);
+  });
+
+  /**
+   * The round trip the screen advertises with a badge, run rather than claimed:
+   * export the file, send it back, and read what the API says happened.
+   */
+  it("round-trips the products export, which is what ROUND_TRIPS.products claims", () => {
+    const file = (get("/export/products").body as Buffer).subarray(3).toString("utf8");
+
+    const created = reportOf(send("products", file));
+    expect(created.rows).toBeGreaterThan(1);
+    expect(created.failed).toBe(0);
+    // Default mode over a catalogue that exists is all skips, naming each SKU —
+    // and every one of them resolves, which is the clause that used to assert
+    // the reverse.
+    expect(created.skipped).toBe(created.rows);
+    expect(created.preview.every((row) => (row.sku ?? "") !== "")).toBe(true);
+
+    const updated = reportOf(send("products", file, "mode=update"));
+    expect(updated.updated).toBe(updated.rows);
+    expect(updated.failed).toBe(0);
+    expect(updated.preview.every((row) => (row.name ?? "") !== "")).toBe(true);
+  });
+
+  it("is not a route for a subject with no importer, or for a verb it has no handler for", () => {
+    expect([...IMPORT_SUBJECTS]).toEqual(["products", "inventory"]);
+    for (const subject of ["orders", "customers", "audit"]) {
+      expect(send(subject, "sku\nAC-CAT-0201\n").status, subject).toBe(404);
+    }
+    expect(get("/import/products").status).toBe(404);
+    expect(write("PATCH", "/import/products", {}).status).toBe(404);
+  });
+});
+
+/**
+ * ── The gate is per **subject**, which no other screen in this panel does ────
+ *
+ * `SUBJECT_CAPABILITY` maps each of the four to its own capability, so one
+ * credential can be entitled to half this page. The assertion below drives the
+ * mock's answers off the **panel's own constant** and off the identity's
+ * published capability list, so a gate wired to the wrong capability here fails
+ * rather than merely differing from lib/transfer.ts.
+ */
+describe("the transfer capability gate", () => {
+  const capabilitiesOf = async (mock: typeof import("@/scripts/mock-api.mjs")) =>
+    (
+      (mock.respond("GET", `${mock.BASE_PATH}/auth/me`, new URLSearchParams()).body as {
+        data: { capabilities: string[] };
+      }).data
+    ).capabilities;
+
+  it("refuses each subject exactly when the identity lacks that subject's capability", async () => {
+    for (const identity of ["full", "support", "no_customers", "no_transfer"]) {
+      vi.stubEnv("MOCK_IDENTITY", identity);
+      try {
+        vi.resetModules();
+        const mock = await import("@/scripts/mock-api.mjs");
+        const held = await capabilitiesOf(mock);
+
+        for (const subject of EXPORT_SUBJECTS) {
+          const allowed = held.includes(SUBJECT_CAPABILITY[subject]);
+          const response = mock.respond(
+            "GET",
+            `${mock.BASE_PATH}/export/${subject}`,
+            new URLSearchParams(),
+          );
+          expect(response.status, `${identity} ${subject}`).toBe(allowed ? 200 : 403);
+
+          if (allowed) continue;
+          /*
+           * **The refusal is the ordinary envelope with its 4xx** — measured
+           * (`exportForbidden`), with no `details` key, the shape `forbidden()`
+           * emits everywhere else. That is what stops a client saving an error
+           * message as `products.csv`, so it is asserted as *not a file* rather
+           * than only as a status.
+           */
+          expect(Buffer.isBuffer(response.body), `${identity} ${subject}`).toBe(false);
+          expect(response.headers, `${identity} ${subject}`).toBeUndefined();
+          expect(response.body, `${identity} ${subject}`).toEqual({
+            success: false,
+            error: { code: "forbidden", message: "You are not allowed to perform this action." },
+          });
+        }
+
+        for (const subject of IMPORT_SUBJECTS) {
+          const allowed = held.includes(SUBJECT_CAPABILITY[subject]);
+          const response = mock.respond(
+            "POST",
+            `${mock.BASE_PATH}/import/${subject}`,
+            new URLSearchParams(),
+            null,
+          );
+          // 403 for a credential that cannot, 400 for one that can and sent no
+          // file — which is the measured grid's last two rows exactly.
+          expect(response.status, `${identity} import ${subject}`).toBe(allowed ? 400 : 403);
+        }
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    }
+  });
+
+  /**
+   * **The flat refusal had no fixture until `no_transfer`**, and this is the
+   * assertion that says so rather than leaving it to a comment: no other
+   * identity in the mock drops `ac_manage_products`, so `/transfer`'s
+   * whole-screen refusal could not be photographed at all.
+   *
+   * It also records what `support` really gives, which is **not** the measured
+   * Support Agent: lib/transfer.ts:36-39 has that credential 200 on customers
+   * alone, and this one is 200 on products too. Asserted so the divergence is a
+   * red test the day somebody widens or narrows it, rather than a sentence in a
+   * report nobody re-reads.
+   */
+  it("reaches the flat refusal only under no_transfer, and support is not the partial fixture", async () => {
+    const grid = async (identity: string) => {
+      vi.stubEnv("MOCK_IDENTITY", identity);
+      try {
+        vi.resetModules();
+        const mock = await import("@/scripts/mock-api.mjs");
+        return EXPORT_SUBJECTS.map(
+          (subject) =>
+            mock.respond("GET", `${mock.BASE_PATH}/export/${subject}`, new URLSearchParams())
+              .status,
+        );
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    };
+
+    // products, orders, inventory, customers — the measured grid's four columns.
+    expect(await grid("full")).toEqual([200, 200, 200, 200]);
+    expect(await grid("no_transfer")).toEqual([403, 403, 403, 403]);
+
+    // The per-subject proof a single 403 cannot give: one card refused, three
+    // served, on one page.
+    expect(await grid("no_customers")).toEqual([200, 200, 200, 403]);
+
+    /*
+     * **What `support` actually gives.** The measured Support Agent is
+     * `[403, 403, 403, 200]`; this identity keeps `ac_manage_products`, so it is
+     * 200 on two. Narrowing it is supported by the same grid and re-captures
+     * `/dashboard` and `/analytics`, which is why the mock's own block beside
+     * that identity records the choice rather than taking it.
+     */
+    expect(await grid("support")).toEqual([200, 403, 403, 200]);
   });
 });
 

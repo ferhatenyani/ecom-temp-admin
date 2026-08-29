@@ -568,6 +568,7 @@ const CAPABILITIES = [
  *   MOCK_IDENTITY=no_content node scripts/capture.mjs /content   twelve
  *   MOCK_IDENTITY=no_customers … /marketing/campaigns/318        twelve others
  *   MOCK_IDENTITY=no_marketing … /marketing                      eleven
+ *   MOCK_IDENTITY=no_transfer  … /transfer                       nine
  *
  * `reduced` is the same person minus exactly those two, so the order detail still
  * renders — it keeps `ac_manage_orders` — with its two gated sections gone rather
@@ -858,6 +859,68 @@ const IDENTITIES = {
     email: "harness-no-settings@example.test",
     roles: ["ac_staff"],
     capabilities: CAPABILITIES.filter((capability) => capability !== "ac_manage_settings"),
+    auth_method: "application_password",
+  },
+  /*
+   * ── The ninth, and the first whose delta is four capabilities ─────────────
+   *
+   * **No identity above drops `ac_manage_products`, `ac_manage_orders` or
+   * `ac_manage_inventory`**, so `/transfer` — where *capability follows the
+   * resource* — had no capturable refusal at all. Every one of the eight is
+   * `CAPABILITIES` minus one or two entries and none of those entries was
+   * products; `support` is the closest and drops only orders and inventory. So
+   * the screen's "you hold none of these four" state could not be reached, which
+   * is `no_content`, `no_customers`, `no_marketing`, `no_users` and
+   * `no_settings` again, one section over, for the sixth time.
+   *
+   * Measured, and this is the whole of what is claimed — lib/transfer.ts:22-41's
+   * four-credential grid, taken 2026-08-21 and reproduced in
+   * ADMIN_PANEL.md:3360-3370 and in `tests/fixtures-admin.json`
+   * (`exportForbidden`, `importForbidden`, `exportPartial`):
+   *
+   *                          super  manager  marketing  support
+   *   GET /export/products     200     200      403       403
+   *   GET /export/orders       200     200      403       403
+   *   GET /export/inventory    200     200      403       403
+   *   GET /export/customers    200     200      403       200
+   *   POST /import/products    400     400      403       403
+   *   POST /import/inventory   400     400      403       403
+   *
+   * This is the **Marketing Manager** column: 403 on all six, the flat refusal,
+   * with `{"code":"forbidden","message":"You are not allowed to perform this
+   * action."}` and no `details` key — the shape `forbidden()` already emits.
+   *
+   * **A credential with a measured shape, not a claim about the shop's roles.**
+   * The delta from `full` is exactly the four capabilities the measured 403s
+   * turn on — `SUBJECT_CAPABILITY` in lib/transfer.ts:57-62 — and nothing else,
+   * which is the rule `reduced` set and every identity since has followed. A
+   * real Marketing Manager also lacks things this credential keeps; nothing here
+   * claims otherwise, and the name says what it *does* rather than who it is.
+   *
+   * **The Support Agent column has no fixture here and cannot be given one
+   * without changing an existing capture.** It is the partial case — one export
+   * 200 and three 403 — and it is the only credential that can prove the gate is
+   * per subject rather than per screen. `support` above is *not* it: it holds
+   * `ac_manage_products` and `ac_manage_customers`, so it is 200 on two exports
+   * where the measured Support Agent is 200 on one. Widening it means dropping
+   * `ac_manage_products`, which is supported by the grid above but re-captures
+   * `/dashboard` and `/analytics` (its nav loses Produits), so it is a decision
+   * with a blast radius rather than a line to slip in here. Recorded rather than
+   * taken.
+   */
+  no_transfer: {
+    id: 522,
+    username: "harness-no-transfer",
+    display_name: "Harness No-Transfer",
+    email: "harness-no-transfer@example.test",
+    roles: ["ac_staff"],
+    capabilities: CAPABILITIES.filter(
+      (capability) =>
+        capability !== "ac_manage_products" &&
+        capability !== "ac_manage_orders" &&
+        capability !== "ac_manage_inventory" &&
+        capability !== "ac_manage_customers",
+    ),
     auth_method: "application_password",
   },
 };
@@ -7722,6 +7785,21 @@ const state = {
    * is mutated key by key and read out whole.
    */
   settings: {},
+  /**
+   * The next id an **applied** products import hands out, and the one number in
+   * this file that names a row nothing here creates.
+   *
+   * `POST /import/products?dry_run=false` reports `{line, action, product_id}`
+   * for a row it wrote — measured shape, lib/transfer.ts:213 — and this mock
+   * cannot create a product: `catalogue()` maps `CATALOGUE` through
+   * `state.products`, so a write can rewrite a seeded row and nothing can append
+   * one. So the id is minted and the product is not. Same class as
+   * `sendCampaign()` writing counts and no recipient rows
+   * (`mock-api.mjs:13366`), named here for the same reason: the report is
+   * honest about its shape and dishonest about its consequence, and a later
+   * `GET /products?search=` will not find what this said it created.
+   */
+  nextImportedProductId: 0,
 };
 
 export function resetState() {
@@ -7820,7 +7898,7 @@ export function resetState() {
   state.staffGone = new Set();
   /*
    * Clear of every seeded id — the shop's own run to 778 — and clear of the
-   * eight `IDENTITIES` ids this fixture holds out (514-521), so a created
+   * nine `IDENTITIES` ids this fixture holds out (514-522), so a created
    * account can never collide with the acting user under any `MOCK_IDENTITY`.
    * Fixed rather than derived, which is what keeps
    * a screenshot of a created account byte-stable.
@@ -7837,6 +7915,11 @@ export function resetState() {
    * document is plain JSON.
    */
   state.settings = structuredClone(SETTINGS_SEED);
+
+  // Above every product id in this file — the catalogue runs to 204 and the two
+  // stale coupon restrictions to 8843 — and fixed rather than derived, so a
+  // screenshot of an applied import carries the same id in every process.
+  state.nextImportedProductId = 9100;
 
   // Last, because it writes `state.campaigns` and `state.recipients` and every
   // line above has just cleared them. A no-op unless `MOCK_SEND_PROGRESS` is a
@@ -16102,6 +16185,788 @@ function patchSettings(body) {
   return ok(state.settings);
 }
 
+/* -------------------------------------------------------------- transfer --- */
+
+/**
+ * ── Import and export: the one subject whose response is not an envelope ─────
+ *
+ * `GET /export/{products,orders,inventory,customers}` answers a **file** and
+ * `POST /import/{products,inventory}` takes the CSV as the **raw request body**.
+ * Both halves are measured, and where they are not this block says so at the
+ * site rather than in prose somewhere else.
+ *
+ * The measured sources, and there are three of them:
+ *
+ *   lib/transfer.ts               the capability grid, the refusal sentences and
+ *                                 the four preview shapes, dated 2026-08-21
+ *   lib/api/schemas/transfer.ts   the Zod shapes these responses must parse
+ *                                 against, from the same session
+ *   tests/fixtures-admin.json     **19 responses captured verbatim** on the same
+ *                                 day — every sentence below that is in quotes
+ *                                 is copied from it rather than written here
+ *
+ * **A copied measurement is not a fresh one.** Nothing in this file has been
+ * re-run against the live shop; 2026-08-21 is eight days before this branch, and
+ * the products export was repaired *after* that capture — see `EXPORT_COLUMNS`,
+ * where the fixture's own header row is stale and the round-trip fixtures beside
+ * it prove it.
+ *
+ * ── What is emitted here and is nobody's measurement ─────────────────────────
+ *
+ * Flagged at each site, following `mock-api.mjs:13353`:
+ *
+ *   · every **value** in an exported row (the column *names* are measured; what
+ *     this shop's fixtures put under them is this file's own)
+ *   · the `items` column of the orders export, whose format was never captured
+ *   · the line ending of the products export *after* the field-name repair
+ *   · `?dry_run=zzz`, `?limit=` and `?mode=` — the refusal *families* are
+ *     measured on other routes, never on these
+ *   · the `reason` on an applied products row, carried over from the dry run
+ *   · that an applied products import mints an id and creates nothing
+ */
+
+/** lib/transfer.ts:99, and the cap the panel's own route clamps to. */
+const EXPORT_LIMIT_MAX = 2000;
+
+/**
+ * Which capability guards which subject — **capability follows the resource**,
+ * which is what makes a Support Agent 200 on one export and 403 on the other
+ * three. `SUBJECT_CAPABILITY` in lib/transfer.ts:57-62, duplicated here because
+ * this file imports nothing, and asserted against the panel's own copy in
+ * `tests/mock-api.test.ts` so the two cannot drift.
+ */
+const SUBJECT_CAPABILITY = {
+  products: "ac_manage_products",
+  orders: "ac_manage_orders",
+  inventory: "ac_manage_inventory",
+  customers: "ac_manage_customers",
+};
+
+const EXPORT_SUBJECTS = ["products", "orders", "inventory", "customers"];
+const IMPORT_SUBJECTS = ["products", "inventory"];
+const IMPORT_MODES = ["create", "update"];
+
+/**
+ * The raw CSV the shell parsed, or `null` for anything else — the shape
+ * `multipartOf()` has one upload over, and for the same reason: *how the client
+ * framed the request* is a fact the handler needs, not something to infer from
+ * the bytes. A JSON body arrives here as the parsed object and answers the 400
+ * that names `Content-Type`.
+ */
+const csvOf = (body) =>
+  body !== null && typeof body === "object" && !Array.isArray(body) && typeof body.csv === "string"
+    ? body.csv
+    : null;
+
+/**
+ * `products-export-2026-08-18.csv`, and the date is **the mock's epoch** rather
+ * than today's — `EPOCH`, like every other stamp in this file. A filename built
+ * from `Date.now()` would make one byte of every export differ between runs and
+ * put a moving value in front of a byte-comparing assertion.
+ *
+ * The live captures read `-2026-08-21`, which is the day they were taken.
+ */
+const EXPORT_DATE = iso(0).slice(0, 10);
+
+/**
+ * ── The four header rows, measured — and one of them twice ───────────────────
+ *
+ * Three are copied verbatim from `tests/fixtures-admin.json`'s `first_line`:
+ * `exportOrders`, `exportInventory`, `exportCustomers`.
+ *
+ * **`products` is not, and that is deliberate.** That fixture's `first_line`
+ * still reads `ID,Type,SKU,"GTIN, UPC, EAN, or ISBN",Name,…` — WooCommerce's
+ * *display labels* — and it is **stale**: `fix/product-export-field-names` in
+ * `ecom-temp` replaced them with field names, `lib/transfer.ts:104-139` and
+ * ADMIN_PANEL.md:2735-2743 record the repair, and the same commit's own fixtures
+ * prove the export changed while that line did not:
+ *
+ *   `exportProductsRoundTrip`  33 rows, every `sku` and `name` resolved — which
+ *                              a label-headed file cannot produce, because
+ *                              `map_headers()` matches exactly
+ *   `importLabelHeader`        a 400 whose `columns_found` **is the new header**
+ *                              with two cells put back to labels
+ *
+ * So the 52 names below are read off `importLabelHeader.columns_found` with its
+ * two edited cells (`SKU`, `Name`) restored to `sku` and `name` — which is also
+ * exactly what lib/transfer.ts:124 quotes: `id,type,sku,global_unique_id,name,…`.
+ *
+ * Reproducing the fixture's stale line instead would make this harness serve a
+ * defect the backend has fixed, and would make `ROUND_TRIPS.products` — which
+ * the screen renders as a badge — false against the mock and true against the
+ * shop.
+ */
+const EXPORT_COLUMNS = {
+  products: [
+    "id",
+    "type",
+    "sku",
+    "global_unique_id",
+    "name",
+    "published",
+    "featured",
+    "catalog_visibility",
+    "short_description",
+    "description",
+    "date_on_sale_from",
+    "date_on_sale_to",
+    "tax_status",
+    "tax_class",
+    "stock_status",
+    "stock_quantity",
+    "low_stock_amount",
+    "backorders",
+    "sold_individually",
+    "weight",
+    "length",
+    "width",
+    "height",
+    "reviews_allowed",
+    "purchase_note",
+    "sale_price",
+    "regular_price",
+    "category_ids",
+    "tag_ids",
+    "shipping_class_id",
+    "images",
+    "download_limit",
+    "download_expiry",
+    "parent_id",
+    "grouped_products",
+    "upsell_ids",
+    "cross_sell_ids",
+    "product_url",
+    "button_text",
+    "menu_order",
+    // WooCommerce's own capitalisation, kept verbatim: the importer's key really
+    // is `attributes:Name1` beside `attributes:value1`.
+    "attributes:Name1",
+    "attributes:value1",
+    "attributes:visible1",
+    "attributes:taxonomy1",
+    "attributes:Name2",
+    "attributes:value2",
+    "attributes:visible2",
+    "attributes:taxonomy2",
+    "attributes:Name3",
+    "attributes:value3",
+    "attributes:visible3",
+    "attributes:taxonomy3",
+  ],
+  orders: [
+    "order_id",
+    "date_created",
+    "status",
+    "currency",
+    "total",
+    "shipping_total",
+    "discount_total",
+    "payment_method",
+    "customer_id",
+    "billing_name",
+    "billing_phone",
+    "billing_email",
+    "shipping_city",
+    "shipping_state",
+    "items",
+  ],
+  inventory: ["sku", "stock_quantity", "stock_status", "manage_stock", "name", "product_id"],
+  customers: [
+    "customer_id",
+    "email",
+    "first_name",
+    "last_name",
+    "phone",
+    "address_1",
+    "city",
+    "state",
+    "country",
+    "date_registered",
+  ],
+};
+
+/**
+ * **The products export ends its lines with LF and the other three with CRLF.**
+ *
+ * Measured, and pinned by `tests/admin-schema.test.ts:960-968` from the same
+ * capture: `CsvWriter` emits CRLF — RFC 4180, and what Excel on Windows expects
+ * — while `WC_CSV_Exporter` emits LF, so the one export that is WooCommerce's
+ * own disagrees with the three that are ours.
+ *
+ * **Unverified after the field-name repair, and named because the brief that
+ * scoped this asked for CRLF everywhere.** The repair changed which *header* the
+ * WooCommerce exporter writes and nothing recorded whether it still writes it
+ * through `WC_CSV_Exporter`. The last actual measurement of this subject says
+ * LF, and a harness that quietly standardised on CRLF would be the mock tidying
+ * up an inconsistency the shop has — which is what `list()` was found doing to
+ * three envelope shapes on 2026-08-26.
+ */
+const EXPORT_EOL = {
+  products: "\n",
+  orders: "\r\n",
+  inventory: "\r\n",
+  customers: "\r\n",
+};
+
+/** RFC 4180: quote a cell that holds a comma, a quote or a line break. */
+const csvCell = (value) => {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+};
+
+/**
+ * The rows each subject exports, from this file's own seeded fixtures and read
+ * through anything a write has changed — a shelf a `POST /inventory/{id}/adjust`
+ * has moved is in the export, because it is in `/inventory`.
+ *
+ * **Every value below is this file's own and none of it is measured.** The
+ * *columns* are the API's, from the captures; what this shop's 39 products put
+ * under `published` or `images` was never seen. The mapping is the obvious one
+ * and it is still a mapping somebody wrote here.
+ *
+ * **Variations are not exported.** The live 33-row products file is 28 products
+ * plus their 5 variations, and this one is the listed catalogue alone — a
+ * divergence in the *count*, deliberate: the mock's variation slot 0 carries no
+ * SKU, so exporting variations would put a row in the file that the round trip
+ * this screen advertises cannot read back.
+ */
+const exportRowsFor = {
+  products: () =>
+    listed().map((product) => {
+      // `attributes:taxonomy{n}` is the flag for *is this a global attribute*,
+      // which is `id > 0` here: a global travels as its taxonomy (`pa_matiere`)
+      // and a local one as a label (`Taille`) with no id, and
+      // lib/api/schemas/product.ts is explicit that a reader has to know which
+      // it is holding.
+      const attributes = [0, 1, 2].flatMap((slot) => {
+        const attribute = product.attributes[slot];
+        return attribute === undefined
+          ? ["", "", "", ""]
+          : [
+              attribute.name,
+              attribute.options.join(", "),
+              attribute.visible ? 1 : 0,
+              attribute.id > 0 ? 1 : 0,
+            ];
+      });
+      return [
+        product.id,
+        product.type,
+        product.sku,
+        "",
+        product.name,
+        product.status === "publish" ? 1 : 0,
+        product.featured ? 1 : 0,
+        product.catalog_visibility,
+        product.short_description,
+        product.description,
+        "",
+        "",
+        "taxable",
+        "",
+        product.stock_status,
+        product.stock_quantity,
+        "",
+        "no",
+        0,
+        product.weight,
+        "",
+        "",
+        "",
+        1,
+        "",
+        product.sale_price,
+        product.regular_price,
+        product.category_ids.join(", "),
+        product.tag_ids.join(", "),
+        "",
+        product.image_id === 0 ? "" : product.image_id,
+        "",
+        "",
+        0,
+        "",
+        "",
+        "",
+        "",
+        "",
+        0,
+        ...attributes,
+      ];
+    }),
+  orders: () =>
+    ORDERS.map(orderRow).map((order) => [
+      order.id,
+      order.date_created,
+      order.status,
+      order.currency,
+      order.total,
+      order.shipping_total,
+      order.discount_total,
+      order.payment_method,
+      order.customer_id,
+      `${order.billing.first_name} ${order.billing.last_name}`.trim(),
+      order.billing.phone,
+      order.billing.email,
+      order.shipping.city,
+      order.shipping.state,
+      // **Invented.** The column name is measured and its contents were never
+      // captured; a count is the least this file can put there without writing a
+      // format the shop may not use.
+      order.line_items.length,
+    ]),
+  inventory: () =>
+    inventoryRows().map((row) => [
+      row.sku,
+      row.stock_quantity,
+      row.stock_status,
+      row.manage_stock,
+      row.name,
+      row.id,
+    ]),
+  customers: () =>
+    CUSTOMERS.map((customer) => [
+      customer.id,
+      customer.email,
+      customer.first_name,
+      customer.last_name,
+      customer.billing.phone,
+      customer.billing.address_1,
+      customer.billing.city,
+      customer.billing.state,
+      customer.billing.country,
+      customer.date_created,
+    ]),
+};
+
+/**
+ * A response that is **bytes rather than an envelope**, and the only one
+ * `respond()` produces.
+ *
+ * The shell writes `body` straight out when it is a Buffer and JSON-encodes it
+ * otherwise, which is what makes the two shapes distinguishable without a second
+ * return type. `tests/mock-api.test.ts` reads the same two fields.
+ *
+ * The three headers are measured verbatim (`exportProducts` and its three
+ * siblings): `text/csv; charset=utf-8`, an `attachment` filename that is the
+ * API's, and `no-store, private` — which the panel's own route then rewrites
+ * into a longer `no-store` string of its own.
+ *
+ * **The BOM is three real bytes**, `EF BB BF`, and that is the whole point of
+ * this path existing: the defect ADMIN_PANEL.md:2695-2706 records is WordPress
+ * JSON-encoding the file, which turns the mark into the six characters `Ã¯Â»Â¿`
+ * and every newline into a literal `\r\n`. A mock that answered the envelope
+ * here could not reproduce the shape the fix produced.
+ */
+const download = (subject, text) => ({
+  status: 200,
+  headers: {
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${subject}-export-${EXPORT_DATE}.csv"`,
+    "cache-control": "no-store, private",
+  },
+  body: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, "utf8")]),
+});
+
+/**
+ * `GET /export/{subject}`.
+ *
+ * **An export error is still the envelope, with its 4xx** — lib/transfer.ts:80-83
+ * — which is what stops a client saving an error message as `products.csv`. So
+ * the capability refusal and the `limit` refusal below both go out as JSON and
+ * only a 200 is bytes.
+ *
+ * `?limit=999999` → 400 `details.params.limit` *"limit must be between 1
+ * (inclusive) and 2000 (inclusive)"* is measured (`exportOverCap`), full stop
+ * absent because it is the range family. **The default is not measured**: the
+ * live captures all read 4 lines, so something truncated them and nothing
+ * recorded what. Everything, here — a mock that invented a page size would make
+ * a shop's export silently short.
+ */
+function exportCsv(subject, params) {
+  const limitRead = pagingNumber(params, "limit", null, (value) =>
+    value >= 1 && value <= EXPORT_LIMIT_MAX
+      ? null
+      : `limit must be between 1 (inclusive) and ${EXPORT_LIMIT_MAX} (inclusive)`,
+  );
+  if (limitRead.error) return limitRead.error;
+
+  const rows = exportRowsFor[subject]();
+  const capped = limitRead.value === null ? rows : rows.slice(0, limitRead.value);
+  const eol = EXPORT_EOL[subject];
+
+  const lines = [EXPORT_COLUMNS[subject], ...capped].map((cells) => cells.map(csvCell).join(","));
+  return download(subject, `${lines.join(eol)}${eol}`);
+}
+
+/**
+ * One CSV line into cells, RFC 4180 quoting included — the products export's own
+ * header once held `"GTIN, UPC, EAN, or ISBN"`, and a splitter that read commas
+ * inside quotes would report 54 columns for a 52-column file.
+ *
+ * **A quoted field containing a *newline* is not supported**, because the reader
+ * below splits on line breaks first. Named rather than hidden: it is reachable
+ * with a product description holding a paragraph break, and the fixtures this
+ * harness serves carry none.
+ */
+function splitCsvLine(line) {
+  const cells = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let at = 0; at < line.length; at++) {
+    const character = line[at];
+    if (quoted) {
+      if (character !== '"') cell += character;
+      else if (line[at + 1] === '"') {
+        cell += '"';
+        at++;
+      } else quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === ",") {
+      cells.push(cell);
+      cell = "";
+    } else cell += character;
+  }
+  cells.push(cell);
+  return cells;
+}
+
+/**
+ * The uploaded file, or `null` for one with no header row at all.
+ *
+ * `line` is 1-based **over the file including its header**, so the first data
+ * row is 2 — lib/api/schemas/transfer.ts:32-38 — and a blank line is skipped
+ * without consuming a number, which is what keeps the numbers a preview reports
+ * pointing at the rows a person can see in their spreadsheet.
+ */
+function readCsv(text) {
+  const lines = text.split(/\r\n|\n|\r/);
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  if (lines.length === 0 || lines[0].trim() === "") return null;
+
+  return {
+    header: splitCsvLine(lines[0]).map((name) => name.trim()),
+    rows: lines
+      .slice(1)
+      .map((raw, index) => ({ line: index + 2, cells: splitCsvLine(raw) }))
+      .filter((row) => row.cells.some((cell) => cell.trim() !== "")),
+  };
+}
+
+/**
+ * ── The three file-level refusals, all four sentences measured verbatim ──────
+ *
+ * Copied from `tests/fixtures-admin.json` — `importAsJson`, `importEmpty`,
+ * `importMissingColumns`, `importLabelHeader` — including their top-level
+ * messages, which are *not* the enum-sentence shape `checkSort()` still gets
+ * wrong: each carries a generic sentence and the useful half lives under
+ * `details.fields`.
+ *
+ * **`columns_found` and `columns_required` sit beside `fields`, never inside
+ * it** (lib/api/schemas/transfer.ts:101-120). A form binding only to `fields`
+ * throws away the half that turns the refusal into an answer, so the placement
+ * is load-bearing rather than cosmetic and `fail()` is handed all three keys at
+ * once.
+ */
+const importAsJson = () =>
+  fail(400, "invalid_request", "Send the CSV as the request body.", {
+    fields: { body: "Content-Type must be text/csv, and the body the file itself — not JSON." },
+  });
+
+const importEmpty = () =>
+  fail(400, "invalid_request", "The file is empty.", {
+    fields: { file: "A CSV with a header row is required." },
+  });
+
+const importMissingColumns = (found, required) =>
+  fail(400, "invalid_request", "The file is missing required columns.", {
+    fields: { file: `Missing: ${required.join(", ")}.` },
+    columns_found: found,
+    columns_required: required,
+  });
+
+/**
+ * The **label-header** refusal, which is the products import's own and is the
+ * control that keeps `fix/product-export-field-names` honest: a file WooCommerce
+ * cannot map is a 400 naming the column it needs rather than a green
+ * `created: 33, failed: 0` over fields nothing was read into.
+ *
+ * Which of the two refusals a header gets is **inferred, not measured**. Two
+ * fixtures exist — `a,b,c` got the plain one and a header carrying `SKU`/`Name`
+ * got this one — so the rule written here is "a case-insensitive match with no
+ * exact one", which fits both and was never stated by the API.
+ */
+const importLabelHeader = (found) =>
+  fail(400, "invalid_request", "The header does not name WooCommerce's import fields.", {
+    fields: {
+      file:
+        'Missing: sku. WooCommerce\'s importer matches column names exactly and reads field names — sku, name, regular_price, stock_quantity — not the display labels "SKU" and "Regular price" that a wp-admin product export writes. GET /export/products writes a header this route can read.',
+    },
+    columns_found: found,
+    columns_required: ["sku"],
+  });
+
+/**
+ * **`preview_only` is present on a products dry run and nowhere else** — not on
+ * an inventory dry run, where our own importer really does rehearse, and not on
+ * either apply. Its presence is the signal and its English text is never
+ * rendered (lib/transfer.ts:261-277). Verbatim from three separate captures.
+ */
+const PREVIEW_ONLY =
+  "WooCommerce's product importer has no dry-run mode. This parsed the file with its own parser and looked each SKU up; it does not guarantee every write will succeed.";
+
+/**
+ * ── `POST /import/products` ──────────────────────────────────────────────────
+ *
+ * **The header is matched exactly**, which is the whole of the repair
+ * lib/transfer.ts:104-139 describes: `CsvReader` lower-cases headers on purpose,
+ * so `requireColumns(['sku'])` was satisfied by `SKU` while
+ * `WC_Product_CSV_Importer::map_headers()` matches exactly and resolved nothing
+ * — one file, two readers, and only the lenient one consulted. The precondition
+ * now asks the importer's own `get_mapped_keys()`, so `SKU` is a 400 here and a
+ * lower-cased match is *not* a match.
+ *
+ * `mode` decides the two outcomes and **neither does both** (`importProductsDry`
+ * and `importProductsCreate`, measured on the same two-row file):
+ *
+ *   create (default)  an existing SKU is `skipped`, "a product with that SKU
+ *                     already exists"; a new one is `created`
+ *   update            an existing SKU is `updated`; a new one is `skipped`,
+ *                     "no product with that SKU to update"
+ *
+ * The applied arm is the shape lib/transfer.ts:213 records and nothing here has
+ * seen: `{line, action, product_id}` for a row that was written and
+ * `{line, action, reason}` for one that was not, with **`line: 2` on every
+ * row** — WooCommerce's importer reporting, not a defect, and the reason the
+ * screen keys its table by index. The `reason` string is carried over from the
+ * dry run rather than measured on an apply.
+ */
+function importProducts(csv, mode, dryRun) {
+  const skuAt = csv.header.indexOf("sku");
+  if (skuAt === -1) {
+    const lenient = csv.header.some((name) => name.toLowerCase() === "sku");
+    return lenient ? importLabelHeader(csv.header) : importMissingColumns(csv.header, ["sku"]);
+  }
+  const nameAt = csv.header.indexOf("name");
+
+  const report = {
+    dry_run: dryRun,
+    rows: csv.rows.length,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [],
+    preview: [],
+  };
+
+  for (const row of csv.rows) {
+    const sku = (row.cells[skuAt] ?? "").trim();
+    const name = nameAt === -1 ? "" : (row.cells[nameAt] ?? "").trim();
+    const existing = sku === "" ? undefined : listed().find((product) => product.sku === sku);
+
+    const action =
+      mode === "update"
+        ? existing === undefined
+          ? "skipped"
+          : "updated"
+        : existing === undefined
+          ? "created"
+          : "skipped";
+    const reason =
+      action !== "skipped"
+        ? undefined
+        : mode === "update"
+          ? "no product with that SKU to update"
+          : "a product with that SKU already exists";
+
+    report[action] += 1;
+
+    if (dryRun) {
+      report.preview.push({ line: row.line, action, sku, name, ...(reason ? { reason } : {}) });
+      continue;
+    }
+
+    // `line: 2` for every row, measured on a two-row file.
+    report.preview.push(
+      action === "skipped"
+        ? { line: 2, action, reason }
+        : {
+            line: 2,
+            action,
+            product_id: existing === undefined ? state.nextImportedProductId++ : existing.id,
+          },
+    );
+  }
+
+  if (dryRun) report.preview_only = PREVIEW_ONLY;
+  return ok(report);
+}
+
+/**
+ * ── `POST /import/inventory` ─────────────────────────────────────────────────
+ *
+ * **It only ever updates.** A SKU nothing matches is an `errors[]` row, not a
+ * created product — *"Not found. An inventory import never creates products."* —
+ * and both halves of that error are measured (`importInventoryDry`): the generic
+ * `message` is *"No product with that SKU."* and the useful half is keyed by the
+ * column, which is the `details.fields` split this API has everywhere else.
+ *
+ * `stock_quantity` missing from a row is the other measured error shape,
+ * lib/transfer.ts:279-288: `{line, message: "The row is invalid.", fields:
+ * {"stock_quantity": "Required."}}`. **Whether a file with no `stock_quantity`
+ * *column* is that error on every row or a file-level 400 was never captured**,
+ * and this reads it as the row error — the only measured shape of the two.
+ *
+ * The header is matched **case-insensitively** here and exactly on products,
+ * which is not tidy and is the measured asymmetry: this route is our own
+ * `CsvReader`, which lower-cases on purpose, and that one is WooCommerce's.
+ *
+ * An apply really does write, through the same `writeStock()` a manual
+ * adjustment uses, so the inventory screen agrees with the report. **It writes
+ * no ledger movement**, and nobody measured whether the shop's does — so
+ * `/inventory/{id}/movements` will not show what this changed. Same class as
+ * `sendCampaign()`'s counts without rows, and named for the same reason.
+ */
+function importInventory(csv, dryRun) {
+  const lower = csv.header.map((name) => name.toLowerCase());
+  const skuAt = lower.indexOf("sku");
+  if (skuAt === -1) return importMissingColumns(csv.header, ["sku"]);
+  const quantityAt = lower.indexOf("stock_quantity");
+
+  const report = {
+    dry_run: dryRun,
+    rows: csv.rows.length,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [],
+    preview: [],
+  };
+
+  for (const row of csv.rows) {
+    const sku = (row.cells[skuAt] ?? "").trim();
+    const raw = quantityAt === -1 ? "" : (row.cells[quantityAt] ?? "").trim();
+
+    if (!/^-?\d+$/.test(raw)) {
+      report.failed += 1;
+      report.errors.push({
+        line: row.line,
+        message: "The row is invalid.",
+        fields: { stock_quantity: "Required." },
+      });
+      continue;
+    }
+
+    const item = sku === "" ? undefined : inventoryRows().find((candidate) => candidate.sku === sku);
+    if (item === undefined) {
+      report.failed += 1;
+      report.errors.push({
+        line: row.line,
+        message: "No product with that SKU.",
+        fields: { sku: "Not found. An inventory import never creates products." },
+      });
+      continue;
+    }
+
+    const to = Number.parseInt(raw, 10);
+    const from = item.stock_quantity;
+    const unchanged = from === to;
+
+    report[unchanged ? "skipped" : "updated"] += 1;
+    if (!dryRun && !unchanged) writeStock(item, to);
+
+    report.preview.push({
+      line: row.line,
+      action: unchanged ? "skipped" : "updated",
+      sku: item.sku,
+      product_id: item.id,
+      from,
+      to,
+      // `reason` is on the applied shape only — measured on both arms, and it is
+      // the one key that separates `inventory, applied` from `inventory, dry`.
+      ...(!dryRun && unchanged ? { reason: "unchanged" } : {}),
+    });
+  }
+
+  return ok(report);
+}
+
+/**
+ * The route, and the order of its gates.
+ *
+ * The capability is checked by the caller, before this runs, because a
+ * `permission_callback` runs before the handler on the wire: the measured grid
+ * is 403 for a Marketing Manager and **400** for a Super Admin sending the same
+ * broken body, so the refusal is about the credential rather than the file.
+ *
+ * Parameters next, then the body — WordPress validates registered arguments
+ * before the callback runs. **Which of `mode` and `dry_run` is reported first
+ * was not measured**, the way `paginate()` says of `per_page` and `page`.
+ *
+ * `dry_run` **defaults to true and only `false` writes** (lib/transfer.ts:168-177).
+ * That is the safety property: a request that lost the parameter previews.
+ */
+function postImport(subject, params, body) {
+  /*
+   * `mode` is **products-only**, so `/import/inventory?mode=create` is a
+   * parameter nobody registered and is ignored rather than refused — the rule
+   * `?bogus_param=1` follows on every collection in this file. Offering the
+   * control there would be offering a choice the route does not have.
+   *
+   * `?mode=nonsense` → 400 `details.params.mode` *"mode is not one of create and
+   * update."*, measured verbatim (`importBadMode`), and `invalidParam()` +
+   * `notOneOf()` are what emit it: the top-level message is
+   * `"Invalid parameter(s): mode"` and the enum sentence stays in `details`,
+   * which is the shape `checkSort()` and `filterByStatus()` still get wrong.
+   * `?mode=` is refused with it — `""` is a value and not an absence, the family
+   * measured on every sort in this file, never on this route.
+   */
+  let mode = "create";
+  if (subject === "products") {
+    const raw = params.get("mode");
+    if (raw !== null) {
+      if (!IMPORT_MODES.includes(raw)) {
+        return invalidParam("mode", notOneOf("mode", IMPORT_MODES));
+      }
+      mode = raw;
+    }
+  }
+
+  /*
+   * **Unmeasured on this route**, and the direction matters: a mock that read
+   * `?dry_run=zzz` as *true* would be more forgiving than the API and would hide
+   * a typo behind the safe answer, while this refuses it the way every other
+   * boolean parameter in this file was measured refusing one
+   * (`include_variations`, `on_sale`, `featured`). The panel sends `false` or
+   * nothing, so neither arm is reachable from the screen.
+   */
+  const rawDryRun = params.get("dry_run");
+  if (rawDryRun !== null && !BOOLEANS.has(rawDryRun)) {
+    return invalidParam("dry_run", "dry_run is not of type boolean.");
+  }
+  const dryRun = rawDryRun === null ? true : BOOLEANS.get(rawDryRun);
+
+  /*
+   * The body arrives as `{csv}` when the client sent `Content-Type: text/csv`
+   * and as the parsed JSON otherwise, so "sent us JSON" is a fact about the
+   * request rather than a guess about the bytes. A body of nothing at all is
+   * `null` and reads as the empty file, which is the same 400 either way.
+   */
+  const csvText = csvOf(body);
+  if (csvText === null) return body === null ? importEmpty() : importAsJson();
+
+  const csv = readCsv(csvText);
+  if (csv === null) return importEmpty();
+
+  return subject === "products"
+    ? importProducts(csv, mode, dryRun)
+    : importInventory(csv, dryRun);
+}
+
 /* ------------------------------------------------------------------ route --- */
 
 const numericId = (segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : null);
@@ -16186,6 +17051,15 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
      * verbs they take.
      */
     "settings",
+    /*
+     * **The only collection here that is write-only**, and the only one whose
+     * body is not JSON: `POST /import/{products,inventory}` takes the CSV as the
+     * raw request body with `Content-Type: text/csv`. There is no `GET /import`
+     * — the `case` below refuses it — and the four exports beside it are reads,
+     * so they are not on this list and a `POST /export/products` falls to the
+     * 404 rather than being decided here.
+     */
+    "import",
   ];
   if (method !== "GET" && !WRITES.includes(collection)) return notFound();
 
@@ -17499,6 +18373,45 @@ export function respond(method, pathname, searchParams = new URLSearchParams(), 
       return method === "GET" ? ok(state.settings) : patchSettings(body);
     }
 
+    /*
+     * ── The two routes whose answers are not envelopes ────────────────────────
+     *
+     * **`/export/{subject}` answers a file** — the only response in this mock
+     * that is bytes and headers rather than JSON — and `/import/{subject}` takes
+     * one. Both are gated **per subject**, which is the whole shape of this
+     * screen: `SUBJECT_CAPABILITY` maps each to its own capability, so one
+     * credential can be 200 on `/export/customers` and 403 on the other three
+     * and the refusal is about the resource rather than the page.
+     *
+     * The shape is checked before the capability, the way `/settings` and
+     * `/marketing/config` do it: `/export/zzz` and `POST /export/products` are
+     * path/verb pairs WordPress has no handler for, so they answer
+     * `rest_no_route` before any `permission_callback` runs. A 403 there would
+     * be the harness claiming a route exists that does not — and the panel's own
+     * `app/api/export/[subject]/route.ts` refuses an unknown subject before it
+     * ever reaches here, with `lib/api/allowlist.ts:426` pinning the import
+     * pattern to the same two words.
+     *
+     * **An export error stays inside the envelope with its 4xx**, which is what
+     * stops a client saving an error message as `products.csv`. So the 403 and
+     * the `limit` 400 below are ordinary JSON and only the 200 is a download.
+     */
+    case "export": {
+      if (method !== "GET" || segments.length !== 2 || !EXPORT_SUBJECTS.includes(second)) {
+        return notFound();
+      }
+      const refused = gatedOn(SUBJECT_CAPABILITY[second]);
+      return refused ?? exportCsv(second, searchParams);
+    }
+
+    case "import": {
+      if (method !== "POST" || segments.length !== 2 || !IMPORT_SUBJECTS.includes(second)) {
+        return notFound();
+      }
+      const refused = gatedOn(SUBJECT_CAPABILITY[second]);
+      return refused ?? postImport(second, searchParams, body);
+    }
+
     default:
       return notFound();
   }
@@ -17615,6 +18528,27 @@ export function parseMultipart(buffer, contentType) {
   return { multipart: { fields, files } };
 }
 
+/**
+ * `text/csv` → the `body` argument `respond()` takes for an import.
+ *
+ * The two imports are the only requests in this panel whose body is not JSON,
+ * and the wrapper is what lets the handler tell *"they sent us JSON"* from
+ * *"they sent us an empty file"* — two different measured 400s that would be
+ * indistinguishable if a CSV arrived as a bare string. Same shape
+ * `parseMultipart()` returns one upload over.
+ *
+ * Exported for the same reason that one is: `tests/mock-api.test.ts` calls
+ * `respond()` directly, and hand-writing `{csv}` there would test the import
+ * against a shape nothing produces and leave this mapping — the half that
+ * decides which 400 a client gets — untested.
+ *
+ * Returns `null` for a body that is not `text/csv` at all.
+ */
+export function parseCsvBody(buffer, contentType) {
+  if (!/^\s*text\/csv\b/i.test(contentType ?? "")) return null;
+  return { csv: buffer.toString("utf8") };
+}
+
 export function createServer() {
   return createHttpServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -17681,6 +18615,8 @@ export function createServer() {
       if (chunks.length > 0) {
         if (contentType.toLowerCase().startsWith("multipart/form-data")) {
           parsed = parseMultipart(Buffer.concat(chunks), contentType);
+        } else if (contentType.toLowerCase().startsWith("text/csv")) {
+          parsed = parseCsvBody(Buffer.concat(chunks), contentType);
         } else {
           try {
             parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -17690,12 +18626,27 @@ export function createServer() {
         }
       }
 
-      const { status, body } = respond(
+      const { status, body, headers } = respond(
         request.method ?? "GET",
         url.pathname,
         url.searchParams,
         parsed,
       );
+
+      /*
+       * **A `Buffer` body is a file and is written out untouched.** The four
+       * exports are the only responses in this API that are not envelopes, and
+       * the BOM is exactly why this branch cannot be `JSON.stringify`: encoding
+       * the string is the defect ADMIN_PANEL.md:2695-2706 records the backend
+       * having — one quoted line, the mark as six characters — and a shell that
+       * did it here would reproduce a fixed defect on every download.
+       */
+      if (Buffer.isBuffer(body)) {
+        response.writeHead(status, { ...headers, "content-length": String(body.length) });
+        response.end(body);
+        return;
+      }
+
       response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
       response.end(JSON.stringify(body));
     });
