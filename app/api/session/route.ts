@@ -35,7 +35,22 @@ export async function POST(request: Request) {
   const session = { username: parsed.username, password, userId: 0 };
 
   try {
-    const { data: me } = await acFetch(identity, session, "/auth/me");
+    /*
+     * **`retry: false`, and it is the sign-in that pays for the default.**
+     *
+     * `/auth/me` is a GET and `isRetryable` is true on a 429, so a locked-out
+     * address slept `min(retryAfter, 10)` inside `acFetch` and asked again before
+     * this handler could answer — measured as a **ten-second** spinner on the
+     * login screen, ending in "wait 15 minutes". The failed-login bucket is 10
+     * per 15 minutes: the second ask cannot succeed, so the wait bought nothing.
+     *
+     * The other two retryable cases go with it and that is the right trade here
+     * rather than collateral. A `NetworkError` or a 5xx on this route ends in a
+     * 503 the login screen renders **with a retry control of its own** (§3.7-4),
+     * so retrying invisibly for a second only delays a sentence the reader can
+     * already act on. Every other call site keeps the retry — see the prop.
+     */
+    const { data: me } = await acFetch(identity, session, "/auth/me", { retry: false });
 
     const jar = await cookies();
     jar.set(SESSION_COOKIE, await seal({ ...session, userId: me.id }), cookieOptions());

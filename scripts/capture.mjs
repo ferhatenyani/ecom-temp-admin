@@ -52,6 +52,28 @@
  *     node scripts/capture.mjs /audit
  *     MOCK_IDENTITY=no_audit node scripts/capture.mjs /audit
  *
+ * **`no_capabilities` is the eleventh and it drops all thirteen.** It is the only
+ * identity here that is not a named delta, and it exists for the one screen that
+ * has to answer *"this credential is real and there is nowhere to send you"*:
+ *
+ *     MOCK_IDENTITY=no_capabilities node scripts/capture.mjs /login
+ *
+ * Read its block in `scripts/mock-api.mjs` before capturing anything else under
+ * it. The mock enforces ten of the thirteen capabilities, so under this
+ * credential `/products`, `/coupons`, `/shipping` and five of the six analytics
+ * reports still answer **200** where the panel refuses them — a capture of any of
+ * those taken here photographs a screen this reader could never open, which is
+ * the §18 `no_settings` failure shape one direction over.
+ *
+ * ── The two signed-out routes, which arrived with item 20 ────────────────────
+ *
+ *     node scripts/capture.mjs /login "/login?reason=expired"
+ *     node scripts/capture.mjs /nope                     the global 404
+ *
+ * `SIGNED_OUT` and `EXPECTED_404` below are the whole of what makes those two
+ * possible, and each says why at its own site. `/login` is on `DEFAULT_ROUTES`;
+ * `/nope` deliberately is not, and the entry beside `"/login"` says what fails.
+ *
 
  * **A second harness switch arrived with it, and it is not an identity.**
  * `MOCK_HOMEPAGE` chooses which stored homepage document the mock serves,
@@ -147,7 +169,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EncryptJWT } from "jose";
 import { chromium } from "playwright";
-import { BASE_PATH, startServer } from "./mock-api.mjs";
+import { BASE_PATH, HARNESS_CREDENTIAL, startServer } from "./mock-api.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -1085,6 +1107,83 @@ const DEFAULT_ROUTES = [
    * two halves agree for the first time.
    */
   "/audit",
+  /*
+   * ── The panel's only unauthenticated screen, and the last route to become
+   *    capturable at all ─────────────────────────────────────────────────────
+   *
+   * **It was not merely unlisted; it was unreachable.** Every context this
+   * script built carried `ac_admin_session`, and `login/page.tsx:19` sends a
+   * cookied reader to `/orders` — so a capture of `/login` would have followed
+   * the redirect and filed a picture of the orders list under `login/`, with an
+   * `h1` on it and every assertion green. `SIGNED_OUT` above is the whole fix,
+   * and it is why this entry could not simply have been added earlier.
+   *
+   * The default capture is the **resting** form, with no banner. The three
+   * states that carry one are all at URLs and are captured by name, because they
+   * are states of this screen rather than screens of their own —
+   * `LoginForm.tsx:32-38` reads `?reason=` and renders one of three:
+   *
+   *     node scripts/capture.mjs "/login?reason=expired"    a 401 mid-session
+   *     node scripts/capture.mjs "/login?reason=suspended"  the account is gone
+   *     node scripts/capture.mjs "/login?reason=signedout"  a deliberate logout
+   *
+   * `slugOf()` folds the `?` and `=`, so all four land in their own directories.
+   * **`?reason=` also suppresses the redirect** (`page.tsx:18`), so those three
+   * are the one part of this screen that a *signed-in* reader can reach — which
+   * is what `requireSession()` does to somebody whose credential died under them
+   * (`lib/session/read.ts:41`).
+   *
+   * The three **refusal** states are not URLs and cannot be captured here: they
+   * need the form submitted, and this harness never interacts with a page. The
+   * mock serves all three off named credentials — `harness` with a wrong
+   * password, `harness-suspended`, `harness-locked` — so they are reachable by
+   * hand and in `e2e/`, and `scripts/mock-api.mjs`'s `HARNESS_CREDENTIAL` block
+   * is where they are written up.
+   *
+   * ── `/nope` is deliberately not on this list ───────────────────────────────
+   *
+   * It is capturable now — `EXPECTED_404` above made it so — but it is **red for
+   * reasons `app/not-found.tsx` owns**, and a `--all` that is permanently red
+   * teaches everyone to stop reading it.
+   *
+   *     node scripts/capture.mjs /nope
+   *
+   * ── What two runs found, and both were found here and nowhere else ─────────
+   *
+   * **Run 1, build `0Q0pTg35xKuH8ykIeXttI`.** 12 captures, 12 failures:
+   *
+   *     data-theme is unset, expected light|dark                        ×12
+   *     light and dark computed the same body background on 6 pair(s),
+   *                                                   both rgb(242, 242, 247)
+   *
+   * That screen emits its own `<html>` — the only one in the panel that does,
+   * for a reason its own docblock gives — and stamped no `data-theme`, so the
+   * cookie this script sets reached nothing and `tokens.css`'s dark block never
+   * applied; its `<body>` was on `bg-bg-grouped`, the old system's ground, which
+   * is why both themes computed the light value. **The opaque-background and
+   * Plex assertions both passed** — `globals.css:56` sets `font-family` on
+   * `html` and the body inherits it — so the cross-capture light-vs-dark
+   * comparison was the only check that caught it. That is DECISIONS.md §0's own
+   * proof-it-works paragraph arriving on a real screen for the first time.
+   *
+   * Both are **fixed**: `not-found.tsx` now stamps `data-theme` and its body is
+   * `bg-ui-canvas`.
+   *
+   * **Run 2, build `CSarX2GfkaloQEggjVTBK`.** 12 captures, 12 failures, one line:
+   *
+   *     no <h1> on the page                                            ×12
+   *
+   * The rewrite renders its heading through `EmptyState`, whose title is an
+   * `<h2>` (`components/ui/States.tsx:38`), and this document has no page header
+   * above it — so the 404 now has no `<h1>` at all and its outline starts at
+   * level 2. **`e2e/not-found.spec.ts` does not catch it**: all three of its
+   * heading assertions are `getByRole("heading", { name })` with no `level`, and
+   * a role query matches `h2` exactly as well as `h1`. This assertion is the
+   * only thing in the repository that reads the level.
+   *
+   * Add `/nope` here when a run of it is clean.
+   */
+  "/login",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
@@ -1108,13 +1207,27 @@ function envLocal(key) {
 /**
  * The seal, reproduced exactly as lib/session/seal.ts derives it: sha256 of the
  * secret for the 32 bytes A256GCM needs, `dir` + `A256GCM`, and the payload
- * `sessionPayload` validates. The credential itself is never checked — the mock
- * answers everything — so the username and password are only there because the
- * schema requires a non-empty string.
+ * `sessionPayload` validates.
+ *
+ * **The credential is now read, and this docblock used to say it was not.** It
+ * said *"the credential itself is never checked — the mock answers everything —
+ * so the username and password are only there because the schema requires a
+ * non-empty string"*, which was true until `GET /auth/me` started answering the
+ * login screen's three refusals on 2026-08-29. The mock refuses
+ * `HARNESS_CREDENTIAL.username` with any other password, so the pair below is
+ * load-bearing: a typo in it makes **every** capture in the run land on the
+ * login form, with an `h1` on it and no console error, which is the shape of
+ * green failure this whole script exists to prevent. It is imported rather than
+ * spelled out for exactly that reason.
+ *
+ * `userId` stays `IDENTITIES.full.id`. It is not checked by anything — the panel
+ * refetches `/auth/me` on every server render rather than trusting the cookie
+ * (`lib/session/read.ts:12-15`) — and it is the one field here that is still
+ * only shaped.
  */
 async function mintSession(secret) {
   const key = new Uint8Array(createHash("sha256").update(secret, "utf8").digest());
-  return new EncryptJWT({ username: "harness", password: "harness", userId: 514 })
+  return new EncryptJWT({ ...HARNESS_CREDENTIAL, userId: 514 })
     .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
     .setIssuedAt()
     .setExpirationTime(`${12 * 60 * 60}s`)
@@ -1194,6 +1307,70 @@ async function waitForPanel(log) {
 const slugOf = (route) => route.replace(/^\//, "").replace(/[/?&=]/g, "-") || "root";
 
 /**
+ * ── The two routes captured with **no session cookie** ───────────────────────
+ *
+ * Every capture before this one got one, and `/login` is the route that proves
+ * why that was a gap rather than a default: `login/page.tsx:19` redirects a
+ * cookied reader straight to `/orders`, so with the cookie set on every context
+ * **the login screen could not be photographed at all** — the harness would
+ * follow the redirect and file a picture of the orders list under `login/`.
+ *
+ * Two properties travel together here and both are deliberate:
+ *
+ *   1. **No `ac_admin_session`.** This is the whole affordance for `/login`.
+ *      `/nope` renders the 404 either way — `app/not-found.tsx` reads no session
+ *      and sits outside `(panel)` — and it is here because its own docblock says
+ *      the screen *"is reachable signed out"* and renders no nav for that
+ *      reason, so signed out is the state it was written for.
+ *   2. **They reach no API.** Neither screen makes a single request: the login
+ *      page with no cookie never calls `readSession()`'s `/auth/me`, and the 404
+ *      fetches nothing. That is why the run's mock-request assertion below is
+ *      conditioned on this set rather than being unconditional — see it for what
+ *      would otherwise happen.
+ *
+ * A route with one property and not the other needs a second set, not a third
+ * member of this one. `ac-theme` is still set on both, because the theme is a
+ * property of the browser rather than of the session and `/login` stamps
+ * `data-theme` like every other screen under `[locale]/layout.tsx`.
+ *
+ * **Membership is by path, because a route string may carry a query.** Both sets
+ * below are keyed on the screen, and `/login?reason=expired` is the same screen
+ * as `/login` in both respects — no session, no API request. Matched as a whole
+ * string it was in neither set, so it drew a session cookie it does not use and
+ * then tripped the run-level mock-request assertion at the foot of this file:
+ * one route in the run expected an API call, none of the screens made one, and
+ * the run failed while all twelve of its captures passed. A **green capture
+ * inside a red run** is the shape this harness exists to make impossible, so the
+ * lookup folds the query off first rather than the set growing a second spelling
+ * of every screen.
+ */
+const pathOf = (route) => route.split("?")[0];
+
+const SIGNED_OUT_PATHS = new Set(["/login", "/nope"]);
+const SIGNED_OUT = { has: (route) => SIGNED_OUT_PATHS.has(pathOf(route)) };
+
+/**
+ * The routes whose **HTTP status is expected to be 404**.
+ *
+ * `/nope` is a route name and not a screen: `app/not-found.tsx` is what Next
+ * renders for any path matching nothing, and `capture()` builds its target as
+ * `${PANEL}/${locale}${route}` — so the 404 is reachable as an ordinary route
+ * string with no special case, and `/nope`, `/fr/anything-at-all` and a mistyped
+ * id all photograph it. It is on this list rather than baked in because the
+ * property belongs to
+ * the *route*, and every other route in this file must still fail on a 404.
+ *
+ * Membership does two things, and the pair is the point: it exempts the
+ * browser's own console error about the status line (see `capture()`), and it
+ * **requires** the status to be 404 (see the assertion beside `page.goto`).
+ *
+ * Keyed on the path for the reason `SIGNED_OUT` above gives: a query string
+ * makes a different *screen*, never a different status.
+ */
+const EXPECTED_404_PATHS = new Set(["/nope"]);
+const EXPECTED_404 = { has: (route) => EXPECTED_404_PATHS.has(pathOf(route)) };
+
+/**
  * One capture: one route at one width, theme and locale.
  *
  * The screenshot is taken *before* the assertions run, on purpose — a failing
@@ -1202,6 +1379,7 @@ const slugOf = (route) => route.replace(/^\//, "").replace(/[/?&=]/g, "-") || "r
  */
 async function capture(browser, cookie, route, width, theme, locale) {
   const label = `${slugOf(route)} ${width}-${theme}-${locale}`;
+  const target = `${PANEL}/${locale}${route}`;
   const problems = [];
   const exempted = new Set();
 
@@ -1215,13 +1393,50 @@ async function capture(browser, cookie, route, width, theme, locale) {
     deviceScaleFactor: 1,
   });
   await context.addCookies([
-    { name: "ac_admin_session", value: cookie, url: PANEL },
+    // The session, unless this route is one of the two captured signed out.
+    ...(SIGNED_OUT.has(route) ? [] : [{ name: "ac_admin_session", value: cookie, url: PANEL }]),
     { name: "ac-theme", value: theme, url: PANEL },
   ]);
 
   const page = await context.newPage();
   page.on("console", (message) => {
-    if (message.type() === "error") problems.push(`console.error: ${message.text()}`);
+    if (message.type() !== "error") return;
+
+    /*
+     * ── The one console error a screen can be *right* to produce ─────────────
+     *
+     * **Chromium logs a console error for the main document's own non-2xx
+     * status**, and the 404 screen's whole job is to answer 404. Measured
+     * 2026-08-29 on `/fr/nope`: one `console.error` reading *"Failed to load
+     * resource: the server responded with a status of 404 (Not Found)"* whose
+     * `location().url` is **the page's own URL** — nothing on the page failed to
+     * load, the browser is reporting the status line.
+     *
+     * So this is a property of the harness rather than of `app/not-found.tsx`,
+     * and without the exemption that screen could never go green however it was
+     * written — which would hand its author an assertion no edit can satisfy and
+     * teach them to disable the check.
+     *
+     * **It is narrow in two directions at once**, because a document 404 waved
+     * through anywhere else is exactly the green failure this file exists to
+     * prevent: a `/orders` that started answering 404 would render the
+     * not-found screen, which has an `h1`, an opaque background and Plex on it,
+     * and every remaining assertion would pass.
+     *
+     *   1. Only for a route named in `EXPECTED_404`, and
+     *   2. only for an error whose location is this capture's own URL.
+     *
+     * And the exemption is paired with a **positive** assertion below: a route
+     * on that list must actually answer 404. Tolerating the status without
+     * requiring it would let the list quietly become a place where console
+     * errors go to be ignored.
+     */
+    if (EXPECTED_404.has(route) && message.location()?.url === target) {
+      exempted.add(`${target} (404, which is this route's expected status)`);
+      return;
+    }
+
+    problems.push(`console.error: ${message.text()}`);
   });
   page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
   page.on("requestfailed", (request) => {
@@ -1260,10 +1475,21 @@ async function capture(browser, cookie, route, width, theme, locale) {
   });
 
   try {
-    await page.goto(`${PANEL}/${locale}${route}`, {
+    const response = await page.goto(target, {
       waitUntil: "networkidle",
       timeout: 45_000,
     });
+
+    /*
+     * The positive half of the `EXPECTED_404` exemption above. A screen that
+     * *renders* the not-found state while answering 200 is a different and worse
+     * bug than one that fails to render it — a crawler, a monitor and a browser's
+     * own history all read the status and not the heading — so the status is
+     * asserted rather than merely tolerated.
+     */
+    if (EXPECTED_404.has(route) && response?.status() !== 404) {
+      problems.push(`status is ${response?.status() ?? "unknown"}, expected 404`);
+    }
     // Let the web font swap land, so a capture is not of a half-painted state.
     await page.waitForTimeout(400);
 
@@ -1440,7 +1666,23 @@ try {
    */
   const served = await fetch(`${MOCK}/__mock/stats`).then((r) => r.json());
   console.log(`\ncapture: the mock served ${served.count} request(s)`);
-  if (served.count === 0) {
+  /*
+   * **Conditioned on the run containing a route that talks to the API**, which
+   * it had never needed to be until `/login` and `/nope` became capturable.
+   *
+   * Both reach no API at all, so `node scripts/capture.mjs /login /nope` serves
+   * zero requests legitimately — and this check would have failed the run with
+   * the message below, which says every screenshot is of an error state. That
+   * sentence would have been *false*, and a false failure on the one screen
+   * whose whole job is to render before anybody is signed in is worse than no
+   * check: the next person's move is to disable the assertion rather than to
+   * read it.
+   *
+   * The condition is the route list rather than a flag, so a mixed run — one
+   * signed-out route beside any other — still demands its requests.
+   */
+  const expectsApi = routes.some((route) => !SIGNED_OUT.has(route));
+  if (expectsApi && served.count === 0) {
     console.error(
       "\ncapture: FAIL — the mock received zero requests. The panel was talking to\n" +
         "something else (most likely AC_API_BASE from .env.local), so every screenshot\n" +

@@ -484,16 +484,47 @@ export function TextField({
   validate,
   disabled = false,
   /**
-   * An identifier — a SKU, a price, a tracking number — rather than prose.
+   * An identifier — a SKU, a price, a tracking number, a login — rather than
+   * prose.
    *
    * Forces `dir="ltr"` and `unicode-bidi: isolate` on the input, for the reason
    * `components/primitives/Ltr.tsx` records at length: a run of digits typed into
    * an Arabic page is reordered by the bidi algorithm and the person reads back a
    * value they did not enter. Off by default, because a customer's name is not an
    * identifier and forcing LTR on one is the same bug from the other side.
+   *
+   * **It also turns off the three things a browser does to prose**, added on the
+   * login branch: `autoCapitalize`, `autoCorrect` and `spellCheck`. An identifier
+   * is case-significant and is not a word — iOS capitalises the first letter of a
+   * text input by default, which silently turns `ac_panel_manager` into
+   * `Ac_panel_manager` and answers 401 for no visible reason, and a spellcheck
+   * underline under a SKU says it is wrong when it is not. The three belong here
+   * rather than on a fourth prop because they are the same claim `dir="ltr"` is
+   * already making: *this is a token, not language*.
    */
   isolate = false,
   inputMode,
+  /**
+   * `password`, for the one field in the panel that holds a credential.
+   *
+   * A password field is a labelled text field in every respect §3.4 legislates —
+   * the visible label, the hint written before the error, `aria-describedby`,
+   * `aria-invalid`, the pre-hydration guard — and the *only* thing it does
+   * differently is mask what is typed. Forking a second frame for that would give
+   * the panel two field geometries and one of them would drift, which is the
+   * whole reason this file exists. So it is a prop.
+   */
+  type = "text",
+  /**
+   * The browser's own credential and address autofill.
+   *
+   * Not a nicety on this panel: an Application Password is a 24-character string
+   * displayed with spaces that nobody memorises, so `current-password` is what
+   * lets a manager save it once and a warehouse phone fill it thereafter.
+   * `TextField` had no way to emit the attribute at all, which is why the login
+   * form hand-rolled its own inputs.
+   */
+  autoComplete,
   name,
   className = "",
 }: {
@@ -511,6 +542,8 @@ export function TextField({
   disabled?: boolean;
   isolate?: boolean;
   inputMode?: "text" | "decimal" | "numeric" | "tel" | "email" | "search";
+  type?: "text" | "password";
+  autoComplete?: string;
   name?: string;
   className?: string;
 }) {
@@ -529,7 +562,8 @@ export function TextField({
       <input
         id={field.id}
         name={name}
-        type="text"
+        type={type}
+        autoComplete={autoComplete}
         inputMode={inputMode}
         value={value}
         placeholder={placeholder}
@@ -568,7 +602,14 @@ export function TextField({
          * author was not looking at.
          */
         {...(isolate
-          ? { dir: "ltr" as const, "data-numeric": "", style: { unicodeBidi: "isolate" as const } }
+          ? {
+              dir: "ltr" as const,
+              "data-numeric": "",
+              style: { unicodeBidi: "isolate" as const },
+              autoCapitalize: "none",
+              autoCorrect: "off",
+              spellCheck: false,
+            }
           : { dir: "auto" as const })}
         className={`${CONTROL} ${borderFor(Boolean(field.shown))}`}
       />
