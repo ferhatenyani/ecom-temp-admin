@@ -44,6 +44,15 @@
  * served ones. Both runs write their own `-no_transfer` / `-no_customers`
  * suffix, so all three sit in one folder.
  *
+ * **`no_audit` is the tenth and it drops exactly one** — `ac_view_audit_logs`,
+ * which all nine identities above hold and which `GET /audit-logs` is the
+ * plugin's oldest authenticated gate on. So `/audit`'s refusal had never been
+ * reachable either, for the seventh time this hole has been found:
+ *
+ *     node scripts/capture.mjs /audit
+ *     MOCK_IDENTITY=no_audit node scripts/capture.mjs /audit
+ *
+
  * **A second harness switch arrived with it, and it is not an identity.**
  * `MOCK_HOMEPAGE` chooses which stored homepage document the mock serves,
  * because the three states that screen has are properties of the *document*
@@ -1022,6 +1031,60 @@ const DEFAULT_ROUTES = [
    * cannot hold, since one identity answers both questions. Hence the URL.
    */
   "/transfer",
+  /*
+   * ── The trail, and the first list here whose rows are the whole screen ────
+   *
+   * `GET /audit-logs` was **unmocked entirely** until 2026-08-29 — no route, no
+   * fixture, and `audit` sat in `tests/mock-api.test.ts`'s `UNCOVERED` saying
+   * so — so this list has never photographed a populated audit table at any
+   * width. The bare path is the default listing: 28 rows at 20 a page, which is
+   * two pages, so the pager renders with something on both sides of it rather
+   * than as the single disabled control every other list in this harness shows.
+   *
+   * **The rows are deliberately not uniform, and that is what makes one capture
+   * worth taking.** The fixture carries all four `metadataShape()` kinds
+   * (lib/audit.ts:209-270) — a field-by-field `change` with `before`/`after`, a
+   * `transition`, a names-only `fields` block, and `plain` pairs — so the four
+   * ways this screen can render a row are in one screenshot instead of four. It
+   * also carries the three states that have no second fixture anywhere:
+   *
+   *   `[redacted]`   a value the writer refused to store, on the
+   *                  `notification.retried` row. It is a **fact to render, not a
+   *                  gap** — a blank here would say the key was absent.
+   *   `ac_banner`    the twenty-third resource type, which `RESOURCE_TYPES` does
+   *                  not name, so the panel's raw-string fallback is exercised.
+   *   `actor_id: 0`  the system actor, with an empty `actor_login`, rendered as a
+   *                  named state rather than as a zero.
+   *
+   * ── The filtered states, which are at URLs and are captured like any other ──
+   *
+   *     node scripts/capture.mjs "/audit?resource_type=order"
+   *     node scripts/capture.mjs "/audit?date_from=2026-08-16&date_to=2026-08-16"
+   *
+   * `slugOf()` already folds `?`, `&` and `=` into the directory name, the way
+   * `/shipping?view=parcels` is captured. The first is the filtered-list state
+   * with a chip set showing; the second is a single day, which is the state the
+   * date range exists for and the one that fits on a 340px screen.
+   *
+   * There is **no search box and no sort control** on this screen, and both
+   * absences are measured rather than omissions — `?search=`, `?orderby=` and
+   * `?order=` are accepted and ignored by the API and by this harness — so
+   * neither has a state to photograph.
+   *
+   * ── And the refusal, which needs its own run ───────────────────────────────
+   *
+   *     MOCK_IDENTITY=no_audit node scripts/capture.mjs /audit
+   *
+   * **None of the nine identities before it could stand in.** Every one is
+   * `CAPABILITIES` minus one to four entries and not one of those entries was
+   * `ac_view_audit_logs`, so a capture under `reduced`, `no_settings` or
+   * `no_transfer` photographs the *served* screen and files it as the forbidden
+   * one — the §18 `no_settings` failure shape, and the seventh time this hole
+   * has been found. The mock gates the route on the same capability
+   * `app/[locale]/(panel)/audit/page.tsx:35` renders `ForbiddenState` on, so the
+   * two halves agree for the first time.
+   */
+  "/audit",
 ];
 
 /* -------------------------------------------------------------- the cookie --- */
