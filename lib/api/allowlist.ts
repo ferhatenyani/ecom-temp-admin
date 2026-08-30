@@ -40,7 +40,22 @@ const UUID = `${HEX}{8}-${HEX}{4}-${HEX}{4}-${HEX}{4}-${HEX}{12}`;
  */
 const RULES: readonly Rule[] = [
   rule("/auth/me", "GET"),
-  rule("/orders", "GET"),
+  /*
+   * `POST /orders` is here now, and it is the first write this list has allowed
+   * on a collection route.
+   *
+   * The rule the whole file follows is that a route is allowed when a screen
+   * reaches it and not before — the products block below refuses `POST
+   * /products` on exactly that ground. `NewOrderDrawer` is that screen: it is
+   * the panel's back-office order entry, for an order taken over the phone or
+   * at a counter, which is the one order this shop creates that no checkout
+   * ever will.
+   *
+   * The route is `ac_manage_orders`, the same capability the list and the
+   * detail already require, so this widens no credential — it widens what the
+   * panel can ask for with one it already holds.
+   */
+  rule("/orders", "GET", "POST"),
   rule("/orders/\\d+", "GET", "PATCH"),
   rule("/orders/\\d+/notes", "GET"),
   rule("/orders/\\d+/timeline", "GET"),

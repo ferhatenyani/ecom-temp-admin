@@ -17,7 +17,9 @@ administration screens — settings, staff accounts, the audit trail and import/
 
 ```
 /[locale]/login              sign in with a WordPress Application Password
-/[locale]/orders             list — filters in the URL, 30 s poll, five states
+/[locale]/orders             list — filters in the URL, 30 s poll, five states, and the
+                             create drawer: back-office order entry for an order taken
+                             over the phone, priced by the API and never by the form
 /[locale]/orders/[id]        detail — summary, items, totals, customer, parcels, payments,
                              COD with its attempt log, and the timeline, plus the status
                              transition, which renders the API's 409

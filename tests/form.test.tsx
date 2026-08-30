@@ -75,15 +75,29 @@ describe("the accessible name is the label, and only the label", () => {
     expect(screen.getByRole("textbox", { name: LABEL })).toHaveAccessibleDescription(HINT);
   });
 
+  /**
+   * `Select` is a `Listbox` now — a `<button role="combobox">` rather than a
+   * `<select>` — and this assertion is the one that proves the swap kept the
+   * frame's promise. A `<label htmlFor>` names a `<button>` because a button is
+   * a *labelable* element in the HTML spec exactly as a select is, so
+   * `FieldFrame` needed no change; if that had not held, the control's name
+   * would have fallen through to its own content and become the selected
+   * option's label, which changes every time somebody picks something.
+   *
+   * `withIntl`, because `Listbox` reads the locale for its popper direction —
+   * see its docblock. `States.tsx` already sets that precedent in this layer.
+   */
   it("holds for a select", () => {
     render(
-      <Select
-        label={LABEL}
-        value="a"
-        onChange={() => {}}
-        options={[{ value: "a", label: "A" }]}
-        hint={HINT}
-      />,
+      withIntl(
+        <Select
+          label={LABEL}
+          value="a"
+          onChange={() => {}}
+          options={[{ value: "a", label: "A" }]}
+          hint={HINT}
+        />,
+      ),
     );
     expect(screen.getByRole("combobox", { name: LABEL })).toHaveAccessibleDescription(HINT);
   });
@@ -159,19 +173,21 @@ describe("the name does not change as the hint changes", () => {
 
   it("survives a hint appearing", () => {
     const { rerender } = render(
-      <Select label="Statut" value="publish" onChange={() => {}} options={OPTIONS} />,
+      withIntl(<Select label="Statut" value="publish" onChange={() => {}} options={OPTIONS} />),
     );
 
     expect(screen.getByRole("combobox", { name: "Statut" })).toBeInTheDocument();
 
     rerender(
-      <Select
-        label="Statut"
-        value="draft"
-        onChange={() => {}}
-        options={OPTIONS}
-        hint="Un brouillon n’est pas visible sur la boutique."
-      />,
+      withIntl(
+        <Select
+          label="Statut"
+          value="draft"
+          onChange={() => {}}
+          options={OPTIONS}
+          hint="Un brouillon n’est pas visible sur la boutique."
+        />,
+      ),
     );
 
     // Same name, new description — not a renamed control.
@@ -215,30 +231,51 @@ describe("nothing is typeable before React has hydrated it", () => {
    */
   it("ships every control disabled in the server's HTML", () => {
     const html = renderToStaticMarkup(
-      <>
-        <TextField label="Nom" value="" onChange={() => {}} />
-        <TextArea label="Description" value="" onChange={() => {}} />
-        <DateField label="Du" value="" onChange={() => {}} />
-        <Select
-          label="Statut"
-          value="a"
-          onChange={() => {}}
-          options={[{ value: "a", label: "A" }]}
-        />
-        <Switch label="Actif" checked={false} onChange={() => {}} />
-        <CheckRow label="Cuir" checked={false} onChange={() => {}} />
-        <ChoiceGroup
-          label="Tri"
-          value="date"
-          onChange={() => {}}
-          options={[{ value: "date", label: "Date" }]}
-        />
-      </>,
+      withIntl(
+        <>
+          <TextField label="Nom" value="" onChange={() => {}} />
+          <TextArea label="Description" value="" onChange={() => {}} />
+          <DateField label="Du" value="" onChange={() => {}} />
+          <Select
+            label="Statut"
+            value="a"
+            onChange={() => {}}
+            options={[{ value: "a", label: "A" }]}
+          />
+          <Switch label="Actif" checked={false} onChange={() => {}} />
+          <CheckRow label="Cuir" checked={false} onChange={() => {}} />
+          <ChoiceGroup
+            label="Tri"
+            value="date"
+            onChange={() => {}}
+            options={[{ value: "date", label: "Date" }]}
+          />
+        </>,
+      ),
     );
 
-    const controls = html.match(/<(?:input|select|textarea)\b[^>]*>/g) ?? [];
-    // Seven controls above. A regex that matched nothing must not report success.
-    expect(controls).toHaveLength(7);
+    /*
+     * `button` joined the alternation when `Select` stopped being a `<select>`,
+     * and the count went from seven to eight — which is the interesting part.
+     *
+     * Seven controls are rendered above. The eighth is Radix's own hidden
+     * `<select aria-hidden tabindex="-1">`, the "bubble" it emits beside every
+     * listbox so that a native `<form>` submission and the browser's autofill
+     * still see a form control. It is out of the accessibility tree and out of
+     * the tab order, so it is not a second control a person can reach — but it
+     * *is* a real DOM control that a stray keystroke could reach if it were
+     * enabled, so it belongs inside this assertion rather than filtered out of
+     * it. Radix disables it along with the trigger, and the loop below is what
+     * says so.
+     *
+     * Had the regex been left matching `select` alone it would have found seven
+     * again — six real controls plus that bubble — and passed while the trigger
+     * went entirely unchecked. The count is here to close exactly that hole.
+     */
+    const controls = html.match(/<(?:button|input|select|textarea)\b[^>]*>/g) ?? [];
+    // Seven controls above, plus Radix's hidden bubble. A regex that matched
+    // nothing must not report success.
+    expect(controls).toHaveLength(8);
     for (const control of controls) {
       expect(control).toContain("disabled");
     }
@@ -396,11 +433,29 @@ describe("validation speaks on blur, then on every change — never on the first
     expect(screen.getByText(API)).toBeInTheDocument();
   });
 
+  /**
+   * Driven through the open list rather than with `fireEvent.change`, which is
+   * what this asserted while `Select` was a `<select>`.
+   *
+   * That is not a workaround for the migration, it is the migration's point: a
+   * `change` event on a replaced element was the only handle the control offered
+   * and it bypassed everything a person actually does. Here the trigger is
+   * opened, an option is chosen from the list, and the latch is asserted on the
+   * far side of both — so the test now fails if the popover never opens, if the
+   * options never render, or if picking one does not commit, none of which the
+   * old form could tell apart.
+   *
+   * **The empty option is deliberately the one selected last.** Radix reserves
+   * `""` for "nothing is selected"; `Listbox` maps it to a sentinel so that a
+   * cleared filter stays a real, choosable value. Sixteen screens depend on
+   * that, and this is where it is proven — if the mapping were dropped, picking
+   * "—" would throw rather than refuse.
+   */
   it("latches a select on change, because a select has nothing half-typed", () => {
     const REQUIRED = "Choisissez un statut.";
 
     function StatusSelect() {
-      const [value, setValue] = useState("");
+      const [value, setValue] = useState("publish");
       return (
         <Select
           label="Statut"
@@ -416,18 +471,22 @@ describe("validation speaks on blur, then on every change — never on the first
       );
     }
 
-    render(<StatusSelect />);
-    const select = screen.getByRole("combobox", { name: "Statut" });
+    render(withIntl(<StatusSelect />));
+    const trigger = screen.getByRole("combobox", { name: "Statut" });
 
-    // Untouched and empty: silent.
+    // Untouched and valid: silent.
     expect(screen.queryByText(REQUIRED)).not.toBeInTheDocument();
 
-    fireEvent.change(select, { target: { value: "publish" } });
+    // A keystroke rather than a press: `keydown` is the one opening gesture
+    // jsdom can deliver truthfully, having neither layout nor pointer events.
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("option", { name: "Brouillon" }));
     expect(screen.queryByText(REQUIRED)).not.toBeInTheDocument();
 
     // Back to nothing. No blur — a selection is a complete act, so the refusal
     // lands where the person made it.
-    fireEvent.change(select, { target: { value: "" } });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("option", { name: "—" }));
     expect(screen.getByText(REQUIRED)).toBeInTheDocument();
   });
 });

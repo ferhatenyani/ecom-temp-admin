@@ -3,7 +3,7 @@ import { requireSession } from "@/lib/session/read";
 import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { orderList, wilayas as wilayasSchema, type Wilaya } from "@/lib/api/schemas/order";
-import { canManageOrders } from "@/lib/capabilities";
+import { canManageOrders, has } from "@/lib/capabilities";
 import { ForbiddenState } from "@/components/ui/States";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import { OrdersList } from "./OrdersList";
@@ -75,6 +75,15 @@ export default async function OrdersPage({
       initialOrders={initial?.data ?? null}
       initialTotal={typeof initial?.meta?.total === "number" ? initial.meta.total : null}
       wilayas={wilayaList}
+      /*
+       * The create drawer's two pickers, resolved here because this is where the
+       * session is. Neither is `ac_manage_orders`: a product picker reads
+       * `/products` and a customer picker reads `/customers`, and **`Order
+       * Manager` holds the second and not the first**. The drawer degrades to a
+       * product-id field rather than showing that role a 403 — see its docblock.
+       */
+      canPickProducts={has(me, "ac_manage_products")}
+      canPickCustomers={has(me, "ac_manage_customers")}
     />
   );
 }

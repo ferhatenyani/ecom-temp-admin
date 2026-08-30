@@ -1463,6 +1463,40 @@ when hidden.
 > `details.params.per_page`. Note the envelope key: parameter errors arrive under `params`, not the
 > `fields` that Part II's error table names.
 
+> **Added in the build: the list creates. `POST /orders` had no caller for eleven branches.**
+>
+> This section names `POST /orders` in its route line and then describes a list and a detail, because
+> §"Import and export" frames an order as something "created by a checkout" — which is true of all 633
+> orders this shop has. It is not true of the one a shopkeeper takes **over the phone or at a
+> counter**, and that order had nowhere to be entered. `NewOrderDrawer` is that screen, opened from the
+> one primary on the list.
+>
+> A `Drawer`, not a route, and not a nested picker: §3.1 gives the drawer "a create form long enough to
+> need room", and it also says overlays are never nested — so the product and customer searches are
+> **inline inside their sections** rather than borrowing `RestrictionPicker`'s second drawer.
+>
+> Four things the build settled that the spec did not raise:
+>
+> - **Nothing on the form computes money.** The catalogue's unit price renders beside a line because it
+>   is a fact about the product; no subtotal and no total are drawn. The API prices the order from the
+>   catalogue at save and refuses a caller-supplied `price` **by name**
+>   (`details.fields["line_items.0.price"]`), so a form that added the figures up would be publishing a
+>   number the server has not agreed to.
+> - **Five creatable statuses, not seven.** `cancelled` and `refunded` answer **409**, not 400 — they
+>   are real statuses that are simply not places an order can begin. The picker offers five;
+>   `lib/order-status.ts`'s `CREATABLE_STATUSES` carries why this is the opposite of what a status
+>   *move* does, which asks the API and renders its refusal.
+> - **"Same as billing" must drop the email.** A shipping address carries none — WooCommerce has
+>   `set_billing_email()` and no counterpart — and the API refuses the key by name rather than ignoring
+>   it. Measured on the built drawer: the copy also made one bad country produce *two* refusals, the
+>   second with no control on screen to point at, so `bindRefusals` folds a `shipping.*` failure onto
+>   the billing control that caused it.
+> - **`Order Manager` cannot read the catalogue.** It holds `ac_manage_orders` and not
+>   `ac_manage_products` — a retired role, still held by existing accounts — so a product picker built
+>   on `/products` shows a 403 to the one role whose whole job is orders. There is no `/orders`
+>   equivalent of `/coupons/eligible-products`, so the drawer degrades to a product-id field that says
+>   why, and the API still validates the id.
+
 **Detail.** A stack of grouped inset sections: summary, line items, customer, shipping, COD,
 payments, notes, timeline. Each section pulls from its own route and renders independently, so a
 missing shipment does not block the order.

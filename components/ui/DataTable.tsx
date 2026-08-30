@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr } from "@/components/primitives/Ltr";
 import { Button, IconButton } from "./Button";
 import { Popover, FloatGroup, FloatToggle, FloatRadio } from "./Float";
 import { CountBadge } from "./Badge";
+import { Listbox } from "./Listbox";
 import { useStored, writeStored } from "@/lib/stored";
 
 /**
@@ -881,6 +882,20 @@ function SelectionBar({
 }
 
 /** The footer: range, per-page and the page stepper. */
+/**
+ * The three page sizes, as `Listbox` options.
+ *
+ * Module scope rather than rebuilt per render: the array identity is stable, and
+ * the strings are digits in every locale this panel ships — `t()` would be
+ * translating a number into itself. `data-numeric` is not needed on them either,
+ * since `--text-label` already carries tabular figures on the trigger.
+ */
+const PER_PAGE_OPTIONS = [
+  { value: "20", label: "20" },
+  { value: "50", label: "50" },
+  { value: "100", label: "100" },
+] as const;
+
 export function TableFooter({
   page,
   perPage,
@@ -895,6 +910,7 @@ export function TableFooter({
   onPerPageChange: (next: number) => void;
 }) {
   const t = useTranslations("ui.table");
+  const rowsLabelId = useId();
   const pages = Math.max(1, Math.ceil(total / perPage));
   const from = total === 0 ? 0 : (page - 1) * perPage + 1;
   const to = Math.min(page * perPage, total);
@@ -906,48 +922,34 @@ export function TableFooter({
       </p>
 
       <div className="flex items-center justify-between gap-3 sm:justify-end">
-        <label className="flex items-center gap-1.5 text-ui-label text-ui-muted">
-          {t("rows")}
-          <select
-            value={perPage}
-            onChange={(event) => onPerPageChange(Number(event.target.value))}
-            /*
-             * `.ui-select-tap` carries the 44px touch floor — see globals.css.
-             * A `<select>` is a replaced element with its own UA shadow tree, so
-             * `.ui-tap`'s pseudo-element never renders on one and the box itself
-             * has to grow.
-             *
-             * `min-h-8` is the **pointer** floor and it is the same argument one
-             * breakpoint down: §5 says 32px, this control was 28px, and no
-             * pseudo-element can lend a `<select>` the missing 4px either. The
-             * analytics branch closed the 44px sweep and left this open because
-             * growing the box grows the footer row on every list that has one —
-             * eight of them, `/inventory/movements` included.
-             *
-             * Measured in Chromium on an A/B of two builds, `/orders` and
-             * `/customers` at 1440 and 340: the select goes 28→32px and the
-             * footer row goes **49→53px** with it (32 + `py-2.5` twice + the 1px
-             * `border-t`), because the pagination `IconButton size="sm"` beside
-             * it is `size-7` and so was never the tall one. Below `sm` the footer
-             * is `flex-col` with the select on its own line and the row goes
-             * 79→83px, the same four.
-             *
-             * The footer is the last thing inside the table card, so the card and
-             * the document each grow by exactly those 4px and nothing reflows
-             * *within* the card — the four land at the bottom of the page. Across
-             * 84 harness captures of all seven lists, 64 grew 4px (two of the
-             * Arabic ones 5, sub-pixel line metrics) and 20 kept their dimensions
-             * outright, those being the pages already shorter than the viewport.
-             */
-            className="ui-select-tap ui-ring ui-interactive min-h-8 cursor-pointer rounded-ui-md border border-ui-line-control bg-ui-surface px-1.5 text-ui-label text-ui-fg"
-          >
-            {[20, 50, 100].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/*
+          A `<span>` and `aria-labelledby`, not a wrapping `<label>`.
+          The control is `Listbox` now — a `<button role="combobox">` — and
+          although a button is labelable by `htmlFor`, an *implicit* label
+          (wrapping) does not associate with one. The visible word stays exactly
+          where it was and the name is wired explicitly instead.
+
+          §5's 32px pointer floor is met here for the first time. The 28px this
+          control shipped at was a documented residual: it was a `<select>`, a
+          replaced element whose UA shadow tree `.ui-tap`'s pseudo-element never
+          paints on, so the only way to reach the floor was to grow the box —
+          which grew the footer row on all seven shipped lists. `min-h-8` inside
+          `Listbox`'s `sm` trigger does that now, and `.ui-listbox`'s
+          coarse-pointer rule gives the options the 44px `<option>` never had.
+        */}
+        <div className="flex items-center gap-1.5">
+          <span id={rowsLabelId} className="text-ui-label text-ui-muted">
+            {t("rows")}
+          </span>
+          <Listbox
+            value={String(perPage)}
+            onChange={(next) => onPerPageChange(Number(next))}
+            options={PER_PAGE_OPTIONS}
+            labelledBy={rowsLabelId}
+            size="sm"
+            className="w-auto"
+          />
+        </div>
 
         <div className="flex items-center gap-1">
           <IconButton

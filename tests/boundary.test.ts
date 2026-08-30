@@ -172,10 +172,22 @@ describe("the proxy allowlist", () => {
     // Positive controls first: without these the refusals below prove nothing,
     // because a refusal and an unreachable route look identical from outside.
     expect(checkAllowed(["orders"], "GET").allowed).toBe(true);
+    /*
+     * **The first write this list allows on a collection**, added with the
+     * back-office order-entry drawer. `ac_manage_orders` already covers the
+     * list and the detail, so this widens what the panel may ask for with a
+     * credential it holds rather than widening the credential.
+     */
+    expect(checkAllowed(["orders"], "POST").allowed).toBe(true);
     expect(checkAllowed(["orders", "3078"], "GET").allowed).toBe(true);
     expect(checkAllowed(["orders", "3078"], "PATCH").allowed).toBe(true);
     expect(checkAllowed(["orders", "3078", "timeline"], "GET").allowed).toBe(true);
     expect(checkAllowed(["auth", "me"], "GET").allowed).toBe(true);
+
+    // …and no further. A create on the collection is not a licence to replace
+    // or delete one, neither of which the API offers: an order is cancelled.
+    expect(checkAllowed(["orders"], "PUT").allowed).toBe(false);
+    expect(checkAllowed(["orders"], "DELETE").allowed).toBe(false);
   });
 
   it("permits the products routes and no more of them than the screens use", () => {
