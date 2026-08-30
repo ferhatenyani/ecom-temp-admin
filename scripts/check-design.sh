@@ -45,7 +45,17 @@ cd "$(dirname "$0")/.." || exit 2
 # 312 at the order-entry branch, floor 310. Three files: components/ui/Listbox.tsx
 # (the drawn single-select that retired the panel's last native `<select>`), and
 # app/[locale]/(panel)/orders/{NewOrderDrawer,new-order}.tsx|ts.
-FLOOR=310
+#
+# 316 at the order-edit branch, floor 314. Four files, and two of them are a
+# split rather than an addition: the order **edit** form became the second caller
+# of the create drawer's address block and customer picker, so both were lifted
+# out of `NewOrderDrawer.tsx` into `orders/{AddressFields,CustomerPicker}.tsx`
+# beside it. The other two are the form itself —
+# `orders/[id]/{OrderEditDrawer.tsx,order-edit.ts}`. Raised by the same margin of
+# 2 the history above keeps, and raised here rather than left to pass on the old
+# number: a floor that trails the real count by six stops catching the emptied
+# glob it exists for.
+FLOOR=314
 failures=0
 checks=0
 

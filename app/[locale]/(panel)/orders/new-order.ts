@@ -25,20 +25,32 @@ import { CREATABLE_STATUSES, type OrderStatus } from "@/lib/order-status";
  * status picker, because the status picker is where the choice is made.
  */
 
-/** Every address field the API takes, `email` included — see `payloadAddress`. */
-export type AddressDraft = {
-  first_name: string;
-  last_name: string;
-  company: string;
-  address_1: string;
-  address_2: string;
-  city: string;
-  state: string;
-  postcode: string;
-  country: string;
-  phone: string;
-  email: string;
-};
+/**
+ * Every address field the API takes, `email` included — see `payloadAddress`.
+ *
+ * **A list rather than three hand-kept copies**, which is what this was: the
+ * type, the eleven lines of `emptyAddress()` and a `ADDRESS_KEYS` const in
+ * `NewOrderDrawer` all enumerated the same fields, and the drawer's copy existed
+ * only because this file did not export one. The order edit form is the second
+ * caller and would have been the fourth copy. The type and the blank block are
+ * both derived from this now, so a field cannot be added to one and forgotten in
+ * the others.
+ */
+export const ADDRESS_KEYS = [
+  "first_name",
+  "last_name",
+  "company",
+  "address_1",
+  "address_2",
+  "city",
+  "state",
+  "postcode",
+  "country",
+  "phone",
+  "email",
+] as const;
+
+export type AddressDraft = Record<(typeof ADDRESS_KEYS)[number], string>;
 
 /**
  * A chosen product, with what the picker knew about it.
@@ -71,19 +83,7 @@ export type OrderDraft = {
 };
 
 export function emptyAddress(): AddressDraft {
-  return {
-    first_name: "",
-    last_name: "",
-    company: "",
-    address_1: "",
-    address_2: "",
-    city: "",
-    state: "",
-    postcode: "",
-    country: "",
-    phone: "",
-    email: "",
-  };
+  return Object.fromEntries(ADDRESS_KEYS.map((key) => [key, ""])) as AddressDraft;
 }
 
 /**

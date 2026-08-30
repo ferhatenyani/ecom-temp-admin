@@ -7,7 +7,6 @@ import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import type { Customer } from "@/lib/api/schemas/customer";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
 import type { Product } from "@/lib/api/schemas/product";
-import { customerRef } from "@/lib/customers";
 import { SHOP_CURRENCY, formatMoney } from "@/lib/format/money";
 import { Drawer } from "@/components/ui/Overlay";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -26,6 +25,8 @@ import { EmptyState } from "@/components/ui/States";
 import { Skeleton, SkeletonRegion } from "@/components/ui/Skeleton";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
+import { ADDRESS_KEYS, AddressFields, addressFieldId } from "./AddressFields";
+import { CustomerPicker } from "./CustomerPicker";
 import {
   CREATABLE,
   bindRefusals,
@@ -78,6 +79,23 @@ import {
  * better than a 403 with no explanation, which is what a picker built on
  * `/products` alone would have shown the one role whose whole job is orders.
  *
+ * ## Two of its sections are files now, and neither moved for tidiness
+ *
+ * The address block and the customer picker were declared in here and are
+ * `AddressFields.tsx` and `CustomerPicker.tsx` beside this one. The order **edit**
+ * drawer is the second form to need both, and the address block's own docblock
+ * had already made the argument against a second copy — "two hand-maintained
+ * copies of eleven controls drift by the third branch". Nothing about the
+ * controls changed on the way out; what moved with them is the wilaya option
+ * list and the strings, which were `orders.create.address.*` and
+ * `orders.create.customer.*` and are now `orders.address.*` and
+ * `orders.customer.*` because they belong to neither form in particular.
+ *
+ * What did **not** move is what choosing a customer implies: this form copies
+ * their billing block into a block nobody has typed in, and the edit form copies
+ * nothing, because an existing order already carries the address the shopper
+ * gave. `CustomerPicker` hands the whole record back and each form decides.
+ *
  * ## Nothing here computes money
  *
  * The catalogue's unit price renders beside each line because it is a fact about
@@ -114,6 +132,9 @@ export function NewOrderDrawer({
 }) {
   const t = useTranslations("orders.create");
   const tOrders = useTranslations("orders");
+  /* The customer block's strings moved to `orders.customer` when the picker
+     became shared: they belong to neither form in particular. */
+  const tCustomer = useTranslations("orders.customer");
   const tStatus = useTranslations("status");
   const tUi = useTranslations("ui");
 
@@ -130,7 +151,6 @@ export function NewOrderDrawer({
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const [productSearch, setProductSearch] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
   const [manualProductId, setManualProductId] = useState("");
 
   /*
@@ -146,7 +166,6 @@ export function NewOrderDrawer({
       setFields({});
       setRefusal(null);
       setProductSearch("");
-      setCustomerSearch("");
       setManualProductId("");
     }
   }
@@ -165,16 +184,6 @@ export function NewOrderDrawer({
     queryFn: () =>
       acRead<Product[]>(
         `/products?per_page=${PICKER_PER_PAGE}&search=${encodeURIComponent(productSearch)}`,
-      ),
-    placeholderData: keepPreviousData,
-  });
-
-  const customers = useQuery({
-    queryKey: ["orders", "new", "customers", customerSearch],
-    enabled: open && canPickCustomers && customerSearch !== "",
-    queryFn: () =>
-      acRead<Customer[]>(
-        `/customers?per_page=${PICKER_PER_PAGE}&search=${encodeURIComponent(customerSearch)}`,
       ),
     placeholderData: keepPreviousData,
   });
@@ -272,18 +281,7 @@ export function NewOrderDrawer({
         ? { ...current.billing, ...pickAddress(customer), email: customer.email }
         : current.billing,
     }));
-    setCustomerSearch("");
   }
-
-  const wilayaLabel = (w: Wilaya) =>
-    locale === "ar" && w.name_ar !== "" ? w.name_ar : w.name;
-
-  /** The wilaya picker's options. `state` is the **code**, not the id — measured
-      on the order schema, which documents it as a two-digit code. */
-  const wilayaOptions = [
-    { value: "", label: t("address.noWilaya") },
-    ...wilayas.map((w) => ({ value: w.code, label: wilayaLabel(w) })),
-  ];
 
   /**
    * Every refusal on screen, as `ErrorSummary` takes them.
@@ -513,96 +511,29 @@ export function NewOrderDrawer({
         </Section>
 
         {/* ────────────────────────────────────────────────────────── client ─── */}
-        <Section title={t("customer.title")}>
-          <div className="flex flex-col gap-3">
-            <Switch
-              label={t("customer.guest")}
-              hint={t("customer.guestWhy")}
-              checked={draft.customerId === null}
-              onChange={(guest) => patch({ customerId: guest ? null : draft.customerId })}
-              error={fields.customer_id}
-            />
-
-            {draft.customerId !== null ? (
-              <p className="text-ui-compact text-ui-fg">
-                <Isolate numeric>{t("customer.chosen", { id: draft.customerId })}</Isolate>
-              </p>
-            ) : null}
-
-            {draft.customerId === null && canPickCustomers ? (
-              <>
-                <SearchField
-                  value={customerSearch}
-                  onSubmit={setCustomerSearch}
-                  placeholder={t("customer.search")}
-                  label={t("customer.search")}
-                  clearLabel={tOrders("clearSearch")}
-                />
-                {customerSearch !== "" ? (
-                  customers.isPending ? (
-                    <SkeletonRegion
-                      label={t("customer.loading")}
-                      className="flex flex-col gap-1"
-                    >
-                      {Array.from({ length: 3 }, (_, i) => (
-                        <Skeleton key={i} className="ui-field w-full rounded-ui-md" />
-                      ))}
-                    </SkeletonRegion>
-                  ) : (customers.data?.data ?? []).length === 0 ? (
-                    <EmptyState icon="search" message={t("customer.noResults")} />
-                  ) : (
-                    <ul className="flex flex-col gap-1">
-                      {(customers.data?.data ?? []).map((customer) => {
-                        /*
-                          **The address leads and the name is secondary**, which
-                          is the opposite of the customers list and is measured
-                          rather than a preference: 12 of the 16 live customers
-                          in this shop have neither a first nor a last name, so a
-                          row built name-first renders blank for the ordinary
-                          case. `customerRef` is the helper that decided this and
-                          the campaign composer's picker already follows it.
-                        */
-                        const ref = customerRef(customer);
-                        return (
-                          <li key={ref.id}>
-                            <button
-                              type="button"
-                              onClick={() => chooseCustomer(customer)}
-                              className="ui-field ui-interactive ui-ring ui-hover-fill flex w-full cursor-pointer flex-col justify-center rounded-ui-md px-2 text-start text-ui-compact text-ui-fg"
-                            >
-                              <span className="truncate">
-                                <Ltr numeric={false}>{ref.email}</Ltr>
-                              </span>
-                              {ref.name !== null ? (
-                                <span
-                                  dir="auto"
-                                  className="truncate text-ui-caption text-ui-subtle"
-                                >
-                                  {ref.name}
-                                </span>
-                              ) : null}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )
-                ) : null}
-              </>
-            ) : null}
-          </div>
+        <Section title={tCustomer("title")}>
+          <CustomerPicker
+            id={FIELD_IDS.customer_id}
+            customerId={draft.customerId}
+            onChange={(next) => patch({ customerId: next })}
+            onChoose={chooseCustomer}
+            canPick={canPickCustomers}
+            enabled={open}
+            error={fields.customer_id}
+          />
         </Section>
 
         {/* ───────────────────────────────────────────────────── facturation ─── */}
         <Section title={t("billing.title")}>
           <AddressFields
+            idPrefix={ID_PREFIX}
             prefix="billing"
             value={draft.billing}
             onChange={(next) => patchAddress("billing", next)}
             fields={fields}
-            wilayaOptions={wilayaOptions}
+            wilayas={wilayas}
+            locale={locale}
             email
-            t={t}
           />
         </Section>
 
@@ -620,13 +551,14 @@ export function NewOrderDrawer({
             />
             {draft.shippingSameAsBilling ? null : (
               <AddressFields
+                idPrefix={ID_PREFIX}
                 prefix="shipping"
                 value={draft.shipping}
                 onChange={(next) => patchAddress("shipping", next)}
                 fields={fields}
-                wilayaOptions={wilayaOptions}
+                wilayas={wilayas}
+                locale={locale}
                 email={false}
-                t={t}
               />
             )}
           </div>
@@ -692,6 +624,10 @@ export function NewOrderDrawer({
   );
 }
 
+/** This form's DOM id namespace. See `addressFieldId` in `AddressFields.tsx` —
+    the edit drawer's is `order-edit`, and two forms must not mint the same id. */
+const ID_PREFIX = "new-order";
+
 /**
  * The DOM ids the error summary links to, keyed by the API's own field names.
  *
@@ -701,28 +637,18 @@ export function NewOrderDrawer({
  * key absent from here renders in the summary as text — which is exactly right
  * for a field this form does not draw.
  */
-const ADDRESS_KEYS = [
-  "first_name",
-  "last_name",
-  "company",
-  "address_1",
-  "address_2",
-  "city",
-  "state",
-  "postcode",
-  "country",
-  "phone",
-  "email",
-] as const;
-
 const FIELD_IDS: Record<string, string | undefined> = {
-  status: "new-order-status",
-  customer_note: "new-order-note",
-  payment_method: "new-order-payment-method",
-  payment_method_title: "new-order-payment-title",
+  status: `${ID_PREFIX}-status`,
+  customer_id: `${ID_PREFIX}-customer`,
+  customer_note: `${ID_PREFIX}-note`,
+  payment_method: `${ID_PREFIX}-payment-method`,
+  payment_method_title: `${ID_PREFIX}-payment-title`,
   ...Object.fromEntries(
     (["billing", "shipping"] as const).flatMap((prefix) =>
-      ADDRESS_KEYS.map((key) => [`${prefix}.${key}`, `new-order-${prefix}-${key}`]),
+      ADDRESS_KEYS.map((key) => [
+        `${prefix}.${key}`,
+        addressFieldId(ID_PREFIX, prefix, key),
+      ]),
     ),
   ),
 };
@@ -736,155 +662,4 @@ function pickAddress(customer: Customer): Partial<AddressDraft> {
     if (typeof value === "string") out[key] = value;
   }
   return out;
-}
-
-/**
- * One address block. Written once and rendered twice, which is the whole reason
- * it exists — billing and shipping differ by exactly one field and a `prefix`,
- * and two hand-maintained copies of eleven controls drift by the third branch.
- *
- * `country` is a text field and not a picker. The API wants an ISO 3166-1
- * alpha-2 code, upper-cases what it is given, and refuses a country *name* with
- * a message that names `DZ` outright — so the refusal is already legible. A
- * picker would need a 249-row country table that this panel does not have and
- * that nothing has measured; `docs/API.md` and `lib/api/schemas` are built on
- * what the live API returns, and a list typed from memory is precisely the kind
- * of data this project does not ship.
- */
-function AddressFields({
-  prefix,
-  value,
-  onChange,
-  fields,
-  wilayaOptions,
-  email,
-  t,
-}: {
-  prefix: "billing" | "shipping";
-  value: AddressDraft;
-  onChange: (next: Partial<AddressDraft>) => void;
-  fields: Record<string, string>;
-  wilayaOptions: { value: string; label: string }[];
-  email: boolean;
-  t: ReturnType<typeof useTranslations<"orders.create">>;
-}) {
-  const id = (key: string) => `new-order-${prefix}-${key}`;
-  const error = (key: string) => fields[`${prefix}.${key}`];
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-3">
-        <TextField
-          id={id("first_name")}
-          label={t("address.firstName")}
-          value={value.first_name}
-          onChange={(next) => onChange({ first_name: next })}
-          error={error("first_name")}
-          autoComplete="off"
-          className="min-w-40 flex-1"
-        />
-        <TextField
-          id={id("last_name")}
-          label={t("address.lastName")}
-          value={value.last_name}
-          onChange={(next) => onChange({ last_name: next })}
-          error={error("last_name")}
-          autoComplete="off"
-          className="min-w-40 flex-1"
-        />
-      </div>
-
-      <TextField
-        id={id("company")}
-        label={t("address.company")}
-        value={value.company}
-        onChange={(next) => onChange({ company: next })}
-        error={error("company")}
-      />
-      <TextField
-        id={id("address_1")}
-        label={t("address.line1")}
-        value={value.address_1}
-        onChange={(next) => onChange({ address_1: next })}
-        error={error("address_1")}
-      />
-      <TextField
-        id={id("address_2")}
-        label={t("address.line2")}
-        value={value.address_2}
-        onChange={(next) => onChange({ address_2: next })}
-        error={error("address_2")}
-      />
-
-      <div className="flex flex-wrap gap-3">
-        <TextField
-          id={id("city")}
-          label={t("address.city")}
-          value={value.city}
-          onChange={(next) => onChange({ city: next })}
-          error={error("city")}
-          className="min-w-40 flex-1"
-        />
-        <TextField
-          id={id("postcode")}
-          label={t("address.postcode")}
-          value={value.postcode}
-          onChange={(next) => onChange({ postcode: next })}
-          error={error("postcode")}
-          isolate
-          className="min-w-30 flex-1"
-        />
-      </div>
-
-      {/* The wilaya is a two-digit code on the wire and a bilingual name on
-          screen — `state` is filled on about 8 % of the shop's orders, which is
-          the measurement `columns.tsx` renders the list against. A picker is
-          what stops this one being the ninth. */}
-      <Select
-        id={id("state")}
-        label={t("address.wilaya")}
-        value={value.state}
-        onChange={(next) => onChange({ state: next })}
-        error={error("state")}
-        options={wilayaOptions}
-      />
-
-      <div className="flex flex-wrap gap-3">
-        <TextField
-          id={id("country")}
-          label={t("address.country")}
-          hint={t("address.countryHint")}
-          value={value.country}
-          onChange={(next) => onChange({ country: next })}
-          error={error("country")}
-          isolate
-          className="min-w-30 flex-1"
-        />
-        <TextField
-          id={id("phone")}
-          label={t("address.phone")}
-          value={value.phone}
-          onChange={(next) => onChange({ phone: next })}
-          error={error("phone")}
-          isolate
-          inputMode="tel"
-          autoComplete="off"
-          className="min-w-40 flex-1"
-        />
-      </div>
-
-      {email ? (
-        <TextField
-          id={id("email")}
-          label={t("address.email")}
-          value={value.email}
-          onChange={(next) => onChange({ email: next })}
-          error={error("email")}
-          isolate
-          inputMode="email"
-          autoComplete="off"
-        />
-      ) : null}
-    </div>
-  );
 }

@@ -182,15 +182,6 @@
         "manualIdWhy": "Votre compte ne peut pas lire le catalogue, la recherche n’est donc pas disponible. L’API refuse un identifiant inconnu.",
         "manualName": "Produit #{id}"
       },
-      "customer": {
-        "title": "Client",
-        "guest": "Commande invité",
-        "guestWhy": "Une commande sans compte client. C’est le cas de la plupart des commandes de la boutique.",
-        "chosen": "Client #{id}",
-        "search": "Rechercher un client",
-        "loading": "Chargement des clients…",
-        "noResults": "Aucun client ne correspond."
-      },
       "billing": {
         "title": "Facturation"
       },
@@ -213,22 +204,66 @@
       "note": {
         "title": "Note",
         "label": "Note du client"
-      },
-      "address": {
-        "firstName": "Prénom",
-        "lastName": "Nom",
-        "company": "Société",
-        "line1": "Adresse",
-        "line2": "Complément d’adresse",
-        "city": "Ville",
-        "postcode": "Code postal",
-        "wilaya": "Wilaya",
-        "noWilaya": "Non renseignée",
-        "country": "Pays",
-        "countryHint": "Code ISO à deux lettres, par exemple DZ.",
-        "phone": "Téléphone",
-        "email": "E-mail"
       }
+    },
+    "edit": {
+      "action": "Modifier",
+      "title": "Modifier la commande {number}",
+      "description": "Le client, les adresses, le paiement et la note. Le statut se change depuis l’en-tête.",
+      "submit": "Enregistrer",
+      "saved": "Commande mise à jour",
+      "failed": "La commande n’a pas pu être modifiée.",
+      "refusedNoField": "Modification refusée : {message}",
+      "nothingToSave": "Aucune modification à enregistrer.",
+      "customer": {
+        "title": "Client",
+        "description": "Rattacher la commande à un autre compte ne modifie pas les adresses ci-dessous."
+      },
+      "billing": {
+        "title": "Facturation"
+      },
+      "shipping": {
+        "title": "Livraison",
+        "same": "Identique à la facturation",
+        "sameWhy": "L’e-mail n’est pas repris : une adresse de livraison n’en porte pas."
+      },
+      "payment": {
+        "title": "Paiement",
+        "method": "Méthode",
+        "methodHint": "L’identifiant utilisé par la boutique, par exemple « cod ».",
+        "methodTitle": "Libellé affiché"
+      },
+      "note": {
+        "title": "Note",
+        "label": "Note du client",
+        "hint": "{limit} caractères au maximum.",
+        "count": "{count} / {limit}"
+      }
+    },
+    "address": {
+      "firstName": "Prénom",
+      "lastName": "Nom",
+      "company": "Société",
+      "line1": "Adresse",
+      "line2": "Complément d’adresse",
+      "city": "Ville",
+      "postcode": "Code postal",
+      "wilaya": "Wilaya",
+      "noWilaya": "Non renseignée",
+      "country": "Pays",
+      "countryHint": "Code ISO à deux lettres, par exemple DZ. L’API n’en vérifie que la forme : un code qui ne désigne aucun pays serait enregistré tel quel.",
+      "countryShape": "Deux lettres, par exemple DZ — pas le nom du pays.",
+      "phone": "Téléphone",
+      "email": "E-mail"
+    },
+    "customer": {
+      "title": "Client",
+      "guest": "Commande invité",
+      "guestWhy": "Une commande sans compte client. C’est le cas de la plupart des commandes de la boutique.",
+      "chosen": "Client #{id}",
+      "search": "Rechercher un client",
+      "loading": "Chargement des clients…",
+      "noResults": "Aucun client ne correspond."
     }
   },
   "status": {

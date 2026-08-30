@@ -40,6 +40,7 @@ import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Icon } from "@/components/primitives/Icon";
 import { OrderScreen, OrderNotices } from "./OrderScreen";
 import { OrderActions } from "./OrderActions";
+import { OrderEditDrawer } from "./OrderEditDrawer";
 import { OrderItems } from "./OrderItems";
 import { CodSection } from "./CodSection";
 import { ParcelsSection } from "./ParcelsSection";
@@ -215,11 +216,32 @@ export default async function OrderDetailPage({
              separating — §2.4. */
           divided={false}
           actions={
-            <OrderActions
-              orderId={order.id}
-              status={order.status}
-              canWrite={canManageOrders(me)}
-            />
+            <>
+              <OrderActions
+                orderId={order.id}
+                status={order.status}
+                canWrite={canManageOrders(me)}
+              />
+              {/*
+                After the status control, not before it: the header reads
+                [refresh · primary · secondary], which is the arrangement the
+                orders list already has. The status is the primary — §3.3 allows
+                exactly one per view — and this is the second act, which writes
+                every field the status is not. The two never share a payload;
+                `OrderEditDrawer`'s docblock carries the measurement that makes
+                that a requirement rather than a preference.
+
+                `wilayas` is already fetched above for the aside's place label,
+                so the address blocks' pickers cost no extra request.
+              */}
+              <OrderEditDrawer
+                order={order}
+                wilayas={geography ?? []}
+                locale={locale}
+                canWrite={canManageOrders(me)}
+                canPickCustomers={has(me, "ac_manage_customers")}
+              />
+            </>
           }
         />
 

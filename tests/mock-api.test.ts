@@ -27,6 +27,10 @@ import {
   respond,
   type MockResponse,
 } from "@/scripts/mock-api.mjs";
+/* The panel's own copy of the API's note cap, imported rather than repeated:
+   the mock and the form must refuse at the same length or the counter under the
+   textarea is telling the operator something the API will not honour. */
+import { MAX_CUSTOMER_NOTE } from "@/app/[locale]/(panel)/orders/[id]/order-edit";
 import { unwrap, listMeta } from "@/lib/api/envelope";
 import { ApiError } from "@/lib/api/errors";
 import { decodeEntities } from "@/lib/format/html";
@@ -3633,6 +3637,257 @@ describe("the writes", () => {
     expect(done.is_editable).toBe(false);
     expect(done.stock_reduced).toBe(true);
     expect(done.date_completed).not.toBeNull();
+  });
+
+  /**
+   * **The rest of `PATCH /orders/{id}`**, which took `status` alone until the
+   * order edit drawer arrived and now takes the whole writable surface.
+   *
+   * Everything asserted here was **measured in-process via `rest_do_request()`**
+   * against the plugin in the backend repository — `tests/Api/orders.php`, the
+   * section headed *the PATCH field contract, measured*. That phrase is used
+   * strictly: it runs routing, `OrderInput`, `AddressInput`, the service guards,
+   * the repository and WooCommerce, and it runs no authentication and nothing
+   * between a browser and PHP. `BLOCKED.md` says why no finding on this route
+   * may say "measured against the live API".
+   *
+   * These are the refusals `OrderEditDrawer` binds to controls. A mock that
+   * answered 200 to any of them would let the drawer ship with an error summary
+   * nobody had seen render.
+   */
+  it("merges a partial address instead of blanking the ten fields beside it", () => {
+    /*
+     * The measurement the whole payload builder rests on:
+     * `OrderRepository::applyProps()` walks the keys the payload *stated*, one
+     * setter each, so an omitted field is never written. `order-edit.ts` sends
+     * the changed keys alone because of this.
+     */
+    const before = parse(order, get("/orders/1023")).data.billing;
+
+    const after = parse(
+      order,
+      write("PATCH", "/orders/1023", { billing: { first_name: "Zineb" } }),
+    ).data.billing;
+
+    expect(after.first_name).toBe("Zineb");
+    expect({ ...after, first_name: before.first_name }).toEqual(before);
+    // And the read after the write agrees, which is what the drawer refreshes into.
+    expect(parse(order, get("/orders/1023")).data.billing.first_name).toBe("Zineb");
+  });
+
+  it("clears a field when it is stated empty, which is the only way to clear one", () => {
+    // `AddressInput::parse()` maps `null` and `""` to an empty string and stores
+    // it. Omission means "leave it"; `""` means "delete it". The create builder
+    // drops an empty and this one must not — nobody could delete a phone number.
+    expect(
+      parse(order, write("PATCH", "/orders/1023", { billing: { phone: "" } })).data.billing.phone,
+    ).toBe("");
+    expect(
+      parse(order, write("PATCH", "/orders/1023", { billing: { phone: null } })).data.billing.phone,
+    ).toBe("");
+  });
+
+  it("writes the customer, both payment fields and the note in one body", () => {
+    const patched = parse(
+      order,
+      write("PATCH", "/orders/1023", {
+        customer_id: 20,
+        payment_method: "bacs",
+        payment_method_title: "Virement bancaire",
+        customer_note: "Sonner deux fois",
+      }),
+    ).data;
+
+    expect(patched.customer_id).toBe(20);
+    expect(patched.payment_method).toBe("bacs");
+    expect(patched.payment_method_title).toBe("Virement bancaire");
+    expect(patched.customer_note).toBe("Sonner deux fois");
+    // 0 is the guest value and a real one, not a gap.
+    expect(parse(order, write("PATCH", "/orders/1023", { customer_id: 0 })).data.customer_id).toBe(0);
+  });
+
+  it("drops read-only keys in silence and then refuses the empty payload with no details", () => {
+    /*
+     * **There is no per-field error for a read-only key on this route, ever.**
+     * `array_diff_key($payload, READ_ONLY)` runs before the unknown-field sweep,
+     * so `{"total":"1.00"}` is neither "Unknown field." nor a refusal naming
+     * `total` — the payload is simply empty afterwards. A form that bound a
+     * control to a read-only refusal would be waiting for a message that cannot
+     * arrive, which is why the edit drawer offers no total field at all.
+     */
+    for (const body of [{}, { total: "1.00" }, { id: 1023, subtotal: "1.00", is_editable: true }]) {
+      const error = refusedWith(write("PATCH", "/orders/1023", body), 400, "invalid_request");
+      expect(error.apiMessage).toBe("No supported fields were provided.");
+      expect(error.details).toEqual({});
+      expect(error.fields).toBeNull();
+    }
+
+    // A read-only key beside a writable one is still dropped, and the writable
+    // one still lands — the drop is silent in both directions.
+    expect(
+      parse(order, write("PATCH", "/orders/1023", { total: "1.00", customer_note: "kept" })).data
+        .customer_note,
+    ).toBe("kept");
+  });
+
+  it("names every bad field at once, the way a form binds them", () => {
+    const error = refusedWith(
+      write("PATCH", "/orders/1023", {
+        wilaya: 16,
+        customer_note: "x".repeat(MAX_CUSTOMER_NOTE + 1),
+        payment_method: { a: 1 },
+        billing: { country: "Algeria" },
+        shipping: { email: "a@b.co" },
+      }),
+      400,
+      "invalid_request",
+    );
+
+    expect(error.apiMessage).toBe("The order data is invalid.");
+    expect(error.fields).toEqual({
+      wilaya: "Unknown field.",
+      customer_note: `Must be at most ${MAX_CUSTOMER_NOTE} characters.`,
+      payment_method: "Must be a string.",
+      "billing.country": "Must be a two-letter ISO country code, such as DZ.",
+      // Refused by name rather than dropped: WooCommerce has `set_billing_email()`
+      // and no shipping counterpart. `bindRefusals()` folds this one onto the
+      // billing control that produced it while same-as-billing is on.
+      "shipping.email": "Only a billing address carries an email.",
+    });
+  });
+
+  it("refuses a block that is not an object, and an id that is not a user", () => {
+    expect(
+      refusedWith(write("PATCH", "/orders/1023", { billing: "nope" }), 400, "invalid_request")
+        .fields,
+    ).toEqual({ billing: "Must be an object." });
+
+    expect(
+      refusedWith(write("PATCH", "/orders/1023", { customer_id: -1 }), 400, "invalid_request")
+        .fields,
+    ).toEqual({ customer_id: "Must be a user id, or 0 for a guest." });
+
+    // The repository's own refusal, after the guards rather than in the field
+    // sweep — `applyProps()` → `assertCustomer()`.
+    expect(
+      refusedWith(write("PATCH", "/orders/1023", { customer_id: 999999 }), 400, "invalid_request")
+        .fields,
+    ).toEqual({ customer_id: "No user with id 999999." });
+  });
+
+  it("validates a country by shape alone, so ZZ is a 200 and the panel cannot lean on it", () => {
+    /*
+     * `AddressInput::validateCountry()` is `preg_match('/^[A-Z]{2}$/')` and
+     * nothing more — membership would mean `WC()->countries`, and that class is
+     * deliberately loadable without WordPress. So the shop stores a country that
+     * does not exist, and `AddressFields.tsx` runs the same shape check locally
+     * and says in its hint that the code is not checked against a list.
+     */
+    expect(
+      parse(order, write("PATCH", "/orders/1023", { billing: { country: "ZZ" } })).data.billing
+        .country,
+    ).toBe("ZZ");
+    // Lower case is accepted and upper-cased; a country *name* is refused.
+    expect(
+      parse(order, write("PATCH", "/orders/1023", { billing: { country: "dz" } })).data.billing
+        .country,
+    ).toBe("DZ");
+  });
+
+  /**
+   * **A 400 with no `details` at all, and the panel must survive it.**
+   *
+   * `AddressInput::validateEmail()` uses `filter_var()` because that class must
+   * load without WordPress; `WC_Order::set_billing_email()` validates again with
+   * `is_email()`; the two disagree. Such an address clears validation, the setter
+   * throws `WC_Data_Exception`, and `OrderService::save()` re-throws it as
+   * `ApiException::invalidRequest($exception->getMessage())` — message only.
+   *
+   * A form binding `fields["billing.email"]` renders **nothing** for this input.
+   * `OrderEditDrawer` therefore keeps a fallback that puts an unbound refusal in
+   * the summary as plain text, and this is the response that fallback exists for.
+   */
+  it("answers the filter_var/is_email gap with a message and no field key", () => {
+    const before = parse(order, get("/orders/1023")).data;
+
+    const error = refusedWith(
+      write("PATCH", "/orders/1023", {
+        customer_note: "changed alongside",
+        billing: { email: "a@b.c" },
+      }),
+      400,
+      "invalid_request",
+    );
+
+    expect(error.apiMessage).toBe("Invalid billing email address");
+    expect(error.fields).toBeNull();
+    expect(error.details).toEqual({});
+
+    // Nothing is written — the whole PATCH rolls back, so the note in the same
+    // body did not move either. That is what makes an unbound line in the
+    // summary an honest thing to render rather than a lie about what happened.
+    const after = parse(order, get("/orders/1023")).data;
+    expect(after.customer_note).toBe(before.customer_note);
+    expect(after.billing.email).toBe(before.billing.email);
+
+    // An address both rules reject is named normally, which is what makes the
+    // one above easy to miss.
+    expect(
+      refusedWith(
+        write("PATCH", "/orders/1023", { billing: { email: "nope" } }),
+        400,
+        "invalid_request",
+      ).fields,
+    ).toEqual({ "billing.email": "Must be a valid email address." });
+  });
+
+  /**
+   * **The 409 that shapes the panel's payload builder.**
+   *
+   * `OrderService::update()` guards `line_items` and `shipping_amount` on
+   * `WC_Order::is_editable()`, so an echoed `line_items` is a conflict on every
+   * order that has left `pending` — *even when the only field the operator
+   * touched was the customer note*. `order-edit.ts` omits the key structurally:
+   * its draft has no lines in it, so there is no condition to get wrong.
+   */
+  it("409s on line_items and shipping_amount once an order has left pending", () => {
+    for (const [field, sentence] of [
+      ["line_items", "The line items of an order in this status cannot be changed."],
+      ["shipping_amount", "The shipping amount of an order in this status cannot be changed."],
+    ]) {
+      const error = refusedWith(
+        // 1014 is `processing`. The note is here on purpose: it is a perfectly
+        // writable field, and it does not save the request.
+        write("PATCH", "/orders/1014", { customer_note: "fine on its own", [field]: [] }),
+        409,
+        "conflict",
+      );
+      expect(error.apiMessage).toBe(sentence);
+      expect(error.details).toEqual({ status: "processing", editable_in: ["pending", "on-hold"] });
+    }
+
+    // And the note really was writable on that order, sent on its own.
+    expect(
+      parse(order, write("PATCH", "/orders/1014", { customer_note: "fine on its own" })).data
+        .customer_note,
+    ).toBe("fine on its own");
+  });
+
+  it("answers a numeric id naming no order with this collection's own 404", () => {
+    /*
+     * `OrderService::requireOrder()` answers `not_found` / "No order with that
+     * id." and stands behind the detail, the PATCH and every sub-resource. A
+     * non-numeric segment never reaches the controller and stays `rest_no_route`
+     * — the distinction the customers collection also draws.
+     */
+    const missing = refusedWith(
+      write("PATCH", "/orders/999999", { customer_note: "x" }),
+      404,
+      "not_found",
+    );
+    expect(missing.apiMessage).toBe("No order with that id.");
+    expect(apiError(get("/orders/999999")).code).toBe("not_found");
+    expect(apiError(get("/orders/abc")).code).toBe("rest_no_route");
   });
 
   /**

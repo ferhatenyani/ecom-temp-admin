@@ -7915,6 +7915,24 @@ const state = {
   /** Order id → status, and **empty until something PATCHes**. */
   statuses: new Map(),
   /**
+   * Order id → the fields a `PATCH` wrote that are **not** the status.
+   *
+   * A second map beside `statuses` rather than a widening of it, and the split
+   * is the route's own: a status move runs a transition guard and recomputes
+   * five derived flags (`withStatus`), while `billing`, `shipping`,
+   * `customer_id`, the two payment fields and `customer_note` are plain props
+   * that merge and derive nothing. Folding the second kind into the first would
+   * put an address through a function whose whole job is stock and dates.
+   *
+   * It holds **seeded and created orders alike**, unlike `state.orders` — which
+   * is creates only, on the argument that an order's one write was its status.
+   * That argument expired the moment `PATCH /orders/{id}` grew eight more
+   * writable fields, and rewriting the 633-row fixture to unify the two shapes
+   * would still be rewriting a fixture that works. `orderRow()` reads through
+   * this for both.
+   */
+  orderProps: new Map(),
+  /**
    * Order id → the whole row, for the orders `POST /orders` created.
    *
    * **Creates only**, unlike `state.coupons` and `state.pages`, which hold both
@@ -8135,6 +8153,7 @@ const state = {
 
 export function resetState() {
   state.statuses = new Map();
+  state.orderProps = new Map();
   state.orders = new Map();
   state.createdOrders = [];
   /*
@@ -8346,10 +8365,20 @@ function withStatus(order, status) {
   };
 }
 
-/** The row as it reads *now*. Identity when nothing has been written to it. */
+/**
+ * The row as it reads *now*. Identity when nothing has been written to it.
+ *
+ * The props are applied **before** the status, because `withStatus` derives
+ * `is_editable`, `stock_reduced` and the two dates from the row it is given and
+ * a props write must not be able to shadow them. Nothing in `state.orderProps`
+ * is a derived field — `patchOrder` only ever puts writable ones there — so the
+ * ordering is a guard rather than a fix.
+ */
 const orderRow = (order) => {
+  const props = state.orderProps.get(order.id);
+  const written = props === undefined ? order : { ...order, ...props };
   const status = statusOf(order);
-  return status === order.status ? order : withStatus(order, status);
+  return status === written.status ? written : withStatus(written, status);
 };
 
 /**
@@ -8485,23 +8514,308 @@ const invalidBody = (message, fields) =>
 
 const conflict = (message, details) => fail(409, "conflict", message, details);
 
-/** `PATCH /orders/{id}` — one field, and the transition is the whole story. */
+/**
+ * This collection's own 404, and it is not the routing one.
+ *
+ * `Orders\OrderService::requireOrder()` answers `not_found` / *"No order with
+ * that id."* and it is the single gate behind the detail, the PATCH, the cancel
+ * and every sub-resource — so an id that is numeric but names nothing gets a
+ * sentence, while `/orders/abc` never reaches the controller at all and stays
+ * `rest_no_route`. The customers collection draws the same line a few hundred
+ * lines down and records why: `collectionOf`'s routing 404 is right for the
+ * collections that have no sentence of their own and wrong for the ones that do.
+ */
+const orderNotFound = () => fail(404, "not_found", "No order with that id.");
+
+/**
+ * `OrderInput::allowedFields()`, in its own order.
+ *
+ * Nine keys, and the panel's order edit form sends six of them. `status` is
+ * `OrderActions`' control and never travels with the rest — `OrderService::update()`
+ * runs `guardTransition()` before every other guard, so a body carrying a refused
+ * move and a good address reports only the move and the address silently does not
+ * land. `line_items` and `shipping_amount` are recognised but not written here;
+ * see `patchOrder`.
+ */
+const ORDER_WRITABLE_FIELDS = [
+  "payment_method",
+  "payment_method_title",
+  "customer_note",
+  "status",
+  "customer_id",
+  "billing",
+  "shipping",
+  "line_items",
+  "shipping_amount",
+];
+
+/**
+ * `OrderInput::READ_ONLY` — **stripped before the unknown-key sweep**, which is
+ * the ordering that makes them drop in silence rather than come back named.
+ *
+ * `array_diff_key($payload, array_flip(self::READ_ONLY))` runs first and the
+ * `array_diff(array_keys($payload), allowedFields())` sweep runs second, so
+ * `{"total":"1.00"}` is not "Unknown field." and is not a per-field refusal
+ * either: the payload is simply empty afterwards, and an empty payload is the
+ * `"No supported fields were provided."` 400 with no details. There is no
+ * per-field error for a read-only key on this route, ever — which is why the
+ * edit form binds no control to one.
+ */
+const ORDER_READ_ONLY_FIELDS = [
+  "id",
+  "number",
+  "order_key",
+  "created_via",
+  "currency",
+  "version",
+  "discount_total",
+  "shipping_total",
+  "total_tax",
+  "total",
+  "subtotal",
+  "prices_include_tax",
+  "payment_url",
+  "is_editable",
+  "needs_payment",
+  "stock_reduced",
+  "customer",
+  "date_created",
+  "date_modified",
+  "date_paid",
+  "date_completed",
+];
+
+/** `OrderInput::STRING_FIELDS`, and the cap all three of them share. */
+const ORDER_STRING_FIELDS = ["payment_method", "payment_method_title", "customer_note"];
+
+const MAX_ORDER_NOTE = 5000;
+
+/** `guardLineItemsWritable()` and `guardShippingAmountWritable()` both name it. */
+const ORDER_EDITABLE_IN = ["pending", "on-hold"];
+
+/**
+ * `PATCH /orders/{id}` — the whole writable surface, not the status alone.
+ *
+ * ## What this route was here, and what it is now
+ *
+ * It took `status` and refused everything else, because the status control was
+ * the only thing on the panel that wrote an order. The order **edit** form —
+ * `app/[locale]/(panel)/orders/[id]/OrderEditDrawer.tsx` — writes the customer,
+ * both addresses, the two payment fields and the customer note through this same
+ * route, so a mock that answered "Invalid parameter(s): status" to a corrected
+ * phone number would make every screen in that drawer uncapturable.
+ *
+ * Everything below is **measured in-process via `rest_do_request()`** against the
+ * plugin in the backend repository — `tests/Api/orders.php`, the section headed
+ * *the PATCH field contract, measured*. Read that phrase strictly: it runs
+ * routing, the args schema, `OrderInput`, `AddressInput`, the service guards, the
+ * repository and WooCommerce, and it does **not** run Application Password
+ * authentication or anything between a browser and PHP. It is not "measured
+ * against the live API"; `BLOCKED.md` says why that phrase is unavailable here.
+ *
+ * ## The order the refusals come in, and why it is not arbitrary
+ *
+ * `OrderService::update()` runs them in exactly this sequence and a mock that
+ * reordered them would answer a different error to a body with two problems:
+ *
+ *   1. read-only keys dropped, silently
+ *   2. every remaining field validated at once, one 400 naming all of them
+ *   3. nothing left to write → 400, **no details at all**
+ *   4. `guardTransition()`      → 409, and it runs before every other guard
+ *   5. `guardLineItemsWritable()`, `guardShippingAmountWritable()` → 409
+ *   6. the repository, where an unknown customer id is refused
+ *   7. WooCommerce's own setters, where the `details`-less billing-email 400 is
+ *
+ * ## `line_items` and `shipping_amount` are recognised, guarded, and not written
+ *
+ * **Recognised** because `allowedFields()` lists them, and a mock answering
+ * "Unknown field." would send whoever builds the line-item editor hunting a bug
+ * that is not there. **Guarded** because the 409 they produce on an order that
+ * has left `pending` is the single most important rule on this route — it is why
+ * `order-edit.ts` omits `line_items` from the body *structurally* rather than
+ * conditionally, and a mock without it makes that rule untestable.
+ *
+ * **Not written, and this says so rather than pretending otherwise.** On an
+ * order the guard lets through — `pending` or `on-hold` — stating either key is
+ * accepted and changes nothing, which is a divergence from the API and is left
+ * deliberately: the line-item write is a wholesale replacement with catalogue
+ * pricing (item 1 step 2) and the shipping amount recomputes the order total
+ * (step 4), and neither control exists yet. No screen in the panel sends either
+ * key today, so the divergence is unreachable from the panel — but it is a
+ * divergence, and the next branch to touch this function should close it rather
+ * than discover it.
+ */
 function patchOrder(order, body) {
-  const to = body?.status;
-  if (typeof to !== "string" || !ORDER_STATUSES.includes(to)) {
-    return invalidBody("Invalid parameter(s): status", {
-      status: oneOf(ORDER_STATUSES),
+  /* The row as it reads *now*, not the seed: `is_editable` and the status this
+     write is guarded against are both properties of what an earlier PATCH left
+     behind, and the addresses this one merges into are too. */
+  const row = orderRow(order);
+
+  const payload =
+    body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+
+  // 1. Read-only keys leave without a trace. See `ORDER_READ_ONLY_FIELDS`.
+  const stated = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !ORDER_READ_ONLY_FIELDS.includes(key)),
+  );
+
+  for (const key of Object.keys(stated)) {
+    if (!ORDER_WRITABLE_FIELDS.includes(key)) fields[key] = "Unknown field.";
+  }
+
+  /** What survives validation, keyed as `OrderInput` keys its own `$clean`. */
+  const clean = {};
+
+  for (const key of ORDER_STRING_FIELDS) {
+    if (!(key in stated)) continue;
+    const raw = stated[key];
+
+    // `null` is the documented way to clear one, and stores `''`.
+    if (raw === null) {
+      clean[key] = "";
+      continue;
+    }
+    // `is_scalar()` in PHP: an array or an object is refused, a number is cast.
+    if (typeof raw === "object") {
+      fields[key] = "Must be a string.";
+      continue;
+    }
+
+    const value = String(raw).trim();
+    // The 5 000 cap is on all three, not on the note alone — one loop over
+    // STRING_FIELDS applies it, and `MAX_CUSTOMER_NOTE` is the panel's copy.
+    if (value.length > MAX_ORDER_NOTE) {
+      fields[key] = `Must be at most ${MAX_ORDER_NOTE} characters.`;
+      continue;
+    }
+
+    clean[key] = value;
+  }
+
+  if ("status" in stated) {
+    const value = typeof stated.status === "string" ? stated.status : "";
+    if (ORDER_STATUSES.includes(value)) clean.status = value;
+    else fields.status = oneOf(ORDER_STATUSES);
+  }
+
+  if ("customer_id" in stated) {
+    const raw = stated.customer_id;
+    // `is_numeric()`: a number, or a numeric string. Not `null`, not `""`.
+    const value =
+      typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "")
+        ? Number(raw)
+        : Number.NaN;
+
+    if (!Number.isInteger(value) || value < 0) {
+      fields.customer_id = "Must be a user id, or 0 for a guest.";
+    } else {
+      clean.customer_id = value;
+    }
+  }
+
+  // Only the stated keys, so the merge below is a merge. See `statedAddressFields`.
+  for (const prefix of ["billing", "shipping"]) {
+    if (!(prefix in stated)) continue;
+    const block = statedAddressFields(stated[prefix], prefix, fields);
+    if (block !== null) clean[prefix] = block;
+  }
+
+  for (const key of ["line_items", "shipping_amount"]) {
+    if (key in stated) clean[key] = stated[key];
+  }
+
+  // 2. One 400 naming every bad field at once — a form binds them all in one pass.
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The order data is invalid.", fields);
+  }
+
+  /*
+   * 3. Nothing left to write. `OrderInput::isEmpty()`, and it carries **no
+   * details** — there is no field to name, because every field that could have
+   * been named was either read-only or absent. `isEditDirty()` is the panel's
+   * guard against ever sending this body.
+   */
+  if (Object.keys(clean).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  // 4. The transition, before every other guard.
+  if (clean.status !== undefined) {
+    const from = row.status;
+    const allowed = allowedMoves(from);
+    if (!allowed.includes(clean.status)) {
+      return conflict(`An order cannot move from ${from} to ${clean.status}.`, {
+        from,
+        to: clean.status,
+        allowed,
+      });
+    }
+  }
+
+  /*
+   * 5. The two `is_editable` gates. **This is the 409 that shapes the panel's
+   * payload builder**: the echoed `line_items` of a `completed` order is a
+   * conflict even when the only field the operator touched was the customer
+   * note, so an edit form that PATCHed the GET body back would fail on every
+   * order that has left `pending`.
+   */
+  if (clean.line_items !== undefined && !row.is_editable) {
+    return conflict("The line items of an order in this status cannot be changed.", {
+      status: row.status,
+      editable_in: ORDER_EDITABLE_IN,
     });
   }
 
-  const from = statusOf(order);
-  const allowed = allowedMoves(from);
-  if (!allowed.includes(to)) {
-    return conflict(`An order cannot move from ${from} to ${to}.`, { from, to, allowed });
+  if (clean.shipping_amount !== undefined && !row.is_editable) {
+    return conflict("The shipping amount of an order in this status cannot be changed.", {
+      status: row.status,
+      editable_in: ORDER_EDITABLE_IN,
+    });
   }
 
-  state.statuses.set(order.id, to);
-  return ok(withStatus(order, to));
+  // 6. The repository's own refusal — `applyProps()` → `assertCustomer()`.
+  if (
+    clean.customer_id !== undefined &&
+    clean.customer_id !== 0 &&
+    !CUSTOMERS.some((customer) => customer.id === clean.customer_id)
+  ) {
+    return invalidBody("The order data is invalid.", {
+      customer_id: `No user with id ${clean.customer_id}.`,
+    });
+  }
+
+  /*
+   * 7. WooCommerce's setter, and the only refusal on this route carrying no
+   * `details`. Nothing is written when it fires — the whole PATCH rolls back,
+   * so a customer note in the same body does not move either, which is what
+   * makes an unbound line in the panel's error summary an honest thing to
+   * render rather than a lie about what happened.
+   */
+  const email = clean.billing?.email;
+  if (email !== undefined && email !== "" && wordPressWouldRefuseEmail(email)) {
+    return bareFail(400, "invalid_request", "Invalid billing email address");
+  }
+
+  const next = { ...(state.orderProps.get(order.id) ?? {}) };
+
+  for (const key of ORDER_STRING_FIELDS) {
+    if (clean[key] !== undefined) next[key] = clean[key];
+  }
+  if (clean.customer_id !== undefined) next.customer_id = clean.customer_id;
+  // The merge: the stated keys over what the row already carries. Ten untouched
+  // fields survive a PATCH that corrects the eleventh.
+  if (clean.billing !== undefined) next.billing = { ...row.billing, ...clean.billing };
+  if (clean.shipping !== undefined) next.shipping = { ...row.shipping, ...clean.shipping };
+
+  state.orderProps.set(order.id, next);
+
+  // The status keeps its own map — it derives five flags that a props write
+  // must not be able to shadow. `orderRow` applies the props first for that.
+  if (clean.status !== undefined) state.statuses.set(order.id, clean.status);
+
+  return ok(orderRow(order));
 }
 
 /**
@@ -8704,49 +9018,79 @@ function postOrder(body) {
 }
 
 /**
- * One address block on the way in, validated the way `AddressInput` validates it.
+ * The keys one address block accepts — `Commerce\AddressInput::FIELDS`, plus
+ * `BILLING_ONLY` on the billing side.
  *
- * Two refusals and both are named rather than generic, because both are mistakes
- * somebody actually makes: a country **name** where a code belongs, and a
- * billing e-mail that is not one. `email` on a *shipping* address is the third —
- * WooCommerce has `set_billing_email()` and no shipping equivalent, so the key
- * is refused by name rather than dropped, and `new-order.ts` never sends it.
+ * `email` is billing's alone because WooCommerce has `set_billing_email()` and
+ * no shipping counterpart, which is why the key is **refused by name** on a
+ * shipping block rather than dropped: "Only a billing address carries an email."
  */
-function readOrderAddress(raw, prefix, fields) {
-  const empty = {
-    first_name: "",
-    last_name: "",
-    company: "",
-    address_1: "",
-    address_2: "",
-    city: "",
-    state: "",
-    postcode: "",
-    country: "",
-    phone: "",
-    ...(prefix === "billing" ? { email: "" } : {}),
-  };
+const ADDRESS_BLOCK_FIELDS = [
+  "first_name",
+  "last_name",
+  "company",
+  "address_1",
+  "address_2",
+  "city",
+  "state",
+  "postcode",
+  "country",
+  "phone",
+];
 
-  if (raw === undefined) return empty;
+const emptyAddressBlock = (prefix) => ({
+  ...Object.fromEntries(ADDRESS_BLOCK_FIELDS.map((key) => [key, ""])),
+  ...(prefix === "billing" ? { email: "" } : {}),
+});
+
+/**
+ * The **stated** keys of one address block, validated the way `AddressInput`
+ * validates them — and only the stated ones.
+ *
+ * That last clause is the whole reason this is a function rather than the body
+ * of `readOrderAddress` below. `POST` wants a whole block with the eleven
+ * defaults filled in; `PATCH` wants exactly what the payload named, because
+ * `Orders\OrderRepository::applyProps()` walks `$address->fields` — the keys the
+ * payload *stated* — one setter each, so an omitted field is never written and
+ * a partial address **merges**. A mock that filled the gaps with `""` on the
+ * way in would blank ten fields on every PATCH that corrected one, and the panel
+ * would never find out until a real order lost its address.
+ *
+ * `null` returns when the block itself is refused: the caller has the message in
+ * `fields[prefix]` and there is nothing to merge.
+ *
+ * Two refusals are named rather than generic because both are mistakes somebody
+ * actually makes: a country **name** where a code belongs, and a billing e-mail
+ * that is not one. The country rule is `^[A-Z]{2}$` **and nothing more** —
+ * `AddressInput::validateCountry()` is that `preg_match` alone, membership would
+ * mean `WC()->countries` and that class is deliberately loadable without
+ * WordPress. So `ZZ` is accepted here exactly as it is accepted there, which is
+ * the measurement `AddressFields.tsx` runs its own shape check for.
+ */
+function statedAddressFields(raw, prefix, fields) {
+  const allowed = emptyAddressBlock(prefix);
+
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     fields[prefix] = "Must be an object.";
-    return empty;
+    return null;
   }
 
-  const out = { ...empty };
+  const out = {};
 
   for (const [key, value] of Object.entries(raw)) {
-    if (!(key in empty)) {
+    if (!(key in allowed)) {
       fields[`${prefix}.${key}`] =
         key === "email"
           ? "Only a billing address carries an email."
           : "Unknown field.";
       continue;
     }
+    // `null` stores an empty string — `AddressInput::parse()` maps it — which is
+    // how a PATCH *clears* a field. It is not the same as omitting the key.
     out[key] = typeof value === "string" ? value : String(value ?? "");
   }
 
-  if (out.country !== "") {
+  if (out.country !== undefined && out.country !== "") {
     const upper = out.country.toUpperCase();
     if (!/^[A-Z]{2}$/.test(upper)) {
       fields[`${prefix}.country`] = "Must be a two-letter ISO country code, such as DZ.";
@@ -8755,11 +9099,72 @@ function readOrderAddress(raw, prefix, fields) {
     }
   }
 
-  if (prefix === "billing" && out.email !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(out.email)) {
+  if (
+    prefix === "billing" &&
+    out.email !== undefined &&
+    out.email !== "" &&
+    !FILTER_VAR_EMAIL.test(out.email)
+  ) {
     fields["billing.email"] = "Must be a valid email address.";
   }
 
   return out;
+}
+
+/**
+ * `AddressInput::validateEmail()`'s rule, which is PHP's `filter_var()` and not
+ * WordPress's `is_email()`. The gap between the two is real and reachable —
+ * `wordPressWouldRefuseEmail()` below is the other half of it.
+ */
+const FILTER_VAR_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/**
+ * WordPress's `is_email()`, in the two clauses where it disagrees with
+ * `filter_var()` — and the disagreement is the only way to reach a **400 with
+ * no `details` at all** on this route.
+ *
+ * `AddressInput` validates with `filter_var()` because that class must stay
+ * loadable without WordPress; `WC_Order::set_billing_email()` then validates
+ * again with `is_email()` and throws `WC_Data_Exception` when it disagrees,
+ * which `Orders\OrderService::save()` re-throws as
+ * `ApiException::invalidRequest($exception->getMessage())` — **message only, no
+ * details array**. Measured in-process via `rest_do_request()`, in the backend
+ * suite's check *"a filter_var-valid address WooCommerce refuses has no field
+ * key"*: `PATCH {billing:{email:"a@b.c"}}` answers `400 invalid_request
+ * "Invalid billing email address"` with `details.fields` absent.
+ *
+ * The two clauses reproduced here are the ones that produce that gap:
+ *
+ *   the length floor    `is_email()` refuses anything under six characters
+ *                       outright, which is what `a@b.c` (five) falls to.
+ *   the domain charset  each dot-separated part must match `[a-z0-9-]+`, which
+ *                       is what an IP literal like `a@[127.0.0.1]` falls to.
+ *
+ * It exists so the panel's fallback for a `details`-less refusal has something
+ * to render against. A mock where every 400 carried `details.fields` would let
+ * `OrderEditDrawer` ship with a summary that renders nothing for this input.
+ */
+const wordPressWouldRefuseEmail = (value) => {
+  if (value.length < 6) return true;
+  const domain = value.slice(value.lastIndexOf("@") + 1);
+  return domain.split(".").some((part) => !/^[a-z0-9-]+$/i.test(part));
+};
+
+/**
+ * One **whole** address block on the way in, for `POST /orders` — the stated
+ * keys over the eleven defaults.
+ *
+ * A create states the whole address by definition: there is nothing underneath
+ * it to merge with, so an unstated field is `""` rather than absent. `PATCH`
+ * calls `statedAddressFields` directly for the opposite reason.
+ */
+function readOrderAddress(raw, prefix, fields) {
+  const empty = emptyAddressBlock(prefix);
+
+  if (raw === undefined) return empty;
+
+  const stated = statedAddressFields(raw, prefix, fields);
+  return stated === null ? empty : { ...empty, ...stated };
 }
 
 /**
@@ -18389,6 +18794,14 @@ export function respond(
 
       const id = second === undefined ? null : numericId(second);
       const order = id === null ? undefined : findOrder(id);
+
+      /* A numeric id naming no order is this collection's 404 — see
+         `orderNotFound`. Answered once, before the split below, because the
+         same gate stands behind the detail, the PATCH and every sub-resource.
+         A non-numeric segment falls through to the routing 404 underneath. */
+      if (second !== undefined && id !== null && order === undefined) {
+        return orderNotFound();
+      }
 
       /*
        * The detail's own sub-resources and the four writes on them. Every
