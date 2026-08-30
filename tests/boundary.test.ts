@@ -961,6 +961,10 @@ describe("order domain rules", () => {
     },
     line_items: [],
     discount_total: "0.00",
+    /* `null` is "nobody stated a delivery fee", which is not the same claim as
+       `shipping_total: "0.00"` beside it — see the schema. Both are required
+       keys, so this fixture states both rather than leaning on a default. */
+    shipping_amount: null,
     shipping_total: "0.00",
     total_tax: "0.00",
     subtotal: "0.00",

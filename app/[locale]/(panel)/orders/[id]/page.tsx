@@ -253,7 +253,20 @@ export default async function OrderDetailPage({
           <DetailGrid
             main={
               <>
-                <OrderItems order={order} locale={locale} />
+                {/*
+                  The line-item editor lives in this card rather than the
+                  header: §3.3 allows one primary action per view, the header
+                  already has two, and — the better reason — the card is where
+                  the disabled reason is already printed. Both capabilities are
+                  resolved here on the server, `ac_manage_products` for the
+                  editor's picker exactly as `NewOrderDrawer` needs it.
+                */}
+                <OrderItems
+                  order={order}
+                  locale={locale}
+                  canWrite={canManageOrders(me)}
+                  canPickProducts={has(me, "ac_manage_products")}
+                />
 
                 {/* ------------------------------------------------- timeline --- */}
                 <Card title={t("timeline")}>

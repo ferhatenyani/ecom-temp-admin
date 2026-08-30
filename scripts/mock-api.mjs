@@ -2187,6 +2187,36 @@ const ORDER_NAMES = [
   ["Rachid", "Ould Kaddour"],
 ];
 
+/**
+ * The statuses that take units off the shelf — WooCommerce's own three.
+ *
+ * **`on-hold` is here and that is the whole reason this list exists.**
+ * `wc_maybe_reduce_stock_levels()` is hooked to `woocommerce_order_status_processing`,
+ * `_completed` **and** `_on-hold`, so an on-hold order is holding stock while
+ * still being `is_editable` — the one window where the two rules disagree, and
+ * the window `OrderService::guardManualPricesWritable()` was written for.
+ *
+ * This file used to derive `stock_reduced` from the same flag it derives
+ * `date_paid` from — completed, processing and refunded — which is *payment*,
+ * not stock, and the two only look alike. The consequence was not cosmetic: no
+ * order in the fixture was ever both editable and holding stock, so the manual
+ * price 409 was unreachable through the mock, the panel's most interesting error
+ * path could not be driven, and a screen built against this harness would have
+ * shipped having never rendered it.
+ *
+ * `refunded` is deliberately **not** here: refunding restores the units, and
+ * WooCommerce's `wc_maybe_increase_stock_levels()` runs on `_cancelled` and
+ * `_pending`. The fixture keeps `date_paid` for a refunded order — it was paid —
+ * while saying the shelf has it back.
+ *
+ * The real rule is a flag on the order and not a list of names at all —
+ * `OrderRepository::stockReduced()` is emphatic that an order can sit in
+ * `on-hold` holding nothing, having arrived there from `cancelled`. A fixture
+ * has to derive it from something, and the status is the only thing a seed row
+ * knows; the divergence is that this mock cannot reproduce *that* order.
+ */
+const HOLDS_STOCK = ["processing", "completed", "on-hold"];
+
 const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
   const id = 1000 + index;
   const status = statusColumn[index];
@@ -2210,6 +2240,25 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
           // One order in ten carries the 60-character SKU, so a line-item table
           // has an overflow case at every width the harness captures.
           sku: index % 10 === 3 ? LONG_SKU : item.sku,
+          /*
+           * **`null` on every seeded line, and that is the honest fixture.**
+           *
+           * `price` is an *override* rather than the price charged —
+           * `Orders\OrderPresenter::manualPrice()` reads
+           * `OrderRepository::MANUAL_PRICE_META` and emits `null` for a line
+           * nobody hand-priced. Every order in this book came from a checkout,
+           * where nothing types a price, so every seeded line is `null` and the
+           * effective unit price is `total / quantity` as it always was.
+           *
+           * Seeding a few overrides here was tempting and is wrong twice: it
+           * would put a "manual price" marker on orders the fixture describes as
+           * shop traffic, and — worse — it would make a *quantity* edit on those
+           * orders unreachable in the harness, because the editor has to restate
+           * a hand-priced line to keep it and a stock-holding order refuses a
+           * stated price. `patchOrder` writes real overrides, so the state is
+           * reachable by driving the panel rather than by pre-loading it.
+           */
+          price: null,
           subtotal: total,
           total,
         };
@@ -2254,13 +2303,24 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
     shipping,
     line_items: lineItems,
     discount_total: "0.00",
+    /*
+     * **`null` beside a non-zero `shipping_total`, which is the pair's whole
+     * point.** `shipping_amount` is what somebody *stated* and `shipping_total`
+     * is what the order charges; an order the checkout placed has a fee from
+     * §14's tariff and nobody typed it, so it reads `null` here and `600.00`
+     * below. `OrderPresenter::shippingAmount()` says outright that a client
+     * showing one number must show `shipping_total` — and a fixture where the
+     * two agreed on all 633 rows would let a screen read the wrong one and
+     * still look right.
+     */
+    shipping_amount: null,
     shipping_total: shippingTotal,
     total_tax: "0.00",
     subtotal,
     total,
     is_editable: status === "pending" || status === "on-hold",
     needs_payment: !paid && status !== "cancelled" && status !== "failed",
-    stock_reduced: paid,
+    stock_reduced: HOLDS_STOCK.includes(status),
     date_created: iso(index * 43),
     date_modified: iso(index * 43 - 5),
     date_paid: paid ? iso(index * 43 - 10) : null,
@@ -7933,6 +7993,21 @@ const state = {
    */
   orderProps: new Map(),
   /**
+   * The next line-item id, and it exists because ids **churn**.
+   *
+   * `OrderRepository::replaceLineItems()` removes every line and re-adds the
+   * payload's, so a write that names `line_items` returns a whole new set of ids
+   * even when the lines are identical. A counter is the only honest way to
+   * reproduce that; reusing the row's ids would make a panel that cached one
+   * look correct here and lose an edit against the real API.
+   *
+   * Based well clear of both id spaces in this file — the seeded lines are
+   * `order.id * 10 + n`, at most 16 329, and a created order's are
+   * `nextOrderId * 10 + n` from 92 000 — and fixed rather than derived, which is
+   * what keeps a screenshot of a rewritten order byte-stable.
+   */
+  nextLineItemId: 0,
+  /**
    * Order id → the whole row, for the orders `POST /orders` created.
    *
    * **Creates only**, unlike `state.coupons` and `state.pages`, which hold both
@@ -8162,6 +8237,9 @@ export function resetState() {
    * for the same reason: a screenshot of a created order has to be byte-stable.
    */
   state.nextOrderId = 9200;
+  // Clear of the seeded line ids (≤ 16 329) and of a created order's (≥ 92 000),
+  // and the same figure in every process. See `state.nextLineItemId`.
+  state.nextLineItemId = 500000;
   state.cod = new Map(ORDERS.map((order) => [order.id, seedCod(order)]));
   state.shipments = seedShipments();
   state.payments = seedPayments();
@@ -8356,7 +8434,12 @@ function withStatus(order, status) {
     status,
     is_editable: status === "pending" || status === "on-hold",
     needs_payment: !paid && status !== "cancelled" && status !== "failed",
-    stock_reduced: paid,
+    /* Stock is not payment, and `HOLDS_STOCK` carries the whole argument: a
+       PATCH to `on-hold` produces an order that is **editable and holding
+       stock**, which is the one state where a quantity change goes through and a
+       stated price is a 409. Deriving this from `paid` — as this line did —
+       made that state unreachable in the harness. */
+    stock_reduced: HOLDS_STOCK.includes(status),
     date_paid: paid ? (order.date_paid ?? order.date_modified) : order.date_paid,
     date_completed:
       status === "completed"
@@ -8370,9 +8453,17 @@ function withStatus(order, status) {
  *
  * The props are applied **before** the status, because `withStatus` derives
  * `is_editable`, `stock_reduced` and the two dates from the row it is given and
- * a props write must not be able to shadow them. Nothing in `state.orderProps`
- * is a derived field — `patchOrder` only ever puts writable ones there — so the
- * ordering is a guard rather than a fix.
+ * a props write must not be able to shadow them. The ordering is a guard rather
+ * than a fix: nothing `patchOrder` writes is one of those five.
+ *
+ * **It does now hold derived money, and that is not the same thing.** A write
+ * that names `line_items` or `shipping_amount` puts the replaced lines, the
+ * shipping total and the recomputed `subtotal`/`total` here — because on the API
+ * those are `calculate_totals()`'s output and there is nowhere else for them to
+ * live. They are derived *from the payload* and cannot be stated by one; the
+ * five `withStatus` owns are derived from the **status**, which is written to a
+ * different map for exactly this reason. Read the split as: this map is what the
+ * request changed, `state.statuses` is what the status implies.
  */
 const orderRow = (order) => {
   const props = state.orderProps.get(order.id);
@@ -8530,12 +8621,15 @@ const orderNotFound = () => fail(404, "not_found", "No order with that id.");
 /**
  * `OrderInput::allowedFields()`, in its own order.
  *
- * Nine keys, and the panel's order edit form sends six of them. `status` is
- * `OrderActions`' control and never travels with the rest — `OrderService::update()`
- * runs `guardTransition()` before every other guard, so a body carrying a refused
- * move and a good address reports only the move and the address silently does not
- * land. `line_items` and `shipping_amount` are recognised but not written here;
- * see `patchOrder`.
+ * Nine keys, and the panel sends eight of them from two controls: the edit
+ * drawer writes the customer, both addresses, the payment pair and the note; the
+ * line editor writes `line_items` and `shipping_amount`, which are the two the
+ * `is_editable` guards stand behind.
+ *
+ * `status` is the ninth and travels with neither — `OrderService::update()` runs
+ * `guardTransition()` before every other guard, so a body carrying a refused move
+ * and a good address reports only the move and the address silently does not
+ * land. It is `OrderActions`' own control.
  */
 const ORDER_WRITABLE_FIELDS = [
   "payment_method",
@@ -8594,6 +8688,202 @@ const MAX_ORDER_NOTE = 5000;
 const ORDER_EDITABLE_IN = ["pending", "on-hold"];
 
 /**
+ * `LineItemInput::READ_ONLY` — **stripped before the unknown-key sweep**, the
+ * same ordering `ORDER_READ_ONLY_FIELDS` above follows and for the same reason.
+ *
+ * Exactly the keys `OrderPresenter::lineItems()` emits and `LineItemInput` does
+ * not accept, and no more. **`price` is emitted too and is deliberately absent
+ * from this list**: it is the one computed-looking field a caller really does
+ * state. `subtotal` and `total` are the interesting pair — a body carrying a
+ * `price` and a stale `total` is stating two different amounts, and dropping the
+ * computed one and believing the price is what keeps a total a total.
+ *
+ * `id` is here, and dropping it in silence is what makes a price aimed at one
+ * existing line impossible to express — see the refusal in `readLineItems`.
+ */
+const LINE_ITEM_READ_ONLY = ["id", "name", "sku", "subtotal", "total"];
+
+/** `LineItemInput::ALLOWED`. Anything else on a line is "Unknown field." */
+const LINE_ITEM_FIELDS = ["product_id", "variation_id", "quantity", "price"];
+
+/**
+ * `LineItemInput::MAX_PRICE` and `OrderInput::MAX_SHIPPING_AMOUNT`, which are
+ * two constants holding one number. Both refuse above it with the same sentence.
+ */
+const MAX_STATED_AMOUNT = 9999999.99;
+
+/**
+ * PHP's `is_numeric()`, as close as this file can get.
+ *
+ * A number or a numeric string; **not** `null`, `""`, a boolean, an array or an
+ * object. The one deliberate inclusion is a non-finite number: PHP decodes the
+ * JSON literal `1e400` to `INF`, `is_numeric(INF)` is true, and the ceiling
+ * check below is what refuses it — so `Number.isFinite` here would answer "Must
+ * be an amount." where the API answers "Is implausibly large."
+ */
+const phpNumeric = (value) =>
+  typeof value === "number" ||
+  (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value)));
+
+/**
+ * `LineItemInput::positiveInt()` — a whole number of one or more.
+ *
+ * Rejects `1.5` rather than truncating it: a fractional quantity is a caller
+ * mistake, and half a unit is not something a ledger of whole units can hold.
+ *
+ * **One divergence, named rather than hidden.** PHP's ceiling is `PHP_INT_MAX`
+ * (~9.2 × 10^18) and this one is JavaScript's safe-integer limit (~9.0 × 10^15),
+ * so quantities between the two are refused here and accepted there. No payload
+ * this panel produces goes near either, and the alternative — BigInt arithmetic
+ * for a stepper whose floor is 1 — would be a fiction with more moving parts.
+ */
+const positiveInt = (value) => {
+  if (!phpNumeric(value)) return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+};
+
+/**
+ * A stated amount — a line's `price` or the order's `shipping_amount`.
+ *
+ * `LineItemInput::amount()` and `OrderInput::amount()` are two copies of one
+ * function and this is the third; the three messages are theirs verbatim,
+ * because there are three distinct ways an amount is wrong and a single
+ * "invalid amount" would tell the caller which one none of the time.
+ *
+ * **Zero is allowed and must be.** A free line is a real thing a shop does and
+ * a stated `0` is how a delivery charge is cancelled. Negative is refused: a
+ * negative line is a refund, and a refund is a different object on a different
+ * route rather than an order line with a minus sign.
+ *
+ * Returns the string the caller typed, trimmed — `is_numeric()` tolerates
+ * surrounding whitespace and the stored value should not carry it.
+ */
+function statedAmount(value, field, fields) {
+  if (!phpNumeric(value)) {
+    fields[field] = "Must be an amount.";
+    return null;
+  }
+
+  const amount = Number(value);
+
+  if (amount < 0) {
+    fields[field] = "Cannot be negative.";
+    return null;
+  }
+
+  // Negated rather than `>`, which also catches the `INF` a literal like 1e400
+  // decodes to — no comparison against a real number would.
+  if (!(amount <= MAX_STATED_AMOUNT)) {
+    fields[field] = "Is implausibly large.";
+    return null;
+  }
+
+  return String(value).trim();
+}
+
+/**
+ * `LineItemInput::listFromPayload()` — the submitted set, or the refusals.
+ *
+ * Returns the parsed lines; a line that failed is simply absent from them and
+ * its reason is in `fields`, which is what the 400 above the guards renders. The
+ * caller must not read the list when `fields` is non-empty — `OrderInput::normalize()`
+ * throws in exactly that case, which is why the service guards can assume the
+ * parsed list is one-for-one with what was sent, and why
+ * `guardManualPricesWritable()`'s `lines` indices are the payload's own.
+ */
+function readLineItems(payload, fields) {
+  if (!Array.isArray(payload)) {
+    fields.line_items = "Must be an array of line items.";
+    return [];
+  }
+
+  if (payload.length === 0) {
+    fields.line_items = "An order needs at least one line item.";
+    return [];
+  }
+
+  const lines = [];
+
+  payload.forEach((raw, index) => {
+    const prefix = `line_items.${index}`;
+
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      fields[prefix] = "Must be an object.";
+      return;
+    }
+
+    const stated = Object.fromEntries(
+      Object.entries(raw).filter(([key]) => !LINE_ITEM_READ_ONLY.includes(key)),
+    );
+
+    for (const key of Object.keys(stated)) {
+      if (!LINE_ITEM_FIELDS.includes(key)) fields[`${prefix}.${key}`] = "Unknown field.";
+    }
+
+    const productId = positiveInt(stated.product_id);
+    if (productId === null) fields[`${prefix}.product_id`] = "A product id is required.";
+
+    const quantity = positiveInt(stated.quantity);
+    if (quantity === null) {
+      fields[`${prefix}.quantity`] = "Must be a whole number of one or more.";
+    }
+
+    /* A variation is optional, but `0` has to mean "none" rather than an error —
+       it is what the presenter emits for a simple product, so a round-tripped
+       order would otherwise fail on a field nobody touched. */
+    let variationId = 0;
+    if ("variation_id" in stated && ![null, 0, "0", ""].includes(stated.variation_id)) {
+      variationId = positiveInt(stated.variation_id) ?? -1;
+      if (variationId === -1) {
+        fields[`${prefix}.variation_id`] = "Must be a variation id, or 0 for none.";
+      }
+    }
+
+    /*
+     * A price is optional, and **absent is not the same as zero**. `null` and
+     * `""` mean "no manual price — let the catalogue price this line", so a
+     * client clears an override by sending the field empty rather than by
+     * knowing a magic amount. `0` and `"0"` are deliberately not in that list: a
+     * free line is exactly the case the old refusal existed to prevent, and
+     * conflating it with "no price stated" would reinstate that rule by
+     * accident. Contrast `variation_id` just above, where `0` *is* the empty
+     * value.
+     */
+    let price = null;
+    let priceRefused = false;
+
+    if ("price" in stated && stated.price !== null && stated.price !== "") {
+      price = statedAmount(stated.price, `${prefix}.price`, fields);
+      priceRefused = price === null;
+
+      /*
+       * A price may only ride on a line that states the line.
+       * `{"id": 91, "price": 0}` is somebody trying to reprice one existing line
+       * in place — a reasonable thing to want, and not a thing this route does,
+       * because `line_items` replaces the whole set and pairs by index alone.
+       * Without this the body fails with two errors about fields the caller
+       * believes they never had to send and says nothing about the one they came
+       * for. Checked on key presence, not on the parsed values: a stated but
+       * invalid quantity is a quantity error and gets one message, not two.
+       */
+      if (price !== null && !("product_id" in stated && "quantity" in stated)) {
+        fields[`${prefix}.price`] =
+          "A price can only be set on a line that also states its product and quantity: " +
+          "line_items replaces the whole set and cannot reprice one line in place.";
+        priceRefused = true;
+      }
+    }
+
+    if (productId === null || quantity === null || variationId === -1 || priceRefused) return;
+
+    lines.push({ productId, variationId, quantity, price });
+  });
+
+  return lines;
+}
+
+/**
  * `PATCH /orders/{id}` — the whole writable surface, not the status alone.
  *
  * ## What this route was here, and what it is now
@@ -8622,28 +8912,46 @@ const ORDER_EDITABLE_IN = ["pending", "on-hold"];
  *   2. every remaining field validated at once, one 400 naming all of them
  *   3. nothing left to write → 400, **no details at all**
  *   4. `guardTransition()`      → 409, and it runs before every other guard
- *   5. `guardLineItemsWritable()`, `guardShippingAmountWritable()` → 409
- *   6. the repository, where an unknown customer id is refused
+ *   5. `guardLineItemsWritable()` → 409, then `guardManualPricesWritable()` →
+ *      409, then `guardShippingAmountWritable()` → 409, in that order
+ *   6. the repository — `resolveLines()` before `applyProps()`, so an unknown
+ *      product is reported ahead of an unknown customer
  *   7. WooCommerce's own setters, where the `details`-less billing-email 400 is
  *
- * ## `line_items` and `shipping_amount` are recognised, guarded, and not written
+ * ## `line_items` and `shipping_amount` are written now, and this closed a hole
  *
- * **Recognised** because `allowedFields()` lists them, and a mock answering
- * "Unknown field." would send whoever builds the line-item editor hunting a bug
- * that is not there. **Guarded** because the 409 they produce on an order that
- * has left `pending` is the single most important rule on this route — it is why
- * `order-edit.ts` omits `line_items` from the body *structurally* rather than
- * conditionally, and a mock without it makes that rule untestable.
+ * **This function used to recognise both keys, guard both, and write neither.**
+ * That divergence was documented here rather than hidden, on the argument that
+ * no screen sent either key so it was unreachable from the panel. The line-item
+ * editor is that screen, so it is closed — and the way it was closed is worth
+ * knowing, because the write is not a merge.
  *
- * **Not written, and this says so rather than pretending otherwise.** On an
- * order the guard lets through — `pending` or `on-hold` — stating either key is
- * accepted and changes nothing, which is a divergence from the API and is left
- * deliberately: the line-item write is a wholesale replacement with catalogue
- * pricing (item 1 step 2) and the shipping amount recomputes the order total
- * (step 4), and neither control exists yet. No screen in the panel sends either
- * key today, so the divergence is unreachable from the panel — but it is a
- * divergence, and the next branch to touch this function should close it rather
- * than discover it.
+ * **`line_items` is a wholesale replacement.**
+ * `OrderRepository::replaceLineItems()` removes every existing line and re-adds
+ * the payload's; `resolveLines()` pairs the two by **array index**; the line `id`
+ * never reaches the write, because `LineItemInput::READ_ONLY` drops it. So the
+ * ids below are **minted fresh on every write that names the key**, an identical
+ * replace included. That is not decoration: a panel that cached a line id across
+ * a save would work perfectly against a mock that kept them, and lose an
+ * operator's edit against the real thing.
+ *
+ * **The money is recomputed rather than echoed.** A line with a stated `price`
+ * totals `price × quantity`; a line without one is priced from the catalogue,
+ * exactly as `POST /orders` prices a create. `shipping_amount` replaces the
+ * shipping line and therefore `shipping_total`, and the order's `subtotal` and
+ * `total` are re-derived from whichever of the two moved — one sum, the way
+ * `calculate_totals()` sees both halves at once. `discount_total` and `total_tax`
+ * are `"0.00"` on all 633 seeded orders and on every order this file creates, so
+ * `subtotal + shipping_total` is the whole of that sum here; a fixture that ever
+ * grows a coupon or a tax rate has to grow this line with it.
+ *
+ * **Three refusals arrive with the write and none of them existed before:** the
+ * per-line 400s (`line_items.{n}.price`, `.quantity`, `.product_id`), the
+ * **stock 409** carrying `lines` — the indices of the submitted lines that
+ * stated a price, which is what lets a per-line form redden the right boxes —
+ * and the amount refusals on `shipping_amount`. `OrderLinesDrawer` binds all
+ * three, and a mock that answered 200 to any of them would let that drawer ship
+ * with an error path nobody had seen render.
  */
 function patchOrder(order, body) {
   /* The row as it reads *now*, not the seed: `is_editable` and the status this
@@ -8722,8 +9030,29 @@ function patchOrder(order, body) {
     if (block !== null) clean[prefix] = block;
   }
 
-  for (const key of ["line_items", "shipping_amount"]) {
-    if (key in stated) clean[key] = stated[key];
+  if ("line_items" in stated) {
+    /* Stated even when the parse failed: `OrderInput::has('line_items')` is true
+       for a key the payload named, and the 400 below stops the request before
+       anything reads the list. */
+    clean.line_items = readLineItems(stated.line_items, fields);
+  }
+
+  /*
+   * `null` and `""` are **dropped rather than refused**, which is the whole
+   * contract of this field: they mean *this request says nothing about
+   * delivery*, so the order's shipping line is left where it stands and there is
+   * no way to un-state a fee — `0` is how one is cancelled. Dropped before
+   * `$clean` means `has('shipping_amount')` is false, so an empty value is not
+   * even a 409 on a non-editable order; sent alone it is the empty-payload 400.
+   * `order-edit.ts` omits the key for exactly this reason.
+   */
+  if (
+    "shipping_amount" in stated &&
+    stated.shipping_amount !== null &&
+    stated.shipping_amount !== ""
+  ) {
+    const amount = statedAmount(stated.shipping_amount, "shipping_amount", fields);
+    if (amount !== null) clean.shipping_amount = amount;
   }
 
   // 2. One 400 naming every bad field at once — a form binds them all in one pass.
@@ -8768,6 +9097,46 @@ function patchOrder(order, body) {
     });
   }
 
+  /*
+   * `guardManualPricesWritable()` — **after the editability gate, never
+   * before**, and it is a narrower rule rather than a second condition on it.
+   *
+   * `is_editable` gates whether the lines may be rewritten at all; this gates
+   * whether *this particular write* may also restate what the goods cost. A
+   * quantity correction on a stock-holding `on-hold` order still goes through —
+   * the repository returns the units, replaces the lines and takes them again —
+   * and only an amount somebody stated is refused. Running it first would answer
+   * the narrow question on an order where the broad one had already said no.
+   *
+   * **`stock_reduced` and never a list of status names.** `on-hold` reduces
+   * stock *and* is editable, which is exactly the window this guard exists for;
+   * and an order can sit in `on-hold` holding nothing at all, having arrived
+   * there from `cancelled`. `OrderRepository::stockReduced()` reads
+   * WooCommerce's own flag and this reads the row's, which `withStatus()`
+   * derives the same way.
+   *
+   * A 409 with **no `fields`**: the payload is well formed, `1200.50` is a good
+   * amount and the parser already accepted it. What refuses it is the state of
+   * the order, and no value the operator retypes would be accepted — so binding
+   * a control to `fields` would tell them their number is wrong. `lines` is the
+   * concession to the mistake being per-line even though the reason is not: the
+   * zero-based indices of the submitted lines that stated a price, so a form
+   * bound per line can still point at the boxes to clear.
+   */
+  if (clean.line_items !== undefined && row.stock_reduced) {
+    const priced = clean.line_items.flatMap((line, index) =>
+      line.price === null ? [] : [index],
+    );
+
+    if (priced.length > 0) {
+      return conflict("A manual price cannot be set on an order that is already holding stock.", {
+        status: row.status,
+        stock_reduced: true,
+        lines: priced,
+      });
+    }
+  }
+
   if (clean.shipping_amount !== undefined && !row.is_editable) {
     return conflict("The shipping amount of an order in this status cannot be changed.", {
       status: row.status,
@@ -8775,7 +9144,42 @@ function patchOrder(order, body) {
     });
   }
 
-  // 6. The repository's own refusal — `applyProps()` → `assertCustomer()`.
+  /*
+   * 6. The repository. `OrderRepository::update()` resolves the lines **before**
+   * `applyProps()` runs, and that ordering is load-bearing rather than
+   * incidental: `replaceLineItems()` deletes the existing lines before adding
+   * the new ones, so a bad product id partway through would otherwise leave the
+   * order stripped of the items it had. It also means a body carrying both an
+   * unknown product and an unknown customer reports the product.
+   *
+   * The sentence is `resolveProduct()`'s own — "No product with id {N}." — and
+   * `postOrder` below now answers it too. **It did not when this comment was
+   * written**, which is worth keeping rather than tidying away: the create path
+   * said "No product with that id.", this half was written source-accurate on
+   * the line-editor branch, and the divergence was *named here* rather than
+   * copied on the argument that a mock which matched itself by being wrong twice
+   * would be worse than one that is inconsistent and says so. The create-drawer
+   * branch closed it in the direction of the source, which is the outcome that
+   * naming it was for. `resolveLines()` is one method serving both routes, so
+   * there was never a create-specific wording to preserve.
+   */
+  const resolved = [];
+
+  if (clean.line_items !== undefined) {
+    for (const [index, line] of clean.line_items.entries()) {
+      const product = productById(line.productId);
+
+      if (product === undefined) {
+        return invalidBody("The order data is invalid.", {
+          [`line_items.${index}.product_id`]: `No product with id ${line.productId}.`,
+        });
+      }
+
+      resolved.push({ product, line });
+    }
+  }
+
+  // `applyProps()` → `assertCustomer()`, after the lines.
   if (
     clean.customer_id !== undefined &&
     clean.customer_id !== 0 &&
@@ -8808,6 +9212,77 @@ function patchOrder(order, body) {
   // fields survive a PATCH that corrects the eleventh.
   if (clean.billing !== undefined) next.billing = { ...row.billing, ...clean.billing };
   if (clean.shipping !== undefined) next.shipping = { ...row.shipping, ...clean.shipping };
+
+  /*
+   * The lines, replaced wholesale — **and with new ids every time**.
+   *
+   * `replaceLineItems()` removes every existing line and re-adds the payload's,
+   * so an identical replace still produces different ids. Minting them here
+   * rather than reusing the ones the row had is the single most important thing
+   * this write does for the panel: an editor that keyed its rows on the API's
+   * line id would work against a mock that preserved them and lose an edit
+   * against the real API. `LineDraft` carries no id at all for that reason, and
+   * this is what would catch it if it ever did.
+   *
+   * The price is the catalogue's unless the line stated one, which is
+   * `add_product()`'s behaviour with and without `lineTotals()`'s `$args`. The
+   * stored `price` is published through the presenter's `money()`, so an amount
+   * typed with more decimals than the store keeps reads back rounded — the round
+   * trip normalizes, exactly as `LineItemInput` warns it does.
+   */
+  if (clean.line_items !== undefined) {
+    next.line_items = resolved.map(({ product, line }) => {
+      const unit =
+        line.price !== null ? line.price : product.price === "" ? "0.00" : product.price;
+      const total = (Number.parseFloat(unit) * line.quantity).toFixed(2);
+
+      return {
+        id: state.nextLineItemId++,
+        name: product.name,
+        product_id: product.id,
+        variation_id: line.variationId,
+        quantity: line.quantity,
+        sku: product.sku,
+        // `null` when the catalogue priced it — the override, not the charge.
+        price: line.price === null ? null : Number.parseFloat(line.price).toFixed(2),
+        subtotal: total,
+        total,
+      };
+    });
+  }
+
+  /* `replaceShippingLine()` collapses the statement to one shipping line, and
+     `calculate_totals()` sums that one line — so on an order this API wrote, the
+     stated amount and the derived total agree. They disagree only on an order
+     the checkout placed, which is every seeded row above. */
+  if (clean.shipping_amount !== undefined) {
+    next.shipping_amount = Number.parseFloat(clean.shipping_amount).toFixed(2);
+    next.shipping_total = next.shipping_amount;
+  }
+
+  /*
+   * One `calculate_totals()`, seeing both halves.
+   *
+   * `rewriteLineItems()` writes the fee *before* it recomputes precisely so the
+   * lines and the delivery are two terms of one sum — recomputing twice would
+   * publish a total that was briefly the goods without the carriage. Here that
+   * means one branch reading whichever of the two this request moved, falling
+   * back to what the row already had.
+   *
+   * `discount_total` and `total_tax` are `"0.00"` on every order this file
+   * holds, so they are absent from the sum rather than wrongly assumed to be:
+   * the day a fixture grows a coupon, this line is where it has to be told.
+   */
+  if (clean.line_items !== undefined || clean.shipping_amount !== undefined) {
+    const lines = next.line_items ?? row.line_items;
+    const shippingTotal = next.shipping_total ?? row.shipping_total;
+    const subtotal = lines
+      .reduce((sum, item) => sum + Number.parseFloat(item.total), 0)
+      .toFixed(2);
+
+    next.subtotal = subtotal;
+    next.total = (Number.parseFloat(subtotal) + Number.parseFloat(shippingTotal)).toFixed(2);
+  }
 
   state.orderProps.set(order.id, next);
 
@@ -8845,79 +9320,103 @@ const CREATABLE_ORDER_STATUSES = ["pending", "processing", "on-hold", "completed
  *
  *   no body / empty list      400, `details.fields.line_items`
  *   an unknown top-level key  400, naming the key
- *   a caller-supplied price   400, `line_items.0.price`
- *   a product that is gone    400
+ *   a read-only key           **dropped in silence**, never named
+ *   a per-line manual price   **accepted** — see below
+ *   a bad amount              400, `line_items.{n}.price` / `shipping_amount`
+ *   a product that is gone    400, `line_items.{n}.product_id`
  *   an unknown customer       400, `details.fields.customer_id`
  *   a malformed billing email 400, `details.fields.billing.email`
  *   a country name, not code  400
  *   cancelled / refunded      **409**
  *   an unknown status         400
- *   the happy path            **201**, total priced from the catalogue, the
- *                             country upper-cased, `stock_reduced` false while
- *                             the order is pending
+ *   the happy path            **201**, total priced from the catalogue where
+ *                             nobody overrode it, the country upper-cased, and
+ *                             `stock_reduced` false while the order is pending
+ *
+ * ## `price` is accepted now, and this line used to say the opposite
+ *
+ * It read: *"a caller-supplied price → 400, `line_items.0.price`"*, and the
+ * handler refused the key by name to match. **That refusal is gone from the
+ * backend.** `Orders\LineItemInput::ALLOWED` names `price`, and
+ * `OrderInput::normalize()` is one function shared by `forCreate()` and
+ * `forUpdate()` — so create and update take the same line shape, and the
+ * sentence *"Line prices come from the catalogue and cannot be set."* no longer
+ * exists anywhere in the plugin. `shipping_amount` rides the same shared
+ * `normalize()` and is written by `OrderRepository::create()` through
+ * `applyShippingAmount()`, before the single `calculate_totals()`.
+ *
+ * **What is *not* here, and must not be.** `OrderService::create()` calls
+ * neither `guardManualPricesWritable()` nor `guardShippingAmountWritable()` —
+ * read from source. There is no order yet, so nothing is holding stock and
+ * nothing is un-editable; the two 409s `patchOrder` answers have no counterpart
+ * on this route, and a mock that invented one would make the create drawer bind
+ * an error path the API cannot produce.
+ *
+ * **The line parsing is `readLineItems()` now**, the same function `patchOrder`
+ * uses, rather than the hand-rolled loop that stood here. That loop had drifted
+ * from `LineItemInput` in three places besides the price: it answered
+ * *"Must be a whole number greater than zero."* where the source says
+ * *"Must be a whole number of one or more."*, it answered *"No product with that
+ * id."* for a **malformed** product id where the source says *"A product id is
+ * required."*, and it dropped `line_items` read-only keys nowhere, so a
+ * round-tripped line carrying `name` came back with an unknown-field error the
+ * API does not make.
  *
  * ## The total is computed here, and that is the point of it
  *
- * `2 × 1500 + 3 × 300 = 3900.00`, from the catalogue and never from the request
- * — the suite asserts that figure against those lines. A mock that echoed a
- * caller's price back would let the panel ship a form that sent one.
+ * `2 × 1500 + 3 × 300 = 3900.00` when nobody states a price — from the catalogue
+ * and never from the request, and the suite asserts that figure against those
+ * lines. A stated price replaces the catalogue's for its own line and nothing
+ * else; the delivery fee joins the same sum. That is `calculate_totals()` seeing
+ * both halves at once, which is exactly what the create drawer must **not** do
+ * for itself: the panel states amounts and reads the total off the 201.
  */
 function postOrder(body) {
   const fields = {};
 
-  const known = new Set([
-    "line_items",
-    "status",
-    "customer_id",
-    "billing",
-    "shipping",
-    "payment_method",
-    "payment_method_title",
-    "customer_note",
-  ]);
-  for (const key of Object.keys(body ?? {})) {
-    if (!known.has(key)) fields[key] = "Unknown field.";
+  const payload =
+    body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  /*
+   * Read-only keys leave without a trace, **before** the unknown-key sweep.
+   * `OrderInput::normalize()` runs `array_diff_key($payload, READ_ONLY)` first
+   * and the `array_diff(array_keys(...), allowedFields())` sweep second, and it
+   * is one function for create and update — so `{"total": "1.00"}` is not
+   * "Unknown field." on this route either. The hand-written list that stood here
+   * named the eight writable keys and no read-only ones, so a client that POSTed
+   * a fetched order back met a 400 the API would not have sent.
+   */
+  const stated = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !ORDER_READ_ONLY_FIELDS.includes(key)),
+  );
+
+  for (const key of Object.keys(stated)) {
+    if (!ORDER_WRITABLE_FIELDS.includes(key)) fields[key] = "Unknown field.";
   }
 
-  const lines = Array.isArray(body?.line_items) ? body.line_items : null;
-  if (lines === null || lines.length === 0) {
-    fields.line_items = "An order needs at least one line item.";
-  }
+  /*
+   * `line_items` is the one key create *requires* — the single place
+   * `normalize()` behaves differently for a create than for an update
+   * (`elseif ($isCreate)`). Present, it is parsed by the same
+   * `LineItemInput::listFromPayload()` both routes use.
+   */
+  const lines = "line_items" in stated ? readLineItems(stated.line_items, fields) : null;
+  if (lines === null) fields.line_items = "An order needs at least one line item.";
 
-  const resolved = [];
-  for (const [index, raw] of (lines ?? []).entries()) {
-    const prefix = `line_items.${index}`;
-    for (const key of Object.keys(raw ?? {})) {
-      // `price` is refused **by name**: nobody reaches it by round-tripping a
-      // response — the presenter never emits one — so they reached it by trying
-      // to set a price.
-      if (!["product_id", "variation_id", "quantity"].includes(key)) {
-        fields[`${prefix}.${key}`] = "Unknown field.";
-      }
-    }
-    /*
-     * `productById`, not `PRODUCTS.find`. The catalogue is `NEW_ARRIVALS` +
-     * `PRODUCTS` + `BACK_CATALOGUE` and `/products` lists all three — so a
-     * lookup against the middle third alone refuses the first three rows of
-     * page one, which are exactly the rows a picker offers first. Found by
-     * driving the create drawer against this mock: every order built from the
-     * top of the search results came back "No product with that id."
-     *
-     * It also reads through the write state, so a force-deleted product is
-     * gone here as it is everywhere else — which is the right refusal rather
-     * than an accident.
-     */
-    const product = productById(Number(raw?.product_id));
-    if (product === undefined) {
-      fields[`${prefix}.product_id`] = "No product with that id.";
-      continue;
-    }
-    const quantity = Number(raw?.quantity);
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      fields[`${prefix}.quantity`] = "Must be a whole number greater than zero.";
-      continue;
-    }
-    resolved.push({ product, quantity });
+  /*
+   * `null` and `""` are **dropped rather than refused**, exactly as on the PATCH
+   * — one shared `normalize()`, one rule. On a create the consequence is milder
+   * and worth naming: there is no existing shipping line to leave alone, so an
+   * empty value simply means the order is born carrying no delivery charge and
+   * `applyShippingAmount()` returns without adding a line at all.
+   */
+  let shippingAmount = null;
+  if (
+    "shipping_amount" in stated &&
+    stated.shipping_amount !== null &&
+    stated.shipping_amount !== ""
+  ) {
+    shippingAmount = statedAmount(stated.shipping_amount, "shipping_amount", fields);
   }
 
   if (body?.customer_id !== undefined) {
@@ -8953,16 +9452,68 @@ function postOrder(body) {
     });
   }
 
-  const lineItems = resolved.map(({ product, quantity }, index) => {
-    const unit = product.price === "" ? "0.00" : product.price;
-    const total = (Number.parseFloat(unit) * quantity).toFixed(2);
+  /*
+   * The repository, and it runs **after** the whole field breakdown rather than
+   * inside it. `OrderRepository::create()` resolves every line before anything
+   * is written — "a line naming a product that does not exist has to fail while
+   * there is still nothing to undo" — and that is *after* `OrderInput::forCreate()`
+   * has already thrown for any bad field. So a body carrying both a country name
+   * and a product that is gone reports the country, and the product only on the
+   * retry. It used to be batched in with the validation here, which reported
+   * both at once and told a form the API is more forthcoming than it is.
+   *
+   * The sentence is `resolveProduct()`'s own — **"No product with id {N}."** —
+   * and `resolveLines()` is one method shared by `create()` and `update()`, so
+   * there was never a create-specific wording to preserve. The string that stood
+   * here, *"No product with that id."*, was simply wrong, and `patchOrder` above
+   * has said the accurate one since the line-editor branch; the divergence that
+   * branch documented rather than copied is closed here in the direction of the
+   * source.
+   *
+   * `productById`, not `PRODUCTS.find`. The catalogue is `NEW_ARRIVALS` +
+   * `PRODUCTS` + `BACK_CATALOGUE` and `/products` lists all three — so a lookup
+   * against the middle third alone refuses the first three rows of page one,
+   * which are exactly the rows a picker offers first. Found by driving the create
+   * drawer against this mock. It also reads through the write state, so a
+   * force-deleted product is gone here as it is everywhere else.
+   */
+  const resolved = [];
+  for (const [index, line] of lines.entries()) {
+    const product = productById(line.productId);
+
+    if (product === undefined) {
+      return invalidBody("The order data is invalid.", {
+        [`line_items.${index}.product_id`]: `No product with id ${line.productId}.`,
+      });
+    }
+
+    resolved.push({ product, line });
+  }
+
+  /*
+   * The lines, priced the way `add_product()` prices them: from the catalogue
+   * unless the line stated an amount, which is `lineTotals()`'s `$args` present
+   * or absent. The stored `price` is the **override** and stays `null` for a line
+   * nobody priced — the read shape's own meaning, which `OrderPresenter` keeps
+   * distinguishable from an override that happens to equal the catalogue price.
+   *
+   * A price is published through the presenter's `money()`, so an amount typed
+   * with more decimals than the store keeps reads back rounded. `LineItemInput`
+   * warns that the round trip normalizes and this is where it does.
+   */
+  const lineItems = resolved.map(({ product, line }, index) => {
+    const unit =
+      line.price !== null ? line.price : product.price === "" ? "0.00" : product.price;
+    const total = (Number.parseFloat(unit) * line.quantity).toFixed(2);
+
     return {
       id: state.nextOrderId * 10 + index,
       name: product.name,
       product_id: product.id,
-      variation_id: 0,
-      quantity,
+      variation_id: line.variationId,
+      quantity: line.quantity,
       sku: product.sku,
+      price: line.price === null ? null : Number.parseFloat(line.price).toFixed(2),
       subtotal: total,
       total,
     };
@@ -8971,6 +9522,17 @@ function postOrder(body) {
   const subtotal = lineItems
     .reduce((sum, item) => sum + Number.parseFloat(item.total), 0)
     .toFixed(2);
+
+  /*
+   * `applyShippingAmount()` writes the fee **before** the single
+   * `calculate_totals()`, so the goods and the carriage are two terms of one
+   * sum rather than two recomputes. An unstated fee adds no shipping line at
+   * all, which is why `shipping_total` is `"0.00"` and `shipping_amount` is
+   * `null` — those two mean different things and only one of them is a decision.
+   */
+  const shippingTotal = shippingAmount === null
+    ? "0.00"
+    : Number.parseFloat(shippingAmount).toFixed(2);
 
   const id = state.nextOrderId++;
   const paid = status === "completed" || status === "processing";
@@ -8990,15 +9552,31 @@ function postOrder(body) {
     line_items: lineItems,
     discount_total: "0.00",
     /*
-     * **No shipping is added.** The suite's happy path totals exactly
-     * `3900.00` on two lines of 1500 and three of 300, so a created order
-     * carries no carriage until a rule or a parcel puts one on it — unlike the
-     * seeded fixtures above, which are written with one.
+     * **No shipping unless the body stated one.** The suite's happy path totals
+     * exactly `3900.00` on two lines of 1500 and three of 300, so an order
+     * created without a `shipping_amount` still carries no carriage at all —
+     * unlike the seeded fixtures above, which are written with one.
+     *
+     * The pair is the whole point of the field's two names. `shipping_amount` is
+     * what somebody **stated** and is `null` when nobody did; `shipping_total`
+     * is what the order **charges** and is derived. On an order this route wrote
+     * they agree, because `replaceShippingLine()` collapses the statement to the
+     * one line `calculate_totals()` then sums. They disagree on an order the
+     * checkout placed, which is every seeded row above — and the reader's rule
+     * that falls out of it is *send `shipping_amount`, read `shipping_total`*.
      */
-    shipping_total: "0.00",
+    shipping_amount: shippingAmount === null ? null : shippingTotal,
+    shipping_total: shippingTotal,
     total_tax: "0.00",
     subtotal,
-    total: subtotal,
+    /*
+     * `discount_total` and `total_tax` are `"0.00"` on every order this file
+     * holds, so the sum is the goods plus the carriage and they are absent from
+     * it rather than wrongly assumed to be: the day a fixture grows a coupon or
+     * a tax rate, this line is where it has to be told. `patchOrder` carries the
+     * same caveat over the same sum.
+     */
+    total: (Number.parseFloat(subtotal) + Number.parseFloat(shippingTotal)).toFixed(2),
     is_editable: status === "pending" || status === "on-hold",
     needs_payment: !paid && status !== "failed",
     // False while pending — the suite asserts it, and asserts the movement

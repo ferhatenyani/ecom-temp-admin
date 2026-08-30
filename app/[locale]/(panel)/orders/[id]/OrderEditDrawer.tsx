@@ -67,15 +67,24 @@ import {
  * the person is looking, and §3.4 wants a failed submission summarised at the top
  * of the form it failed with focus moved there. `ErrorSummary` does both.
  *
- * ## Seams the rest of item 1 lands in
+ * ## The lines, the per-line price and the delivery fee are next door
  *
- * The line-item editor (step 2), the per-line manual price (step 3) and the
- * editable shipping cost (step 4) are **not** here, and the payload builder in
- * `order-edit.ts` cannot express any of them: its draft holds no lines and no
- * shipping amount, which is how "omit `line_items` entirely" is guaranteed
- * structurally rather than by a condition somebody has to keep right. Both of
- * those keys are gated on `is_editable` and these fields are not, so whatever
- * writes them is a second control with a second payload — see `order-edit.ts`.
+ * They are `OrderLinesDrawer`, opened from the `OrderItems` card, and the split
+ * is the route's own: every field *this* form writes is writable in every
+ * status, and those three are writable only while `WC_Order::is_editable()`.
+ * One form with a permanently disabled half is worse than two forms, and on a
+ * `completed` order — which is most of them — that half is what this would be.
+ *
+ * **This drawer still cannot emit `line_items` or `shipping_amount`, and the
+ * guarantee has changed shape.** It used to be structural: `OrderEditDraft` had
+ * no such fields, so no branch could get a condition wrong. The draft carries
+ * both now, because one route deserves one payload builder and the editor writes
+ * through the same one. What guarantees the keys stay out of *this* form's body
+ * is the mechanism every other field here already relies on — the body is a diff
+ * — plus the fact that this file draws no control for either, so the seeded
+ * values and the stored ones are the same values. `order-edit.ts` argues it, and
+ * `tests/order-edit.test.ts` asserts it on a `completed` order for every edit
+ * this drawer can make.
  */
 export function OrderEditDrawer({
   order,
@@ -204,9 +213,10 @@ export function OrderEditDrawer({
   const busy = save.isPending || refreshing;
 
   /* Disabled with the reason, never hidden — §3.3. Two reasons, in the order
-     they stop being true: no capability, no connection. There is no third: every
-     field this form writes is writable in every status, which is exactly what
-     the line items are not. */
+     they stop being true: no capability, no connection. There is no third,
+     because every field this form writes is writable in every status —
+     `OrderLinesDrawer` is the control that has the third, and it is disabled
+     with the sentence its own card already prints. */
   const blocked = !canWrite ? tOrders("readOnly") : writesBlocked;
 
   /**
@@ -422,8 +432,10 @@ const ID_PREFIX = "order-edit";
  * `getElementById` still working while `#billing.country` selects a class. Every
  * key absent from here renders in the summary as text — which is exactly right
  * for a field this form does not draw, and there are two of those the API can
- * still name: `line_items` and `shipping_amount`, neither of which this body ever
- * carries and both of which would arrive as a 409 rather than as a field anyway.
+ * still name: `line_items` and `shipping_amount`. Neither can reach this body —
+ * the draft seeds both from the order and this form draws no control for either,
+ * so the diff on them is always empty — and both would arrive as a 409 rather
+ * than as a field anyway. `OrderLinesDrawer` is where they are bound.
  */
 const FIELD_IDS: Record<string, string | undefined> = {
   customer_id: `${ID_PREFIX}-customer`,

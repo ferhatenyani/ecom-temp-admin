@@ -902,22 +902,163 @@ describe("POST /orders", () => {
     expect(data.stock_reduced).toBe(false);
   });
 
-  it("prices the line from the catalogue and ignores what the caller says", () => {
+  it("prices a line from the catalogue when nobody states an amount", () => {
     /*
-     * The refusal this whole route hinges on. A price in the body is refused by
-     * name rather than used, so a mock that echoed one back would let the panel
-     * ship a form that sent one and never find out.
+     * **This assertion used to say the opposite.** It was "prices the line from
+     * the catalogue *and ignores what the caller says*", and it checked that a
+     * body carrying `price` came back 400 with `line_items.0.price`. That
+     * refusal is gone from the backend: `LineItemInput::ALLOWED` names `price`,
+     * and `OrderInput::normalize()` is one function shared by `forCreate()` and
+     * `forUpdate()`, so create takes the same line shape update does. The half
+     * that survives is the half below — a line that states nothing is still
+     * priced by the shop, and the total is still the server's.
      */
-    const priced = write("POST", "/orders", {
-      line_items: [{ ...LINE, price: "0.01" }],
-    });
-    expect(priced.status).toBe(400);
-    expect(errorOf(priced).details?.fields).toHaveProperty("line_items.0.price");
-
     const { data } = parse(order, write("POST", "/orders", { line_items: [LINE] }));
+    expect(data.line_items[0].price).toBeNull();
+
     const unit = Number.parseFloat(data.line_items[0].total) / 2;
     expect(data.total).toBe((unit * 2).toFixed(2));
     expect(Number.parseFloat(data.total)).toBeGreaterThan(0);
+  });
+
+  it("takes a manual price per line and totals the order from it", () => {
+    /*
+     * The create half of item 1's sub-task 3, and the gap the line-editor branch
+     * left flagged: this handler recognised `price` only in order to refuse it.
+     *
+     * `price` on the read shape is the **override**, not the charge — `null`
+     * where the catalogue priced the line and the stated amount where somebody
+     * did — which is what lets the panel tell "no override" from "overridden to
+     * exactly the catalogue price". Both kinds of row are on this order.
+     */
+    const { data } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [
+          { product_id: 101, quantity: 2, price: "700" },
+          { product_id: 102, quantity: 1 },
+        ],
+      }),
+    );
+
+    expect(data.line_items[0].price).toBe("700.00");
+    expect(data.line_items[0].total).toBe("1400.00");
+    // The second line states nothing, so the shop prices it and the override
+    // stays null.
+    expect(data.line_items[1].price).toBeNull();
+
+    const catalogue = Number.parseFloat(data.line_items[1].total);
+    expect(data.total).toBe((1400 + catalogue).toFixed(2));
+  });
+
+  it("allows a free line, refuses a bad amount by name, and drops an empty one", () => {
+    /*
+     * `0` is exactly the case the old refusal existed to prevent and is now
+     * permitted and audited rather than blocked — a replacement, a promised
+     * gift. `null` and `""` are the *absence* of a price and are dropped rather
+     * than refused, which is why `buildPayload` omits the key instead of sending
+     * it empty. The three messages are `LineItemInput::amount()`'s own and each
+     * names which of three distinct things is wrong.
+     */
+    const free = parse(
+      order,
+      write("POST", "/orders", { line_items: [{ ...LINE, price: 0 }] }),
+    );
+    expect(free.data.line_items[0].price).toBe("0.00");
+    expect(free.data.total).toBe("0.00");
+
+    for (const [price, message] of [
+      ["-1", "Cannot be negative."],
+      ["nope", "Must be an amount."],
+      ["10000000", "Is implausibly large."],
+    ] as const) {
+      const refused = write("POST", "/orders", { line_items: [{ ...LINE, price }] });
+      expect(refused.status).toBe(400);
+      expect(errorOf(refused).details?.fields?.["line_items.0.price"]).toBe(message);
+    }
+
+    for (const price of [null, ""]) {
+      const { data } = parse(
+        order,
+        write("POST", "/orders", { line_items: [{ ...LINE, price }] }),
+      );
+      expect(data.line_items[0].price).toBeNull();
+    }
+  });
+
+  it("takes a shipping_amount on create and folds it into the total", () => {
+    /*
+     * `shipping_amount` rides the same shared `normalize()` and is written by
+     * `OrderRepository::create()` through `applyShippingAmount()` **before** the
+     * single `calculate_totals()` — so the goods and the carriage are two terms
+     * of one sum rather than two recomputes. **Send `shipping_amount`, read
+     * `shipping_total`**: the first is what somebody stated, the second is what
+     * the order charges.
+     */
+    const bare = parse(order, write("POST", "/orders", { line_items: [LINE] }));
+    expect(bare.data.shipping_amount).toBeNull();
+    expect(bare.data.shipping_total).toBe("0.00");
+
+    const { data } = parse(
+      order,
+      write("POST", "/orders", { line_items: [LINE], shipping_amount: "400" }),
+    );
+    expect(data.shipping_amount).toBe("400.00");
+    expect(data.shipping_total).toBe("400.00");
+    expect(data.total).toBe((Number.parseFloat(data.subtotal) + 400).toFixed(2));
+
+    const refused = write("POST", "/orders", {
+      line_items: [LINE],
+      shipping_amount: "-5",
+    });
+    expect(refused.status).toBe(400);
+    expect(errorOf(refused).details?.fields?.["shipping_amount"]).toBe("Cannot be negative.");
+  });
+
+  it("drops an empty shipping_amount rather than refusing it, and keeps a stated zero", () => {
+    /*
+     * `null` and `""` mean *this request says nothing about delivery*. On a
+     * PATCH that leaves an existing fee where it stands; on a create there is no
+     * fee to leave alone, so the order is simply born carrying none. `0` is the
+     * stated zero and reads back differently — which is the only thing that
+     * tells a decision from a silence, since both charge nothing.
+     */
+    for (const amount of [null, ""]) {
+      const { data } = parse(
+        order,
+        write("POST", "/orders", { line_items: [LINE], shipping_amount: amount }),
+      );
+      expect(data.shipping_amount).toBeNull();
+      expect(data.shipping_total).toBe("0.00");
+    }
+
+    const { data } = parse(
+      order,
+      write("POST", "/orders", { line_items: [LINE], shipping_amount: 0 }),
+    );
+    expect(data.shipping_amount).toBe("0.00");
+    expect(data.shipping_total).toBe("0.00");
+  });
+
+  it("drops a read-only key in silence rather than naming it", () => {
+    /*
+     * `OrderInput::normalize()` strips `READ_ONLY` **before** the unknown-key
+     * sweep, and it is one function for create and update — so a client that
+     * POSTs a fetched order back does not meet a 400 about `total`. The handler
+     * used to sweep against a hand-written list of the eight writable keys, so
+     * every read-only key came back as "Unknown field.".
+     */
+    const response = write("POST", "/orders", {
+      line_items: [LINE],
+      total: "1.00",
+      shipping_total: "999.00",
+      is_editable: false,
+    });
+
+    expect(response.status).toBe(201);
+    const { data } = parse(order, response);
+    expect(data.total).not.toBe("1.00");
+    expect(data.shipping_total).toBe("0.00");
   });
 
   it("refuses a body with no lines, naming line_items", () => {
@@ -937,6 +1078,18 @@ describe("POST /orders", () => {
   it("refuses a product and a customer that do not exist", () => {
     const product = write("POST", "/orders", { line_items: [{ product_id: 99999999, quantity: 1 }] });
     expect(product.status).toBe(400);
+    /*
+     * **The sentence is the source's, and it was wrong here until this branch.**
+     * `OrderRepository::resolveProduct()` answers "No product with id {N}." and
+     * `resolveLines()` is one method shared by `create()` and `update()`, so
+     * there was never a create-specific wording — this handler simply said "No
+     * product with that id." The PATCH half was corrected on the line-editor
+     * branch and named the divergence rather than copying it; this is that
+     * divergence closed, in the direction of the plugin.
+     */
+    expect(errorOf(product).details?.fields).toEqual({
+      "line_items.0.product_id": "No product with id 99999999.",
+    });
 
     const customer = write("POST", "/orders", { line_items: [LINE], customer_id: 99999999 });
     expect(customer.status).toBe(400);
@@ -3631,7 +3784,20 @@ describe("the writes", () => {
   it("recomputes is_editable rather than leaving a finished order editable", () => {
     const editable = parse(order, write("PATCH", "/orders/1023", { status: "on-hold" })).data;
     expect(editable.is_editable).toBe(true);
-    expect(editable.stock_reduced).toBe(false);
+    /*
+     * **`on-hold` is editable *and* holding stock, and this assertion used to
+     * say the opposite.**
+     *
+     * `wc_maybe_reduce_stock_levels()` is hooked to `_processing`, `_completed`
+     * and `_on-hold`, and every guard docblock in `Orders\OrderService` turns on
+     * it: `is_editable` is "pending or on-hold" and is emphatically *not* "holds
+     * no stock". The mock derived this flag from the same condition it derives
+     * `date_paid` from — which is payment — so no order in the fixture was ever
+     * both editable and holding stock, and `guardManualPricesWritable()`'s 409
+     * was unreachable through the harness. `HOLDS_STOCK` in the mock carries the
+     * correction; this is where it is asserted.
+     */
+    expect(editable.stock_reduced).toBe(true);
 
     const done = parse(order, write("PATCH", "/orders/1023", { status: "completed" })).data;
     expect(done.is_editable).toBe(false);
@@ -3851,14 +4017,32 @@ describe("the writes", () => {
    * its draft has no lines in it, so there is no condition to get wrong.
    */
   it("409s on line_items and shipping_amount once an order has left pending", () => {
-    for (const [field, sentence] of [
-      ["line_items", "The line items of an order in this status cannot be changed."],
-      ["shipping_amount", "The shipping amount of an order in this status cannot be changed."],
-    ]) {
+    /*
+     * **The bodies here are well-formed on purpose, and they did not used to
+     * be.** This case sent `[]` for both keys, which passed only because the
+     * mock recognised the keys without parsing them: against the real API an
+     * empty `line_items` is `LineItemInput`'s own 400 ("An order needs at least
+     * one line item.") and an array under `shipping_amount` is "Must be an
+     * amount." — both *before* any service guard runs. So the old assertion
+     * proved the 409 for two payloads that can never reach it, and the mock now
+     * validates first, exactly as `OrderService::update()` does.
+     */
+    for (const [field, value, sentence] of [
+      [
+        "line_items",
+        [{ product_id: 101, quantity: 1 }],
+        "The line items of an order in this status cannot be changed.",
+      ],
+      [
+        "shipping_amount",
+        "600.00",
+        "The shipping amount of an order in this status cannot be changed.",
+      ],
+    ] as const) {
       const error = refusedWith(
         // 1014 is `processing`. The note is here on purpose: it is a perfectly
         // writable field, and it does not save the request.
-        write("PATCH", "/orders/1014", { customer_note: "fine on its own", [field]: [] }),
+        write("PATCH", "/orders/1014", { customer_note: "fine on its own", [field]: value }),
         409,
         "conflict",
       );
@@ -3871,6 +4055,396 @@ describe("the writes", () => {
       parse(order, write("PATCH", "/orders/1014", { customer_note: "fine on its own" })).data
         .customer_note,
     ).toBe("fine on its own");
+  });
+
+  /**
+   * ── `line_items` and `shipping_amount`, which this mock now writes ──────────
+   *
+   * The function used to recognise both keys, guard both, and write neither —
+   * documented as a divergence on the grounds that no screen sent either. The
+   * line-item editor is that screen.
+   *
+   * Everything below is read from `Orders\LineItemInput`, `Orders\OrderInput`,
+   * `Orders\OrderService` and `Orders\OrderRepository` in the backend
+   * repository, and the field contract around it was **measured in-process via
+   * `rest_do_request()`** in that repository's `tests/Api/orders.php`. Read the
+   * phrase strictly: no refusal on this route has been seen coming back over
+   * HTTP, and `BLOCKED.md` says why.
+   */
+  describe("the line items, which are replaced wholesale", () => {
+    /** 1001 is `on-hold` — editable, and holding stock. */
+    const editableId = () => {
+      const rows = parseList(orderList, get("/orders", "status=pending&per_page=1")).data;
+      return rows[0].id;
+    };
+
+    it("replaces the whole set, prices it from the catalogue and recomputes the totals", () => {
+      const id = editableId();
+      const before = parse(order, get(`/orders/${id}`)).data;
+      expect(before.is_editable).toBe(true);
+
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, {
+          line_items: [{ product_id: 101, quantity: 2 }],
+        }),
+      ).data;
+
+      // Wholesale: whatever the order had is gone, not merged with.
+      expect(after.line_items).toHaveLength(1);
+      expect(after.line_items[0].product_id).toBe(101);
+      expect(after.line_items[0].quantity).toBe(2);
+      // Priced from the catalogue, because the line stated no price.
+      expect(after.line_items[0].price).toBeNull();
+
+      const unit = Number.parseFloat(after.line_items[0].total) / 2;
+      expect(after.subtotal).toBe((unit * 2).toFixed(2));
+      // The shipping line is untouched by a lines-only write, and the total is
+      // one sum over both — `calculate_totals()` sees the two together.
+      expect(after.shipping_total).toBe(before.shipping_total);
+      expect(after.total).toBe(
+        (Number.parseFloat(after.subtotal) + Number.parseFloat(after.shipping_total)).toFixed(2),
+      );
+
+      // And the read after the write agrees, which is what the drawer refreshes
+      // into.
+      expect(parse(order, get(`/orders/${id}`)).data.line_items).toHaveLength(1);
+    });
+
+    it("mints new line ids on every write, including an identical replace", () => {
+      /*
+       * **The property the panel is built against.**
+       * `OrderRepository::replaceLineItems()` removes every line and re-adds the
+       * payload's, `resolveLines()` pairs by array index, and
+       * `LineItemInput::READ_ONLY` drops `id` — so a line id addresses nothing
+       * and churns on every write that names the key. An editor that cached one
+       * would look correct against a mock that preserved them.
+       */
+      const id = editableId();
+      const body = { line_items: [{ product_id: 101, quantity: 1 }] };
+
+      const first = parse(order, write("PATCH", `/orders/${id}`, body)).data.line_items[0].id;
+      const second = parse(order, write("PATCH", `/orders/${id}`, body)).data.line_items[0].id;
+
+      expect(second).not.toBe(first);
+    });
+
+    it("charges a stated price and recomputes the line's own totals from it", () => {
+      const id = editableId();
+
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, {
+          line_items: [{ product_id: 101, quantity: 3, price: "500" }],
+        }),
+      ).data;
+
+      const line = after.line_items[0];
+      // `subtotal` and `total` are dropped on write and recomputed from
+      // `price × quantity` — a caller sending a price and a stale total is
+      // believed about the price and ignored about the totals.
+      expect(line.total).toBe("1500.00");
+      expect(line.subtotal).toBe("1500.00");
+      /* The round trip normalizes: the amount is stored as typed and published
+         through `wc_format_decimal()` at the store's precision, so `"500"` reads
+         back `"500.00"`. `LineItemInput` lists that as the third cost of the
+         field existing. */
+      expect(line.price).toBe("500.00");
+      expect(after.subtotal).toBe("1500.00");
+    });
+
+    it("treats an empty price as no override and zero as a free line", () => {
+      /*
+       * `null` and `""` mean "let the catalogue price this line"; `0` and `"0"`
+       * are deliberately not in that list, because a free line is a real thing a
+       * shop does and conflating the two would reinstate the old refusal by
+       * accident.
+       */
+      const id = editableId();
+
+      for (const price of [null, ""]) {
+        const line = parse(
+          order,
+          write("PATCH", `/orders/${id}`, {
+            line_items: [{ product_id: 101, quantity: 1, price }],
+          }),
+        ).data.line_items[0];
+        expect(line.price).toBeNull();
+        expect(Number.parseFloat(line.total)).toBeGreaterThan(0);
+      }
+
+      const free = parse(
+        order,
+        write("PATCH", `/orders/${id}`, {
+          line_items: [{ product_id: 101, quantity: 4, price: 0 }],
+        }),
+      ).data;
+      expect(free.line_items[0].price).toBe("0.00");
+      expect(free.line_items[0].total).toBe("0.00");
+      expect(free.subtotal).toBe("0.00");
+    });
+
+    it("round-trips a fetched order's own lines, dropping the read-only keys", () => {
+      /*
+       * The natural client move — GET an order, change a quantity, PATCH the
+       * lines back — has to work, and it is what `LineItemInput::READ_ONLY`
+       * exists for: `id`, `name`, `sku`, `subtotal` and `total` are dropped in
+       * silence rather than answered "Unknown field."
+       */
+      const id = editableId();
+      const before = parse(order, get(`/orders/${id}`)).data;
+
+      const echoed = before.line_items.map((line) => ({ ...line, quantity: line.quantity + 1 }));
+      const after = parse(order, write("PATCH", `/orders/${id}`, { line_items: echoed })).data;
+
+      expect(after.line_items.map((line) => line.quantity)).toEqual(
+        before.line_items.map((line) => line.quantity + 1),
+      );
+    });
+
+    it("names every bad line at once, keyed the way a per-line form binds them", () => {
+      const id = editableId();
+
+      const error = refusedWith(
+        write("PATCH", `/orders/${id}`, {
+          line_items: [
+            { product_id: 101, quantity: 0 },
+            { product_id: 101, quantity: 1, price: "-5" },
+            { product_id: 101, quantity: 1, price: "nope" },
+            { product_id: 101, quantity: 1, price: "10000000" },
+            { product_id: 101, quantity: 1, colour: "rouge" },
+          ],
+        }),
+        400,
+        "invalid_request",
+      );
+
+      expect(error.fields).toEqual({
+        "line_items.0.quantity": "Must be a whole number of one or more.",
+        "line_items.1.price": "Cannot be negative.",
+        "line_items.2.price": "Must be an amount.",
+        // `LineItemInput::MAX_PRICE` is 9 999 999.99 and this is a hair over it.
+        "line_items.3.price": "Is implausibly large.",
+        "line_items.4.colour": "Unknown field.",
+      });
+    });
+
+    it("refuses an empty set and a line naming a product that is not there", () => {
+      const id = editableId();
+
+      expect(
+        refusedWith(write("PATCH", `/orders/${id}`, { line_items: [] }), 400, "invalid_request")
+          .fields,
+      ).toEqual({ line_items: "An order needs at least one line item." });
+
+      expect(
+        refusedWith(
+          write("PATCH", `/orders/${id}`, {
+            line_items: [{ product_id: 101, quantity: 1 }, { product_id: 99999999, quantity: 1 }],
+          }),
+          400,
+          "invalid_request",
+        ).fields,
+      ).toEqual({ "line_items.1.product_id": "No product with id 99999999." });
+    });
+
+    it("refuses a price aimed at one existing line by id, and says why", () => {
+      /*
+       * `{"id": 91, "price": 0}` is somebody trying to reprice one line in
+       * place. It is a reasonable thing to want and not a thing this route does,
+       * and without the named refusal it fails with two errors about fields the
+       * caller believes they never had to send.
+       */
+      const id = editableId();
+      const stored = parse(order, get(`/orders/${id}`)).data.line_items[0];
+
+      const error = refusedWith(
+        write("PATCH", `/orders/${id}`, { line_items: [{ id: stored.id, price: "10" }] }),
+        400,
+        "invalid_request",
+      );
+
+      expect(error.fields?.["line_items.0.price"]).toContain(
+        "A price can only be set on a line that also states its product and quantity",
+      );
+      // And nothing about `id` — it was dropped before the sweep, in silence.
+      expect(error.fields).not.toHaveProperty("line_items.0.id");
+    });
+
+    /**
+     * **`guardManualPricesWritable()`, and the state it needs to exist at all.**
+     *
+     * `on-hold` reduces stock *and* is editable, so it is the one status where
+     * the lines may be rewritten and a stated price may not. The refusal is a
+     * 409 with **no `fields`** — the payload is well formed and no amount would
+     * be accepted — carrying `lines`, the zero-based indices of the submitted
+     * lines that stated a price, so a per-line form can still redden the right
+     * boxes.
+     */
+    it("409s a stated price on an order holding stock, naming the lines that stated one", () => {
+      const id = editableId();
+      parse(order, write("PATCH", `/orders/${id}`, { status: "on-hold" }));
+      expect(parse(order, get(`/orders/${id}`)).data.stock_reduced).toBe(true);
+
+      const error = refusedWith(
+        write("PATCH", `/orders/${id}`, {
+          line_items: [
+            { product_id: 101, quantity: 1 },
+            { product_id: 101, quantity: 2, price: "500" },
+            { product_id: 101, quantity: 1 },
+            { product_id: 101, quantity: 1, price: "0" },
+          ],
+        }),
+        409,
+        "conflict",
+      );
+
+      expect(error.apiMessage).toBe(
+        "A manual price cannot be set on an order that is already holding stock.",
+      );
+      expect(error.details).toEqual({ status: "on-hold", stock_reduced: true, lines: [1, 3] });
+      // `fields` is the validation channel and this is not a validation error.
+      expect(error.fields).toBeNull();
+    });
+
+    it("still lets a quantity through on that same order, which is the narrower gate working", () => {
+      /*
+       * The gate is on the *price*, not on the money.
+       * `guardLineItemsWritable()` is unchanged and the repository returns the
+       * units, replaces the lines and takes them again — so four kettles become
+       * forty here and the order's total moves with no manual price anywhere
+       * near it. That asymmetry is deliberate and is named in both guards.
+       */
+      const id = editableId();
+      parse(order, write("PATCH", `/orders/${id}`, { status: "on-hold" }));
+
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, { line_items: [{ product_id: 101, quantity: 40 }] }),
+      ).data;
+
+      expect(after.line_items[0].quantity).toBe(40);
+      expect(after.stock_reduced).toBe(true);
+    });
+  });
+
+  describe("the delivery fee, which is stated and never quoted back", () => {
+    const editableId = () =>
+      parseList(orderList, get("/orders", "status=pending&per_page=1")).data[0].id;
+
+    it("writes the fee, moves shipping_total with it and re-derives the total", () => {
+      const id = editableId();
+      const before = parse(order, get(`/orders/${id}`)).data;
+      // Every seeded order was placed by a checkout: a fee from the tariff that
+      // nobody stated. That is the pair `shipping_amount`/`shipping_total`
+      // exists to keep apart.
+      expect(before.shipping_amount).toBeNull();
+      expect(Number.parseFloat(before.shipping_total)).toBeGreaterThan(0);
+
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, { shipping_amount: "750.5" }),
+      ).data;
+
+      expect(after.shipping_amount).toBe("750.50");
+      // `replaceShippingLine()` collapses the statement to one line and
+      // `calculate_totals()` sums that one line, so on an order this API wrote
+      // the two agree.
+      expect(after.shipping_total).toBe("750.50");
+      expect(after.total).toBe(
+        (Number.parseFloat(after.subtotal) + 750.5).toFixed(2),
+      );
+      // The lines were not named, so their ids did not churn.
+      expect(after.line_items.map((line) => line.id)).toEqual(
+        before.line_items.map((line) => line.id),
+      );
+    });
+
+    it("cancels a fee with a stated zero, which is the only way to cancel one", () => {
+      const id = editableId();
+      const after = parse(order, write("PATCH", `/orders/${id}`, { shipping_amount: 0 })).data;
+
+      expect(after.shipping_amount).toBe("0.00");
+      expect(after.shipping_total).toBe("0.00");
+      expect(after.total).toBe(after.subtotal);
+    });
+
+    it("drops an empty fee rather than refusing it, so an empty box states nothing", () => {
+      /*
+       * `null` and `""` are dropped before `$clean` is assembled, so
+       * `has('shipping_amount')` is false for them: the shipping line is left
+       * where it stands, **and the guard does not fire either**. Sent alone the
+       * body is empty and answers the no-details 400 — which is exactly why
+       * `order-edit.ts` omits the key for an emptied field rather than sending
+       * `""`.
+       */
+      const id = editableId();
+      const before = parse(order, get(`/orders/${id}`)).data;
+
+      for (const value of [null, ""]) {
+        const error = refusedWith(
+          write("PATCH", `/orders/${id}`, { shipping_amount: value }),
+          400,
+          "invalid_request",
+        );
+        expect(error.apiMessage).toBe("No supported fields were provided.");
+        expect(error.details).toEqual({});
+      }
+
+      // Beside a real edit it is simply absent, and the fee is untouched.
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, { shipping_amount: "", customer_note: "kept" }),
+      ).data;
+      expect(after.customer_note).toBe("kept");
+      expect(after.shipping_total).toBe(before.shipping_total);
+
+      // And on a *non-editable* order an empty value is not a 409 either, for
+      // the same reason: the key never entered the payload.
+      expect(
+        refusedWith(write("PATCH", "/orders/1014", { shipping_amount: null }), 400, "invalid_request")
+          .apiMessage,
+      ).toBe("No supported fields were provided.");
+    });
+
+    it("refuses a bad amount with the same three sentences a line's price gets", () => {
+      const id = editableId();
+
+      for (const [value, sentence] of [
+        ["nope", "Must be an amount."],
+        ["-1", "Cannot be negative."],
+        ["10000000", "Is implausibly large."],
+        [[], "Must be an amount."],
+      ] as const) {
+        expect(
+          refusedWith(
+            write("PATCH", `/orders/${id}`, { shipping_amount: value }),
+            400,
+            "invalid_request",
+          ).fields,
+        ).toEqual({ shipping_amount: sentence });
+      }
+    });
+
+    it("writes both halves in one body and sums them once", () => {
+      /*
+       * `rewriteLineItems()` applies the fee *before* it recomputes, precisely
+       * so one `calculate_totals()` sees both — recomputing twice would publish
+       * a total that was briefly the goods without the carriage.
+       */
+      const id = editableId();
+      const after = parse(
+        order,
+        write("PATCH", `/orders/${id}`, {
+          line_items: [{ product_id: 101, quantity: 2, price: "100" }],
+          shipping_amount: "300",
+        }),
+      ).data;
+
+      expect(after.subtotal).toBe("200.00");
+      expect(after.shipping_total).toBe("300.00");
+      expect(after.total).toBe("500.00");
+    });
   });
 
   it("answers a numeric id naming no order with this collection's own 404", () => {

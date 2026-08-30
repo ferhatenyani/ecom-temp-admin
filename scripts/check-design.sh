@@ -55,7 +55,20 @@ cd "$(dirname "$0")/.." || exit 2
 # 2 the history above keeps, and raised here rather than left to pass on the old
 # number: a floor that trails the real count by six stops catching the emptied
 # glob it exists for.
-FLOOR=314
+#
+# 318 at the order-lines branch, floor 316. Two files, and one of them is a split
+# of the same kind the line above records. `orders/[id]/OrderLinesDrawer.tsx` is
+# the line-item editor itself — the lines, the per-line manual price and the
+# delivery fee, which are the three fields `is_editable` gates and which
+# therefore could not join the edit drawer. `orders/ProductPicker.tsx` is the
+# search-plus-results list lifted out of `NewOrderDrawer.tsx`, whose inline copy
+# it was: the editor is the second form that has to put a product on an order,
+# and `AddressFields.tsx` already recorded on the previous branch what happens if
+# a control like that is copied instead — "two hand-maintained copies of eleven
+# controls drift by the third branch". `NewOrderDrawer` still holds the original
+# and adopts this on its next touch, so the count is +2 rather than the +1 a
+# finished extraction would have been. Same margin of 2.
+FLOOR=316
 failures=0
 checks=0
 
