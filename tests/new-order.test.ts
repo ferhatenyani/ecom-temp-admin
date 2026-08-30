@@ -6,7 +6,9 @@ import {
   emptyAddress,
   emptyDraft,
   isAddressEmpty,
+  nextLineKey,
   parseQuantity,
+  type DraftLine,
   type OrderDraft,
 } from "@/app/[locale]/(panel)/orders/new-order";
 import { CREATABLE_STATUSES, orderStatuses } from "@/lib/order-status";
@@ -19,14 +21,41 @@ import { CREATABLE_STATUSES, orderStatuses } from "@/lib/order-status";
  * rather than through eleven `fireEvent`s per case. Every expectation below is a
  * refusal the backend's own suite (`tests/Api/orders.php`) makes by name, or a
  * rule this panel decided and would otherwise lose silently.
+ *
+ * ## One group of assertions in here was overturned, not extended
+ *
+ * *"never sends a price, however much the row knows about one"* was called "the
+ * single most important assertion in this file" and it is gone. The rule it
+ * protected is gone with it: `Orders\LineItemInput::ALLOWED` names `price` and
+ * `OrderInput::normalize()` is one function shared by `forCreate()` and
+ * `forUpdate()`, so `POST /orders` takes a manual unit price and a
+ * `shipping_amount` the way `PATCH /orders/{id}` does. What replaces it is
+ * *"sends a price only when somebody typed one"*, which is a narrower and much
+ * more easily broken claim — and it is deliberately asserted from both ends,
+ * because the old assertion's real job was to stop the row's rendering data from
+ * being spread onto the wire, and that failure mode still exists.
  */
 
 const MESSAGES = { noLines: "no lines", quantity: "bad quantity" };
 
+/** One line as the picker leaves it: seeded from the catalogue, editable. */
+function lineWith(overrides: Partial<DraftLine> = {}): DraftLine {
+  return {
+    key: 0,
+    productId: 101,
+    name: "Théière",
+    sku: "AC-THE-001",
+    price: "1500.00",
+    cataloguePrice: "1500.00",
+    quantity: "2",
+    ...overrides,
+  };
+}
+
 function draftWith(overrides: Partial<OrderDraft> = {}): OrderDraft {
   return {
     ...emptyDraft(),
-    lines: [{ productId: 101, name: "Théière", sku: "AC-THE-001", price: "1500.00", quantity: "2" }],
+    lines: [lineWith()],
     ...overrides,
   };
 }
@@ -38,23 +67,35 @@ describe("the body carries only what the operator set", () => {
      * billing strings, an empty payment method and a `customer_id: 0` would be
      * asking the API to validate fields nobody filled in — and `billing.country`
      * is exactly the one that answers back.
+     *
+     * The line carries a `price` because the picker seeded it from the catalogue
+     * and that is a *stated* price — see the prefill assertions below, and
+     * `NewOrderDrawer`'s `addLine`, which makes that choice on purpose.
      */
     expect(buildPayload(draftWith())).toEqual({
-      line_items: [{ product_id: 101, quantity: 2 }],
+      line_items: [{ product_id: 101, quantity: 2, price: "1500.00" }],
       status: "pending",
     });
   });
 
-  it("never sends a price, however much the row knows about one", () => {
+  it("sends a line's rendering data nowhere near the wire", () => {
     /*
-     * The single most important assertion in this file. `POST /orders` prices
-     * every line from the catalogue and refuses a caller-supplied price **by
-     * name** — `details.fields["line_items.0.price"]` — and the draft line
-     * carries a price for its own rendering, one field away from being spread
-     * onto the wire.
+     * What survives of the old *"never sends a price"* assertion, which this
+     * replaces. That one guarded a rule the API no longer has; the failure mode
+     * it was really watching for — the draft line being spread onto the payload,
+     * carrying whatever it holds for its own rendering — is still live, and
+     * `name`, `sku`, `cataloguePrice` and `key` are all one spread away from it.
+     *
+     * `key` is the one worth naming twice: it is the panel's own React key,
+     * meaningless to the API, and a body carrying it would be refused with
+     * "Unknown field." on a line nobody could see anything wrong with.
      */
     const body = buildPayload(draftWith()) as { line_items: Record<string, unknown>[] };
-    expect(Object.keys(body.line_items[0]).sort()).toEqual(["product_id", "quantity"]);
+    expect(Object.keys(body.line_items[0]).sort()).toEqual([
+      "price",
+      "product_id",
+      "quantity",
+    ]);
   });
 
   it("omits customer_id for a guest and sends it for a customer", () => {
@@ -79,6 +120,185 @@ describe("the body carries only what the operator set", () => {
 
     expect(body).toMatchObject({ payment_method: "cod", customer_note: "Sonner deux fois" });
     expect(body).not.toHaveProperty("payment_method_title");
+  });
+});
+
+/**
+ * The manual price per line — item 1's sub-task 3, create half.
+ *
+ * Measured in-process via `rest_do_request()` against the plugin's own suite,
+ * and read from `Orders\LineItemInput::one()` where a rule is a rule rather than
+ * a case. The old refusal — *"Line prices come from the catalogue and cannot be
+ * set."* — is gone from the backend; these are the rules that replaced it.
+ */
+describe("a line states a price only when somebody typed one", () => {
+  /** The line items of a payload, which is the only shape assertions want. */
+  const linesOf = (draft: OrderDraft) =>
+    buildPayload(draft).line_items as Record<string, unknown>[];
+
+  it("sends the amount that is in the box", () => {
+    expect(linesOf(draftWith({ lines: [lineWith({ price: "700" })] }))[0]).toEqual({
+      product_id: 101,
+      quantity: 2,
+      price: "700",
+    });
+  });
+
+  it("omits the key entirely for an empty box, rather than sending it empty", () => {
+    /*
+     * `LineItemInput::one()` reads a missing key, `null` and `""` identically —
+     * *no manual price, let the catalogue price this line* — so all three are
+     * equivalent to the API and none of them is equivalent to a person reading
+     * the request. The smallest body that says what the panel means is the one
+     * that omits the key. `[id]/order-edit.ts`'s `payloadLines()` omits it on the
+     * same argument plus one this route does not have: there the choice is also
+     * the difference between a 200 and `guardManualPricesWritable()`'s 409, and
+     * `OrderService::create()` never calls that guard.
+     */
+    expect(linesOf(draftWith({ lines: [lineWith({ price: "" })] }))[0]).toEqual({
+      product_id: 101,
+      quantity: 2,
+    });
+    expect(linesOf(draftWith({ lines: [lineWith({ price: "   " })] }))[0]).toEqual({
+      product_id: 101,
+      quantity: 2,
+    });
+  });
+
+  it("sends a zero, because a free line is not an absent price", () => {
+    /*
+     * **The distinction the whole field turns on.** `0` and `"0"` are
+     * deliberately absent from `LineItemInput`'s empty list: a free line is a
+     * real thing a shop does — a replacement, a promised gift — and it is
+     * exactly the case the old refusal was written to prevent. A builder that
+     * treated a falsy amount as "no price" would reinstate that rule by
+     * accident, and the operator would watch a giveaway come back at full price.
+     */
+    expect(linesOf(draftWith({ lines: [lineWith({ price: "0" })] }))[0]).toMatchObject({
+      price: "0",
+    });
+  });
+
+  it("trims, because is_numeric() tolerates whitespace and the stored value should not", () => {
+    expect(linesOf(draftWith({ lines: [lineWith({ price: " 700 " })] }))[0]).toMatchObject({
+      price: "700",
+    });
+  });
+
+  it("does not normalise the amount, however differently it is written", () => {
+    /*
+     * `1200.5` is sent as `1200.5`. `LineItemInput::amount()` returns the string
+     * the caller typed and is explicit about not normalising it — the class is
+     * pure and cannot ask `wc_get_price_decimals()` what the store's precision
+     * is, so rounding is WooCommerce's to do when the amount reaches the line.
+     * A panel that rounded here would be deciding a precision it cannot read,
+     * which is the same arithmetic `lib/format/money.ts` opens by refusing.
+     */
+    expect(linesOf(draftWith({ lines: [lineWith({ price: "1200.5" })] }))[0]).toMatchObject({
+      price: "1200.5",
+    });
+  });
+
+  it("states a product and a quantity on every line that carries a price", () => {
+    /*
+     * `LineItemInput::one()` refuses a price on a line that does not also state
+     * `product_id` and `quantity` — checked on key presence, so that a stated
+     * but invalid quantity is one message rather than two. Both keys are
+     * unconditional in `buildPayload`, so the refusal is unreachable from this
+     * form; this is what keeps it that way, because the omission rules above are
+     * exactly the sort of thing that grows a third case later.
+     */
+    const lines = linesOf(
+      draftWith({
+        lines: [
+          lineWith({ key: 0, price: "700", quantity: "nope" }),
+          lineWith({ key: 1, productId: 102, price: "0" }),
+        ],
+      }),
+    );
+
+    for (const line of lines) {
+      expect(line).toHaveProperty("product_id");
+      expect(line).toHaveProperty("quantity");
+    }
+    // And the unparseable quantity is `0`, which the API refuses by name rather
+    // than a `1` invented here. `draftProblems` catches it before the request.
+    expect(lines[0].quantity).toBe(0);
+  });
+});
+
+/**
+ * The delivery fee — item 1's sub-task 4, create half.
+ *
+ * `shipping_amount` is accepted on create by the same `OrderInput::normalize()`
+ * the PATCH uses and is written by `OrderRepository::create()` through
+ * `applyShippingAmount()`, before the single `calculate_totals()`. It is
+ * **`shipping_amount` out and `shipping_total` back**: the first is what
+ * somebody stated, the second is what the order charges, and `shipping_total` is
+ * in `OrderInput::READ_ONLY`.
+ */
+describe("the delivery fee", () => {
+  it("is absent from a blank draft, and from the body it produces", () => {
+    /*
+     * There is nothing to seed it from: step 2's rate lookup is not built and
+     * this drawer has no wilaya or commune to quote against. The seam at the
+     * foot of `new-order.ts` says so, and this is the assertion that would fail
+     * if somebody invented a default.
+     */
+    expect(emptyDraft().shippingAmount).toBe("");
+    expect(buildPayload(draftWith())).not.toHaveProperty("shipping_amount");
+  });
+
+  it("omits an empty box rather than sending it empty", () => {
+    /*
+     * `OrderInput::normalize()` drops `null` and `""` before the payload is
+     * assembled, so an empty box is a key the API discards — asking for nothing
+     * in a longer sentence. On a *create* the effect is milder than on the edit
+     * form, where an empty box leaves an existing fee where it stands: here
+     * there is no fee to leave alone and the order is simply born carrying none.
+     */
+    expect(buildPayload(draftWith({ shippingAmount: "  " }))).not.toHaveProperty(
+      "shipping_amount",
+    );
+  });
+
+  it("sends what was typed, trimmed, including a stated zero", () => {
+    expect(buildPayload(draftWith({ shippingAmount: " 400 " }))).toMatchObject({
+      shipping_amount: "400",
+    });
+    /* `0` is the way to say "no delivery charge" and is a statement rather than
+       an absence — a zero shipping line. It reads back as `"0.00"` where an
+       empty one reads back `null`, which is the only thing that tells a decision
+       from a silence, since both charge nothing. */
+    expect(buildPayload(draftWith({ shippingAmount: "0" }))).toMatchObject({
+      shipping_amount: "0",
+    });
+  });
+});
+
+/**
+ * The line key — the panel's own, and never the API's.
+ *
+ * It exists because two rows for one product became reachable the moment a price
+ * could be typed: four copies at 1 500 and one damaged copy at 700 is a real
+ * order, and `NewOrderDrawer`'s `addLine` opens a second row for it rather than
+ * merging the press into the discounted one. The React key used to be
+ * `line.productId` and would collide on exactly that order.
+ */
+describe("line keys", () => {
+  it("mints the next unused key, derived from the list rather than counted", () => {
+    expect(nextLineKey([])).toBe(0);
+    expect(nextLineKey([lineWith({ key: 0 }), lineWith({ key: 1 })])).toBe(2);
+    // Derived, so a removal cannot make it hand back a key that is still in use.
+    expect(nextLineKey([lineWith({ key: 4 })])).toBe(5);
+    expect(nextLineKey([lineWith({ key: 7 }), lineWith({ key: 2 })])).toBe(8);
+  });
+
+  it("never reaches the wire", () => {
+    const body = buildPayload(
+      draftWith({ lines: [lineWith({ key: 99 })] }),
+    ) as { line_items: Record<string, unknown>[] };
+    expect(body.line_items[0]).not.toHaveProperty("key");
   });
 });
 
@@ -180,6 +400,24 @@ describe("one bad value produces one refusal, not two", () => {
     expect(bindRefusals(fields, true)).toEqual(fields);
   });
 
+  it("does not mistake shipping_amount for a shipping address field", () => {
+    /*
+     * The two names are one character apart and mean nothing like each other:
+     * `shipping.city` is half of an address block that is sent twice while the
+     * switch is on, and `shipping_amount` is the delivery fee, sent once and
+     * never duplicated. The fold is keyed on the `shipping.` prefix — with the
+     * dot — so the underscore is what keeps them apart, and a refusal about the
+     * fee must never be re-keyed onto a billing control that has nothing to do
+     * with it. `line_items.{n}.price` is here for the same reason: a per-line
+     * refusal binds to the row that produced it and to nothing else.
+     */
+    const fields = {
+      shipping_amount: "Cannot be negative.",
+      "line_items.0.price": "Is implausibly large.",
+    };
+    expect(bindRefusals(fields, true)).toEqual(fields);
+  });
+
   it("remaps nothing when the two blocks are genuinely two blocks", () => {
     const fields = { "billing.country": COUNTRY, "shipping.country": COUNTRY };
     expect(bindRefusals(fields, false)).toEqual(fields);
@@ -216,8 +454,8 @@ describe("the client-side rules, and how few of them there are", () => {
     const problems = draftProblems(
       draftWith({
         lines: [
-          { productId: 101, name: "A", sku: "", price: "", quantity: "2" },
-          { productId: 102, name: "B", sku: "", price: "", quantity: "nope" },
+          lineWith({ key: 0, productId: 101, quantity: "2" }),
+          lineWith({ key: 1, productId: 102, quantity: "nope" }),
         ],
       }),
       MESSAGES,
@@ -240,6 +478,37 @@ describe("the client-side rules, and how few of them there are", () => {
     const problems = draftProblems(
       draftWith({
         billing: { ...emptyAddress(), country: "Algeria", email: "nope" },
+      }),
+      MESSAGES,
+    );
+
+    expect(problems).toEqual({});
+  });
+
+  it("adds no rule for the two new money fields, and that is the decision", () => {
+    /**
+     * **Sub-task 6 asks for `draftProblems()` to be extended for the new fields.
+     * It was examined for both and gained nothing**, so this is what "extended"
+     * came to: an assertion that it did not grow, and a reason.
+     *
+     * `LineItemInput::amount()` and `OrderInput::amount()` answer a bad amount
+     * with one of three sentences — "Must be an amount.", "Cannot be negative.",
+     * "Is implausibly large." — and each names which of three distinct things
+     * went wrong. A local rule could only be a fourth, vaguer sentence, or a
+     * second copy of those two functions that drifts on the first branch that
+     * moves the ceiling. `[id]/order-edit.ts`'s `lineProblems` reached the same
+     * conclusion about the same fields.
+     *
+     * The stock 409 is not pre-empted either, and on this route it cannot be:
+     * `OrderService::create()` does not call `guardManualPricesWritable()`, so
+     * there is no refusal to warn about before the save. If somebody ever wires
+     * that guard into `create()`, this test is where the panel finds out it was
+     * ignoring it.
+     */
+    const problems = draftProblems(
+      draftWith({
+        lines: [lineWith({ price: "-1" }), lineWith({ key: 1, price: "beaucoup" })],
+        shippingAmount: "-40",
       }),
       MESSAGES,
     );

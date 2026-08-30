@@ -3,6 +3,7 @@ import type { Order } from "@/lib/api/schemas/order";
 import { formatMoney } from "@/lib/format/money";
 import { Ltr } from "@/components/primitives/Ltr";
 import { Card } from "@/components/ui/Card";
+import { OrderLinesDrawer } from "./OrderLinesDrawer";
 
 /**
  * The line items and the totals that follow from them.
@@ -32,28 +33,43 @@ import { Card } from "@/components/ui/Card";
  * with room to spare. Scrolling to reach a two-character quantity would be a
  * worse answer than restructuring, and the totals block has no columns at all.
  *
- * ## No line-item editor, and no sentence about it either
+ * ## The editor, and the footnote that used to stand in for it
  *
- * `is_editable` is real and `ADMIN_PANEL.md:1473` specifies the behaviour, but
- * the `PATCH /orders/{id}` line-items contract has never been measured against
- * the live API. Unverified is treated as not working: shipping an editor whose
- * write shape is a guess would put the shop's order book at risk to save a
- * support agent a phone call. **That reasoning lives here and nowhere on
- * screen.** A footnote explaining that a write contract was never measured is
- * engineering rationale in front of a shopkeeper, who has no idea what one is.
+ * This card said, for eleven branches, that there was **no** line-item editor —
+ * because the `PATCH /orders/{id}` line-items contract had never been measured
+ * and unverified is treated as not working. That reason has expired: the whole
+ * write shape is now **measured in-process via `rest_do_request()`** against the
+ * plugin's own suite, replace-the-set semantics and every refusal included, and
+ * `OrderLinesDrawer` is built on it. Read that phrase strictly — it is not
+ * "measured against the live API", which `BLOCKED.md` says is a sentence no
+ * finding on this route may use.
  *
- * So the footnote renders only when `is_editable` is false, and says only the
- * part that is a fact about *their* order: the stock has moved, so the lines are
- * fixed. When it is true there is no disabled affordance to explain and nothing
- * worth saying — "the items are still editable" beside no editor is worse than
+ * The trigger goes in `Card`'s `actions` slot rather than the page header, and
+ * the reason is this footnote. §3.3 allows one primary action per view and the
+ * header already carries the status menu and the edit drawer; more usefully,
+ * **the disabled reason is already printed here**. The button is disabled for
+ * exactly the condition the footnote explains, and both read
+ * `orders.detail.editableNo`, so the tooltip and the paragraph under it cannot
+ * drift into saying two different things about one rule.
+ *
+ * The footnote still renders only when `is_editable` is false, and still says
+ * only the part that is a fact about *their* order: the stock has moved, so the
+ * lines are fixed. When it is true there is a live control and nothing to
+ * explain — "the items are still editable" beside a working button is worse than
  * silence.
  */
 export async function OrderItems({
   order,
   locale,
+  canWrite,
+  canPickProducts,
 }: {
   order: Order;
   locale: string;
+  /** `ac_manage_orders`. The capability every write on this screen requires. */
+  canWrite: boolean;
+  /** `ac_manage_products`, for the editor's picker. Resolved on the server. */
+  canPickProducts: boolean;
 }) {
   const t = await getTranslations("orders.detail");
   const money = (value: string) => formatMoney(value, order.currency, locale);
@@ -84,9 +100,24 @@ export async function OrderItems({
 
   const footnote = order.is_editable ? undefined : t("editableNo");
 
+  const edit = (
+    <OrderLinesDrawer
+      order={order}
+      locale={locale}
+      canWrite={canWrite}
+      canPickProducts={canPickProducts}
+    />
+  );
+
+  /*
+   * An order with no lines still gets the editor, and that is the case it is
+   * most needed on: 45 of the shop's 633 orders have none — measured — and
+   * `{"line_items": []}` is the API's own first refusal, so the only way out of
+   * an empty order is to put a line on it.
+   */
   if (order.line_items.length === 0) {
     return (
-      <Card title={t("items")} footnote={footnote}>
+      <Card title={t("items")} footnote={footnote} actions={edit}>
         <p className="text-ui-body text-ui-muted">{t("noItems")}</p>
       </Card>
     );
@@ -97,7 +128,7 @@ export async function OrderItems({
   const cell = "border-b border-ui-line px-4 py-3 align-top text-ui-compact";
 
   return (
-    <Card title={t("items")} footnote={footnote} flush>
+    <Card title={t("items")} footnote={footnote} actions={edit} flush>
       {/* ─────────────────────────────────────────── sm and up: a real table */}
       <table className="hidden w-full border-collapse sm:table">
         <thead>
@@ -127,6 +158,23 @@ export async function OrderItems({
                   <span className="mt-0.5 block text-ui-label font-normal text-ui-subtle">
                     {/* A SKU inside Arabic text needs its own direction. */}
                     {t("sku")} <Ltr className="break-all">{item.sku}</Ltr>
+                  </span>
+                ) : null}
+                {/*
+                  An override reads as an override.
+
+                  `price` is `null` on a line the catalogue priced and a decimal
+                  string on one somebody chose — `OrderPresenter::manualPrice()`
+                  keeps the two distinguishable *even when the amounts agree*,
+                  because the meta records the decision rather than the
+                  difference. So this line says a person set this, and does not
+                  claim to know what it was set against: the catalogue price is
+                  on no route this screen calls, and inventing a comparison
+                  would be worse than stating the fact alone.
+                */}
+                {item.price !== null ? (
+                  <span className="mt-0.5 block text-ui-label font-normal text-ui-subtle">
+                    {t("manualPrice")} <Ltr>{money(item.price)}</Ltr>
                   </span>
                 ) : null}
               </th>
@@ -191,6 +239,12 @@ export async function OrderItems({
               {item.sku ? (
                 <span className="min-w-0 text-ui-label text-ui-subtle">
                   {t("sku")} <Ltr className="break-all">{item.sku}</Ltr>
+                </span>
+              ) : null}
+              {/* The same override marker as the table above — see it there. */}
+              {item.price !== null ? (
+                <span className="min-w-0 text-ui-label text-ui-subtle">
+                  {t("manualPrice")} <Ltr>{money(item.price)}</Ltr>
                 </span>
               ) : null}
               <span className="flex min-w-0 items-baseline justify-between gap-2 text-ui-label text-ui-subtle">

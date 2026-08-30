@@ -43,12 +43,44 @@ export const address = z.looseObject({
 export type Address = z.infer<typeof address>;
 
 export const lineItem = z.looseObject({
+  /**
+   * **Identifies nothing across a write, and no client may cache one.**
+   *
+   * `line_items` is replace-the-set: `Orders\OrderRepository::replaceLineItems()`
+   * removes every line and re-adds the payload's, and `resolveLines()` pairs the
+   * two by **array index**. The id is dropped on the way in by
+   * `Orders\LineItemInput::READ_ONLY`, so a body aimed at one line by id does not
+   * reach a line at all — it fails on the `product_id` and `quantity` it did not
+   * state. Ids churn on every write that names the key, an identical replace
+   * included. It is a React key for one render and nothing more.
+   */
   id: z.number(),
   name: z.string(),
   product_id: z.number(),
   variation_id: z.number(),
   quantity: z.number(),
   sku: z.string(),
+  /**
+   * The unit price **a person typed**, or `null` when the catalogue priced it.
+   *
+   * Not the price the line was charged at, which is what the name suggests and
+   * would be the wrong reading: `Orders\OrderPresenter::manualPrice()` reads
+   * `OrderRepository::MANUAL_PRICE_META` and emits `null` for a line carrying
+   * none, mirroring the write side where `null` and `""` mean *let the catalogue
+   * price this* and `0` is the real amount zero. So this field is an **override,
+   * present or absent**, and the effective unit price is `total / quantity` —
+   * both of which are already here.
+   *
+   * That mirror is what makes a round trip work: PATCH a fetched order back and
+   * a hand-priced line keeps its amount while a catalogue-priced one is re-priced
+   * — each because of what it said, not by luck. It is also what makes a round
+   * trip **fail** on an order holding stock, where
+   * `OrderService::guardManualPricesWritable()` answers 409 to a *stated* price
+   * and nothing downstream can tell an echo from a decision.
+   *
+   * Read from source: `OrderPresenter::lineItems()` and `manualPrice()`.
+   */
+  price: decimal.nullable(),
   subtotal: decimal,
   total: decimal,
 });
@@ -69,6 +101,26 @@ export const order = z.looseObject({
   /** Empty on 45 of 633 orders, so a detail screen must render that state. */
   line_items: z.array(lineItem),
   discount_total: decimal,
+  /**
+   * The delivery fee **this API was told**, or `null` when nobody stated one.
+   *
+   * The pair to read with it is `shipping_total` directly below, and the rule for
+   * telling them apart is the one `Orders\OrderInput`'s docblock gives: **send
+   * `shipping_amount`, read `shipping_total`.** This is the settable half —
+   * `shipping_total` is in `OrderInput::READ_ONLY` and is derived by
+   * `calculate_totals()` from the shipping line — and the two say different
+   * things rather than the same thing twice.
+   *
+   * **`null` here is not "no delivery charge".** An order the checkout placed
+   * carries a fee that came from §14's tariff with nobody typing anything, so it
+   * reads `shipping_amount: null` beside a `shipping_total` of `600.00`. Any
+   * screen that shows one number shows `shipping_total`;
+   * `Orders\OrderPresenter::shippingAmount()` says so outright.
+   *
+   * What this field is for is the **form**: it is what the operator last stated,
+   * so the field can open on it and a diff can tell an edit from an echo.
+   */
+  shipping_amount: decimal.nullable(),
   shipping_total: decimal,
   total_tax: decimal,
   subtotal: decimal,
