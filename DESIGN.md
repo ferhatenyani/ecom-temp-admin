@@ -1079,7 +1079,9 @@ rounded-lg            → rounded-lg     (14px → 8px: cards)
 `.press`, `.press-row`, `.material-bar`, `.tonal`, `.tone-*`, `.sheet-*`,
 `.action-sheet`, `.seg-thumb`, `.title-collapsed`, `.hairline-*`, `.switch*`,
 `.pill-row`, `.save-bar` and `.tap-44` are deleted from `globals.css`. `.tap-44`
-is replaced by `.tap-target`, which does the same job at the sizes in §5.
+is replaced by `.ui-tap`, which does the same job at the sizes in §5. (This
+paragraph said `.tap-target` until teardown: no such class was ever written, so
+the name is corrected here to the one that actually shipped.)
 
 ---
 

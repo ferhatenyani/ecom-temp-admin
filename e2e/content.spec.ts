@@ -106,10 +106,10 @@ test.describe("the content hub", () => {
    * **This used to open `/fr/more`, and that surface is gone.** `patterns/TabBar`
    * held five slots and pushed everything else behind a `More` screen; DESIGN.md
    * §0 retires the tab bar by name and `AppShell` renders `nav-tree.ts` instead —
-   * a persistent sidebar at `lg`+ and the identical tree in a `Drawer` below. The
-   * `/more` route still resolves, and nothing in the panel links to it any more,
-   * so a test asserting "Content is reachable from the navigation" through it was
-   * asserting against a screen no reader arrives at.
+   * a persistent sidebar at `lg`+ and the identical tree in a `Drawer` below. When
+   * this note was written the `/more` route still resolved and nothing linked to
+   * it; teardown has since deleted the route outright, so a test asserting
+   * "Content is reachable from the navigation" through it would now 404.
    *
    * What the test checks is unchanged: the panel's navigation offers Content, and
    * following it lands on the hub. Only the surface moved.

@@ -1,9 +1,11 @@
 /**
  * `components/ui/Form.tsx` — the form layer the whole redesign run goes through.
  *
- * The counterpart to `tests/field.test.tsx`, which covers the iOS `Field.tsx` it
- * replaces. Both files stay for now: `Field.tsx` is still live on 24 screens and
- * is deleted by a teardown pass at the end of the run, not by this branch.
+ * This was the counterpart to `tests/field.test.tsx`, which covered the iOS
+ * `Field.tsx` it replaces. Teardown deleted both that file and its subject; the
+ * two properties this file did not already hold — a number field's name, and a
+ * name that stays put as its hint appears — were ported into §1 and §1b rather
+ * than deleted with it.
  *
  * Five things are asserted here, and each of them is a defect that has actually
  * shipped in this panel or was one edit away from shipping:
@@ -32,6 +34,7 @@ import {
   ChoiceGroup,
   DateField,
   ErrorSummary,
+  NumberField,
   ReadOnlyField,
   SaveBar,
   Select,
@@ -109,6 +112,20 @@ describe("the accessible name is the label, and only the label", () => {
     expect(control).toBeChecked();
   });
 
+  it("holds for a number field", () => {
+    /*
+     * `NumberField` delegates to `TextField` with `isolate` set, and that
+     * delegation is the whole reason to assert it separately: it passes props
+     * through by spread, so a prop dropped or renamed on the way would be
+     * invisible to every assertion above and to the five screens that use it.
+     */
+    render(<NumberField label="Poids (kg)" value="" onChange={() => {}} hint={HINT} />);
+
+    const input = screen.getByRole("textbox", { name: "Poids (kg)" });
+    expect(input).toHaveAccessibleDescription(HINT);
+    expect(screen.getByText(HINT)).toBeInTheDocument();
+  });
+
   it("puts a checkable row's count inside its name, zero included", () => {
     render(<CheckRow label="Cuir" checked={false} count={0} onChange={() => {}} />);
     // A regex, not a string: whether the two spans are joined by a space is the
@@ -116,6 +133,67 @@ describe("the accessible name is the label, and only the label", () => {
     // is that the count is in the *name* at all rather than beside it, where a
     // screen reader would never reach it.
     expect(screen.getByRole("checkbox", { name: /^Cuir\s*0$/ })).toBeInTheDocument();
+  });
+});
+
+/* ────────────────────────────────────── 1b. and the name does not drift ────── */
+
+/*
+ * The second half of the defect `Field.tsx` carried, and the one a static
+ * reading would miss. Ported from `tests/field.test.tsx` when that file was
+ * deleted: the assertions above all render a hint that was there from the
+ * start, so every one of them would still pass if the hint were inside the
+ * label and simply *never changed*.
+ *
+ * With the hint inside the `<label>`, a hint that appears **renames** the
+ * control. The page form's status hint appears only for a draft, so selecting
+ * "Brouillon" renamed the field beside it — a screen reader announces a name
+ * change, so the field appeared to become a different field in response to
+ * editing a different one.
+ */
+describe("the name does not change as the hint changes", () => {
+  const OPTIONS = [
+    { value: "publish", label: "Publié" },
+    { value: "draft", label: "Brouillon" },
+  ];
+
+  it("survives a hint appearing", () => {
+    const { rerender } = render(
+      <Select label="Statut" value="publish" onChange={() => {}} options={OPTIONS} />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Statut" })).toBeInTheDocument();
+
+    rerender(
+      <Select
+        label="Statut"
+        value="draft"
+        onChange={() => {}}
+        options={OPTIONS}
+        hint="Un brouillon n’est pas visible sur la boutique."
+      />,
+    );
+
+    // Same name, new description — not a renamed control.
+    const control = screen.getByRole("combobox", { name: "Statut" });
+    expect(control).toHaveAccessibleDescription(
+      "Un brouillon n’est pas visible sur la boutique.",
+    );
+  });
+
+  it("survives an error appearing on top of a hint", () => {
+    const { rerender } = render(
+      <TextField label={LABEL} value="" onChange={() => {}} hint={HINT} />,
+    );
+
+    expect(screen.getByRole("textbox", { name: LABEL })).toBeInTheDocument();
+
+    rerender(
+      <TextField label={LABEL} value="a/b" onChange={() => {}} hint={HINT} error={SLASH} />,
+    );
+
+    const input = screen.getByRole("textbox", { name: LABEL });
+    expect(input).toHaveAccessibleDescription(`${HINT} ${SLASH}`);
   });
 });
 

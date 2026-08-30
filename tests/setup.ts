@@ -5,14 +5,19 @@ import "@testing-library/jest-dom/vitest";
 process.env.SESSION_SECRET = "test-secret-that-is-long-enough-to-pass";
 
 /*
- * jsdom has never implemented `IntersectionObserver`, and `Scaffold` uses one to
- * collapse its large title — deliberately, because a scroll listener recomputing
- * layout at 60 Hz janks the list under the reader's thumb.
+ * jsdom has never implemented `IntersectionObserver`. This stub was added for
+ * `Scaffold`, which drove one to collapse its large title.
  *
- * A no-op stub rather than a polyfill: nothing in the unit suite scrolls, so the
- * only behaviour needed is that constructing one does not throw. The *collapse*
- * is a scroll behaviour and belongs to the e2e suite, which runs in a real engine
- * that has the API.
+ * **`Scaffold` was deleted at teardown, and no component observes anything
+ * today** — `PageHeader` replaced the collapsing title with a static one, which
+ * is the whole reason the class is gone. The stub is therefore currently unused.
+ * It is kept rather than deleted because it costs one construction guard and
+ * because the next component that needs an observer would otherwise fail in
+ * jsdom for a reason that has nothing to do with it — but it is a stub with no
+ * consumer, and if that is not wanted, this is the block to remove.
+ *
+ * A no-op rather than a polyfill: nothing in the unit suite scrolls, so the only
+ * behaviour needed is that constructing one does not throw.
  */
 /*
  * jsdom implements no layout, so it implements no `Element.scrollIntoView` —
