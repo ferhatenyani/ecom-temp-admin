@@ -675,6 +675,42 @@ link         accent, underline on hover
   **A placeholder is never a label.**
 - Field: 36px pointer / 44px touch, `bg-surface`, `border-control`,
   `--radius-md`, `--text-body`.
+- **A single-select is drawn, not native.** `components/ui/Listbox.tsx` is the
+  primitive; `Form.tsx`'s `Select` is that primitive in the field frame, and
+  `TableFooter`'s rows-per-page picker is the same primitive at `sm`.
+
+  > **Corrected in the build, and it reverses what this section used to say.**
+  >
+  > `Select` was a real `<select>` for the whole redesign run, and the case for
+  > it was recorded in its own docblock: a native select is the one control a
+  > phone renders as a full-screen wheel with the platform's own search, it needs
+  > no portal and no collision detection, and at the 340px floor it cannot open
+  > off the edge of the screen. Every one of those is still true.
+  >
+  > What the argument left out is that **a `<select>`'s open list is drawn by the
+  > operating system and cannot be styled on any engine.** `appearance: none`
+  > reaches the closed control and stops there. So §1's surface tokens, §1.6's
+  > 1px line, `--radius-lg`, the focus ring, the dark theme and the Plex face all
+  > ended at the moment somebody opened a picker — the panel had two visual
+  > systems, and the second one appeared precisely when a choice was being made.
+  > `<option>` carries no second line either, so a picker wanting a SKU under a
+  > name had to drop it.
+  >
+  > **What the reversal costs, named rather than buried:** on a phone it gives up
+  > the platform wheel. `.ui-listbox` buys that back by taking its maximum height
+  > from Radix's `--radix-select-content-available-height` — the live distance to
+  > the edge of the viewport — so the drawn list can be scrolled but can never be
+  > taller than the screen, which is the one guarantee the native control gave
+  > for free. Its options are 44px on a coarse pointer, which §5 asks for and an
+  > `<option>` never honoured.
+  >
+  > Radix supplies behaviour only, as it does for the five overlays in §3.1.
+  > One detail is worth knowing before writing a caller: **Radix reserves the
+  > empty string** for "nothing is selected", and sixteen screens here offer
+  > `{ value: "", label: "Toutes" }` as the cleared state of a filter. `Listbox`
+  > maps `""` to a private sentinel and back, so the empty case stays a real,
+  > choosable value — the same argument `ChoiceGroup` makes for why "all" has to
+  > be a value rather than an absence.
 - Focus: `border-color: accent` + a 3px `--color-selection` ring. The global
   `:focus-visible` outline stays as the fallback for everything else.
 - Help text below, `--text-label --color-muted`. Written before the error, not

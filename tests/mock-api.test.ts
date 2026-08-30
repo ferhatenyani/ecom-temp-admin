@@ -420,8 +420,24 @@ describe("the envelope", () => {
     }
   });
 
+  /**
+   * **`DELETE`, because `POST /orders` is a route now.**
+   *
+   * This asserted on `POST /orders` from the branch the mock was written on,
+   * when nothing created an order and the collection served reads alone. The
+   * back-office order-entry drawer changed that, so the example had to move to a
+   * verb the collection genuinely has no handler for — and `DELETE` is one the
+   * API does not offer either: an order is cancelled, never deleted.
+   *
+   * The property under test is unchanged and is the one that matters: an
+   * unhandled verb must fall to the 404 rather than through to the read below
+   * it. `POST` used to prove that by accident; now the mock's own
+   * `if (method !== "GET") return notFound()` proves it on purpose, and this is
+   * what holds it there.
+   */
   it("refuses a verb it has no handler for, rather than falling through", () => {
-    expect(respond("POST", `${BASE_PATH}/orders`).status).toBe(404);
+    expect(respond("DELETE", `${BASE_PATH}/orders`).status).toBe(404);
+    expect(respond("PUT", `${BASE_PATH}/orders`).status).toBe(404);
   });
 
   it("refuses a path outside the base", () => {
@@ -849,6 +865,150 @@ describe("GET /orders", () => {
 
   it("404s an id that does not exist", () => {
     expect(get("/orders/999999").status).toBe(404);
+  });
+});
+
+/**
+ * `POST /orders` — the back-office order-entry drawer's route.
+ *
+ * **Transcribed from the backend's own `tests/Api/orders.php`, not measured on
+ * the shop**, and the mock's handler says so at length: creating an order is not
+ * reversible the way a coupon or a parcel is, so nobody has fired one at the
+ * live install. These assertions are therefore checking that the mock matches
+ * the plugin's test suite, which is a weaker claim than the rest of this file
+ * makes and is written down rather than left to be assumed.
+ */
+describe("POST /orders", () => {
+  const LINE = { product_id: 101, quantity: 2 };
+
+  /** The refusal envelope's `error`, so a `details.fields` key can be named. */
+  const errorOf = (response: MockResponse) =>
+    (response.body as { error: { details?: Record<string, never> } }).error;
+
+  it("creates an order and answers 201 with it", () => {
+    const response = write("POST", "/orders", { line_items: [LINE], status: "pending" });
+    expect(response.status).toBe(201);
+
+    const { data } = parse(order, response);
+    expect(data.line_items).toHaveLength(1);
+    expect(data.line_items[0].product_id).toBe(101);
+    expect(data.line_items[0].quantity).toBe(2);
+    // Pending holds no stock — the suite asserts it, and the panel's status
+    // picker defaults to pending because of it.
+    expect(data.stock_reduced).toBe(false);
+  });
+
+  it("prices the line from the catalogue and ignores what the caller says", () => {
+    /*
+     * The refusal this whole route hinges on. A price in the body is refused by
+     * name rather than used, so a mock that echoed one back would let the panel
+     * ship a form that sent one and never find out.
+     */
+    const priced = write("POST", "/orders", {
+      line_items: [{ ...LINE, price: "0.01" }],
+    });
+    expect(priced.status).toBe(400);
+    expect(errorOf(priced).details?.fields).toHaveProperty("line_items.0.price");
+
+    const { data } = parse(order, write("POST", "/orders", { line_items: [LINE] }));
+    const unit = Number.parseFloat(data.line_items[0].total) / 2;
+    expect(data.total).toBe((unit * 2).toFixed(2));
+    expect(Number.parseFloat(data.total)).toBeGreaterThan(0);
+  });
+
+  it("refuses a body with no lines, naming line_items", () => {
+    for (const body of [{}, { line_items: [] }]) {
+      const response = write("POST", "/orders", body);
+      expect(response.status).toBe(400);
+      expect(errorOf(response).details?.fields).toHaveProperty("line_items");
+    }
+  });
+
+  it("names an unknown top-level field rather than dropping it", () => {
+    const response = write("POST", "/orders", { line_items: [LINE], wilaya: 16 });
+    expect(response.status).toBe(400);
+    expect(errorOf(response).details?.fields).toHaveProperty("wilaya");
+  });
+
+  it("refuses a product and a customer that do not exist", () => {
+    const product = write("POST", "/orders", { line_items: [{ product_id: 99999999, quantity: 1 }] });
+    expect(product.status).toBe(400);
+
+    const customer = write("POST", "/orders", { line_items: [LINE], customer_id: 99999999 });
+    expect(customer.status).toBe(400);
+    expect(errorOf(customer).details?.fields).toHaveProperty("customer_id");
+  });
+
+  it("refuses a country name where a code belongs, and upper-cases a code", () => {
+    const named = write("POST", "/orders", {
+      line_items: [LINE],
+      billing: { country: "Algeria" },
+    });
+    expect(named.status).toBe(400);
+    expect(errorOf(named).details?.fields).toHaveProperty("billing.country");
+
+    const { data } = parse(
+      order,
+      write("POST", "/orders", { line_items: [LINE], billing: { country: "dz" } }),
+    );
+    expect(data.billing.country).toBe("DZ");
+  });
+
+  it("refuses an email on a shipping address, by name", () => {
+    /*
+     * WooCommerce has `set_billing_email()` and no shipping equivalent. The key
+     * is refused rather than ignored, which is why `new-order.ts` drops it when
+     * "same as billing" copies the block.
+     */
+    const response = write("POST", "/orders", {
+      line_items: [LINE],
+      shipping: { email: "amina@example.test" },
+    });
+    expect(response.status).toBe(400);
+    expect(errorOf(response).details?.fields?.["shipping.email"]).toBe(
+      "Only a billing address carries an email.",
+    );
+  });
+
+  it("refuses a malformed billing email", () => {
+    const response = write("POST", "/orders", {
+      line_items: [LINE],
+      billing: { email: "nope" },
+    });
+    expect(response.status).toBe(400);
+    expect(errorOf(response).details?.fields).toHaveProperty("billing.email");
+  });
+
+  it("answers 409 for a terminal status and 400 for an unknown one", () => {
+    /*
+     * The distinction the panel's `CREATABLE_STATUSES` exists for. `cancelled`
+     * is a real status that is not a place an order can begin — a 400 there
+     * would send an operator hunting for a typo in a word on the status filter
+     * three inches away.
+     */
+    for (const status of ["cancelled", "refunded"]) {
+      const response = write("POST", "/orders", { line_items: [LINE], status });
+      expect(response.status).toBe(409);
+      expect(errorOf(response).details?.allowed).not.toContain(status);
+    }
+
+    expect(write("POST", "/orders", { line_items: [LINE], status: "shipped" }).status).toBe(400);
+  });
+
+  it("puts the new order at the head of the list, and serves it by id", () => {
+    const before = parseList(orderList, get("/orders", "per_page=1")).meta.total;
+
+    const { data } = parse(order, write("POST", "/orders", { line_items: [LINE] }));
+
+    const after = parseList(orderList, get("/orders", "per_page=1"));
+    expect(after.meta.total).toBe(before + 1);
+    // `/orders` is `created_at DESC, id DESC` and nothing can change it, so the
+    // order made a moment ago is the first row there is.
+    expect(after.data[0].id).toBe(data.id);
+
+    // And it resolves on its own URL, which is what the list's `?peek=` needs:
+    // the drawer hands the new id straight to a preview that was 404ing before.
+    expect(parse(order, get(`/orders/${data.id}`)).data.id).toBe(data.id);
   });
 });
 

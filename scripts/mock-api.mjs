@@ -7914,6 +7914,20 @@ const COMMUNES = new Map();
 const state = {
   /** Order id → status, and **empty until something PATCHes**. */
   statuses: new Map(),
+  /**
+   * Order id → the whole row, for the orders `POST /orders` created.
+   *
+   * **Creates only**, unlike `state.coupons` and `state.pages`, which hold both
+   * the seeded rows a write has rewritten and the rows a create made. The
+   * difference is that an order's only write is its *status*, and `state.statuses`
+   * has held that since the first branch — folding 633 seeded rows in here to
+   * unify the two shapes would rewrite a fixture that works in order to make one
+   * lookup shorter.
+   */
+  orders: new Map(),
+  /** Ids created in this process, newest first — the head of the list. */
+  createdOrders: [],
+  nextOrderId: 0,
   cod: new Map(),
   shipments: new Map(),
   payments: new Map(),
@@ -8121,6 +8135,14 @@ const state = {
 
 export function resetState() {
   state.statuses = new Map();
+  state.orders = new Map();
+  state.createdOrders = [];
+  /*
+   * Clear of the 633 seeded ids, which run 1000-1632, and the same figure in
+   * every process — the rule `nextCouponId` and `nextPageId` already follow, and
+   * for the same reason: a screenshot of a created order has to be byte-stable.
+   */
+  state.nextOrderId = 9200;
   state.cod = new Map(ORDERS.map((order) => [order.id, seedCod(order)]));
   state.shipments = seedShipments();
   state.payments = seedPayments();
@@ -8331,6 +8353,33 @@ const orderRow = (order) => {
 };
 
 /**
+ * Every order the shop has, newest first — the ones this process created ahead
+ * of the 633 seeded ones.
+ *
+ * **The created rows lead, and that is the sort rather than a convenience.**
+ * `collectionOf` does not re-sort, and `/orders` is `created_at DESC, id DESC`
+ * with nothing able to change it — measured, and recorded at the head of this
+ * file. An order made a moment ago is the newest order there is, so it belongs
+ * where the list already puts the newest.
+ */
+const allOrders = () => [
+  ...state.createdOrders.map((id) => orderRow(state.orders.get(id))),
+  ...ORDERS.map(orderRow),
+];
+
+/**
+ * One order by id, seeded or created, read through any status a PATCH has
+ * written. The created map is checked first because it is the smaller of the two
+ * and because its ids cannot collide — `nextOrderId` starts well above 1632.
+ */
+const findOrder = (id) => {
+  const made = state.orders.get(id);
+  if (made !== undefined) return orderRow(made);
+  const seeded = ORDERS.find((row) => row.id === id);
+  return seeded === undefined ? undefined : seeded;
+};
+
+/**
  * One customer's orders as they read **now**, newest first — what
  * `GET /customers/{id}/orders` serves and what the statistics below are counted
  * from. Read through the write state, so a PATCHed status moves the row, the
@@ -8453,6 +8502,264 @@ function patchOrder(order, body) {
 
   state.statuses.set(order.id, to);
   return ok(withStatus(order, to));
+}
+
+/**
+ * The statuses an order may be **created** in.
+ *
+ * `cancelled` and `refunded` are absent and their refusal is a **409**, not a
+ * 400 — they are real statuses that are simply not places an order can begin.
+ * `lib/order-status.ts`'s `CREATABLE_STATUSES` is the panel's copy of this list
+ * and carries the argument for offering five rather than seven.
+ */
+const CREATABLE_ORDER_STATUSES = ["pending", "processing", "on-hold", "completed", "failed"];
+
+/**
+ * `POST /orders`. The panel's back-office order entry.
+ *
+ * ## Provenance, and it is weaker than the rest of this file
+ *
+ * Everything above is measured against the live shop. **This is transcribed from
+ * `tests/Api/orders.php` in the backend repository** — the plugin's own suite,
+ * which exercises each refusal below by name — rather than from a request
+ * somebody made. That is a real difference in confidence and it is written here
+ * rather than left for the reader to assume: creating an order on the live shop
+ * is not reversible the way a coupon or a parcel is, so nobody has fired one to
+ * see what comes back.
+ *
+ * What the suite asserts, and therefore what this reproduces:
+ *
+ *   no body / empty list      400, `details.fields.line_items`
+ *   an unknown top-level key  400, naming the key
+ *   a caller-supplied price   400, `line_items.0.price`
+ *   a product that is gone    400
+ *   an unknown customer       400, `details.fields.customer_id`
+ *   a malformed billing email 400, `details.fields.billing.email`
+ *   a country name, not code  400
+ *   cancelled / refunded      **409**
+ *   an unknown status         400
+ *   the happy path            **201**, total priced from the catalogue, the
+ *                             country upper-cased, `stock_reduced` false while
+ *                             the order is pending
+ *
+ * ## The total is computed here, and that is the point of it
+ *
+ * `2 × 1500 + 3 × 300 = 3900.00`, from the catalogue and never from the request
+ * — the suite asserts that figure against those lines. A mock that echoed a
+ * caller's price back would let the panel ship a form that sent one.
+ */
+function postOrder(body) {
+  const fields = {};
+
+  const known = new Set([
+    "line_items",
+    "status",
+    "customer_id",
+    "billing",
+    "shipping",
+    "payment_method",
+    "payment_method_title",
+    "customer_note",
+  ]);
+  for (const key of Object.keys(body ?? {})) {
+    if (!known.has(key)) fields[key] = "Unknown field.";
+  }
+
+  const lines = Array.isArray(body?.line_items) ? body.line_items : null;
+  if (lines === null || lines.length === 0) {
+    fields.line_items = "An order needs at least one line item.";
+  }
+
+  const resolved = [];
+  for (const [index, raw] of (lines ?? []).entries()) {
+    const prefix = `line_items.${index}`;
+    for (const key of Object.keys(raw ?? {})) {
+      // `price` is refused **by name**: nobody reaches it by round-tripping a
+      // response — the presenter never emits one — so they reached it by trying
+      // to set a price.
+      if (!["product_id", "variation_id", "quantity"].includes(key)) {
+        fields[`${prefix}.${key}`] = "Unknown field.";
+      }
+    }
+    /*
+     * `productById`, not `PRODUCTS.find`. The catalogue is `NEW_ARRIVALS` +
+     * `PRODUCTS` + `BACK_CATALOGUE` and `/products` lists all three — so a
+     * lookup against the middle third alone refuses the first three rows of
+     * page one, which are exactly the rows a picker offers first. Found by
+     * driving the create drawer against this mock: every order built from the
+     * top of the search results came back "No product with that id."
+     *
+     * It also reads through the write state, so a force-deleted product is
+     * gone here as it is everywhere else — which is the right refusal rather
+     * than an accident.
+     */
+    const product = productById(Number(raw?.product_id));
+    if (product === undefined) {
+      fields[`${prefix}.product_id`] = "No product with that id.";
+      continue;
+    }
+    const quantity = Number(raw?.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      fields[`${prefix}.quantity`] = "Must be a whole number greater than zero.";
+      continue;
+    }
+    resolved.push({ product, quantity });
+  }
+
+  if (body?.customer_id !== undefined) {
+    const customerId = Number(body.customer_id);
+    if (!Number.isInteger(customerId) || customerId < 0) {
+      fields.customer_id = "Must be a user id, or 0 for a guest.";
+    } else if (customerId !== 0 && !CUSTOMERS.some((row) => row.id === customerId)) {
+      fields.customer_id = "No customer with that id.";
+    }
+  }
+
+  const billing = readOrderAddress(body?.billing, "billing", fields);
+  const shipping = readOrderAddress(body?.shipping, "shipping", fields);
+
+  const status = body?.status === undefined ? "pending" : body.status;
+  const knownStatus = typeof status === "string" && ORDER_STATUSES.includes(status);
+  if (!knownStatus) fields.status = oneOf(ORDER_STATUSES);
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The order data is invalid.", fields);
+  }
+
+  /*
+   * The terminal pair, **after** the field validation and as a 409. An order
+   * cannot begin cancelled, but `cancelled` is not an unknown value — answering
+   * 400 would send an operator looking for a typo in a word that is on the
+   * status filter three inches away.
+   */
+  if (!CREATABLE_ORDER_STATUSES.includes(status)) {
+    return conflict(`An order cannot be created as ${status}.`, {
+      status,
+      allowed: CREATABLE_ORDER_STATUSES,
+    });
+  }
+
+  const lineItems = resolved.map(({ product, quantity }, index) => {
+    const unit = product.price === "" ? "0.00" : product.price;
+    const total = (Number.parseFloat(unit) * quantity).toFixed(2);
+    return {
+      id: state.nextOrderId * 10 + index,
+      name: product.name,
+      product_id: product.id,
+      variation_id: 0,
+      quantity,
+      sku: product.sku,
+      subtotal: total,
+      total,
+    };
+  });
+
+  const subtotal = lineItems
+    .reduce((sum, item) => sum + Number.parseFloat(item.total), 0)
+    .toFixed(2);
+
+  const id = state.nextOrderId++;
+  const paid = status === "completed" || status === "processing";
+
+  const order = {
+    id,
+    number: String(id),
+    status,
+    currency: "DZD",
+    customer_id: Number(body?.customer_id ?? 0),
+    customer_note: typeof body?.customer_note === "string" ? body.customer_note : "",
+    payment_method: typeof body?.payment_method === "string" ? body.payment_method : "",
+    payment_method_title:
+      typeof body?.payment_method_title === "string" ? body.payment_method_title : "",
+    billing,
+    shipping,
+    line_items: lineItems,
+    discount_total: "0.00",
+    /*
+     * **No shipping is added.** The suite's happy path totals exactly
+     * `3900.00` on two lines of 1500 and three of 300, so a created order
+     * carries no carriage until a rule or a parcel puts one on it — unlike the
+     * seeded fixtures above, which are written with one.
+     */
+    shipping_total: "0.00",
+    total_tax: "0.00",
+    subtotal,
+    total: subtotal,
+    is_editable: status === "pending" || status === "on-hold",
+    needs_payment: !paid && status !== "failed",
+    // False while pending — the suite asserts it, and asserts the movement
+    // ledger stays empty beside it.
+    stock_reduced: paid,
+    date_created: iso(0),
+    date_modified: iso(0),
+    date_paid: paid ? iso(0) : null,
+    date_completed: status === "completed" ? iso(0) : null,
+  };
+
+  state.orders.set(id, order);
+  state.createdOrders = [id, ...state.createdOrders];
+  state.cod.set(id, seedCod(order));
+
+  return created(order);
+}
+
+/**
+ * One address block on the way in, validated the way `AddressInput` validates it.
+ *
+ * Two refusals and both are named rather than generic, because both are mistakes
+ * somebody actually makes: a country **name** where a code belongs, and a
+ * billing e-mail that is not one. `email` on a *shipping* address is the third —
+ * WooCommerce has `set_billing_email()` and no shipping equivalent, so the key
+ * is refused by name rather than dropped, and `new-order.ts` never sends it.
+ */
+function readOrderAddress(raw, prefix, fields) {
+  const empty = {
+    first_name: "",
+    last_name: "",
+    company: "",
+    address_1: "",
+    address_2: "",
+    city: "",
+    state: "",
+    postcode: "",
+    country: "",
+    phone: "",
+    ...(prefix === "billing" ? { email: "" } : {}),
+  };
+
+  if (raw === undefined) return empty;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    fields[prefix] = "Must be an object.";
+    return empty;
+  }
+
+  const out = { ...empty };
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (!(key in empty)) {
+      fields[`${prefix}.${key}`] =
+        key === "email"
+          ? "Only a billing address carries an email."
+          : "Unknown field.";
+      continue;
+    }
+    out[key] = typeof value === "string" ? value : String(value ?? "");
+  }
+
+  if (out.country !== "") {
+    const upper = out.country.toUpperCase();
+    if (!/^[A-Z]{2}$/.test(upper)) {
+      fields[`${prefix}.country`] = "Must be a two-letter ISO country code, such as DZ.";
+    } else {
+      out.country = upper;
+    }
+  }
+
+  if (prefix === "billing" && out.email !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(out.email)) {
+    fields["billing.email"] = "Must be a valid email address.";
+  }
+
+  return out;
 }
 
 /**
@@ -18078,8 +18385,10 @@ export function respond(
       const refused = gatedOn("ac_manage_orders");
       if (refused !== null) return refused;
 
+      if (segments.length === 1 && method === "POST") return postOrder(body);
+
       const id = second === undefined ? null : numericId(second);
-      const order = id === null ? undefined : ORDERS.find((row) => row.id === id);
+      const order = id === null ? undefined : findOrder(id);
 
       /*
        * The detail's own sub-resources and the four writes on them. Every
@@ -18125,9 +18434,11 @@ export function respond(
         return notFound();
       }
 
+      if (method !== "GET") return notFound();
+
       // The list and the plain detail, both reading through any status a PATCH
       // has written.
-      return collectionOf(ORDERS.map(orderRow), {
+      return collectionOf(allOrders(), {
         status: true,
         search: (candidate) => [
           candidate.number,

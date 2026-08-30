@@ -30,6 +30,7 @@ import {
   type OrderColumnContext,
 } from "./columns";
 import { OrderPeek } from "./OrderPeek";
+import { NewOrderDrawer } from "./NewOrderDrawer";
 import { downloadCsv } from "@/lib/csv";
 import { toCsv } from "./export";
 import { fetchOrders, ordersKey, type OrdersQuery } from "./query";
@@ -57,18 +58,34 @@ type StatusFilter = "" | (typeof orderStatuses)[number];
  * is a 400, which is why the tabs are single-select, and `?search=Nadia` takes
  * 633 rows to 92.
  */
+/**
+ * The create button's DOM id, so `NewOrderDrawer` can name it as the thing focus
+ * returns to. See `useOpenerFocus` in `Overlay.tsx`.
+ */
+const CREATE_BUTTON_ID = "orders-create";
+
 export function OrdersList({
   locale,
   initialQuery,
   initialOrders,
   initialTotal,
   wilayas,
+  canPickProducts,
+  canPickCustomers,
 }: {
   locale: string;
   initialQuery: OrdersQuery;
   initialOrders: Order[] | null;
   initialTotal: number | null;
   wilayas: Wilaya[];
+  /**
+   * `ac_manage_products` and `ac_manage_customers`, for the create drawer's two
+   * pickers. Resolved on the server from `/auth/me` and passed down rather than
+   * re-read here: this component has no session, and the drawer degrades rather
+   * than 403s — see `NewOrderDrawer`'s docblock for the role that needs it.
+   */
+  canPickProducts: boolean;
+  canPickCustomers: boolean;
 }) {
   const t = useTranslations("orders");
   const tStatus = useTranslations("status");
@@ -83,6 +100,7 @@ export function OrdersList({
   const peekId = searchParams.get("peek");
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(initialQuery.perPage);
+  const [creating, setCreating] = useState(false);
 
   const query: OrdersQuery = { status, search, page, perPage };
 
@@ -235,6 +253,19 @@ export function OrdersList({
               onClick={() => void refetch()}
               loading={isFetching}
             />
+            {/*
+              The one primary on the screen — §3.3 allows exactly one per view,
+              and on a list whose other two controls are a refresh and an export
+              this is it.
+
+              `id`, because the drawer it opens has to hand focus back here on
+              close. `useOpenerFocus` records whatever held focus at open, which
+              is right on the keyboard and wrong on a pointer press in WebKit —
+              `Overlay.tsx` carries the measurement.
+            */}
+            <Button id={CREATE_BUTTON_ID} icon="plus" onClick={() => setCreating(true)}>
+              {t("create.action")}
+            </Button>
             {/* A real link, so the browser performs the download and the
                 credential is attached server-side — never in the document.
 
@@ -436,6 +467,30 @@ export function OrdersList({
         ctx={ctx}
         onOpenChange={(open) => {
           if (!open) setParams({ peek: "" }, false);
+        }}
+      />
+
+      <NewOrderDrawer
+        open={creating}
+        onOpenChange={setCreating}
+        wilayas={wilayas}
+        locale={locale}
+        canPickProducts={canPickProducts}
+        canPickCustomers={canPickCustomers}
+        returnFocusTo={CREATE_BUTTON_ID}
+        /*
+         * The new order is opened in the peek rather than navigated to.
+         *
+         * `?peek=` already resolves an id that is not on the page in memory —
+         * the media branch taught it to, because a shared link to page three
+         * opened nothing — so this costs one request and leaves the person on
+         * the list they were working from, which is where the next phone order
+         * gets taken. `refetch` first, so the row is really there when the
+         * filter happens to include it and the peek is free.
+         */
+        onCreated={(order) => {
+          void refetch();
+          setParams({ peek: String(order.id) }, false);
         }}
       />
     </div>

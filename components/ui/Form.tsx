@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Button } from "@/components/ui/Button";
+import { Listbox } from "@/components/ui/Listbox";
 import { useHydrated } from "@/lib/use-hydrated";
 
 /**
@@ -967,14 +968,24 @@ export function TextArea({
 }
 
 /**
- * A single-select field — a real `<select>`.
+ * A single-select field — `Listbox` in this file's frame.
  *
- * Not a Radix listbox, and that is a decision rather than an omission: a native
- * select is the one control a phone renders as a full-screen wheel with the
- * platform's own search, it needs no portal, no collision detection and no
- * keyboard re-implementation, and at 340px it is the only picker that cannot
- * open off the edge of the screen. `ChoiceGroup` above is what a *small* closed
- * set uses; this is for the 69-row wilaya list.
+ * ## It was a real `<select>` until this branch, and the reversal is recorded
+ *
+ * The case this docblock used to make was that a native select is the one
+ * control a phone renders as a full-screen wheel with the platform's own search,
+ * that it needs no portal and no collision detection, and that at 340px it
+ * cannot open off the edge of the screen. Every one of those is still true, and
+ * none of them was the whole picture: **a `<select>`'s open list is drawn by the
+ * operating system and cannot be styled on any engine**, so the panel's surface,
+ * its 1px line, its radius, its focus ring, its dark theme and its Plex face all
+ * stopped at the moment a person opened a picker. `components/ui/Listbox.tsx`
+ * carries the full argument and the thing the trade costs.
+ *
+ * **The prop list is unchanged and so is every call site.** That is the point of
+ * the swap happening here rather than in thirty screens: `Select` is the import
+ * seventeen of them already hold, and a migration that also renamed it would
+ * have been thirty diffs to read instead of one.
  *
  * **Generic over the option union, as `Field.tsx`'s `SelectField` was.** A
  * `value: string` takes any string at all, so a status select accepts `"drafft"`
@@ -985,9 +996,14 @@ export function TextArea({
  * the moment they migrated. `= string` keeps every existing call inferring
  * exactly what it inferred before.
  *
- * The validation latch arms on **change**, not on blur: a `<select>` has no
+ * The validation latch arms on **change**, not on blur: a selection has no
  * half-typed state, so there is no keystroke for "never on first keystroke" to
  * protect and holding a refusal until the person tabs away only delays it.
+ *
+ * `FieldFrame`'s `<label htmlFor>` still names the control, because a `<button>`
+ * is a labelable element in the HTML spec exactly as a `<select>` is — the frame
+ * did not have to learn about this, and `tests/form.test.tsx` §1 asserts the
+ * accessible name is still the label and only the label.
  */
 export function Select<T extends string = string>({
   id: givenId,
@@ -1026,25 +1042,22 @@ export function Select<T extends string = string>({
       error={field.shown}
       errorId={field.errorId}
     >
-      <select
+      <Listbox<T>
         id={field.id}
         value={value}
+        onChange={onChange}
+        onCommit={field.commit}
+        options={options}
+        /* The guard the whole file wears. A trigger cannot suffer the DOM drift
+           a `<select>` could — there is no value for a pre-hydration press to
+           change behind React's back — but it also cannot *open*, and a control
+           that looks live and does nothing is the state `useHydrated` exists to
+           refuse. */
         disabled={disabled || !field.hydrated}
-        aria-busy={!field.hydrated || undefined}
-        onChange={(event) => {
-          field.commit();
-          onChange(event.target.value as T);
-        }}
-        aria-invalid={field.shown ? true : undefined}
-        aria-describedby={describedBy(hint, field.hintId, field.shown, field.errorId)}
-        className={`${CONTROL} cursor-pointer ${borderFor(Boolean(field.shown))}`}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        busy={!field.hydrated}
+        invalid={Boolean(field.shown)}
+        describedBy={describedBy(hint, field.hintId, field.shown, field.errorId)}
+      />
     </FieldFrame>
   );
 }

@@ -152,7 +152,84 @@
       "status": "Statut",
       "id": "ID"
     },
-    "readOnly": "Vous n’avez pas la permission de modifier cette commande."
+    "readOnly": "Vous n’avez pas la permission de modifier cette commande.",
+    "create": {
+      "action": "Nouvelle commande",
+      "title": "Nouvelle commande",
+      "description": "Une commande prise par téléphone ou au comptoir.",
+      "submit": "Créer la commande",
+      "created": "Commande {number} créée — {total}",
+      "failed": "La commande n’a pas pu être créée.",
+      "problem": {
+        "noLines": "Ajoutez au moins un article.",
+        "quantity": "La quantité doit être un nombre entier supérieur à zéro."
+      },
+      "items": {
+        "title": "Articles",
+        "description": "Les prix viennent du catalogue : la commande est chiffrée à l’enregistrement.",
+        "none": "Aucun article pour le moment.",
+        "search": "Rechercher un produit",
+        "skuHint": "La recherche porte aussi sur la référence (SKU).",
+        "loading": "Chargement des produits…",
+        "noResults": "Aucun produit ne correspond.",
+        "noSku": "Sans référence",
+        "quantity": "Quantité",
+        "decrement": "Diminuer la quantité",
+        "increment": "Augmenter la quantité",
+        "remove": "Retirer {name}",
+        "add": "Ajouter",
+        "manualId": "Identifiant du produit",
+        "manualIdWhy": "Votre compte ne peut pas lire le catalogue, la recherche n’est donc pas disponible. L’API refuse un identifiant inconnu.",
+        "manualName": "Produit #{id}"
+      },
+      "customer": {
+        "title": "Client",
+        "guest": "Commande invité",
+        "guestWhy": "Une commande sans compte client. C’est le cas de la plupart des commandes de la boutique.",
+        "chosen": "Client #{id}",
+        "search": "Rechercher un client",
+        "loading": "Chargement des clients…",
+        "noResults": "Aucun client ne correspond."
+      },
+      "billing": {
+        "title": "Facturation"
+      },
+      "shipping": {
+        "title": "Livraison",
+        "same": "Identique à la facturation",
+        "sameWhy": "L’e-mail n’est pas repris : une adresse de livraison n’en porte pas."
+      },
+      "payment": {
+        "title": "Paiement",
+        "method": "Méthode",
+        "methodHint": "L’identifiant utilisé par la boutique, par exemple « cod ».",
+        "methodTitle": "Libellé affiché"
+      },
+      "status": {
+        "title": "Statut",
+        "description": "Une commande « en attente » ne décrémente pas le stock ; « en cours » et « terminée » le font.",
+        "label": "Statut initial"
+      },
+      "note": {
+        "title": "Note",
+        "label": "Note du client"
+      },
+      "address": {
+        "firstName": "Prénom",
+        "lastName": "Nom",
+        "company": "Société",
+        "line1": "Adresse",
+        "line2": "Complément d’adresse",
+        "city": "Ville",
+        "postcode": "Code postal",
+        "wilaya": "Wilaya",
+        "noWilaya": "Non renseignée",
+        "country": "Pays",
+        "countryHint": "Code ISO à deux lettres, par exemple DZ.",
+        "phone": "Téléphone",
+        "email": "E-mail"
+      }
+    }
   },
   "status": {
     "pending": "En attente",

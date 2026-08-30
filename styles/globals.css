@@ -669,24 +669,43 @@
       min-block-size: 2.75rem;
     }
   }
-  /*
-   * `TableFooter`'s rows-per-page picker, which was 28px and is the smallest
-   * control in the panel.
+  /* ------------------------------------------------------------ listbox ---
+   * `components/ui/Listbox.tsx`'s popover — the drawn single-select that
+   * replaced the last native `<select>` in the panel.
    *
-   * It grows its own box because it cannot borrow `.ui-tap`: a `<select>` is a
-   * replaced element rendered from a UA shadow tree, so `::after` never paints on
-   * one — and a pseudo-element on a *wrapper* would be worse than nothing, since
-   * hit-testing routes to the originating element and the extra ring would swallow
-   * taps that then opened no dropdown.
+   * Both figures come from Radix rather than from a number chosen here, and that
+   * is the whole reason this is a class and not four utilities:
    *
-   * **Coarse only, and the pointer figure is a known residual.** 28px is 4px under
-   * §5's 32px pointer floor, and closing that means growing the control, which
-   * grows the footer row on all seven shipped list screens — a layout change on
-   * screens this branch does not own. Recorded in DECISIONS.md with its remedy
-   * rather than taken here.
+   *   trigger-width      the list is at least as wide as the control it came
+   *                      from, so it never opens narrower than the label it is
+   *                      about to show. Not a fixed width — a 69-row wilaya list
+   *                      is allowed to be wider than its trigger.
+   *   available-height   the distance to the edge of the *viewport*, recomputed
+   *                      on every open and every flip. This is what makes the
+   *                      drawn list safe at the 340px floor: it can be scrolled
+   *                      but it cannot be taller than the screen, which is the
+   *                      one guarantee the native control gave for free and the
+   *                      thing that had to be bought back deliberately.
+   *
+   * They are custom properties Radix writes onto the content element, so they
+   * cannot be reached from a Tailwind utility without an arbitrary value — which
+   * §7's scanner refuses, correctly.
+   *
+   * This replaces `.ui-select-tap`, whose only consumer was `TableFooter`'s
+   * rows-per-page `<select>`. That control's documented residual — 28px against
+   * §5's 32px pointer floor, left open because growing a replaced element grows
+   * the footer row on seven shipped lists — closes here rather than being
+   * carried: the trigger is an ordinary `<button>` now, so `min-h-8` reaches it
+   * and the coarse-pointer floor below reaches its options.
    */
+  .ui-listbox {
+    min-inline-size: var(--radix-select-trigger-width);
+    max-block-size: var(--radix-select-content-available-height);
+  }
+  /* §3.1's rule for `.ui-menu`, and for the same reason: a list of choices is a
+     list of touch targets, whatever ARIA role it carries. */
   @media (pointer: coarse) {
-    .ui-select-tap {
+    .ui-listbox [role="option"] {
       min-block-size: 2.75rem;
     }
   }

@@ -41,7 +41,11 @@ cd "$(dirname "$0")/.." || exit 2
 # what it was scheduled to do — but it must still be *lowered deliberately and
 # once*, to the real count minus the same margin of 2, never quietly edited down
 # to whatever makes today pass.
-FLOOR=307
+#
+# 312 at the order-entry branch, floor 310. Three files: components/ui/Listbox.tsx
+# (the drawn single-select that retired the panel's last native `<select>`), and
+# app/[locale]/(panel)/orders/{NewOrderDrawer,new-order}.tsx|ts.
+FLOOR=310
 failures=0
 checks=0
 

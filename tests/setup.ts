@@ -35,6 +35,38 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function scrollIntoView(): void {};
 }
 
+/*
+ * The three jsdom gaps a Radix popper falls into, added when `Listbox` replaced
+ * the last native `<select>` in the panel.
+ *
+ * None of them is a shortcoming of the component. `ResizeObserver` is what
+ * Floating UI watches the trigger with, and the pointer-capture pair is what
+ * Radix's own press handling calls before it decides whether a pointerdown
+ * became a drag. jsdom implements no layout and no pointer events, so all three
+ * are simply absent — a component that guarded against their absence would be
+ * carrying defensive code for a browser that does not exist.
+ *
+ * The observer is a no-op rather than a measuring stub for the same reason the
+ * `IntersectionObserver` below is: nothing in the unit suite has a layout to
+ * observe, so the only behaviour needed is that constructing one does not throw.
+ */
+if (typeof Element !== "undefined" && !Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = function hasPointerCapture(): boolean {
+    return false;
+  };
+  Element.prototype.setPointerCapture = function setPointerCapture(): void {};
+  Element.prototype.releasePointerCapture = function releasePointerCapture(): void {};
+}
+
+if (!("ResizeObserver" in globalThis)) {
+  class NoopResizeObserver implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = NoopResizeObserver;
+}
+
 if (!("IntersectionObserver" in globalThis)) {
   class NoopIntersectionObserver implements IntersectionObserver {
     readonly root = null;
