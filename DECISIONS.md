@@ -35,12 +35,23 @@ left looking like an oversight.
 [x] 18. Transfer
 [x] 19. Audit
 [x] 20. Login + not-found
-[ ] 21. TEARDOWN
+[x] 21. TEARDOWN
 ```
 
+**The run is complete.** Every item above is ticked; §22 is the last entry.
+
 Progress check that does not depend on this list: a file with no `ui-` prefix in
-its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **10
-files left**, down from 31 after the notifications branch. Login removed four —
+its classNames is not migrated. `grep -rL 'ui-' --include=*.tsx app/` — **8
+files left** after teardown (down from 10), and **the heuristic has now run out
+of usefulness entirely**: the two it lost were *deleted* by §22 rather than
+migrated, and of what remains `app/layout.tsx` and `(panel)/layout.tsx` hold no
+markup, while the rest are fully migrated screens whose every class comes from a
+primitive. Read the number as zero. The paragraph below is kept as written
+because its argument — that the heuristic degrades exactly as the migration
+succeeds — is the thing worth carrying, and §22 is where it finally bottomed out.
+
+Historical, as of the login branch: **10 files left**, down from 31 after the
+notifications branch. Login removed four —
 `app/not-found.tsx`, the login page, its form and `(panel)/page.tsx` — and added
 none; two of the ten that remain (`app/layout.tsx`, `(panel)/layout.tsx`) hold no
 markup of their own and will never carry one. Transfer removed three
@@ -3473,7 +3484,149 @@ resolve against nothing.
 
 ---
 
-## Carried forward — teardown owns these
+## 22. Teardown — the retired system, removed
+
+Item 21, and the last of the run. All 44 route pages were migrated, so this
+deletes what the migration left standing. **18 files.** No screen changed shape;
+the verification is that none of them did.
+
+**Deleted.** `primitives/`: `ActionSheet`, `Bar`, `Button`, `Field`,
+`GroupedList`, `Segmented`, `Sheet`, `StatusBadge`. `patterns/`: `FilterSheet`,
+`MediaPicker`, `MoveControls`, `RangeControl`, `Scaffold`, `States`, `TabBar`.
+Plus `app/[locale]/(panel)/more/`, `inventory/RowSkeleton.tsx` and
+`tests/field.test.tsx`.
+
+**Four files kept, and it is a decision rather than an unfinished job.**
+`primitives/Icon.tsx`, `Ltr.tsx`, `Toast.tsx` and `patterns/QueryProvider.tsx`
+are live and have no `ui/` equivalent — `DESIGN.md` §0 lists exactly this class
+of thing as *kept, because they were right and are not iOS-specific*. Moving them
+into `components/ui/` would touch ~200 import sites and change nothing a reader
+sees, so the two directories survive under their retired names holding four
+correct files. **A reader who finds `primitives/` still present has not found a
+teardown that stopped early.**
+
+**`/more` was the last of the retired shell** — the bottom tab bar's overflow
+slot, unreachable from `nav-tree.ts` or `AppShell` for the whole run. The only
+things still reaching it were three e2e tests, which is why it outlived the shell
+that created it. They were **rewritten, not deleted**: each keeps its
+capability-gated presence/absence assertion and reads `AppShell`'s tree instead,
+following the pattern `e2e/content.spec.ts:106-116` had already set. They are
+**unexecuted** — the suite needs live credentials nobody has here — and that is
+recorded rather than glossed.
+
+**CSS and tokens went with their last callers**, not by name-matching a list:
+`.material-bar`, `.tone-*`, `.tonal*`, `.sheet-*`, `.switch*`, `.pill-row`,
+`.action-sheet`, `.seg-thumb`, `.hairline-*`, `.press`/`.press-row`, `.tap-44`,
+`.list-row`, `.save-bar`, `.title-collapsed`, and `.skeleton` with its
+`skeleton-sweep` keyframe. `globals.css` 1430 → 1014 lines, `tokens.css` 422 →
+359. **`.skeleton` is the one worth naming**: it was the retired sweeping
+highlight that `DESIGN.md` §3.6 bans outright (*"No sweeping highlight"*), still
+in the file, still animating, and reachable only from three dying files. It took
+`--color-fill-secondary`/`--color-fill-tertiary` with it. The live skeleton is
+and was `.ui-skeleton`, an opacity pulse, exactly as §3.6 specifies.
+
+**`--ease-ios` had one live consumer, not none.** `.indeterminate` — the upload
+progress bar at `media/UploadModal.tsx:380` — was reading a token §1.7 declares
+deleted. Retargeted to `--ease-ui-standard` and the token removed. Every other
+one of its sixteen references sat inside a rule that was itself being deleted,
+which is why nothing had noticed.
+
+**Two rules in `DESIGN.md` §7 were written and never implemented**, and this is
+the branch on which they first pass, so they shipped: *no retired iOS utilities*
+and *no retired tokens*. `check-design.sh` is 14 checks → **16**, and `FLOOR`
+took its **first decrease** — 324 → 307 against 309 real, with the reason
+appended to the script's own history header. Adding them here is the point of a
+teardown: the deletions make the door closable, and the rules are what keep it
+shut. Both were sabotage-tested independently of the build agent, in a CSS
+position and a `.tsx` position, and both went red.
+
+**Message keys:** 2066 → **2058**, exact parity re-verified path-by-path.
+`nav.moreTitle`/`built`/`notBuilt`/`notBuiltNote` (sole caller `more/page.tsx`),
+`nav.dashboardShort`/`nav.more` (sole caller `TabBar.tsx`), and
+`content.moveUp`/`moveDown` (sole caller `MoveControls.tsx`) — the last pair
+exactly as this file predicted on the content branch. `ui.reorder.up`/`down` are
+**different keys**, are live, and stay; `ui/Reorder.tsx`'s docblock mentions the
+`content.*` pair only to describe what the retired pattern used to read, which is
+a trap worth naming because the scout fell in it and reported "do not delete".
+The banners capture shows the reorder arrows rendering, which is what settled it.
+
+### Where the build corrected the brief — six of eight, and it was right each time
+
+The pattern this run keeps recording. Recorded here because the *shape* repeats.
+
+- **`--color-label-tertiary` is live** — `globals.css:139`, the scrollbar thumb.
+  Its last consumer was never one of the deleted files. Kept.
+- **`--color-bg-grouped` is live in a way nothing greps for** — no CSS rule
+  consumes it; `tests/boundary.test.ts:1190-1195` *parses it out of `tokens.css`*
+  and asserts it matches `lib/theme-color.ts`'s PWA status-bar literals. Deleting
+  it reddens a passing test. Kept, and carried forward below.
+- **`text-subhead` without a word boundary matches the live `--text-subheading`**
+  across 12 files. The rule as I specified it would have failed on correct code
+  on day one. All patterns carry `\b`.
+- **`tests/form.test.tsx` already had the a11y port**, so §B's premise was false.
+  The two properties genuinely missing were `NumberField` (5 live callers, zero
+  coverage) and **name-stability as a hint appears** — every existing assertion
+  rendered its hint present from the start, so all of them would have passed with
+  the hint wrongly inside the `<label>`. Both added. `ui/Form.tsx` passes the
+  property; there was no defect to fix.
+- **The "no fixed viewport widths" rule was already covered** by the existing
+  no-arbitrary-values check, verified as identical match sets. Nothing added.
+- **`.save-bar`, `.scroll-area`, `.safe-b` and `--shadow-overlay` were missing
+  from my list** and met its own rule. Dropping `--shadow-overlay` also let the
+  now-dead `Sheet|Popover|ActionSheet` exemptions come out of the shadow check.
+
+**And one the build missed that verification caught:** `analytics/query.ts:16`
+justified a routing decision with *"it is the panel's tab-bar destination while
+this is a `/more` one"* — two surfaces this branch deletes. Fixed in place with
+the correction visible. It is the ledger's most-repeated shape one more time: a
+comment that reads like a property of the system and is really a description of
+something that no longer exists.
+
+### Omitted deliberately
+
+- **The four live files were not moved** into `components/ui/`. Above.
+- **No 429 backoff added** to `lib/api/browser.ts`. Its *comment* in
+  `QueryProvider.tsx:29-30` was lying and is fixed — it now says the browser
+  client has no backoff — but the behaviour change is not teardown's. Still
+  carried.
+- **`DESIGN.md` §7's migration map is left in place.** It documents a migration
+  that is complete, which is history rather than instruction, and deleting it
+  would remove the record of what each retired name became.
+- **Four pre-existing orphans left and reported rather than swept**: `.place-cap`,
+  `.safe-t`, `.spin` + `@keyframes spin`, and `--radius-ui-xl` — the last being an
+  orphan in the *new* `ui-` set. None has any connection to the retired system, so
+  deleting them under a teardown commit would be scope this branch did not earn.
+  Carried forward instead.
+
+### Verified, not reported
+
+`tsc` silent · lint 0 errors / 8 warnings — **the "11 warnings" baseline every
+brief in this run has quoted was stale; HEAD is 8 and this branch added none** ·
+16/16 design checks · 1004 unit tests in 18 files (was 1012 in 19; −11 from
+`field.test.tsx`, +3 ported) · clean `rm -rf .next && npm run build`, with
+`/[locale]/more` absent from the route table · `capture.mjs` on `/media`,
+`/inventory`, `/content/banners`, `/analytics` and `/products` — **60/60 clean**.
+The PNGs were opened and judged, not just counted: inventory at 1440 light,
+media at 340 dark Arabic, products at 340 light and banners at 1440 dark all
+render with tabular numerics, RTL grid, pager and reorder controls intact.
+
+**Three ledger claims were stale and are corrected in place below** — `RowSkeleton`'s
+importer count (recorded as six, then one; it was zero), and the unit-test count
+recorded as 787.
+
+---
+
+## Carried forward — ~~teardown owns these~~ nobody owns these yet
+
+**The heading was a plan and teardown has now run**, so it is corrected rather
+than left pointing at a finished branch. §22 closed the four entries that were
+genuinely deletions — the dead files, `RowSkeleton`, `primitives/Bar` and the two
+orphaned message keys — and the comment half of the 429 entry. **Everything still
+listed below was examined by teardown and deliberately not taken**, each for a
+reason recorded on its own line, and the commonest reason is that closing it
+re-captures screens the branch did not own. The next reader inherits them without
+an owner; that is the honest state, and it is better than a heading promising a
+branch that has already merged.
 
 - **`lib/api/browser.ts` has no 429 handling at all, and a comment two files over
   says it does.** `QueryProvider.tsx:29-30` reads *"lib/api handles a 429 by its
@@ -3485,6 +3638,13 @@ resolve against nothing.
   dangerous half: it is the shape this ledger keeps recording — a note that reads
   like a property of the system and is really a description of a different file.
   The check is one command: `grep -n 'retryAfter\|429' lib/api/browser.ts`.
+
+  **Half closed by §22, and it is the half that was lying.** The comment now says
+  what is true — that the browser client has no 429 backoff and that this entry is
+  open. **The backoff itself is untouched and still owed**: it is a behaviour
+  change against a 600/min read bucket, not a deletion, so teardown had no claim
+  on it. What this leaves is the better failure mode of the two: a real gap with an
+  accurate note beside it, rather than a real gap with a reassuring one.
 - **`Notice` draws an alert triangle for `info`, `warning` and `danger` alike** —
   `States.tsx:355` is `tone === "success" ? "check" : "alert"`, so a session that
   merely expired carries the same glyph as a refused credential and only the
@@ -3585,6 +3745,32 @@ resolve against nothing.
   branch had corrected it to describe the JSON behaviour honestly; this change
   made that description false, which is worth noticing — **copy that documents a
   defect becomes a lie the moment the defect is fixed.**
+- **`--color-bg-grouped` is a retired iOS token that survives because a test
+  parses it, and it is the only retired name left in `tokens.css`.** Nothing in
+  any stylesheet consumes it — `grep 'var(--color-bg-grouped)'` is empty — but
+  `tests/boundary.test.ts:1190-1195` reads it *out of the file as text* and
+  asserts it matches `lib/theme-color.ts`'s PWA status-bar literals, in both theme
+  blocks. So deleting the definition reddens a passing test, and closing it
+  properly means deciding what colour the PWA status bar should be under the new
+  palette — `#f2f2f7` light and `#000000` dark are the retired ground, not
+  `--color-canvas`. **Teardown left it deliberately**: it is a live coupling
+  between a stylesheet and a browser-chrome literal, which is a colour decision,
+  not a deletion. The `bg-bg-grouped` *utility* is banned by the new retired-token
+  rule regardless; only the definition survives.
+- **Four orphans with no connection to the retired system**, found while sweeping
+  for ones that had: `.place-cap`, `.safe-t`, and `.spin` with its `@keyframes
+  spin` in `globals.css`; and **`--radius-ui-xl`, which has never been used since
+  the day it was written** — an orphan in the *new* `ui-` set rather than the old
+  one, which is worth noticing on its own. All four were dead before §22 and none
+  is named by any rule in `DESIGN.md` §7. Left because sweeping them under a
+  teardown commit would be borrowing that branch's licence for unrelated work; the
+  check is `grep -rn 'place-cap\|safe-t\|\bspin\b\|radius-ui-xl' styles/ app/ components/`.
+- **`tests/setup.ts`'s `IntersectionObserver` stub now has no consumer at all.**
+  Its comment credited it to `patterns/Scaffold.tsx`, which §22 deleted; the
+  comment is corrected but the stub is kept. **Deliberately, and the reasoning is
+  the point**: a test-harness shim removed on a guess costs a red suite that is
+  hard to attribute, and nothing is paid for keeping it. Whoever next touches
+  `tests/setup.ts` should check whether jsdom still needs it.
 - **`tests/fixtures-admin.json`'s `exportProducts`/`exportAsManager` `first_line`
   predate `fix/product-export-field-names`**, so `tests/admin-schema.test.ts:934`
   asserts `startsWith("ID,")` — pinning a header the backend has since replaced
@@ -3770,8 +3956,9 @@ resolve against nothing.
 - **`lib/campaigns.ts:96` says the API refuses the 1001st recipient id. Nobody has
   measured it.** Dated-guess shape, which this file has been wrong about three
   times.
-- **`RowSkeleton.tsx`'s importer count is now six, not seven** — `CampaignsList.tsx`
-  was one of them and no longer imports it.
+- ~~**`RowSkeleton.tsx`'s importer count is now six, not seven**~~ — `CampaignsList.tsx`
+  was one of them and no longer imports it. **Stale; the file was deleted by §22
+  with zero importers.**
 - **Live-shop residue from the harness work: campaign 325 `zz-harness-3`,
   cancelled.** It could not be removed — `DELETE` on a non-draft is a 409, *"Only
   a draft can be deleted. Cancel the campaign instead."* — which is itself the
@@ -3857,8 +4044,12 @@ resolve against nothing.
   the capture-count and refetch-count failure a third time: the number lived in
   prose on both sides. The check was one command and it was written down in the
   rule itself.
-- **`RowSkeleton.tsx` stays** — ~~**seven**~~ ~~**two**~~ **one** unmigrated screen
-  imports it, `audit/AuditList.tsx`, which is checklist item 19. The count had been stale by
+- **`RowSkeleton.tsx` stays** — ~~**seven**~~ ~~**two**~~ ~~**one**~~ **zero**.
+  **Deleted by §22, and the count was stale a fourth time**: this entry named
+  `audit/AuditList.tsx` as the last importer and that screen had already stopped
+  importing it. Four successive counts, every one written down and none re-run —
+  which is the entry's own lesson landing on the entry itself. `grep -rn
+  'RowSkeleton' app/` was always the whole check. The count had been stale by
   four before the notifications branch removed the fifth, and nobody had recounted
   it since it was written; item 16 removed the second, so only item 19 is left.
   **The notifications list was importing it across a page boundary** — from
@@ -3882,7 +4073,10 @@ resolve against nothing.
   `e2e/content.spec.ts` tests were asserting against until this branch.
   **`tests/cms.test.ts` was importing `moveItem` from the retired copy**, so the
   five reorder assertions were covering dead code while `ui/Reorder`'s own
-  implementation had none; repointed, 787 still pass.
+  implementation had none; repointed, ~~787~~ **all** still pass. (The bare count
+  was stale within two branches — the suite was 1012 by teardown and is 1004
+  after it. A number in prose ages; "all pass" does not, and the command reports
+  the count anyway.)
 - **`components/primitives/Bar.tsx` now has no importer at all.** The analytics
   branch was its only caller and `components/ui/Bar.tsx` replaced it. It is left
   in place under the rule that teardown owns `primitives/`, but unlike

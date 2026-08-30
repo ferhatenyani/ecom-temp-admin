@@ -145,204 +145,11 @@
 }
 
 @layer utilities {
-  /*
-   * The navigation material. A blur samples what is behind it; a gradient
-   * invents a colour ramp — which is why this is permitted and a gradient is
-   * not.
-   */
-  /*
-   * 88 %, not the 72 % first written: measured at 390px, list rows scrolling under
-   * the tab bar stayed legible through it and collided with the tab labels. iOS's
-   * own bars are closer to opaque than a "subtle" wash, and the blur is doing the
-   * work either way.
-   */
-  .material-bar {
-    background-color: color-mix(in srgb, var(--color-bg) 88%, transparent);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-  }
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .material-bar {
-      background-color: var(--color-bg);
-    }
-  }
-  /* Reduced transparency replaces the blur with an opaque surface, never with
-   * a gradient. */
-  @media (prefers-reduced-transparency: reduce) {
-    .material-bar {
-      background-color: var(--color-bg);
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-    }
-  }
-
-  /*
-   * Status without an accent bar. The banned pattern needs a named replacement
-   * or it comes back, so this is it: a tonal badge, and a leading dot for rows
-   * too dense to carry one.
-   *
-   * One `--tone` indirection rather than five copies of the color-mix. The label
-   * stays at full strength — a badge whose text is also tinted fails contrast,
-   * which is the specific risk Part VIII names.
-   */
-  .tone-neutral {
-    --tone: var(--color-label-secondary);
-  }
-  .tone-info {
-    --tone: var(--color-info);
-  }
-  .tone-warning {
-    --tone: var(--color-warning);
-  }
-  .tone-success {
-    --tone: var(--color-success);
-  }
-  .tone-danger {
-    --tone: var(--color-danger);
-  }
-  .tone-accent {
-    --tone: var(--color-accent);
-  }
-
-  .tonal {
-    background-color: color-mix(in srgb, var(--tone) 14%, transparent);
-    color: var(--tone);
-  }
-  .tonal-dot {
-    background-color: var(--tone);
-  }
-  .tonal-fg {
-    color: var(--tone);
-  }
-
-  /*
-   * The sheet. A bottom sheet with detents on a phone, a centred modal at md and
-   * up — the same component, positioned differently, rather than two components
-   * that drift apart.
-   *
-   * The medium detent is ~55vh; a sheet whose content exceeds it grows to large.
-   * `max-block-size` rather than a fixed height, so a short filter sheet does not
-   * leave two thirds of the screen empty.
-   */
-  .sheet-content {
-    inset-inline: 0;
-    inset-block-end: 0;
-    max-block-size: 92vh;
-    min-block-size: 55vh;
-    border-start-start-radius: var(--radius-xl);
-    border-start-end-radius: var(--radius-xl);
-    padding-block-end: env(safe-area-inset-bottom, 0px);
-    animation: sheet-up var(--dur-base) var(--ease-ios);
-  }
-  @media (min-width: 48rem) {
-    .sheet-content {
-      /*
-       * `inset-block-start` alone, never the `inset-block` shorthand.
-       *
-       * The shorthand sets *both* block insets to 50%, and with `block-size:
-       * auto` that is not a centring instruction — it is `height: 100% − 50% −
-       * 50%`, which is zero. Measured at 1440 × 900: the sheet came out
-       * 544 × 0 at top 450, `data-state="open"`, `visibility: visible`, and
-       * Playwright reported it as hidden for sixty-three consecutive polls.
-       *
-       * Nothing caught it until now because this is the first sheet the panel
-       * has ever opened at `md`: the orders branch used `ActionSheet`, which is
-       * bottom-anchored at every width and carries its own positioning.
-       */
-      inset-block-start: 50%;
-      inset-block-end: auto;
-      inset-inline-start: 50%;
-      transform: translate(-50%, -50%);
-      inline-size: min(34rem, calc(100vw - 4rem));
-      min-block-size: 0;
-      max-block-size: 80vh;
-      border-radius: var(--radius-xl);
-      animation: sheet-in var(--dur-base) var(--ease-ios);
-    }
-    [dir="rtl"] .sheet-content {
-      transform: translate(50%, -50%);
-    }
-  }
-  .sheet-overlay {
-    animation: fade-in var(--dur-base) var(--ease-ios);
-  }
-
   /* The place on an order row: at most 45 % of the line, so the customer's name
    * always keeps the larger half. */
   .place-cap {
     max-inline-size: 45%;
     flex: 0 1 auto;
-  }
-
-  /*
-   * The switch. iOS's proportions — 51 × 31 with a 27px knob — because a switch
-   * drawn at web defaults is the tell that this is a web form wearing an iOS
-   * costume. The knob moves with a transform so it composites, and
-   * `inset-inline-start` puts it on the leading edge in both directions with only
-   * the sign of the translate mirrored.
-   */
-  .switch {
-    inline-size: 3.1875rem; /* 51 */
-    block-size: 1.9375rem; /* 31 */
-    transition: background-color var(--dur-fast) var(--ease-ios);
-  }
-  /*
-   * No shadow under the knob, though iOS has one. Part III's rule is that
-   * elevation is a surface step and that a shadow belongs to a sheet and a
-   * popover only — and the knob does not need it: white on a filled track is
-   * already a 4.5:1 boundary in both themes.
-   */
-  .switch-knob {
-    inset-block-start: 2px;
-    inset-inline-start: 2px;
-    inline-size: 1.6875rem; /* 27 */
-    block-size: 1.6875rem;
-    transition: transform var(--dur-fast) var(--ease-ios);
-  }
-  .switch[aria-checked="true"] .switch-knob {
-    transform: translateX(1.25rem); /* 51 − 27 − 4 */
-  }
-  [dir="rtl"] .switch[aria-checked="true"] .switch-knob {
-    transform: translateX(-1.25rem);
-  }
-
-  /*
-   * The filter pill row scrolls horizontally and must not show a scrollbar over
-   * a 44px control. Snap, so a pill never comes to rest half off the screen —
-   * at 390px the row is genuinely wider than the viewport and a half-pill reads
-   * as a clipped layout rather than as more content.
-   */
-  .pill-row {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    scroll-snap-type: inline proximity;
-    overscroll-behavior-inline: contain;
-    /*
-     * Without this the snap eats the gutter. `scroll-snap-align: start` aligns a
-     * pill's leading edge with the *scrollport's* leading edge, which is the
-     * padding box — so the 1rem below was applied, the browser snapped straight
-     * past it, and the first pill sat flush against the viewport edge at x=0
-     * while the search field above it started at 16. Measured before the fix:
-     * `firstPillLeft: 0`, `paddingInlineStart: 16px`.
-     */
-    scroll-padding-inline: 1rem;
-  }
-  .pill-row::-webkit-scrollbar {
-    display: none;
-  }
-  .pill-row > * {
-    scroll-snap-align: start;
-  }
-  /*
-   * The row is padded to the page gutter with its own inline padding rather than
-   * the parent's, so the first and last pill sit flush with the content column
-   * and the scroll still runs edge to edge. A pill clipped by the viewport edge
-   * is the affordance; a fade over it would be a gradient, which Part III bans
-   * and which this row does not need.
-   */
-  .pill-row {
-    padding-inline: 1rem;
-    margin-inline: -1rem;
   }
 
   /* The refresh control, while a refetch is in flight. */
@@ -380,7 +187,10 @@
    * exactly what it means.
    */
   .indeterminate {
-    animation: indeterminate-pulse 1.4s var(--ease-ios) infinite;
+    /* Retargeted at teardown: this rule outlived the iOS utility layer it was
+     * written in, and the retired easing token went with that layer. Same curve
+     * family, live namespace — `.ui-skeleton` pulses on the same token. */
+    animation: indeterminate-pulse 1.4s var(--ease-ui-standard) infinite;
     transform-origin: center;
   }
   @keyframes indeterminate-pulse {
@@ -399,206 +209,12 @@
   }
 
   /*
-   * A skeleton block. The shimmer is a transform on a pseudo-element rather than
-   * an animated background-position, so it composites; and under reduced motion
-   * the global rule already collapses it to a still fill.
-   */
-  .skeleton {
-    position: relative;
-    overflow: hidden;
-    background-color: var(--color-fill-tertiary);
-  }
-  .skeleton::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-color: var(--color-fill-secondary);
-    animation: skeleton-sweep 1.4s var(--ease-ios) infinite;
-  }
-  @keyframes skeleton-sweep {
-    from {
-      opacity: 0;
-    }
-    50% {
-      opacity: 1;
-    }
-    to {
-      opacity: 0;
-    }
-  }
-
-  /*
-   * The collapsed nav-bar title. Opacity and a small translate only — a title
-   * that animates its font-size relayouts the bar on every frame of the scroll.
-   */
-  .title-collapsed {
-    opacity: 0;
-    transform: translateY(0.375rem);
-    transition:
-      opacity var(--dur-slow) var(--ease-ios),
-      transform var(--dur-slow) var(--ease-ios);
-  }
-  .title-collapsed.is-collapsed {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  /*
-   * The save bar on the product form, anchored above the tab bar.
-   *
-   * The form is nine grouped sections tall at 390px; a save button at the foot of
-   * it is a save button that has to be hunted for, and the one thing a person
-   * came to this screen to do should not require scrolling past everything they
-   * did not change. It appears only when there is something to save, so an
-   * unedited product keeps the full viewport.
-   *
-   * **Retired, and still here — deliberately.** DESIGN.md §7 lists this class
-   * among the ones deleted from this file, and the product detail it was written
-   * for no longer uses it: `SaveBar` in `components/ui/Form.tsx` is `position:
-   * sticky` inside the form's own column and knows nothing about the tab bar, the
-   * safe inset or the sidebar's width, which are the three numbers below.
-   *
-   * **Its condition is now met, and this class is dead — teardown deletes it.**
-   * This note used to read: "Eight forms still on the old visual system carry it
-   * — settings, the coupon form, the user detail and the new-user form, the
-   * inventory item, the CMS page form, the homepage editor and the menu editor",
-   * with the reason for keeping it being that each is `fixed inset-x-0` with no
-   * block-end of its own, so deleting the rule would not remove their bars but
-   * **unstick** them, jumping all eight to the top of the viewport.
-   *
-   * Every one of those eight has since migrated to `SaveBar`, settings last, on
-   * the settings branch. The check the note itself named is the proof:
-   * `grep -rn save-bar` matches only this rule, `Form.tsx`'s prose about it, and
-   * the `data-testid="save-bar"` the *new* primitive carries — which is a test
-   * handle on the sticky bar, not this class. No source file applies it.
-   *
-   * It is left for the teardown pass rather than removed here because that pass
-   * owns the retired layer wholesale, and because a rule with no consumer breaks
-   * nothing while it waits. The count is corrected rather than the sentence
-   * quietly dropped: a note that reads like a property of the system and is a
-   * stale observation is the defect DECISIONS.md legislates against everywhere
-   * else, and this one had a number in it.
-   */
-  .save-bar {
-    inset-block-end: calc(3.25rem + env(safe-area-inset-bottom, 0px));
-  }
-  @media (min-width: 48rem) {
-    /* At md the tab bar becomes a sidebar and the bar drops to the bottom edge,
-       inset by the sidebar's width so it does not run underneath it. */
-    .save-bar {
-      inset-block-end: 0;
-      inset-inline-start: 15rem;
-    }
-  }
-
-  /*
    * `.toast-anchor` and `.toast` were here, holding the toast 4.25rem off the
    * bottom to clear a tab bar DESIGN.md §0 retired — `AppShell` has no tab bar,
    * so every toast in the panel floated 68px above where it belonged. `Toast` is
    * on the new system now; the rules are `.ui-toast-anchor` / `.ui-toast` in the
    * `ui` layer below, and nothing else ever referenced these two.
    */
-
-  /*
-   * The action sheet sits inset from the screen edges, the way iOS does it, and
-   * respects the home indicator. It stays bottom-anchored at every width: an
-   * action sheet is a response to a control the thumb just touched, and moving it
-   * to the centre of a desktop window loses that connection.
-   */
-  .action-sheet {
-    inset-inline: 0.5rem;
-    inset-block-end: calc(0.5rem + env(safe-area-inset-bottom, 0px));
-    max-inline-size: 26rem;
-    margin-inline: auto;
-    animation: sheet-up var(--dur-base) var(--ease-ios);
-  }
-
-  @keyframes sheet-up {
-    from {
-      transform: translateY(100%);
-    }
-  }
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-    }
-  }
-
-  /*
-   * The desktop sheet is centred with a transform, so its entrance cannot also be
-   * a transform without fighting the centring. Opacity only, and the RTL variant
-   * keeps its own translate.
-   */
-  @keyframes sheet-in {
-    from {
-      opacity: 0;
-    }
-  }
-
-  /*
-   * The segmented control's sliding thumb.
-   *
-   * `inset-inline-start` puts it on the leading edge in both directions, so the
-   * only thing that mirrors is the sign of the translate. Transform only — moving
-   * `inset-inline-start` itself would animate layout and jank the list behind it.
-   */
-  .seg-thumb {
-    inset-block: 2px;
-    inset-inline-start: 2px;
-    inline-size: calc((100% - 4px) / var(--seg-count));
-    transform: translateX(calc(var(--seg-index) * 100%));
-    transition: transform var(--dur-fast) var(--ease-ios);
-  }
-  [dir="rtl"] .seg-thumb {
-    transform: translateX(calc(var(--seg-index) * -100%));
-  }
-
-  /*
-   * A grouped-list row's separator. In CSS rather than a Tailwind arbitrary value
-   * because the hairline is a token whose value changes with pixel density, and
-   * because `:last-child` is the honest way to drop the final rule — the rounded
-   * corner is otherwise crossed by a line.
-   */
-  .list-row {
-    border-block-end: var(--hairline) solid var(--color-separator);
-  }
-  .list-row:last-child {
-    border-block-end: 0;
-  }
-
-  .hairline-b {
-    border-block-end: var(--hairline) solid var(--color-separator);
-  }
-  .hairline-t {
-    border-block-start: var(--hairline) solid var(--color-separator);
-  }
-
-  /*
-   * The press state. A phone has no hover, so a tap with no feedback gets tapped
-   * again — this is immediate and visible. Transform and opacity only; animating
-   * background-color would jank the list under the reader's thumb.
-   *
-   * A utility rather than `active:scale-[0.97]` at each call site, because
-   * arbitrary values are exactly what scripts/check-design.sh fails on.
-   */
-  .press {
-    transition:
-      transform var(--dur-fast) var(--ease-ios),
-      opacity var(--dur-fast) var(--ease-ios);
-  }
-  .press:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-  /* A full-width row scales less; 0.97 on a 390px-wide row reads as a lurch. */
-  .press-row:active:not(:disabled) {
-    transform: scale(0.995);
-    background-color: var(--color-fill-tertiary);
-  }
-  .press-row {
-    transition:
-      transform var(--dur-fast) var(--ease-ios),
-      background-color var(--dur-fast) var(--ease-ios);
-  }
 
   /* A chevron or a back arrow points the way the reader reads. A clock, a
    * checkmark and a box do not, which is why this is opt-in per icon rather than
@@ -607,15 +223,6 @@
     transform: scaleX(-1);
   }
 
-  /* Pulling a sheet's list must not drag the page behind it. */
-  .scroll-area {
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .safe-b {
-    padding-block-end: env(safe-area-inset-bottom, 0px);
-  }
   .safe-t {
     padding-block-start: env(safe-area-inset-top, 0px);
   }
@@ -688,26 +295,6 @@
    */
   .bar-fill-muted {
     background-color: var(--color-ui-line-control);
-  }
-
-  /* A 20px icon gets a 44px hit area via a pseudo-element, not by growing the
-   * icon. */
-  .tap-44 {
-    position: relative;
-  }
-  .tap-44::after {
-    content: "";
-    position: absolute;
-    inset-inline: 50%;
-    inset-block: 50%;
-    min-width: 44px;
-    min-height: 44px;
-    width: 100%;
-    height: 100%;
-    transform: translate(50%, -50%);
-  }
-  [dir="rtl"] .tap-44::after {
-    transform: translate(-50%, -50%);
   }
 }
 

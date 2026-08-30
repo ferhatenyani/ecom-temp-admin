@@ -30,7 +30,18 @@ cd "$(dirname "$0")/.." || exit 2
 # the staff redesign, floor 318; 321 at the settings redesign, floor 319; 322 at
 # the transfer redesign, floor 320; 323 at the export-refusal fix, floor 321; 325
 # at the audit redesign, floor 323; 326 at the login redesign, floor 324.
-FLOOR=324
+#
+# 309 at the teardown, floor 307 — and this is the **first decrease** in the
+# history above, which is why it is spelled out rather than appended as another
+# semicolon. Teardown deleted the retired iOS layer now that all 44 route pages
+# are on `components/ui/`: 17 of the scanned files went (8 in
+# components/primitives/, 7 in components/patterns/, the whole of
+# app/[locale]/(panel)/more/, and inventory/RowSkeleton.tsx), taking 326 to 309.
+# A floor that only ever rises would have failed this branch for doing exactly
+# what it was scheduled to do — but it must still be *lowered deliberately and
+# once*, to the real count minus the same margin of 2, never quietly edited down
+# to whatever makes today pass.
+FLOOR=307
 failures=0
 checks=0
 
@@ -129,6 +140,53 @@ report "no 100vh" \
   "$(scan '\bh-screen\b|100vh'; scan_css '\b100vh\b')"
 
 echo
+echo "the retired system stays retired"
+
+# Added at the teardown branch, and only there, because this is the first branch
+# on which they can pass: DESIGN.md §7 has listed both since the redesign began,
+# but a rule that fails the moment it is written gets commented out rather than
+# obeyed. The retired layer is gone from globals.css and tokens.css now, so these
+# two are what stop it coming back one convenient utility at a time.
+#
+# ## Both scan a *class position*, and that is a decision rather than a weak regex
+#
+# This repository documents its own history in prose. `press` is an ordinary
+# English word here — "one press away in the peek", "the person's own press" —
+# and `hairline`, `text-subhead` and `tonal` all appear inside backticks in
+# comments explaining what was retired and why. A rule that fired on those would
+# be switched off within a week, which is worse than not having it. So the source
+# half matches only inside a `className`/`class` attribute, where a *use* has to
+# live, and the CSS half matches a selector or a custom-property definition,
+# which is where a *reintroduction* has to live. A utility cannot come back
+# without a rule to define it, so the CSS half is the one that closes the door.
+#
+# Word boundaries are load-bearing, not decoration: `text-subhead` without one
+# matches `--text-subheading`, which is a live token this panel uses on twelve
+# screens, and the rule would have failed on correct code the day it was added.
+QUOTE="[\"\`']"
+NOTQUOTE="[^\"\`']"
+
+# The retired iOS utilities — DESIGN.md §0's table and §7's list.
+RETIRED_UTIL='material-bar|press-row|press|sheet-content|sheet-overlay|action-sheet|seg-thumb|title-collapsed|hairline-[bt]|hairline|tap-44|list-row|pill-row|tonal|tone-[a-z]+'
+report "no retired iOS utilities" \
+  "The iOS layer is deleted. .ui-* is the live namespace — see globals.css." \
+  "$(scan "class(Name)?=[{]?$QUOTE$NOTQUOTE*\b($RETIRED_UTIL)\b"; \
+     scan_css "^[[:space:]]*\.($RETIRED_UTIL)\b")"
+
+# The retired type and colour names. The first list is the Tailwind utility a
+# screen would write; the second is the token definition itself, and it is
+# deliberately shorter — `--color-bg-grouped` and `--color-label-tertiary` are
+# still defined because they still have live consumers (the PWA theme-colour
+# pairing tests/boundary.test.ts asserts, and the scrollbar thumb in globals.css
+# respectively). Using them as utilities is banned; defining them is not.
+RETIRED_TOKEN='text-large-title|text-title-[123]|text-headline|text-callout|text-subhead|text-footnote|bg-bg-grouped|text-label-secondary|text-label-tertiary|border-separator'
+RETIRED_TOKEN_DEF='ease-ios|hairline|dur-slow|text-large-title|text-title-[123]|text-headline|text-callout|text-subhead|text-footnote|color-separator|color-label-secondary|color-fill-secondary|color-fill-tertiary'
+report "no retired tokens" \
+  "See DESIGN.md §7's migration map for what each retired name became." \
+  "$(scan "class(Name)?=[{]?$QUOTE$NOTQUOTE*\b($RETIRED_TOKEN)\b"; \
+     scan_css "^[[:space:]]*--($RETIRED_TOKEN_DEF)\b")"
+
+echo
 echo "logical properties only"
 
 # Physical direction properties are banned, not discouraged.
@@ -151,14 +209,15 @@ echo "elevation from tokens only"
 # genuinely float a tokenised shadow. So the rule is no longer "almost nowhere",
 # it is "only from the three tokens".
 #
-# Permitted: shadow-ui-xs / -sm / -md (the new scale) and shadow-overlay (the
-# old one, still used by the screens that have not migrated).
+# Permitted: shadow-ui-xs / -sm / -md, and that is now the whole list. The
+# `shadow-overlay` token and the Sheet/ActionSheet exemptions that went with it
+# were removed at teardown: its last consumer was primitives/Sheet.tsx, both of
+# those files are deleted, and a permitted-value list that names things which no
+# longer exist reads as though they are still allowed to come back.
 # Banned: Tailwind's own scale, which is untokenised and would drift, and any
 # arbitrary shadow.
 shadow_hits="$(grep -nE 'shadow-' "${FILES[@]}" 2>/dev/null \
-  | grep -vE 'shadow-ui-(xs|sm|md)\b' \
-  | grep -vE 'shadow-overlay' \
-  | grep -vE '(Sheet|Popover|ActionSheet)\.tsx' || true)"
+  | grep -vE 'shadow-ui-(xs|sm|md)\b' || true)"
 report "no untokenised shadows" \
   "Use shadow-ui-xs/sm/md. Tailwind's default scale and shadow-[…] both drift." \
   "$shadow_hits"
@@ -180,16 +239,44 @@ fi
 # A positive control on the scanner itself: the patterns above must be capable of
 # matching. If a deliberately bad string does not trip the colour rule, the rule
 # is broken and every PASS above is meaningless.
+#
+# Extended at teardown to cover the two rules added on that branch, and they need
+# it more than the others do: both scan a *class position* rather than the whole
+# line, so a mistake in the quoting would not fail the build — it would silently
+# match nothing and PASS forever, which is the exact failure mode the floor above
+# exists to catch for the file globs. The probe also carries the two strings that
+# must NOT match: `--text-subheading` is a live token that a boundary-less
+# `text-subhead` would hit, and a comment mentioning a press is prose.
 checks=$(( checks + 1 ))
 probe="$(mktemp -t check-design-probe-XXXXXX.tsx)"
-printf 'const bad = "#ff00aa"; const worse = "ml-4 text-left";\n' > "$probe"
-if grep -qE '#[0-9a-fA-F]{3,8}\b' "$probe" && grep -qE 'text-(left|right)\b' "$probe"; then
-  printf '  %s scanner matches a known-bad control\n' "$(green PASS)"
+{
+  printf 'const bad = "#ff00aa"; const worse = "ml-4 text-left";\n'
+  printf 'const retired = <div className="press material-bar" />;\n'
+  printf 'const stale = <p className="text-subhead border-separator">x</p>;\n'
+  printf '/* prose: one press away, at `--text-subheading`, on a hairline. */\n'
+} > "$probe"
+probe_css="$(mktemp -t check-design-probe-XXXXXX.css)"
+printf '.seg-thumb { inset-block: 2px; }\n  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);\n' > "$probe_css"
+
+control_ok=1
+grep -qE '#[0-9a-fA-F]{3,8}\b' "$probe" || control_ok=0
+grep -qE 'text-(left|right)\b' "$probe" || control_ok=0
+# the two new rules match a real reintroduction …
+grep -qE "class(Name)?=[{]?$QUOTE$NOTQUOTE*\b($RETIRED_UTIL)\b" "$probe" || control_ok=0
+grep -qE "class(Name)?=[{]?$QUOTE$NOTQUOTE*\b($RETIRED_TOKEN)\b" "$probe" || control_ok=0
+grep -qE "^[[:space:]]*\.($RETIRED_UTIL)\b" "$probe_css" || control_ok=0
+grep -qE "^[[:space:]]*--($RETIRED_TOKEN_DEF)\b" "$probe_css" || control_ok=0
+# … and do not match the prose line, which is the whole reason they are scoped.
+if grep -E "class(Name)?=[{]?$QUOTE$NOTQUOTE*\b($RETIRED_UTIL|$RETIRED_TOKEN)\b" "$probe" \
+   | grep -q 'prose:'; then control_ok=0; fi
+
+if (( control_ok == 1 )); then
+  printf '  %s scanner matches a known-bad control, and spares the prose beside it\n' "$(green PASS)"
 else
   printf '  %s the scanner did not match a known-bad control\n' "$(red FAIL)"
   failures=$(( failures + 1 ))
 fi
-rm -f "$probe"
+rm -f "$probe" "$probe_css"
 
 echo
 if (( failures > 0 )); then

@@ -127,11 +127,38 @@ async function openCampaign(page: Page, name: string, action: string) {
   await page.getByRole("link", { name: action }).click();
 }
 
+/**
+ * Reveal the navigation tree, at whichever width this project runs.
+ *
+ * `AppShell` paints the same tree twice: a persistent sidebar from `lg` up and a
+ * `Drawer` below it, opened from the top bar's menu button. Only one is ever
+ * painted, so the drawer trigger's visibility *is* the breakpoint test — no
+ * viewport arithmetic in the spec. The same helper as `e2e/content.spec.ts`'s.
+ */
+async function openNav(page: Page) {
+  const trigger = page.getByRole("button", { name: "Navigation principale" });
+  if (await trigger.isVisible()) await trigger.click();
+}
+
 test.describe("the hub", () => {
-  test("reaches four destinations from More, with their counts", async ({ page }) => {
+  /*
+   * **This used to start at `/fr/more`, and that surface is gone.**
+   * `patterns/TabBar` held five slots and pushed everything else behind a `More`
+   * screen; DESIGN.md §0 retires the tab bar by name, teardown deleted the route,
+   * and `AppShell` renders `nav-tree.ts` instead.
+   *
+   * What the test checks is unchanged: Marketing is reachable from the panel's
+   * navigation, and the hub it lands on offers its four destinations. Only the
+   * surface and the selectors moved.
+   */
+  test("is reachable from the navigation, and offers four destinations", async ({
+    page,
+  }) => {
     await signIn(page, "fr");
-    await page.goto("/fr/more");
-    await page.getByRole("link", { name: "Marketing" }).click();
+    await page.goto("/fr/orders");
+
+    await openNav(page);
+    await page.getByRole("link", { name: "Marketing", exact: true }).click();
     await page.waitForURL(/\/fr\/marketing$/);
 
     for (const name of [/Campagnes/, /Segments/, /Modèles d’e-mail/, /Pixel et événements/]) {

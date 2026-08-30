@@ -49,6 +49,19 @@ function parcelRows(page: Page) {
   return page.locator("tbody tr, li.ui-card").filter({ visible: true });
 }
 
+/**
+ * Reveal the navigation tree, at whichever width this project runs.
+ *
+ * `AppShell` paints the same tree twice: a persistent sidebar from `lg` up and a
+ * `Drawer` below it, opened from the top bar's menu button. Only one is ever
+ * painted, so the drawer trigger's visibility *is* the breakpoint test — no
+ * viewport arithmetic in the spec. The same helper as `e2e/content.spec.ts`'s.
+ */
+async function openNav(page: Page) {
+  const trigger = page.getByRole("button", { name: "Navigation principale" });
+  if (await trigger.isVisible()) await trigger.click();
+}
+
 test.describe("the shipping tariff", () => {
   test("resolves commune over wilaya over national, and shows what it beat", async ({
     page,
@@ -287,19 +300,31 @@ test.describe("what a Manager may and may not reach", () => {
     await expect(page.getByText("Contre-remboursement, toute la boutique")).toBeVisible();
   });
 
-  test("the payments destination is absent from More rather than refused", async ({
+  /*
+   * **This used to read the `/fr/more` list, and that surface is gone.**
+   * `patterns/TabBar` held five slots and pushed everything else behind a `More`
+   * screen; DESIGN.md §0 retires the tab bar by name, teardown deleted the route,
+   * and `AppShell` renders `nav-tree.ts` instead — a persistent sidebar at `lg`+
+   * and the identical tree in a `Drawer` below.
+   *
+   * What the test checks is unchanged, and it is the whole point of it: a
+   * destination this tier has no capability for is **absent** from the navigation
+   * rather than present-and-refused. Only the surface and the selectors moved.
+   */
+  test("the payments destination is absent from the navigation rather than refused", async ({
     page,
   }) => {
     await signIn(page, "fr", MANAGER_USER!, MANAGER_PASS!);
-    await page.goto("/fr/more");
+    await page.goto("/fr/shipping");
+    await openNav(page);
 
     // Shipping is offered…
-    await expect(page.getByRole("link", { name: "Livraison" })).toBeVisible({
+    await expect(page.getByRole("link", { name: "Livraison", exact: true })).toBeVisible({
       timeout: 15000,
     });
     // …and Payments is simply not there, the same treatment every other
     // capability-gated destination gets.
-    await expect(page.getByRole("link", { name: "Paiements" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Paiements", exact: true })).toHaveCount(0);
   });
 
   test("a Super Admin reaches both, which is what makes the refusal meaningful", async ({
@@ -322,8 +347,15 @@ test.describe("what a Manager may and may not reach", () => {
      */
     await expect(page.getByTestId("payments-count")).toBeVisible({ timeout: 15000 });
 
-    await page.goto("/fr/more");
-    await expect(page.getByRole("link", { name: "Paiements" })).toBeVisible();
+    /*
+     * And the destination is offered in the navigation, which is the half that
+     * makes the absence asserted above mean something: the same tree, read by an
+     * identity that holds `ac_manage_payments`, lists Payments. Read from
+     * `AppShell`'s tree rather than the retired `/fr/more` list — see the note on
+     * the test above.
+     */
+    await openNav(page);
+    await expect(page.getByRole("link", { name: "Paiements", exact: true })).toBeVisible();
   });
 });
 

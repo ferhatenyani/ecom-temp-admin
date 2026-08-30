@@ -26,8 +26,24 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             // must not spend the shop's rate limit.
             refetchIntervalInBackground: false,
             staleTime: 15_000,
-            // The client's own retry is off: lib/api handles a 429 by its
-            // Retry-After and never retries a write.
+            /*
+             * TanStack's own retry is off, and **nothing else backs off in its
+             * place on this path** — which is not what this comment used to say.
+             *
+             * It read "lib/api handles a 429 by its Retry-After". That retry is
+             * real but it is `lib/api/client.ts`'s, and that file is
+             * `server-only`: a browser `useQuery` goes through
+             * `lib/api/browser.ts` to `/api/ac/*`, whose route handler proxies
+             * with a raw `fetch`. So a 429 reaching a `useQuery` is surfaced to
+             * the screen as an error, with no wait and no second ask.
+             *
+             * That is a **known open item**, recorded here rather than fixed:
+             * adding a backoff is a behaviour change, and the read bucket is
+             * 600/min per credential, so an automatic retry is exactly the thing
+             * that has to be argued before it is written. `retry: false` is still
+             * the right default meanwhile — a blind retry against a rate limit
+             * spends the budget it is reacting to, and a write must never repeat.
+             */
             retry: false,
           },
           mutations: { retry: false },

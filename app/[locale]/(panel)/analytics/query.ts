@@ -12,8 +12,12 @@ import { rangeFromParams, rangeToParams, type RangeQuery } from "@/lib/analytics
  *
  * `overview` is deliberately **not** one of the six. It is the dashboard, at
  * `/dashboard`, because its job is different — cards that drill into a filtered
- * list rather than a report to read — and because it is the panel's tab-bar
- * destination while this is a `/more` one.
+ * list rather than a report to read.
+ *
+ * That last clause used to read "and because it is the panel's tab-bar
+ * destination while this is a `/more` one". Both surfaces are gone — the tab bar
+ * and `/more` were deleted by the teardown — and the sentence was describing a
+ * shell that no longer exists. The reason above never depended on either.
  */
 
 export const VIEWS = [
