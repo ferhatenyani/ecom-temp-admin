@@ -499,15 +499,33 @@ export function NewOrderDrawer({
    * operator has already repriced gets its own row at the catalogue price, which
    * they can then price themselves.
    *
-   * **`OrderLinesDrawer` matches on `price === ""` instead**, and the difference
-   * is worth naming rather than reconciling. Its lines arrive from an order, so
-   * an empty price box there means "this line came off the catalogue" and is a
-   * row that can safely absorb another unit. On this form nothing arrives from
-   * anywhere: every row is picker-added and therefore seeded, so that condition
-   * would never be true here and every press would open a row — losing the
-   * quantity-2 behaviour for the ordinary case. The two conditions agree
-   * wherever both are meaningful: a row at the catalogue price absorbs the
-   * press, a row at a price somebody chose does not.
+   * **This paragraph used to end by explaining why `OrderLinesDrawer` matched on
+   * `price === ""` instead, and the explanation was half wrong.** It read:
+   *
+   * > *"Its lines arrive from an order, so an empty price box there means 'this
+   * > line came off the catalogue' and is a row that can safely absorb another
+   * > unit. On this form nothing arrives from anywhere: every row is picker-added
+   * > and therefore seeded, so that condition would never be true here and every
+   * > press would open a row — losing the quantity-2 behaviour for the ordinary
+   * > case."*
+   *
+   * The diagnosis was exactly right and the conclusion drawn from it was not.
+   * *Its* lines do not all arrive from an order — the drawer has this same
+   * picker, so a row the operator adds there is seeded there too, and the
+   * condition failed for every one of them in precisely the way the second half
+   * of that quotation predicts. Pressing add twice opened two rows. Corrected
+   * rather than deleted, because a reader who remembers being told the two forms
+   * legitimately differed deserves to know they did not.
+   *
+   * They now share one rule, stated once in `order-edit.ts`'s `addPickedLine`:
+   * a row absorbs the press when it is already charging what the new row would
+   * charge. This form's version is the arm where the price is stated; the
+   * editor's old `""` case is the arm where it is the catalogue's, which is the
+   * same number said differently. This function is not routed through it —
+   * `DraftLine` carries no `variationId` and the two drafts stay two
+   * declarations for the dependency reason `new-order.ts` gives — but the
+   * conditions are now the same condition, and the editor's docblock says so
+   * from its side.
    *
    * The fallback path is the third case and falls out for free: without
    * `ac_manage_products` the picker hands back `price: ""`, a new row is seeded

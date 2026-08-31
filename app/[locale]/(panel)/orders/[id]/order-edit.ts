@@ -298,8 +298,150 @@ export function lineDraftsOf(order: Order): LineDraft[] {
  * cases. Derived from the list, it is deterministic and local — and it cannot
  * collide, because the only keys that exist are the ones in the list.
  */
-export function nextLineKey(lines: LineDraft[]): number {
+export function nextLineKey(lines: readonly LineDraft[]): number {
   return lines.reduce((max, line) => Math.max(max, line.key), -1) + 1;
+}
+
+/**
+ * What the picker knows about a product it is handing over.
+ *
+ * Structural rather than `import type { PickedProduct }`, which would make this
+ * pure module depend on a `"use client"` component for four field names —
+ * `new-order.ts`'s `QuoteRow` refuses the same import for the same reason. The
+ * four are `PickedProduct`'s exactly (`Pick<Product, "id"|"name"|"sku"|"price">`),
+ * so the drawer's value is assignable without a cast.
+ */
+export type PickedLine = {
+  id: number;
+  name: string;
+  sku: string;
+  /** The catalogue's asking price, or `""` on the no-`ac_manage_products` path. */
+  price: string;
+};
+
+/**
+ * Put a product on the order — or raise the quantity of the row that is already
+ * charging what a new row would charge.
+ *
+ * ## The defect this replaces, and why the old rule read as correct
+ *
+ * The rule was `productId === product.id && line.price.trim() === ""`, and its
+ * docblock argued it well: an empty price box means *the catalogue prices this
+ * line*, a hand-priced row and a catalogue-priced row are two different
+ * agreements, and merging into the hand-priced one would silently apply somebody's
+ * discount to the extra unit. Every word of that is still true.
+ *
+ * **What it missed is that a picker-added row is never empty.** `addLine` seeds
+ * `price` from the catalogue the moment the row is created — deliberately, and at
+ * length, because a prefilled amount is a *stated* one — so `price.trim() === ""`
+ * is true only of rows that arrived on the order from the API with no override
+ * (`lineDraftOf` above maps `item.price ?? ""`). Press *add* twice on a product
+ * the order did not already contain and the condition is false both times: two
+ * rows open where the second press meant quantity 2. `NewOrderDrawer`'s own
+ * docblock predicted exactly this failure for its own form — *"every row is
+ * picker-added and therefore seeded, so that condition would never be true here
+ * and every press would open a row"* — and then said this form was the case where
+ * it did hold. Half right: it holds for the rows the order arrived with, and
+ * fails for every row the operator adds.
+ *
+ * ## The rule that covers both, stated as one thing rather than two
+ *
+ * A row absorbs the press when **it is already charging, per unit, what the new
+ * row would charge**. That is one sentence and it has two forms here because a
+ * row states its price in two ways:
+ *
+ *   stated      `price` holds an amount, and it absorbs the press when that
+ *               amount is the seed — which is `NewOrderDrawer`'s rule, match on
+ *               product *and* seeded price, unchanged and now shared.
+ *   catalogue   `price` is `""`, meaning *whatever the catalogue asks*. The seed
+ *               **is** what the catalogue asks — the picker has just been told
+ *               it — so the two agree, and this is the old rule surviving as a
+ *               special case of the new one rather than being overturned by it.
+ *
+ * Both arms are the same test, and everything the old docblock protected still
+ * holds: a row repriced to 700 does not absorb a press seeded at 1 500, so four
+ * copies at 1 500 and one damaged one at 700 stays two rows and the extra unit
+ * is never given away. The fallback path also still works — without
+ * `ac_manage_products` the seed is `""`, and `"" === ""` merges into an
+ * unpriced row exactly as before.
+ *
+ * ## First match wins, and it is the array's order
+ *
+ * A set holding both a stated-at-seed row and a catalogue row for one product
+ * charges the same for both, so either would be a correct target and the first
+ * is the cheapest to explain. Positional, like everything else on this route —
+ * `resolveLines()` pairs by array index and the API keys its refusals the same
+ * way.
+ *
+ * Pure, and here rather than in the drawer, so the rule is asserted directly in
+ * `tests/order-edit.test.ts` instead of through a picker's `fireEvent`s. The
+ * drawer keeps the state-clearing that goes with a changed set; only the
+ * *arithmetic* moved.
+ */
+export function addPickedLine(lines: readonly LineDraft[], product: PickedLine): LineDraft[] {
+  const seed = product.price.trim();
+
+  const at = lines.findIndex((line) => {
+    if (line.productId !== product.id) return false;
+    const stated = line.price.trim();
+    return stated === seed || stated === "";
+  });
+
+  if (at !== -1) {
+    const next = [...lines];
+    /*
+     * `Number.parseInt` and not `parseQuantity`, and the difference is the
+     * point rather than an oversight. That function refuses to read a leading
+     * digit — *"a builder that quietly read the leading digit would send an
+     * order for a quantity nobody typed"* — because it builds a payload. This
+     * writes into a box somebody is looking at, so `2x` becoming `3` is a
+     * correction they can see and undo before anything is sent, and `x`
+     * becoming `1` is the press meaning what it says. Carried over unchanged
+     * from the rule this replaces; `tests/order-edit.test.ts` pins both arms.
+     */
+    const quantity = Number.parseInt(next[at].quantity, 10);
+    next[at] = {
+      ...next[at],
+      quantity: String(Number.isFinite(quantity) ? quantity + 1 : 1),
+    };
+    return next;
+  }
+
+  return [
+    ...lines,
+    {
+      key: nextLineKey(lines),
+      productId: product.id,
+      /* The picker only ever offers a simple product's id; a variable product is
+         refused by the API by name, which is a better sentence than one invented
+         here. A line that arrived on the order keeps whatever variation it has. */
+      variationId: 0,
+      name: product.name,
+      sku: product.sku,
+      /*
+       * **Prefilled from the catalogue and editable**, which is what item 1's
+       * sub-task 3 asks for and what `EL/el-admin-app`'s `CreateOrderModal.jsx`
+       * does with `unitPrice` seeded from `selectedBook.price`.
+       *
+       * The consequence is stated rather than discovered: a prefilled amount is
+       * a *stated* one, so the line is recorded as hand-priced even when the
+       * number equals the catalogue's. That is the backend's deliberate reading
+       * — `OrderPresenter::manualPrice()` keeps "no override" and "overridden to
+       * 1 500 when the catalogue also says 1 500" distinguishable, because the
+       * meta records the decision rather than the difference — and it is the
+       * right one here: somebody adding a line to an existing order has seen the
+       * number and accepted it. Clearing the box hands the line back to the
+       * catalogue, and the price beside it says what that means.
+       *
+       * The fallback path leaves it empty: without `ac_manage_products` the
+       * picker knows no price, and seeding `0` would put a free line in front of
+       * somebody who thought they were adding a product.
+       */
+      price: product.price,
+      cataloguePrice: product.price === "" ? null : product.price,
+      quantity: "1",
+    },
+  ];
 }
 
 /** One stored address as the draft holds it. Absent keys read as empty. */

@@ -4,6 +4,7 @@ import { emptyAddress, type AddressDraft } from "@/app/[locale]/(panel)/orders/n
 import {
   MAX_AMOUNT,
   MAX_CUSTOMER_NOTE,
+  addPickedLine,
   addressDraftOf,
   buildEditPayload,
   draftOf,
@@ -819,5 +820,191 @@ describe("the destination, which is writable at every status on purpose", () => 
     expect(payload).toEqual({ wilaya_id: 16, commune_id: 483 });
     expect(payload).not.toHaveProperty("line_items");
     expect(payload).not.toHaveProperty("shipping_amount");
+  });
+});
+
+/**
+ * `addPickedLine` — the merge rule, as pure list arithmetic.
+ *
+ * ## Asserted here rather than driven through the picker, deliberately
+ *
+ * The defect this fixes was invisible to every test the panel had, and the
+ * reason is worth writing down: it lived inside a `setDraft` callback in a
+ * component, so the only way to reach it was to render `OrderLinesDrawer`,
+ * stub `/products`, type into a search box and press a result twice. Nothing was
+ * going to do that, so the rule shipped with a condition that could not fire and
+ * a docblock explaining why it was correct. Moving it to a function of a list
+ * and a product is what makes the first case below a two-line assertion.
+ *
+ * ## The rule, in one sentence
+ *
+ * A row absorbs the press when **it is already charging, per unit, what the new
+ * row would charge** — which is `price.trim() === seed` for a stated price and
+ * `price.trim() === ""` for a row the catalogue prices, because the seed is what
+ * the catalogue asks and the picker has just been told it.
+ *
+ * The seed is `PickedProduct.price`, and it is `""` only on the
+ * no-`ac_manage_products` fallback where the picker genuinely knows no price.
+ */
+describe("adding a product to the set", () => {
+  const picked = { id: 101, name: "Théière", sku: "AC-THE-001", price: "1500.00" };
+
+  /** One line as the picker leaves it: seeded from the catalogue, editable. */
+  function draftLine(overrides: Partial<LineDraft> = {}): LineDraft {
+    return {
+      key: 0,
+      productId: 101,
+      variationId: 0,
+      name: "Théière",
+      sku: "AC-THE-001",
+      price: "1500.00",
+      cataloguePrice: "1500.00",
+      quantity: "1",
+      ...overrides,
+    };
+  }
+
+  it("raises the quantity of a row the picker itself seeded — the defect", () => {
+    /*
+     * **The regression this whole change exists for.** The old rule was
+     * `productId === id && price.trim() === ""`, and a picker-added row's price
+     * is never `""` — `addPickedLine` seeds it from the catalogue in the same
+     * breath. So pressing add twice on a product the order did not already carry
+     * opened two rows, and the second press plainly meant quantity 2.
+     */
+    const once = addPickedLine([], picked);
+    expect(once).toHaveLength(1);
+    expect(once[0]).toMatchObject({ productId: 101, price: "1500.00", quantity: "1" });
+
+    const twice = addPickedLine(once, picked);
+    expect(twice).toHaveLength(1);
+    expect(twice[0].quantity).toBe("2");
+
+    expect(addPickedLine(twice, picked)[0].quantity).toBe("3");
+  });
+
+  it("still absorbs into a row the order arrived with, which is the old rule", () => {
+    /*
+     * `lineDraftOf` maps a stored `price: null` to `""` — *the catalogue prices
+     * this line* — and the old condition was written for exactly this row. It
+     * keeps working, as the arm of the new rule where a row's price is the
+     * catalogue's and the seed is what the catalogue asks: the same number said
+     * two ways, so the press is charged the same either way.
+     */
+    const stored = lineDraftsOf(orderWith({ line_items: [lineWith({ price: null })] }));
+    expect(stored[0].price).toBe("");
+
+    const after = addPickedLine(stored, picked);
+    expect(after).toHaveLength(1);
+    expect(after[0].quantity).toBe("3");
+    /* And it stays catalogue-priced. Merging must not quietly convert a line the
+       catalogue prices into a hand-priced one — that is a different agreement,
+       and `guardManualPricesWritable()` refuses a *stated* price on an order
+       holding stock, so it would also turn a 200 into a 409. */
+    expect(after[0].price).toBe("");
+  });
+
+  it("opens a new row rather than discounting the extra unit", () => {
+    /*
+     * The case the old docblock was written to protect, and it is protected
+     * unchanged. Four copies at 1 500 and one damaged one at 700 is a real
+     * order; a press seeded at 1 500 must not raise the 700 row, or the shop
+     * gives the extra unit away at somebody else's discount.
+     */
+    const discounted = [draftLine({ price: "700", cataloguePrice: "1500.00", quantity: "1" })];
+    const after = addPickedLine(discounted, picked);
+
+    expect(after).toHaveLength(2);
+    expect(after[0]).toMatchObject({ price: "700", quantity: "1" });
+    expect(after[1]).toMatchObject({ price: "1500.00", quantity: "1" });
+  });
+
+  it("takes the first row that agrees, and leaves the others alone", () => {
+    /* Positional, like everything else on this route — `resolveLines()` pairs by
+       array index and the API keys its refusals the same way. Two rows charging
+       the seed would both be correct targets; the first is the one to explain. */
+    const lines = [
+      draftLine({ key: 0, price: "700" }),
+      draftLine({ key: 1, price: "1500.00" }),
+      draftLine({ key: 2, price: "1500.00" }),
+    ];
+    const after = addPickedLine(lines, picked);
+
+    expect(after).toHaveLength(3);
+    expect(after.map((line) => line.quantity)).toEqual(["1", "2", "1"]);
+  });
+
+  it("never merges across products", () => {
+    const other = [draftLine({ productId: 55, name: "Verre", sku: "AC-VER-001" })];
+    expect(addPickedLine(other, picked)).toHaveLength(2);
+  });
+
+  it("merges an unpriced press into an unpriced row, on the fallback path", () => {
+    /*
+     * Without `ac_manage_products` the picker hands back `price: ""` because it
+     * genuinely knows no price, and a row seeded from it is `""` too. `"" === ""`
+     * merges, which is what this path did before and must keep doing — seeding
+     * `0` instead would put a free line in front of somebody who thought they
+     * were adding a product.
+     */
+    const blind = { ...picked, price: "" };
+    const once = addPickedLine([], blind);
+
+    expect(once[0]).toMatchObject({ price: "", cataloguePrice: null, quantity: "1" });
+    expect(addPickedLine(once, blind)[0].quantity).toBe("2");
+  });
+
+  it("does not merge a blind press into a row somebody priced", () => {
+    /* The mirror of the case above, and the one that would give money away if
+       `""` were treated as a wildcard rather than as "the catalogue's price". A
+       picker that knows no price cannot claim a row at 700 charges the same. */
+    const priced = [draftLine({ price: "700" })];
+    expect(addPickedLine(priced, { ...picked, price: "" })).toHaveLength(2);
+  });
+
+  it("mints a key that collides with nothing already in the set", () => {
+    /* Line ids churn on every write that names `line_items`, so the draft mints
+       its own — `LineDraft.key` argues it. A duplicate would have React
+       reconciling the wrong row, and a quantity typed into one line appearing in
+       another. */
+    const lines = [draftLine({ key: 0, productId: 55 }), draftLine({ key: 7, productId: 56 })];
+    expect(addPickedLine(lines, picked)[2].key).toBe(8);
+  });
+
+  it("leaves the set it was handed untouched", () => {
+    /* It is called from inside a `setDraft` updater, so a mutation here would be
+       a state mutation — and under StrictMode's double invocation it would apply
+       twice. Both arms return a new array. */
+    const before = [draftLine({ price: "1500.00", quantity: "1" })];
+    const snapshot = structuredClone(before);
+
+    addPickedLine(before, picked);
+    addPickedLine(before, { ...picked, id: 55 });
+
+    expect(before).toEqual(snapshot);
+  });
+
+  it("repairs a quantity the box is holding as raw text, and never swallows the press", () => {
+    /*
+     * The quantity field holds raw text on purpose — `Stepper`'s docblock argues
+     * it — so a row can be sitting on `2x` or on `` when somebody presses add.
+     * Carried over from the rule this replaces, unchanged and now pinned,
+     * because it is easy to "tidy" into something worse:
+     *
+     *   `2x`  →  `3`.  `Number.parseInt` reads the leading digit. That is
+     *                  exactly what `parseQuantity` refuses to do, and the
+     *                  refusal is right *there* and wrong here: that function
+     *                  builds a payload, where a quantity nobody typed would be
+     *                  ordered silently, and this writes a number into a box the
+     *                  operator is looking at. Whatever it puts there is visible
+     *                  and correctable before anything is sent.
+     *   `x`   →  `1`.  Nothing to read, so the press means one of these.
+     *
+     * Either way the row leaves in a state `lineProblems` accepts, which is the
+     * point: pressing add should not be able to leave the form unsubmittable.
+     */
+    expect(addPickedLine([draftLine({ quantity: "2x" })], picked)[0].quantity).toBe("3");
+    expect(addPickedLine([draftLine({ quantity: "x" })], picked)[0].quantity).toBe("1");
+    expect(addPickedLine([draftLine({ quantity: "" })], picked)[0].quantity).toBe("1");
   });
 });
