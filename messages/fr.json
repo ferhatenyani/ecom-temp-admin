@@ -2249,6 +2249,9 @@
       "text": "Texte",
       "partLabel": "Partie"
     },
+    "repairs": {
+      "title": "{count, plural, one {Un champ de fusion mal écrit a été corrigé automatiquement :} other {# champs de fusion mal écrits ont été corrigés automatiquement :}}"
+    },
     "testStep": {
       "explain": "Envoie un exemplaire à une seule adresse. N’écrit aucun destinataire et ne consomme rien.",
       "to": "Adresse de test",

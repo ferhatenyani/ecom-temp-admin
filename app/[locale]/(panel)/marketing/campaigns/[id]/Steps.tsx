@@ -13,6 +13,7 @@ import {
   audienceProblem,
   consentGap,
   type AudienceType,
+  type TokenRepair,
 } from "@/lib/campaigns";
 import { Card, DataList, DataRow } from "@/components/ui/Card";
 import { Select, TextArea, TextField } from "@/components/ui/Form";
@@ -500,6 +501,7 @@ export function StepContent({
   fieldErrors,
   seed,
   preview,
+  repairs,
 }: {
   draft: Draft;
   onChange: (next: Draft) => void;
@@ -525,6 +527,16 @@ export function StepContent({
    * once here when a campaign with no answers is composed for the first time.
    */
   seed: EmailValues;
+  /**
+   * What the last save's token repair corrected, or empty — item 9.
+   *
+   * Held by `Composer` rather than computed here, and the reason is that it is an
+   * **event and not a state**: `save()` is where the correction happens, and once
+   * it has happened the text on screen is correct and there is nothing left for
+   * this component to derive it from. Passed down for the same reason
+   * `MailPreviewState` is: the owner of the save owns the report about it.
+   */
+  repairs: readonly TokenRepair[];
 }) {
   const t = useTranslations("campaigns");
 
@@ -603,6 +615,47 @@ export function StepContent({
       onFocus={(event) => remember(event.target)}
       onBlur={(event) => remember(event.target)}
     >
+      {/*
+        **Item 9's half of "automatic, not silent".** The correction is made in
+        `Composer.save()`; this is the part that stops it being something that
+        happened to somebody's text without their knowing.
+
+        At the **top of the step** rather than beside a body, which is where
+        `unknown_tokens` sits two cards down, and the two placements answer
+        different questions. That warning is about one body and points at it. This
+        reports an edit the panel made across the subject, both bodies and the
+        form's answers in one act, so there is no single control it belongs
+        beside — and it is the first thing a person should read on returning to a
+        step whose text has been changed under them.
+
+        `info` rather than `warning`: nothing is wrong and nothing needs doing.
+        The mistyped token would have been mailed with its braces showing; it now
+        resolves. §3.3's tones reserve `warning` for a state somebody has to act
+        on, and `role="status"` is `Notice`'s default because this announces a
+        completed act rather than interrupting one.
+
+        Both spellings are shown, the wrong one and the right one, because "we
+        corrected two tokens" without naming them is a claim the operator cannot
+        check against the text in front of them.
+      */}
+      {repairs.length > 0 ? (
+        <Notice tone="info" title={t("repairs.title", { count: repairs.length })}>
+          <span className="flex flex-col gap-1" data-testid="token-repairs">
+            {repairs.map((repair) => (
+              <span key={repair.from} className="flex flex-wrap items-center gap-1.5">
+                <Ltr numeric={false} className="font-mono line-through">
+                  {`{{${repair.from}}}`}
+                </Ltr>
+                <Icon name="chevron" className="size-3 shrink-0 rtl:rotate-180" />
+                <Ltr numeric={false} className="font-mono">
+                  {tokenLiteral(repair.to)}
+                </Ltr>
+              </span>
+            ))}
+          </span>
+        </Notice>
+      ) : null}
+
       <Card title={t("section.content")}>
         <div className="flex flex-col gap-4">
           <TextField
