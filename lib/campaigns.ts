@@ -195,6 +195,116 @@ export function tokenLiteral(token: string): string {
   return `{{${token}}}`;
 }
 
+/* ------------------------------------------------- the malformed ones --- */
+
+/**
+ * `TemplateRenderer::PATTERN`, mirrored — **the shape a token has to have before
+ * the API will look at it at all.**
+ *
+ * Read from source: `Campaigns/TemplateRenderer.php:78`,
+ * `/\{\{\s*([a-z0-9_]{1,40})\s*\}\}/i`. Whitespace *around* the name is
+ * tolerated and the `i` flag plus `strtolower()` mean `{{First_Name}}` already
+ * works — those two are why this is not simply "the token, spelled exactly".
+ * Anchored here because this asks *is this whole brace pair well formed*, where
+ * the API scans for occurrences.
+ */
+const WELL_FORMED = /^\s*[a-z0-9_]{1,40}\s*$/i;
+
+/** Any `{{…}}` pair with no braces inside it, well formed or not. */
+const BRACE_PAIR = /\{\{([^{}]*)\}\}/g;
+
+/** One correction, for the sentence the operator is shown. */
+export type TokenRepair = { from: string; to: Token };
+
+/**
+ * Correct `{{first name}}` to `{{first_name}}`, and say what was corrected.
+ *
+ * ## The defect, which is worse than a misspelling
+ *
+ * `TemplateRenderer::PATTERN` requires `[a-z0-9_]` between the braces, so
+ * `{{first name}}` **matches nothing**. It is not substituted, and — the part
+ * that makes it worth a separate check — it is not reported in `unknown_tokens`
+ * either, because that list is built from the same `preg_match_all` over the
+ * same pattern (`TemplateRenderer.php:133-145`, read from source). So the
+ * existing warning cannot see it. It is mailed to every recipient verbatim, with
+ * the braces showing.
+ *
+ * That makes this the *second* check on this screen and not a replacement for
+ * the first. `unknown_tokens` catches `{{firstname}}` — well formed, spelled
+ * wrong, renders **empty**. This catches `{{first name}}` — malformed, and
+ * renders as itself. Neither sees the other's case.
+ *
+ * ## Only ever onto a token that exists, and that is the whole safety argument
+ *
+ * A repair fires when the normalised name is one of the five in `TOKENS`, and
+ * never otherwise. The temptation is to normalise everything that looks like a
+ * placeholder, and it makes things strictly worse: `{{numéro de suivi}}` mails
+ * verbatim today, which is visible and embarrassing and fixable by the person
+ * who reads the test send. Rewritten to `{{numero_de_suivi}}` it becomes a well
+ * formed unknown token, which renders **empty** — the failure this whole
+ * subsystem exists to prevent, manufactured by the thing meant to prevent it.
+ *
+ * So a name that does not land on a real token is left exactly as typed. It then
+ * mails verbatim, as it did before, and that is the honest outcome rather than
+ * the tidy one.
+ *
+ * ## What counts as normalising
+ *
+ * Trim, lower-case, and every run of characters outside `[a-z0-9]` becomes one
+ * `_`, with leading and trailing underscores dropped. That covers the three ways
+ * this is actually mistyped — a space, a hyphen, and a capital with a space —
+ * and it is deliberately not accent-folding: all five tokens are ASCII words, so
+ * somebody who typed `{{prénom}}` typed a different word, not a damaged one, and
+ * the membership gate above will decline it.
+ *
+ * A well formed pair is returned untouched, including one whose name is unknown.
+ * `{{firstname}}` is `unknown_tokens`' to report and this must not silently
+ * "fix" it into `{{first_name}}`: the API can see that one, and guessing which
+ * of five words somebody meant is a different and much larger claim than
+ * repairing punctuation.
+ *
+ * @returns the corrected text, and one entry per distinct correction made.
+ */
+export function repairTokens(text: string): { text: string; repairs: TokenRepair[] } {
+  const repairs: TokenRepair[] = [];
+
+  const corrected = text.replace(BRACE_PAIR, (whole, inner: string) => {
+    if (WELL_FORMED.test(inner)) return whole;
+
+    const slug = inner
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+
+    const token = TOKENS.find((known) => known === slug);
+    if (token === undefined) return whole;
+
+    const from = inner.trim();
+    if (!repairs.some((made) => made.from === from)) repairs.push({ from, to: token });
+
+    return tokenLiteral(token);
+  });
+
+  return { text: corrected, repairs };
+}
+
+/**
+ * `repairTokens()` over several strings at once, with the corrections merged.
+ *
+ * The composer repairs a subject, two bodies and every string inside the form's
+ * answers in one act, and the operator is owed **one** sentence about it rather
+ * than four. Merged on `from`, because the same mistyped token in the subject and
+ * in a paragraph is one mistake made twice.
+ */
+export function mergeRepairs(all: readonly TokenRepair[]): TokenRepair[] {
+  const merged: TokenRepair[] = [];
+  for (const made of all) {
+    if (!merged.some((held) => held.from === made.from)) merged.push(made);
+  }
+  return merged;
+}
+
 /**
  * **`{{unsubscribe_url}}` absent is correct, not missing.**
  *

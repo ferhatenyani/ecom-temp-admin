@@ -15,12 +15,15 @@ import {
   classifySendRefusal,
   furthestStep,
   hasAudienceCount,
+  mergeRepairs,
   nextStep,
   previousStep,
+  repairTokens,
   sendOutcome,
   stepIndex,
   type ComposerStep,
   type SendOutcome,
+  type TokenRepair,
 } from "@/lib/campaigns";
 import type { CustomerRef } from "@/lib/customers";
 import { useOnline } from "@/lib/use-online";
@@ -41,8 +44,14 @@ import {
   usePreview,
   type Draft,
 } from "./Steps";
-import { buildEmail, directionFor, type EmailImage, type EmailValues } from "./email-body";
-import { readValues, seededValues, writeValues } from "./body-fields";
+import {
+  buildEmail,
+  directionFor,
+  repairValues,
+  type EmailImage,
+  type EmailValues,
+} from "./email-body";
+import { nextBodies, readValues, seededValues, writeValues } from "./body-fields";
 
 /**
  * The composer: audience → content → test → send.
@@ -260,6 +269,21 @@ export function Composer({
   });
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  /**
+   * What the last save corrected, for the sentence item 9 owes the operator.
+   *
+   * **Reset on every save, including to `[]`.** The notice describes the save the
+   * person just made, not a correction accumulated across a session — a sentence
+   * about a repair still standing three saves later, after the text it named has
+   * been rewritten twice, is a claim about a state nobody is in.
+   *
+   * Not derived the way `handEdited()` is, and the difference is instructive.
+   * That flag can be recomputed because the answers and the bodies are both
+   * stored and disagreeing is a property of the pair. A repair leaves *no*
+   * disagreement behind — that is the point of it — so once it lands there is
+   * nothing left to recompute from. It is an event, and an event has to be held.
+   */
+  const [repairs, setRepairs] = useState<TokenRepair[]>([]);
   const [sending, setSending] = useState(false);
   const [outcome, setOutcome] = useState<SendOutcome | null>(null);
   const [refusal, setRefusal] = useState<{ kind: string; message: string } | null>(null);
@@ -361,12 +385,96 @@ export function Composer({
   const save = async (): Promise<boolean> => {
     setSaving(true);
     setFieldErrors({});
+
+    /*
+     * **Item 9: `{{first name}}` is corrected here, before anything is sent, and
+     * the operator is told.**
+     *
+     * `TemplateRenderer::PATTERN` requires `[a-z0-9_]` between the braces, so a
+     * space makes the pair match nothing — not substituted, and *not reported in
+     * `unknown_tokens` either*, because that list is built by scanning with the
+     * same pattern. It mails verbatim, braces and all. `repairTokens()` argues
+     * the rule at length; the short version is that it only ever corrects onto
+     * one of the five real tokens and leaves everything else exactly as typed.
+     *
+     * **Both sides, in one act.** The bodies and the answers are repaired
+     * together — `repairValues()` says why: repairing only the HTML would lose
+     * the fix on the next regeneration and would make `handEdited()` report an
+     * edit nobody made. The two stay consistent because generating a repaired
+     * answer and repairing a generated body produce the same bytes, which
+     * `email-body.test.ts` pins rather than assumes.
+     *
+     * **On save rather than on keystroke**, which is decision 4's "automatic, not
+     * silent" read the way the rest of this panel reads it: rewriting somebody's
+     * text while they are still typing it is how a form fights its user, and
+     * `{{first` is malformed at every intermediate keystroke of a token being
+     * typed correctly.
+     *
+     * The draft is set to the repaired values **before** the request rather than
+     * after it, so a save that then fails leaves the correction on screen. The
+     * correction is right whether or not the write landed.
+     */
+    const subject = repairTokens(draft.subject);
+    const body = draft.body === null ? null : repairValues(draft.body);
+
+    /*
+     * **Regenerate where regenerating is allowed, then repair what is left**, and
+     * the order is not interchangeable — a test pins the one case that proves it.
+     *
+     * Repairing the two bodies as *text* is not equivalent to repairing the
+     * answers and generating from them, because one field is validated on the way
+     * through rather than copied: `safeHref()` drops a call-to-action whose href
+     * is not `http(s)`, `mailto:` or a **well formed** merge token. So a CTA
+     * pointing at `{{unsubscribe url}}` is not a button with a broken link — the
+     * whole block is absent from the generated HTML. Text-repairing that HTML
+     * finds nothing to fix and the button stays gone, while the answers now hold
+     * a good href. The two disagree, and `handEdited()` correctly reports an edit
+     * nobody made: item 12's defect, manufactured by item 9.
+     *
+     * `nextBodies()` is the existing rule and it is exactly the one needed here —
+     * *regenerate only while the bodies still match the answers.* A form-driven
+     * campaign nobody has hand-edited gets its bodies rebuilt from the repaired
+     * answers, which is the only thing that can bring that button back. A
+     * hand-edited one keeps its bodies untouched, because a repair must not do
+     * what Undo asks permission for.
+     *
+     * The `repairTokens()` pass after it is then a no-op on anything regenerated
+     * — repairs are a fixed point, which `merge-tags.test.ts` asserts — and is
+     * the actual correction for the two cases regeneration cannot reach: a
+     * hand-edited body, and a campaign with no answers at all whose HTML somebody
+     * wrote themselves.
+     */
+    const regenerated =
+      draft.body === null || body === null
+        ? { html: draft.body_html, text: draft.body_text }
+        : nextBodies(draft.body, body.values, draft.body_html, draft.body_text);
+
+    const html = repairTokens(regenerated.html);
+    const text = repairTokens(regenerated.text);
+
+    const repaired: Draft = {
+      ...draft,
+      subject: subject.text,
+      body_html: html.text,
+      body_text: text.text,
+      body: body?.values ?? null,
+    };
+    const madeRepairs = mergeRepairs([
+      ...subject.repairs,
+      ...(body?.repairs ?? []),
+      ...html.repairs,
+      ...text.repairs,
+    ]);
+
+    if (madeRepairs.length > 0) setDraft(repaired);
+    setRepairs(madeRepairs);
+
     try {
       await acWrite("PATCH", `/campaigns/${campaign.id}`, {
-        name: draft.name,
-        subject: draft.subject,
-        body_html: draft.body_html,
-        body_text: draft.body_text,
+        name: repaired.name,
+        subject: repaired.subject,
+        body_html: repaired.body_html,
+        body_text: repaired.body_text,
         /*
          * **Only ever an object, never `null`.**
          *
@@ -384,10 +492,14 @@ export function Composer({
          * keys that answer **400**, and everything unknown answers 400 too — so
          * echoing the read body back would be a refusal rather than a no-op.
          */
-        ...(draft.body === null ? {} : { body_fields: writeValues(draft.body) }),
-        audience_type: draft.audience.type,
-        ...(draft.audience.type === "segment" ? { segment_id: draft.audience.segment_id } : {}),
-        ...(draft.audience.type === "ids" ? { customer_ids: draft.audience.customer_ids } : {}),
+        ...(repaired.body === null ? {} : { body_fields: writeValues(repaired.body) }),
+        audience_type: repaired.audience.type,
+        ...(repaired.audience.type === "segment"
+          ? { segment_id: repaired.audience.segment_id }
+          : {}),
+        ...(repaired.audience.type === "ids"
+          ? { customer_ids: repaired.audience.customer_ids }
+          : {}),
       });
 
       /*
@@ -635,6 +747,7 @@ export function Composer({
               disabled={saving}
               fieldErrors={fieldErrors}
               seed={seed}
+              repairs={repairs}
               preview={{
                 preview: preview.data ?? null,
                 loading: preview.isPending,

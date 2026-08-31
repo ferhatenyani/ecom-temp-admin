@@ -1,4 +1,4 @@
-import { TOKENS, tokenLiteral } from "@/lib/campaigns";
+import { TOKENS, mergeRepairs, repairTokens, tokenLiteral, type TokenRepair } from "@/lib/campaigns";
 import { EMAIL_PALETTE } from "@/lib/email-palette";
 
 /**
@@ -374,9 +374,106 @@ export function directionFor(locale: string): EmailDirection {
  * `TemplateRenderer::PATTERN` would be a rule that drifts the day the backend widens
  * it. The picker exists so a token is never typed; `unknown_tokens` exists so one
  * that was typed anyway is still caught.
+ *
+ * **Item 9 puts a copy of that pattern in `lib/campaigns.ts` anyway, and the
+ * paragraph above is why it had to earn it.** Two things make it a different
+ * decision rather than the one this argued against:
+ *
+ * It does not check for *unknown* tokens — that stays the API's, exactly as
+ * above. It repairs a **malformed** one, `{{first name}}`, which the API
+ * structurally cannot report: `unknown_tokens` is built by scanning with the same
+ * pattern that fails to match it, so a brace pair the pattern rejects is invisible
+ * to the warning and is mailed verbatim. There is no version of "let the API
+ * report it" that reaches this case.
+ *
+ * And the drift fails safe, which is the reverse of what this paragraph feared. If
+ * the backend ever widens `PATTERN`, the mirror becomes too *strict* — it calls
+ * something malformed that the API would now accept — and the only consequence is
+ * that the repair rewrites it onto a token that already exists. Nothing is
+ * silently dropped, and nothing well formed is ever renamed. `repairTokens()`
+ * carries the full argument, including why it only ever corrects onto one of these
+ * five names and leaves everything else exactly as typed.
  */
 export const MERGE_TOKENS = TOKENS;
 export { tokenLiteral };
+
+/**
+ * `repairTokens()` over every string in a body's answers.
+ *
+ * ## Why the answers and not only the two bodies
+ *
+ * The bodies are generated from these values, so repairing the HTML and leaving
+ * `{{first name}}` in the paragraph it came from would fix the message and lose
+ * the fix on the next regeneration — and `handEdited()` would report a hand edit,
+ * because the stored bodies would no longer be what these answers generate.
+ *
+ * The composer repairs both sides in the same act, and **the order it does them
+ * in is load-bearing rather than incidental.**
+ *
+ * For everything that is prose, the two orders agree: repairing the answers and
+ * then generating gives the same bytes as generating and then repairing, because
+ * a token's characters — braces, ASCII letters, digits, underscores and the space
+ * or hyphen being repaired — are untouched by the HTML escaping `buildEmail()`
+ * does on the way through. The substring the repair matches in a paragraph is the
+ * same substring it matches in the rendered cell.
+ *
+ * **`EmailCta.href` is the exception, and it is why the composer regenerates.**
+ * That field is validated rather than copied: `safeHref()` accepts `http(s)`,
+ * `mailto:` and a *well formed* merge token and drops everything else — and a
+ * dropped href drops the whole block. So a call to action pointing at
+ * `{{unsubscribe url}}` produces no button at all, and repairing the generated
+ * HTML afterwards finds nothing to fix, because the text it would have repaired
+ * was never written. The answers would hold a good href beside a body with no
+ * button, `handEdited()` would report an edit nobody made, and item 9 would have
+ * manufactured the defect item 12 exists to remove.
+ *
+ * `Composer.save()` therefore runs the repair through `nextBodies()` — rebuild
+ * from the repaired answers while the bodies still match them, text-repair
+ * whatever is hand-edited or hand-written. `merge-tags.test.ts` pins both halves,
+ * and found this one.
+ *
+ * ## Every string that reaches a recipient, including the two `alt`s
+ *
+ * `title`, `paragraphs`, `footer`, the call to action's label **and its href**,
+ * and both images' `alt`. The href is not a stretch — `EmailCta.href` documents
+ * `{{unsubscribe_url}}` as a real thing shops build, so a mistyped one is a
+ * button pointing at literal braces. The `alt`s are text a screen reader speaks
+ * and `buildEmail()` copies verbatim into the text part; a token in one is
+ * substituted like any other.
+ *
+ * `brandColour`, `direction`, `src` and `width` are not prose and are left alone.
+ */
+export function repairValues(values: EmailValues): {
+  values: EmailValues;
+  repairs: TokenRepair[];
+} {
+  const made: TokenRepair[] = [];
+
+  const fix = (text: string): string => {
+    const { text: corrected, repairs } = repairTokens(text);
+    made.push(...repairs);
+    return corrected;
+  };
+
+  const image = (held: EmailImage | null): EmailImage | null =>
+    held === null ? null : { ...held, alt: fix(held.alt) };
+
+  return {
+    values: {
+      ...values,
+      logo: image(values.logo),
+      title: fix(values.title),
+      paragraphs: values.paragraphs.map(fix),
+      image: image(values.image),
+      cta:
+        values.cta === null
+          ? null
+          : { ...values.cta, label: fix(values.cta.label), href: fix(values.cta.href) },
+      footer: fix(values.footer),
+    },
+    repairs: mergeRepairs(made),
+  };
+}
 
 /**
  * Insert a token at the caret, and say where the caret goes afterwards.
