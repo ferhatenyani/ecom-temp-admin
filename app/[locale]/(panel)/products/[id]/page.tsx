@@ -214,6 +214,18 @@ export default async function ProductDetailPage({
           categories={categories}
           attributes={vocabulary.attributes}
           terms={vocabulary.terms}
+          /*
+           * **A second capability on a page guarded by a first**, and it is not
+           * a guard: `/media` is `ac_manage_content` while this route is
+           * `ac_manage_products`, and `Users\UserRoles::assignable()` hands out
+           * exactly `[ac_super_admin, ac_manager]` — so the only
+           * non-administrator role this API still creates holds the second and
+           * not the first. `false` here is the ordinary case for staff, not the
+           * exception, and it degrades the image controls rather than hiding
+           * them. `products/page.tsx` resolves the identical flag for the create
+           * drawer.
+           */
+          canPickMedia={has(me, "ac_manage_content")}
         />
       </PageBody>
     </div>

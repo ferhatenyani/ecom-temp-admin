@@ -68,11 +68,34 @@ const RULES: readonly Rule[] = [
   rule("/orders/\\d+/payments", "GET"),
   rule("/locations/wilayas", "GET"),
 
-  // Products. `DELETE` is here because the detail screen trashes and
-  // force-deletes; `POST /products` is not, because nothing creates a product
-  // yet and a route the panel cannot reach through the UI must not be reachable
-  // by guessing a URL.
-  rule("/products", "GET"),
+  /*
+   * Products. `DELETE` is here because the detail screen trashes and
+   * force-deletes.
+   *
+   * **`POST` is here now, and the entry it replaces is the reason it can be.**
+   * That comment read: *"`POST /products` is not, because nothing creates a
+   * product yet and a route the panel cannot reach through the UI must not be
+   * reachable by guessing a URL."* The rule has not changed — it is the rule
+   * this whole file follows, and the two absences below still stand on it. What
+   * changed is the antecedent: `NewProductDrawer`, opened from the products
+   * list's primary action, is the screen. The route lands **with** the screen,
+   * and this note names it so the next reader can check the claim rather than
+   * trust it.
+   *
+   * The route is `ac_manage_products` — `ProductController::registerRoutes()`
+   * builds one `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` and hangs
+   * every product route on it, and `ProductService::create()` asserts the same
+   * capability again inside. That is the capability the list, the detail and the
+   * export already require, so this widens no credential; it widens what the
+   * panel can ask for with one it already holds.
+   *
+   * **`POST /products/bulk` and `POST /products/{id}/duplicate` stay off**, and
+   * they are the test of whether the rule survived being satisfied once. Both
+   * are registered on the same guard — read from source, same method — and
+   * neither has a screen. A create form is not a licence to reach the two routes
+   * beside the one it needed.
+   */
+  rule("/products", "GET", "POST"),
   rule("/products/\\d+", "GET", "PATCH", "DELETE"),
   rule("/products/\\d+/variations", "GET"),
   rule("/product-categories", "GET"),

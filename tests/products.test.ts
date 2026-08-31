@@ -32,6 +32,8 @@ import {
   toApiParams,
   toUrlParams,
 } from "@/app/[locale]/(panel)/products/query";
+import { product as productSchema } from "@/lib/api/schemas/product";
+import { embeddedImageSrc } from "@/lib/cms";
 import type { FacetValue } from "@/lib/api/schemas/product";
 import type { Product } from "@/lib/api/schemas/product";
 
@@ -354,5 +356,104 @@ describe("sorting", () => {
     expect(sortKey(sortFromKey("rating-desc"))).toBe(DEFAULT_SORT_KEY);
     expect(sortKey(sortFromKey("nonsense"))).toBe(DEFAULT_SORT_KEY);
     expect(sortKey(sortFromKey(null))).toBe(DEFAULT_SORT_KEY);
+  });
+});
+
+/**
+ * **The embedded image, which was declared wrong for the whole run and could
+ * not fire until this branch.**
+ *
+ * `lib/api/schemas/product.ts` required `url` on `image` and on every entry of
+ * `gallery`. `ProductPresenter::image()` answers `{id, src, thumbnail, alt}` —
+ * read from source — and emits no `url` at all. Not one of the 28 seeded
+ * products carries an `image_id`, so the shape was reachable only through a
+ * write and nothing in the panel could perform that write: the moment the edit
+ * form grew `image_id` and `gallery_image_ids`, the answer to the very first
+ * save would have thrown at the boundary and taken the screen with it.
+ *
+ * The fix is `lib/api/schemas/cms.ts`'s, one collection over, for the identical
+ * slip against `MediaPresenter::image()` — `id` required, every carrier of the
+ * picture optional, and `embeddedImageSrc` deciding which key wins so no screen
+ * has to know there are two.
+ */
+describe("the embedded product image", () => {
+  const withImage = (image: unknown, gallery: unknown[] = []) => ({
+    ...productLike({}),
+    id: 1,
+    name: "n",
+    slug: "n",
+    type: "simple",
+    status: "publish" as const,
+    featured: false,
+    catalog_visibility: "visible",
+    sku: "",
+    description: "",
+    short_description: "",
+    stock_status: "instock",
+    weight: "",
+    category_ids: [],
+    tag_ids: [],
+    attributes: [],
+    variations: [],
+    image_id: 5001,
+    gallery_image_ids: [5002],
+    image,
+    gallery,
+    permalink: "",
+    seo: {
+      title: "",
+      description: "",
+      canonical: "",
+      robots: { index: true, follow: true, directive: "index, follow" },
+      overrides: [],
+    },
+    date_created: "2026-01-01T00:00:00+00:00",
+    date_modified: "2026-01-01T00:00:00+00:00",
+  });
+
+  /** What the router really sends. This used to be a parse failure. */
+  const presenterShape = {
+    id: 5001,
+    src: "https://shop.test/wp-content/uploads/2026/08/real.jpg",
+    thumbnail: "https://shop.test/wp-content/uploads/2026/08/real-300x200.jpg",
+    alt: "Gros plan",
+  };
+
+  it("parses the shape ProductPresenter::image() actually sends", () => {
+    const parsed = productSchema.parse(withImage(presenterShape, [presenterShape]));
+    expect(parsed.image?.id).toBe(5001);
+    expect(embeddedImageSrc(parsed.image)).toBe(presenterShape.src);
+    expect(parsed.gallery).toHaveLength(1);
+  });
+
+  /** And the harness's, which sends `url` where the presenter sends `src`. */
+  it("parses the harness's shape too, and one rule picks the key", () => {
+    const harnessShape = { id: 5001, url: presenterShape.src, alt: "", width: 30, height: 20 };
+    const parsed = productSchema.parse(withImage(harnessShape));
+    expect(embeddedImageSrc(parsed.image)).toBe(presenterShape.src);
+
+    // The presenter's key wins when both arrive, because it is the router
+    // rather than a fixture — `lib/cms.ts` carries that decision.
+    expect(embeddedImageSrc({ src: "a", url: "b" })).toBe("a");
+    // And nothing to render is `null` rather than an empty string, so a caller
+    // draws the placeholder instead of a broken image.
+    expect(embeddedImageSrc({ id: 5001 } as { src?: string })).toBeNull();
+    expect(embeddedImageSrc(null)).toBeNull();
+  });
+
+  /**
+   * **`gallery` can be shorter than `gallery_image_ids`**, which is the
+   * presenter's own `array_filter` over `image()` — an id whose attachment is
+   * gone stays writable and drops out of the enriched list. So the two must be
+   * matched by id and never zipped by index, which is what `ProductMedia` does.
+   */
+  it("allows a gallery shorter than the id list it enriches", () => {
+    const parsed = productSchema.parse({
+      ...withImage(null, []),
+      gallery_image_ids: [5002, 5003],
+      gallery: [],
+    });
+    expect(parsed.gallery_image_ids).toHaveLength(2);
+    expect(parsed.gallery).toHaveLength(0);
   });
 });

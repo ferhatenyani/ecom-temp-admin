@@ -143,6 +143,27 @@
  * fixture anywhere in this project until 2026-08-29. Read at module load and no
  * filename suffix, like the three above.
  *
+ * **`MOCK_PRODUCT_MEDIA` is the sixth, and it is `MOCK_SETTINGS`' argument one
+ * collection over.**
+ *
+ *     node scripts/capture.mjs /products/104                    no picture
+ *     MOCK_PRODUCT_MEDIA=attached node scripts/capture.mjs /products/104
+ *     MOCK_PRODUCT_MEDIA=attached MOCK_IDENTITY=no_content \
+ *       node scripts/capture.mjs /products/104
+ *
+ * All 28 measured products carry `image_id: 0` and an empty gallery, and the 41
+ * attachments in the library are on none of them — so the product detail's image
+ * card had no populated state to photograph the day it was written, which is
+ * exactly the debt DECISIONS.md records against the settings logo. The variant
+ * puts a featured image and a **three-entry** gallery on 104 (three, because a
+ * reorder pair is only a control with something to order) and a featured image
+ * alone on 101. Read at module load, no filename suffix, like the four above.
+ *
+ * The third line is the pair that matters most on this screen: `no_content` is a
+ * Manager, who cannot read `/media` at all and *can* still see, reorder and
+ * remove what is already attached — because the URLs ride on the product body
+ * rather than coming from the library.
+ *
  * **Why this exists.** The e2e suite needs live shop credentials nobody has in
  * this environment, and a passing `next build` is not evidence that anything
  * renders — it once passed with a completely broken stylesheet, off a stale

@@ -4870,6 +4870,81 @@ if (!(REQUESTED_MEDIA in MEDIA_VARIANTS)) {
 
 const MEDIA_SEED = MEDIA_VARIANTS[REQUESTED_MEDIA];
 
+/**
+ * ── `MOCK_PRODUCT_MEDIA` — the one state this shop cannot otherwise reach ────
+ *
+ * **All 28 measured products carry `image_id: 0` and an empty gallery**, and the
+ * library holds 41 attachments none of which is on a product. That was harmless
+ * while nothing could attach one; sub-task 5 puts both fields on the edit form,
+ * and it leaves the screen's *populated* state — a thumbnail, three gallery rows
+ * with a reorder pair and a remove on each, at the 340px floor — with no fixture
+ * anywhere. DECISIONS.md already records this exact debt against the settings
+ * logo: *"whoever ships the picker owes that capture first"*.
+ *
+ * So this is `MOCK_MEDIA`'s mechanism one collection over and it behaves
+ * identically: read at module load, applied at every `resetState()`, a **whole
+ * run** rather than a per-capture switch — so `respond()` stays pure — and it
+ * writes **no filename suffix**, so you capture one run then the other and
+ * compare the pair in the same folder.
+ *
+ *     MOCK_PRODUCT_MEDIA=attached node scripts/capture.mjs /products/104
+ *
+ * It is an overlay on `state.products` rather than an edit to `CATALOGUE`, which
+ * is what makes it free: the seeds are untouched, so `CATEGORIES`/`TAGS`/`TERMS`
+ * still publish the counts they computed at load, and — the reason this shape
+ * was chosen over a seeded row — `GET /media/{id}/usage` still answers `0` for
+ * 5002 and 5003 from a cold start, which three assertions in
+ * `tests/mock-api.test.ts` depend on. The default is `none` and every test runs
+ * under it.
+ *
+ * The two rows are chosen rather than arbitrary. **104** is the variable product
+ * the harness already captures and it gets the three-entry gallery, because the
+ * reorder control is only a control with three things to order. **101** is a
+ * simple product and gets a featured image and no gallery, which is the shape
+ * most of a real catalogue is in.
+ */
+const PRODUCT_MEDIA_SEED = [
+  [104, 5001, [5004, 5008, 5013]],
+  [101, 5017, []],
+];
+
+const REQUESTED_PRODUCT_MEDIA = process.env.MOCK_PRODUCT_MEDIA ?? "none";
+if (!["none", "attached"].includes(REQUESTED_PRODUCT_MEDIA)) {
+  throw new Error(
+    `MOCK_PRODUCT_MEDIA must be one of none, attached — got "${REQUESTED_PRODUCT_MEDIA}".`,
+  );
+}
+
+function applyProductMedia() {
+  if (REQUESTED_PRODUCT_MEDIA !== "attached") return;
+
+  for (const [id, imageId, gallery] of PRODUCT_MEDIA_SEED) {
+    const row = CATALOGUE.find((product) => product.id === id);
+    /* A loud failure rather than a silent no-op: a variant that quietly attached
+       nothing would photograph the empty state under a name promising the full
+       one, which is the whole class of thing this harness exists to not do. */
+    if (row === undefined) {
+      throw new Error(
+        `MOCK_PRODUCT_MEDIA names product ${id}, which is not in the catalogue.`,
+      );
+    }
+
+    for (const attachment of [imageId, ...gallery]) {
+      if (!mediaRows().some((item) => item.id === attachment)) {
+        throw new Error(
+          `MOCK_PRODUCT_MEDIA names attachment ${attachment}, which is not in the library.`,
+        );
+      }
+    }
+
+    state.products.set(
+      id,
+      resolveProductImages({ ...row, image_id: imageId, gallery_image_ids: [...gallery] }),
+    );
+  }
+}
+
+
 /*
  * The bytes follow the variant. An empty library has no files behind it, so
  * `/wp-content/uploads/…` must 404 rather than answer for an attachment that
@@ -8307,8 +8382,19 @@ const state = {
    */
   rules: new Map(),
   nextRuleId: 0,
-  /** Product id → the whole row as it reads now. Empty until something PATCHes. */
+  /**
+   * Product id → the whole row as it reads now.
+   *
+   * **Both kinds now**: the seeded rows a `PATCH` has rewritten *and* the rows
+   * `POST /products` created — the shape `state.coupons` and `state.pages`
+   * already use, so one lookup answers for either and `productById` needed no
+   * change at all. It used to say "empty until something PATCHes", which was
+   * true while nothing in the panel could create a product.
+   */
   products: new Map(),
+  /** Ids created in this process, newest first — see `catalogue()`. */
+  createdProducts: [],
+  nextProductId: 0,
   /** Force-deleted product ids. A permanent delete is the one thing that 404s. */
   gone: new Set(),
   /**
@@ -8531,6 +8617,15 @@ export function resetState() {
   // derived, which is what keeps a screenshot of a created rule byte-stable.
   state.nextRuleId = 179;
   state.products = new Map();
+  state.createdProducts = [];
+  /*
+   * Clear of every seeded id — the 28 measured rows run 101-128 and the eleven
+   * filterable ones 201-211 — and clear of the variation ids at 9000+, which
+   * share no lookup with these but do share a screenshot. The same figure in
+   * every process, which is the rule `nextCouponId` and `nextPageId` already
+   * follow and for the same reason: a created product has to be byte-stable.
+   */
+  state.nextProductId = 4500;
   state.gone = new Set();
   state.variations = new Map();
   state.stockSettings = new Map();
@@ -8649,6 +8744,11 @@ export function resetState() {
   // number greater than zero, which is what keeps the default run's fixture — and
   // every capture taken against it — exactly what it was.
   applySeededSendProgress();
+
+  // Also last, and for a second reason on top of that one: it resolves media
+  // rows into products, and `state.media` is cleared eleven lines up. A no-op
+  // unless `MOCK_PRODUCT_MEDIA=attached`.
+  applyProductMedia();
 }
 
 resetState();
@@ -8681,10 +8781,26 @@ const paymentsOf = (orderId) => state.payments.get(orderId) ?? [];
  * rather than hidden: the alternative is recomputing three vocabularies per
  * request to move a number no screen writes.
  */
-const catalogue = () =>
-  CATALOGUE.filter((product) => !state.gone.has(product.id)).map(
+const catalogue = () => [
+  /*
+   * **The rows this process created lead**, which is the ordering `allOrders()`
+   * already keeps and the same argument: `/products` rests at `date desc`,
+   * `blankProduct` stamps a create with the fixture epoch — the newest instant
+   * this file has — and a product made a moment ago is the newest product there
+   * is. `sortProducts()` re-sorts anyway on every listing, so this decides only
+   * the tie and the order a caller reading `catalogue()` directly sees.
+   *
+   * They are read out of `state.products` rather than held as rows, because that
+   * map is also where a PATCH to one of them lands — one lookup, one row, and
+   * `productById` needed no change to find either kind.
+   */
+  ...state.createdProducts
+    .filter((id) => !state.gone.has(id))
+    .map((id) => state.products.get(id)),
+  ...CATALOGUE.filter((product) => !state.gone.has(product.id)).map(
     (product) => state.products.get(product.id) ?? product,
-  );
+  ),
+];
 
 /** What `/products` lists: everything readable except the trash. */
 const listed = () => catalogue().filter((product) => product.status !== "trash");
@@ -12769,16 +12885,101 @@ const mustBeMoney = (value) => {
   return Number.parseFloat(value) < 0 ? "Cannot be negative." : null;
 };
 
+/**
+ * PHP's `is_numeric`, which is what every numeric field below is actually
+ * tested with — `!is_numeric($v) || (int) $v < 0`, read from
+ * `Products\ProductInput::normalize()`.
+ *
+ * It matters that this accepts a numeric **string**: the panel sends
+ * `stock_quantity` as a real number, but a client that sent `"7"` would be
+ * accepted by the API and was refused here, which is the *stricter* direction
+ * and therefore the survivable one — but it is still a mock disagreeing with the
+ * shop about a value the shop stores. Booleans and `null` are excluded, as in
+ * PHP.
+ */
+const isNumeric = (value) =>
+  typeof value === "number"
+    ? Number.isFinite(value)
+    : typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value));
+
+/**
+ * ── Four messages corrected against the source, and one message split in two ──
+ *
+ * The four rules below said something the API does not say. They were written
+ * for `PATCH` alone and never checked against `Products\ProductInput`, and
+ * because `ProductInput::normalize()` is **one function shared by `forCreate()`
+ * and `forUpdate()`** — the single difference between the two is a
+ * `$requireName` boolean — a create handler that reproduced the source would
+ * have had to either fork the table or fix it. Forking is the move
+ * `postOrder`'s docblock records refusing for `readLineItems()`, and for the
+ * same reason: two tables for one PHP function is a fiction that drifts.
+ *
+ * So they are corrected, and `patchProduct` inherits the corrections. What
+ * changed, each read from source with its line:
+ *
+ *   stock_quantity  said *"Must be a number."* / *"Cannot be negative."* and
+ *                   required a real integer. The source says **"Must be a whole
+ *                   number of zero or more."** — one sentence for both failures
+ *                   — and runs `is_numeric()` then casts, so `"7"` is accepted
+ *                   and `7.9` becomes `7`.
+ *
+ *   image_id        said *"Must be a number."* and refused `0`, `null` and `""`
+ *                   — the three values that **clear the featured image**, which
+ *                   the source normalises to `0` on purpose and calls a real
+ *                   edit. The sentence is **"Must be an attachment id, or 0 to
+ *                   clear."**, which is the one that tells a reader `0` is
+ *                   allowed at all.
+ *
+ *   weight          was `mustBeText` — anything at all. The source validates it
+ *                   as a **non-negative number** (`''` and `null` clear it), so
+ *                   `"1,5 kg"` is a 400 rather than a stored string. That
+ *                   overturns a claim `ProductDetail`'s docblock makes in the
+ *                   other direction (*"the API takes `weight` as a string, so a
+ *                   numeric rule here would refuse '1,5' where the shop is
+ *                   allowed to store it"*) — the shop is not allowed to store
+ *                   it, and the mock refusing it is how that screen will find
+ *                   out. Its own `weight` field has no client rule and simply
+ *                   binds what comes back.
+ *
+ *   category_ids    said *"Must be a list of ids."* for everything. The source
+ *   tag_ids         has **two** sentences and they name different mistakes:
+ *   gallery_image…  **"Must be an array of ids."** for a value that is not an
+ *                   array at all, and **"Ids must be positive integers."** for
+ *                   an array carrying a bad element — which is the one a client
+ *                   can hit by sending `0`.
+ *
+ * The table is still stricter than the source in two places that no screen can
+ * reach and that are therefore left alone: `mustBeText` tests `typeof` where the
+ * source tests `is_scalar()`, and `mustBeMoney` refuses `null` where the source
+ * reads it as *clear the price*. Both refuse something the API accepts, which is
+ * the direction DECISIONS.md §0 says is the survivable one.
+ */
 const mustBeQuantity = (value) => {
   if (value === null) return null; // a real value: nothing is being counted
-  if (typeof value !== "number" || !Number.isInteger(value)) return "Must be a number.";
-  return value < 0 ? "Cannot be negative." : null;
+  return isNumeric(value) && Math.trunc(Number(value)) >= 0
+    ? null
+    : "Must be a whole number of zero or more.";
 };
 
-const mustBeIds = (value) =>
-  Array.isArray(value) && value.every((entry) => Number.isInteger(entry))
+const mustBeAttachmentId = (value) => {
+  // 0, null and '' all mean *clear the featured image*, which is a real edit.
+  if (value === null || value === "" || value === 0) return null;
+  return isNumeric(value) && Math.trunc(Number(value)) >= 0
     ? null
-    : "Must be a list of ids.";
+    : "Must be an attachment id, or 0 to clear.";
+};
+
+const mustBeWeight = (value) => {
+  if (value === null || value === "") return null;
+  return isNumeric(value) && Number(value) >= 0 ? null : "Must be a non-negative number.";
+};
+
+const mustBeIds = (value) => {
+  if (!Array.isArray(value)) return "Must be an array of ids.";
+  return value.every((entry) => isNumeric(entry) && Math.trunc(Number(entry)) > 0)
+    ? null
+    : "Ids must be positive integers.";
+};
 
 const mustBeObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -12832,13 +13033,18 @@ const mustBeOptions = (value) => {
   return whole ? null : "Must carry a groups list, each group with an id.";
 };
 
+/** `ProductInput::STRING_FIELDS`, which is the set that gets trimmed on the way in. */
+const PRODUCT_STRING_FIELDS = ["name", "slug", "description", "short_description", "sku"];
+
 const PRODUCT_FIELD_RULES = {
-  name: (value) =>
-    typeof value !== "string"
-      ? "Must be a string."
-      : value.trim() === ""
-        ? "A product name cannot be emptied."
-        : null,
+  /*
+   * Shape only. **The empty-name rule is not here and cannot be**, because it is
+   * the one rule in `ProductInput::normalize()` whose *message* depends on the
+   * verb — see `readProductBody()`, which owns it. This table said
+   * *"A product name cannot be emptied."* for a blank string, which is right for
+   * a PATCH and is the wrong sentence for a create that never named anything.
+   */
+  name: mustBeText,
   slug: mustBeText,
   type: mustBeOneOf(PRODUCT_TYPES),
   // `trash` is readable and **not writable** — a product is trashed by DELETE,
@@ -12854,15 +13060,268 @@ const PRODUCT_FIELD_RULES = {
   manage_stock: mustBeFlag,
   stock_quantity: mustBeQuantity,
   stock_status: mustBeOneOf(STOCK_STATUSES),
-  weight: mustBeText,
+  weight: mustBeWeight,
   category_ids: mustBeIds,
   seo: mustBeSeo,
   options: mustBeOptions,
   attributes: mustBeAttributes,
   tag_ids: mustBeIds,
-  image_id: (value) => (Number.isInteger(value) ? null : "Must be a number."),
+  image_id: mustBeAttachmentId,
   gallery_image_ids: mustBeIds,
 };
+
+/**
+ * One body, read the way `ProductInput::normalize()` reads it — for **both**
+ * verbs, because it is one function on the API and `$requireName` is the only
+ * thing that differs.
+ *
+ * Returns the fields that refused and the values that survived. It does not
+ * decide the ending: an empty `writes` is a 400 on a PATCH and is *not* an error
+ * on a POST (a create with nothing but a name is legal), so each caller finishes
+ * its own sentence.
+ *
+ * A body that is not an object is `[]` on the API's side —
+ * `ProductController::payload()` is `is_array($body) ? $body : []` — so it reads
+ * as an empty payload rather than as a refusal of its own, and the create's name
+ * rule is what turns it into a 400.
+ */
+function readProductBody(body, create) {
+  const payload =
+    body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+
+  for (const [key, value] of Object.entries(payload)) {
+    // Silently. Not a 400, not a mention in the response — this is what lets a
+    // client PATCH a GET body back without diffing it first.
+    if (PRODUCT_READ_ONLY.includes(key)) continue;
+
+    const rule = PRODUCT_FIELD_RULES[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+    const problem = rule(value);
+    if (problem !== null) {
+      fields[key] = problem;
+      continue;
+    }
+
+    /* `ProductInput::normalize()` stores `trim((string) $payload[$field])` for
+       every string field, so `" AC-001 "` is stored as `AC-001` and collides
+       with it. Doing it here rather than at each caller is what keeps the SKU
+       guard, the stored row and the answer agreeing about one value. */
+    writes[key] = PRODUCT_STRING_FIELDS.includes(key) ? value.trim() : value;
+  }
+
+  /*
+   * ── The two normalisations `ProductInput::normalize()` performs and this
+   *    function used to skip ────────────────────────────────────────────────
+   *
+   * The rules above answer *"is this value acceptable"*; the source also
+   * *changes* what it stores, and a mock that validated without normalising
+   * hands the next GET a body the real API would never have served. Both were
+   * unreachable until the edit form grew the two image fields — which is the
+   * branch this is on.
+   *
+   *   `image_id`   `(int) $payload['image_id']`, with `''`, `null` and `0` all
+   *                collapsing to `0`. Reachable *today*: `ProductDetail` sends
+   *                the field as a **string**, deliberately — a cast in the panel
+   *                would turn a typo into `NaN` and `JSON.stringify(NaN)` into
+   *                `null`, which is the *clear the image* value. So `"5001"`
+   *                arrives here and was being stored verbatim, and
+   *                `lib/api/schemas/product.ts` declares `image_id: z.number()`
+   *                — the panel would have thrown at its own boundary on the
+   *                response to a save it had just made.
+   *
+   *   the int lists `array_values(array_unique($ids))` over `category_ids`,
+   *                `tag_ids` **and** `gallery_image_ids`, after `(int) $id`. One
+   *                loop in the source, so one loop here. `array_unique` keeps
+   *                the **first** occurrence in place, which is why a gallery
+   *                comes back in the order it was sent minus its repeats — the
+   *                fact the edit form's reorder control depends on.
+   */
+  if ("image_id" in writes) {
+    const raw = writes.image_id;
+    writes.image_id = raw === null || raw === "" ? 0 : Math.trunc(Number(raw));
+  }
+
+  for (const field of ["category_ids", "tag_ids", "gallery_image_ids"]) {
+    if (!Array.isArray(writes[field])) continue;
+    writes[field] = [...new Set(writes[field].map((id) => Math.trunc(Number(id))))];
+  }
+
+  /*
+   * **The one line where create and update genuinely differ**, and the two
+   * sentences are not interchangeable: a create that never named the product
+   * gets *"A product name is required."*, an update that blanks an existing one
+   * gets *"A product name cannot be emptied."* — `PRODUCT_FIELD_RULES.name`
+   * above carries the second. They describe different acts, and a mock that used
+   * one message for both would let a create form ship copy about emptying a
+   * field nobody had filled in.
+   *
+   * Skipped when the name already earned a message, so *"Must be a string."* is
+   * not overwritten by a vaguer sentence about the same key.
+   */
+  if (fields.name === undefined) {
+    const named = typeof writes.name === "string" ? writes.name.trim() : "";
+
+    if (create && named === "") fields.name = "A product name is required.";
+    else if (!create && "name" in writes && named === "") {
+      fields.name = "A product name cannot be emptied.";
+    }
+  }
+
+  /*
+   * `ProductInput::validateSalePrice()` — and note **when** it fires: only when
+   * *both* prices are in the same payload and neither is empty. A lone
+   * `sale_price` is compared against the **stored** regular price instead, by
+   * `ProductService::guardSalePriceAgainstStored()`, which is wired into
+   * `update()` and **not** into `create()`.
+   *
+   * That second guard is deliberately not reproduced. It is unreachable from
+   * this panel: `ProductDetail`'s draft sends both prices on every save and the
+   * create drawer sends both or neither, so no screen can produce a payload
+   * carrying one alone. A fixture for a state nothing can reach is a fixture
+   * that rots unwatched — and on a *create* it does not exist at all, because
+   * there is nothing stored to compare against.
+   */
+  const sale = typeof writes.sale_price === "string" ? writes.sale_price.trim() : "";
+  const regular =
+    typeof writes.regular_price === "string" ? writes.regular_price.trim() : null;
+
+  if (
+    sale !== "" &&
+    regular !== null &&
+    regular !== "" &&
+    Number.parseFloat(sale) > Number.parseFloat(regular)
+  ) {
+    fields.sale_price = "Cannot be higher than the regular price.";
+  }
+
+  return { fields, writes };
+}
+
+/**
+ * The SKU guard, over **every** product this process can see including the
+ * trashed ones — `ProductService::guardSku()`, and it runs before anything is
+ * written on both verbs.
+ *
+ * **Two conflicts, not one**, and the second is the half this file used to
+ * miss. A SKU held by a *live* product is *"That SKU is already in use."*; a SKU
+ * held by a **trashed** one is *"That SKU belongs to a product in the trash."*
+ * with `details.trashed_product_id` beside it — read from source, and the
+ * backend's own suite pins it by name (*"a SKU held by a trashed product is a
+ * conflict, not a 500"*). It exists because WooCommerce's insert otherwise
+ * threw from inside `save()` and surfaced as a 500.
+ *
+ * The distinction is the whole reason the message is worth surfacing verbatim:
+ * a trashed product appears in no listing, so the id in `details` is the only
+ * way anybody finds the row holding the code.
+ *
+ * `''` is not a collision — every product without a SKU would otherwise collide
+ * with every other — and a product never collides with itself.
+ */
+function productSkuConflict(sku, exceptId) {
+  if (sku === "") return null;
+
+  const holder = catalogue().find(
+    (product) => product.id !== exceptId && product.sku === sku,
+  );
+  if (holder === undefined) return null;
+
+  return holder.status === "trash"
+    ? conflict("That SKU belongs to a product in the trash.", {
+        sku,
+        trashed_product_id: holder.id,
+      })
+    : conflict("That SKU is already in use.", { sku });
+}
+
+/**
+ * `ProductRepository::assertImageAttachment()`, for the two fields that carry
+ * attachment ids.
+ *
+ * A `get_post()` plus `wp_attachment_is_image()`, so an id naming a *post* is as
+ * refused as one naming nothing. Here the library is the only attachment store
+ * there is, so "is a row in `mediaRows()`" is the whole test.
+ *
+ * Two things about the shape, both from source and both easy to get wrong:
+ * `0` returns early and is never looked up, and a bad **gallery** id reports
+ * under the plural field name `gallery_image_ids` rather than under an index —
+ * the loop passes `$field` and not a position — so only the first bad id is ever
+ * named.
+ *
+ * It runs **after** the field breakdown and after the SKU guard, and before
+ * anything is written, which is `ProductRepository::create()`'s own order:
+ * `apply()` asserts, then `$product->save()`. So a body carrying both a taken
+ * SKU and a bad image reports the SKU, and the image only on the retry.
+ *
+ * ~~**`patchProduct` does not call this yet, and the source says it should**:
+ * `apply()` is one method shared by `create()` and `update()`, so a PATCH naming
+ * a bad `image_id` or `gallery_image_ids` is the same 400 on the real API and is
+ * a silent 200 here. It is left for the branch that puts those two fields on the
+ * edit form.~~ **Done on that branch** — `ProductMedia` puts both fields on
+ * `ProductDetail`, so the refusal now has a control to bind to and the guard is
+ * wired into both verbs, in the same position in the gate order.
+ */
+function attachmentRefusal(writes) {
+  const check = (id, field) => {
+    const value = Math.trunc(Number(id));
+    if (value === 0) return null;
+    return mediaRows().some((row) => row.id === value)
+      ? null
+      : invalidBody("The product data is invalid.", {
+          [field]: `${value} is not an image attachment.`,
+        });
+  };
+
+  if ("image_id" in writes) {
+    const refusal = check(writes.image_id ?? 0, "image_id");
+    if (refusal !== null) return refusal;
+  }
+
+  if (Array.isArray(writes.gallery_image_ids)) {
+    for (const id of writes.gallery_image_ids) {
+      const refusal = check(id, "gallery_image_ids");
+      if (refusal !== null) return refusal;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * The two **read-only enriched forms**, recomputed from the ids beside them.
+ *
+ * `ProductPresenter::toArray()` emits `image_id`/`gallery_image_ids` *and*
+ * `image`/`gallery` — *"Writable ids plus a read-only enriched form, so a client
+ * has the URLs without a second request and can still PATCH the object straight
+ * back"* — so the pair has to be derived on every write or the response
+ * contradicts itself: the ids the operator just chose beside the picture they
+ * just replaced. `createProduct` did this inline; `patchProduct` did not do it
+ * at all, which was invisible only while nothing could PATCH the ids.
+ *
+ * **`gallery` can be shorter than `gallery_image_ids`, and that is the
+ * presenter's own shape rather than a shortcut here.** It is
+ * `array_values(array_filter(array_map([self::class, 'image'], …)))`, and
+ * `image()` answers `null` for an attachment `wp_get_attachment_image_url()`
+ * cannot resolve — so an id whose file is gone stays in the writable list and
+ * vanishes from the enriched one. A screen that zipped the two by index would
+ * mislabel every picture after the first dead id. `DELETE /media/{id}` is the
+ * path that produces it: `deleteMediaReferences()` clears a banner's and a
+ * page's image and deliberately leaves `_product_image_gallery` alone.
+ *
+ * Called after the ids are already integers, so neither lookup has to cast.
+ */
+function resolveProductImages(next) {
+  next.image = next.image_id === 0 ? null : embeddedImageOf(next.image_id);
+  next.gallery = next.gallery_image_ids
+    .map((entry) => embeddedImageOf(entry))
+    .filter((entry) => entry !== null);
+  return next;
+}
 
 /**
  * `PATCH /products/{id}`.
@@ -12888,25 +13347,40 @@ function patchProduct(current, body) {
     return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
-  const fields = {};
-  const writes = {};
-  for (const [key, value] of Object.entries(body)) {
-    // Silently. Not a 400, not a mention in the response — this is what lets a
-    // client PATCH a GET body back without diffing it first.
-    if (PRODUCT_READ_ONLY.includes(key)) continue;
-
-    const rule = PRODUCT_FIELD_RULES[key];
-    if (rule === undefined) {
-      fields[key] = "Unknown field.";
-      continue;
-    }
-    const problem = rule(value);
-    if (problem === null) writes[key] = value;
-    else fields[key] = problem;
-  }
+  const { fields, writes } = readProductBody(body, false);
 
   if (Object.keys(fields).length > 0) {
-    return invalidBody(`Invalid parameter(s): ${Object.keys(fields).join(", ")}`, fields);
+    /*
+     * ── The divergence the previous branch left open, closed against source ──
+     *
+     * This read `Invalid parameter(s): ${keys}` where `createProduct` reads
+     * *"The product data is invalid."*, and the comment here said there was no
+     * way to tell which was right with `BLOCKED.md`'s 401 in the way. There is,
+     * and it does not need the wire.
+     *
+     * `Invalid parameter(s): <name>` is **WordPress's own** — `rest_invalid_param`,
+     * raised by `WP_REST_Request::has_valid_params()` before a handler ever
+     * runs, over the `args` a route declares. `ProductController::registerRoutes()`
+     * declares `'args' => $this->idArg()` on the PATCH and nothing else: **the
+     * only parameter WordPress validates on this route is `id`.** So that
+     * sentence can name `id` and can never name `name`, `sku` or `weight` —
+     * every message this branch was producing was one the router is structurally
+     * incapable of sending.
+     *
+     * The body is read by the handler instead, and `ProductInput::normalize()`
+     * throws `ApiException::invalidRequest('The product data is invalid.', …)`.
+     * One function, both verbs. So the two handlers agree again, and the panel's
+     * own record agrees with them: DECISIONS.md closed the mirror-image slip —
+     * *"every parameter refusal in the mock puts the enum sentence in the
+     * top-level `message`, and the wire puts `Invalid parameter(s): <name>`"* —
+     * on 2026-08-29, for **query** parameters. This is that entry's other half:
+     * a query-layer sentence pasted into a body refusal.
+     *
+     * `invalidParam()` two hundred lines up is the helper for the real thing,
+     * and no product route needs it: `/products?status=trash` already goes
+     * through it.
+     */
+    return invalidBody("The product data is invalid.", fields);
   }
   if (Object.keys(writes).length === 0) {
     // The message names nothing because the API's own names nothing, which is
@@ -12914,16 +13388,21 @@ function patchProduct(current, body) {
     return bareFail(400, "invalid_request", "No supported fields were provided.");
   }
 
-  if (typeof writes.sku === "string" && writes.sku !== "") {
-    // A trashed product still holds its SKU, so the search is over the whole
-    // catalogue rather than the listed part.
-    const taken = catalogue().find(
-      (product) => product.id !== current.id && product.sku === writes.sku,
-    );
-    if (taken !== undefined) {
-      return conflict("That SKU is already in use.", { sku: writes.sku });
-    }
+  if (typeof writes.sku === "string") {
+    const clash = productSkuConflict(writes.sku, current.id);
+    if (clash !== null) return clash;
   }
+
+  /*
+   * The third gate, **in the same position it holds on the create**, because it
+   * is the same code on the API: `ProductService::update()` guards the SKU and
+   * then calls the repository, and `ProductRepository::apply()` asserts every
+   * attachment id before `$product->save()`. So a PATCH carrying both a taken
+   * SKU and a dead image reports the SKU, and the image only on the retry —
+   * which is what `ProductDetail`'s error summary is built against.
+   */
+  const refusal = attachmentRefusal(writes);
+  if (refusal !== null) return refusal;
 
   const next = { ...current, ...writes };
 
@@ -12961,8 +13440,210 @@ function patchProduct(current, body) {
     next.price = next.on_sale ? next.sale_price : next.regular_price;
   }
 
+  /* The enriched read shapes, so the answer to a save that changed the picture
+     does not come back carrying the old one. See `resolveProductImages`. */
+  resolveProductImages(next);
+
   state.products.set(current.id, next);
   return ok(next);
+}
+
+/**
+ * A product as `POST /products` starts it, before the body is applied.
+ *
+ * Every key `ProductPresenter::toArray()` emits for a product with no option
+ * set, at the value a freshly constructed `WC_Product_Simple` carries — which is
+ * what makes the created row parse against the panel's own `product` schema
+ * rather than being a fixture that only works because nothing reads it.
+ *
+ * The two dates are the fixture epoch, because there is no clock in this file:
+ * every product a process creates carries the same stamps, which is the price of
+ * a byte-stable screenshot. `date_modified` is a string rather than `null`
+ * because WooCommerce stamps it on the insert — a coupon's is nullable and a
+ * product's is not, and `lib/api/schemas/product.ts` requires the string.
+ */
+const blankProduct = (id) => ({
+  id,
+  name: "",
+  slug: "",
+  type: "simple",
+  status: "draft",
+  featured: false,
+  catalog_visibility: "visible",
+  sku: "",
+  description: "",
+  short_description: "",
+  price: "",
+  regular_price: "",
+  sale_price: "",
+  on_sale: false,
+  manage_stock: false,
+  stock_quantity: null,
+  stock_status: "instock",
+  weight: "",
+  category_ids: [],
+  tag_ids: [],
+  attributes: [],
+  variations: [],
+  image_id: 0,
+  gallery_image_ids: [],
+  image: null,
+  gallery: [],
+  permalink: "",
+  seo: {
+    title: "",
+    description: "",
+    canonical: "",
+    robots: { index: false, follow: true, directive: "noindex, follow" },
+    overrides: [],
+  },
+  date_created: iso(0),
+  date_modified: iso(0),
+});
+
+/**
+ * `POST /products`. The panel's product create drawer.
+ *
+ * ## Provenance, and it is weaker than the rest of this file
+ *
+ * `postOrder`'s paragraph applies here word for word. Everything measured
+ * against the live shop above is a request somebody made; this is **read from
+ * source** in `ecom-temp/wp-content/plugins/algerian-commerce-core`, cited by
+ * `file:symbol`, and cross-checked against the plugin's own in-process suite
+ * (`tests/Api/products.php`, run through `rest_do_request()` rather than over
+ * HTTP). `BLOCKED.md` records the 401 that stops the third kind.
+ *
+ * That suite is unusually thin about *bodies*: five of its create cases assert a
+ * status and nothing else — a missing name, a blank name, an unknown type, an
+ * unknown status and a malformed body are all bare `400` — and only two look
+ * inside, pinning `error.details.fields["seo.image_id"]` and
+ * `error.details.trashed_product_id`. So every message below comes from the
+ * source rather than from the suite, and the suite's contribution is the
+ * *statuses* and the two `details` keys.
+ *
+ * **This is where a create diverges from `patchProduct`**, and there are exactly
+ * three places:
+ *
+ *   `{}`             a create is a **400 naming `name`**, where a PATCH is the
+ *                    bare *"No supported fields were provided."* with no
+ *                    `details` at all. `ProductService::create()` never calls
+ *                    `isEmpty()`; `update()` does, and that one line is the
+ *                    whole difference.
+ *   a blank name     *"A product name is required."* rather than *"…cannot be
+ *                    emptied."* — `$requireName`, the one boolean separating
+ *                    `forCreate()` from `forUpdate()`.
+ *   the message      *"The product data is invalid."*, which is what
+ *                    `normalize()` throws. `patchProduct` says something else
+ *                    and its own comment records why it was left saying it.
+ *
+ * Everything else is shared, and shared as **one function** rather than as two
+ * copies: `readProductBody()`, `productSkuConflict()` and `PRODUCT_FIELD_RULES`
+ * are each one thing because `ProductInput` is one thing.
+ *
+ * ## The order of the gates, which is the order the reason reaches a screen
+ *
+ *   1. every bad field at once  400 `details.fields`, message *"The product data
+ *                               is invalid."* — unknown keys and invalid values
+ *                               in one object, because the form renders one
+ *                               message per control
+ *   2. the SKU                  **409**, `details.sku`, *before the write* —
+ *                               `ProductService::guardSku()` runs between
+ *                               `forCreate()` and the repository, and answers
+ *                               two different sentences
+ *   3. the attachments          400 `details.fields.image_id`, *"{id} is not an
+ *                               image attachment."* — inside `apply()`, still
+ *                               before `save()`
+ *
+ * A body that is wrong in two of the three ways reports the earlier one and the
+ * later one only on the retry. That is not a nicety: it is what the create
+ * drawer's error summary is built against.
+ *
+ * ## What a created product is, and the two things it derives
+ *
+ * **The slug.** WordPress writes `post_name` when a post is published, so a
+ * created **draft** carries `slug: ""` — which is not an omission but the
+ * catalogue's own measured state: `AC-SEO-DRAFT` is published never and its slug
+ * is empty. A create that publishes gets the slugified name, and an explicit
+ * `slug` overrides both.
+ *
+ * **The price.** `price` is read-only and derived — the sale price when there is
+ * one, the regular price otherwise — the same rule `patchProduct` keeps, and for
+ * the same reason: two contradicting figures on one row is the one thing a
+ * catalogue row must never show. A **variable** product is left with `price:
+ * ""`, because its figure is resolved from variations and a just-created one has
+ * none. That is the fact the create drawer hides its price fields on.
+ */
+function createProduct(body) {
+  const { fields, writes } = readProductBody(body, true);
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The product data is invalid.", fields);
+  }
+
+  /* `0` as the id nothing can equal: `guardSku()` takes `$ignoreId = 0` on a
+     create, because there is no product yet for a SKU to be its own. */
+  const clash = productSkuConflict(typeof writes.sku === "string" ? writes.sku : "", 0);
+  if (clash !== null) return clash;
+
+  const refusal = attachmentRefusal(writes);
+  if (refusal !== null) return refusal;
+
+  const id = state.nextProductId++;
+  const next = { ...blankProduct(id), ...writes };
+
+  if (typeof writes.slug !== "string" || writes.slug === "") {
+    next.slug = next.status === "publish" ? slugify(next.name) : "";
+  }
+  next.permalink = `https://boutique.example.test/produit/${next.slug || id}`;
+
+  /* An unmanaged shelf carries no count, which is the catalogue's own invariant
+     — `manage_stock: false` and `stock_quantity: null` together on 8 of 28 rows
+     — and `patchProduct` keeps it for the same reason. */
+  if (!next.manage_stock) next.stock_quantity = null;
+  else if (writes.stock_quantity !== undefined && writes.stock_quantity !== null) {
+    next.stock_quantity = Math.trunc(Number(writes.stock_quantity));
+  }
+
+  if (next.type !== "variable") {
+    next.on_sale = next.sale_price !== "";
+    next.price = next.on_sale ? next.sale_price : next.regular_price;
+  }
+
+  /* The embedded read shapes, which are `image_id` and `gallery_image_ids` seen
+     from the other side. `assertImageAttachment()` has already proved every id
+     names a row, so neither lookup can miss — and the casts that used to be
+     inlined here are `readProductBody()`'s now, shared with the PATCH the way
+     `ProductInput::normalize()` is shared between the two verbs. */
+  resolveProductImages(next);
+
+  /*
+   * SEO is **derived, never taken from this form**. `SeoResolver::forSubject()`
+   * composes a title from the subject's own and parses robots from whether the
+   * page is public, with `overrides` listing only what somebody stored by hand —
+   * so a product created without an `seo` block comes back carrying one, with an
+   * empty `overrides`, and the detail screen's "derived from the product" line
+   * is true on the first read.
+   *
+   * The title is the bare name here rather than the API's `composeTitle($title,
+   * $siteName)`, because that is the convention the 28 seeded rows already
+   * follow and one file must not spell it two ways.
+   */
+  next.seo = {
+    ...next.seo,
+    title: next.name,
+    robots: {
+      index: next.status === "publish",
+      follow: true,
+      directive: next.status === "publish" ? "index, follow" : "noindex, follow",
+    },
+  };
+
+  state.products.set(id, next);
+  state.createdProducts = [id, ...state.createdProducts];
+
+  // **201**, read from `ProductController::store()` and asserted by the backend's
+  // own suite — which also pins that the body carries an id greater than zero.
+  return created(next);
 }
 
 /**
@@ -16375,11 +17056,19 @@ function putMenu(location, body) {
  */
 
 /** Every attachment this process can see, seeded and uploaded, minus the deleted. */
-const mediaRows = () =>
-  [
+/*
+ * A `function` rather than the `const` arrow it was, and the one word matters:
+ * declarations hoist and `const` has a temporal dead zone. `resetState()` runs
+ * at module load, which is *above* this line, and `applyProductMedia()` — the
+ * `MOCK_PRODUCT_MEDIA` seed — resolves attachments from inside it. Nothing else
+ * about it changed, and every caller is unaffected.
+ */
+function mediaRows() {
+  return [
     ...state.createdMedia.map((id) => state.media.get(id)),
     ...MEDIA_SEED.map((row) => state.media.get(row.id) ?? row),
   ].filter((row) => row !== undefined && !state.deletedMedia.has(row.id));
+}
 
 /** `MediaRepository::ORDERBY`. `order` is the file-wide `SORT_DIRECTIONS`. */
 const MEDIA_ORDERBY = ["date", "title", "id"];
@@ -20891,10 +21580,20 @@ export function respond(
       if (segments.length > 3) return notFound();
 
       if (second === undefined) {
-        // **`POST /products` stays a 404.** lib/api/allowlist.ts refuses it
-        // deliberately — nothing in the panel creates a product — and a fixture
-        // that answered would be an invitation to build the screen.
-        return method === "GET" ? productsListing(searchParams) : notFound();
+        /*
+         * **`POST /products` is served now**, and the comment it replaces is
+         * why: *"stays a 404. lib/api/allowlist.ts refuses it deliberately —
+         * nothing in the panel creates a product — and a fixture that answered
+         * would be an invitation to build the screen."* The screen was built,
+         * the allowlist entry landed with it, and this is the fixture it needs.
+         *
+         * The rule that kept it out is intact and is what still keeps `POST
+         * /products/bulk` and `POST /products/{id}/duplicate` off both lists:
+         * the depth guard above answers `notFound()` for the second, and `bulk`
+         * falls through `productById` to the same place.
+         */
+        if (method === "GET") return productsListing(searchParams);
+        return method === "POST" ? createProduct(body) : notFound();
       }
 
       // The whole catalogue, not the listed part: a trashed product answers

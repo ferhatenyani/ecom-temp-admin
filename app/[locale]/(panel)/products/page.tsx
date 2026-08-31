@@ -122,6 +122,28 @@ export default async function ProductsPage({
       categories={categories}
       attributes={attributes}
       terms={Object.fromEntries(termLists)}
+      /*
+       * **A second capability on this screen, and it gates a control rather
+       * than the screen.** The gate above is `ac_manage_products`; this is
+       * `ac_manage_content`, which every `/media` route sits behind —
+       * `MediaController::registerRoutes()` builds one guard for the upload, the
+       * listing, the item and its usage.
+       *
+       * The two do not travel together. `Permissions\Capabilities::roles()`
+       * gives `ac_manage_products` without `ac_manage_content` to **Manager**
+       * and **Product Manager**, and `Users\UserRoles::assignable()` is
+       * `[ac_super_admin, ac_manager]` — so the majority of the accounts this
+       * shop can still create hold products and not content, and the media
+       * picker inside the create drawer would answer 403 for exactly them.
+       * `NewProductDrawer` degrades to an attachment-id field on this flag and
+       * argues the whole thing.
+       *
+       * Resolved here rather than in the client because capabilities arrive
+       * with the session: `has()` reads `/auth/me`'s list, which the server
+       * already holds, and a client that asked again would spend a request to
+       * learn something the page was rendered with.
+       */
+      canPickMedia={has(me, "ac_manage_content")}
     />
   );
 }
