@@ -663,19 +663,38 @@ export const SHIPMENT_DERIVED_CRITERIA = ["wilaya_id"] as const;
 /* ----------------------------------------------------------- the composer --- */
 
 /**
- * The sequence, as §85 writes it: audience → content → preview → test → send.
+ * The sequence: audience → content → test → send.
  *
  * Built as a **stepped wizard**, one step at a time, which is a control grammar
  * this panel has nowhere else. The argument for it here and not on the coupon or
  * page forms: those edit a thing that already exists and whose fields are
  * independent, while this one *ends in an irreversible action* whose correctness
- * depends on every step before it. A person who skips the preview cannot see that
- * `{{firstname}}` renders empty, and the send freezes the audience.
+ * depends on every step before it. The send freezes the audience.
  *
- * `preview` and `test` are reads, so they are safe to revisit; `send` is the only
- * step that changes anything outside the draft.
+ * `test` is a read of the campaign and a write of exactly one message to an
+ * address the operator typed, so it is safe to revisit; `send` is the only step
+ * that changes anything about the shop.
+ *
+ * ## Four, and `preview` is the one that left
+ *
+ * §85 writes five — *audience → content → preview → test → send* — and the third
+ * was a page of its own for the whole of this run. It is folded into `content` at
+ * item 8, and the fold is a **deletion of the page and not of the check**:
+ * `GET /campaigns/{id}/preview` is still fetched (from the first step, for
+ * `audience_count`), still renders subject, HTML and text for a sample recipient,
+ * and still reports `unknown_tokens` — which is the one fact the step existed for,
+ * because an unknown token renders *empty* and nothing else on any screen would
+ * say so. All of it now sits on the compose step, beside the bodies it is about;
+ * `MailPreview.tsx` argues the move and keeps the retired step's own reasoning
+ * where the render replaced it.
+ *
+ * The wizard is shorter by a page and no shorter by a guarantee. What it costs is
+ * that a person can no longer be *made* to walk past the token warning on their
+ * way to the send — and that was always the weaker half of the guard, since a step
+ * can be walked past with two presses and a warning next to the field cannot be
+ * scrolled past without seeing the field.
  */
-export const COMPOSER_STEPS = ["audience", "content", "preview", "test", "send"] as const;
+export const COMPOSER_STEPS = ["audience", "content", "test", "send"] as const;
 export type ComposerStep = (typeof COMPOSER_STEPS)[number];
 
 export function stepIndex(step: ComposerStep): number {
@@ -695,7 +714,12 @@ export function previousStep(step: ComposerStep): ComposerStep | null {
  *
  * The wizard gates forward movement rather than disabling the step buttons: a
  * step you cannot yet reach is reachable *backwards*, always, because a person
- * who got to `preview` and wants to fix the subject must not be trapped.
+ * who got to the send and wants to fix the subject must not be trapped.
+ *
+ * **This is the guard, and it is not `campaignBlocker()`.** `email-body.ts` cites
+ * a function by that name and no such function has ever existed; the behaviour it
+ * describes is this one's `content` branch. Named here because item 8 is the third
+ * branch in a row to check the name before trusting it.
  *
  * `content` needs a subject and both bodies, and **that is this wizard's rule
  * rather than the API's.** Corrected 2026-08-28: this said "an empty `body_text`

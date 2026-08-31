@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
-import type { CampaignPreview, Segment } from "@/lib/api/schemas/campaign";
+import type { Segment } from "@/lib/api/schemas/campaign";
 import { campaignPreview, testResult } from "@/lib/api/schemas/campaign";
 import type { CustomerRef } from "@/lib/customers";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
@@ -12,16 +12,13 @@ import {
   MAX_CUSTOMER_IDS,
   audienceProblem,
   consentGap,
-  unsubscribeNote,
   type AudienceType,
 } from "@/lib/campaigns";
 import { Card, DataList, DataRow } from "@/components/ui/Card";
-import { FilterTabs } from "@/components/ui/FilterBar";
 import { Select, TextArea, TextField } from "@/components/ui/Form";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Confirm";
 import { Notice } from "@/components/ui/States";
-import { Skeleton } from "@/components/ui/Skeleton";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { ChosenCustomers, CustomerPicker, useResolvedCustomers } from "./CustomerPicker";
@@ -42,9 +39,18 @@ import {
 } from "./email-body";
 import { handEdited, nextBodies } from "./body-fields";
 import { BODY_IDS, BodyForm } from "./BodyForm";
+import { MailPreview, type MailPreviewState } from "./MailPreview";
 
 /**
- * The composer's five steps, each a module-level component.
+ * The composer's four steps, each a module-level component.
+ *
+ * **Four, and it was five.** `StepPreview` is gone — item 8 folds the render into
+ * the compose step, where the body it is a render *of* is being written. The call
+ * it made is untouched and so is everything the call answers: the token warning,
+ * the resolved subject, the unsubscribe note and the sample recipient all moved
+ * across into `MailPreview.tsx`, which also carries the retired step's own
+ * argument for showing source rather than a render, and the reason that argument
+ * no longer wins.
  *
  * **Not nested inside `Composer`**, and that is a rule this codebase learned the
  * hard way: a component declared inside another gets a new identity on every
@@ -471,6 +477,21 @@ function AudienceIds({
  * events that bubble up through this wrapper, rather than every field taking an
  * `onCaret` prop it has no other use for. `insertToken()` does the string work and
  * says where the caret lands; `TOKEN_FIELDS` below says which ids are targets.
+ *
+ * ## And now the render, which is what item 8 folded in
+ *
+ * `MailPreview` goes **after the bodies and before the token list**, which is two
+ * decisions rather than an ordering. Sub-task 3 puts `unknown_tokens` "next to the
+ * body it belongs to", and the warning is the first thing that component draws —
+ * so it lands directly under the text areas whose contents caused it. And the
+ * token list stays last because it is a reference and an insert bar for every
+ * field above it, including the two bodies; putting the render below it would put
+ * the result of the form underneath the form's own toolbox.
+ *
+ * The step is long now — six cards in the form shape, four when the body was
+ * written by hand. That is the trade the fold makes and it is the right way
+ * round: scrolling is free, and a second page cost two presses and a save, which
+ * is what let somebody reach a send having never seen the warning.
  */
 export function StepContent({
   draft,
@@ -478,11 +499,22 @@ export function StepContent({
   disabled,
   fieldErrors,
   seed,
+  preview,
 }: {
   draft: Draft;
   onChange: (next: Draft) => void;
   disabled: boolean;
   fieldErrors: Record<string, string>;
+  /**
+   * Everything the render needs, as one prop.
+   *
+   * Grouped rather than spread into six, because it is one subsystem with one
+   * owner: `Composer` holds the query, knows whether the draft has moved away from
+   * what the server rendered, and owns the `save()` that refreshes it. A step that
+   * took `previewLoading`, `previewStale`, `previewRefreshing` … would be six
+   * chances to pass five of them.
+   */
+  preview: MailPreviewState;
   /**
    * A blank body for this campaign: the locale's direction, and the shop's logo
    * when `/settings` published one.
@@ -625,6 +657,11 @@ export function StepContent({
           />
         </>
       )}
+
+      {/* The warning and the render, under whichever of the two body shapes is on
+          screen — a hand-written body needs the token warning at least as much as
+          a generated one, since nothing inserted its tokens for it. */}
+      <MailPreview {...preview} />
 
       {/*
         The tokens. Still listed with their correct spellings — the failure mode is
@@ -1016,126 +1053,7 @@ function NoAnswers({
   );
 }
 
-/* -------------------------------------------------------------- 3. preview --- */
-
-/**
- * The step that exists for one reason: **an unknown token renders empty**, and
- * that is invisible in a preview which has a name in it from another token.
- */
-export function StepPreview({
-  preview,
-  loading,
-}: {
-  preview: CampaignPreview | null;
-  loading: boolean;
-}) {
-  const t = useTranslations("campaigns");
-  const [part, setPart] = useState<"html" | "text">("html");
-
-  if (preview === null) {
-    return (
-      <Card title={t("step.preview")}>
-        {/* The real box: a part switcher over a body block, so the card does not
-            change height when the render arrives. */}
-        <div className="flex flex-col gap-3" aria-busy={loading || undefined}>
-          <Skeleton className="h-9 w-40 rounded-ui-md" />
-          <Skeleton className="h-40 w-full rounded-ui-md" />
-        </div>
-      </Card>
-    );
-  }
-
-  return (
-    <>
-      {preview.unknown_tokens.length > 0 ? (
-        <Notice
-          tone="warning"
-          title={t("previewStep.unknownTokens", { count: preview.unknown_tokens.length })}
-        >
-          <span className="flex flex-wrap gap-1.5" data-testid="unknown-tokens">
-            {preview.unknown_tokens.map((token) => (
-              <Ltr
-                key={token}
-                numeric={false}
-                className="rounded-ui-sm bg-ui-surface px-1.5 py-0.5 font-mono text-ui-caption text-ui-fg"
-              >
-                {tokenLiteral(token)}
-              </Ltr>
-            ))}
-          </span>
-          <span className="text-ui-label">
-            {/*
-              **The tokens are passed as values, not written into the message.**
-              `{{first_name}}` inside an ICU string parses as a `{first_name}`
-              placeholder wrapped in literal braces, so the message throws
-              `INVALID_MESSAGE` and next-intl renders the key path — which is what
-              this line did until a screenshot showed it. A value is inserted
-              verbatim and never re-parsed.
-            */}
-            {t("previewStep.unknownWhy", {
-              correct: tokenLiteral("first_name"),
-              wrong: "{{firstname}}",
-            })}
-          </span>
-        </Notice>
-      ) : null}
-
-      <Card
-        title={t("step.preview")}
-        footnote={
-          unsubscribeNote(preview) === "appended"
-            ? t("previewStep.unsubscribeAppended")
-            : t("previewStep.unsubscribeAuthored")
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <DataList>
-            <DataRow label={t("field.subject")} stacked>
-              <span dir="auto">{preview.subject}</span>
-            </DataRow>
-          </DataList>
-
-          {/* `chips`, not the tab strip: DECISIONS.md §12's panel-wide rule is
-              that a full-bleed underlined strip under the header always means
-              *which view*, and this is a labelled choice inside a card. */}
-          <FilterTabs<"html" | "text">
-            tabs={[
-              { value: "html", label: t("previewStep.html") },
-              { value: "text", label: t("previewStep.text") },
-            ]}
-            value={part}
-            onChange={setPart}
-            label={t("previewStep.partLabel")}
-            variant="chips"
-          />
-
-          {/*
-            **The rendered mail, on its own surface and in its own direction.**
-            `dir="auto"` because the body is whatever language the campaign was
-            written in, which is not necessarily the panel's.
-
-            The HTML is shown as *source*, not injected. It is sanitised on save
-            with an email-safe allowlist, so rendering it would be safe — but a
-            preview that renders is a preview of how *this browser* draws it,
-            which is not how a mail client will, and it invites treating the panel
-            as a WYSIWYG it is not.
-          */}
-          <pre
-            dir="auto"
-            className="ui-scroll max-h-80 rounded-ui-md bg-ui-surface-2 px-3 py-2 text-ui-caption whitespace-pre-wrap text-ui-fg"
-            data-testid="preview-body"
-          >
-            {part === "html" ? preview.html : preview.text}
-          </pre>
-
-          <p className="text-ui-label text-ui-subtle">{t("previewStep.sample")}</p>
-        </div>
-      </Card>
-    </>
-  );
-}
-
-/* ----------------------------------------------------------------- 4. test --- */
+/* ----------------------------------------------------------------- 3. test --- */
 
 /**
  * One copy to one address. **Writes no recipient row**, so a test never appears
@@ -1224,7 +1142,7 @@ export function StepTest({
   );
 }
 
-/* ----------------------------------------------------------------- 5. send --- */
+/* ----------------------------------------------------------------- 4. send --- */
 
 /**
  * The irreversible step, and the one place this screen could mislead.

@@ -2153,7 +2153,6 @@
     "step": {
       "audience": "Audience",
       "content": "Contenu",
-      "preview": "Aperçu",
       "test": "Test",
       "send": "Envoi"
     },
@@ -2235,7 +2234,13 @@
       "choose": "Choisir des clients"
     },
     "previewStep": {
+      "title": "Aperçu",
+      "render": "Le dessin de ce navigateur, pas celui d’une messagerie : seul l’envoi de test montre le rendu réel, et les liens ne s’ouvrent pas d’ici.",
+      "frameTitle": "Aperçu du message",
       "sample": "Rendu pour un destinataire d’exemple.",
+      "stale": "L’aperçu montre le dernier enregistrement, pas vos modifications en cours.",
+      "refresh": "Actualiser",
+      "fresh": "L’aperçu correspond déjà à ce qui est enregistré.",
       "unknownTokens": "{count, plural, one {Un champ inconnu s’affichera vide :} other {# champs inconnus s’afficheront vides :}}",
       "unknownWhy": "Vérifiez l’orthographe : {correct} et non {wrong}.",
       "unsubscribeAppended": "Le lien de désabonnement a été ajouté automatiquement. N’en ajoutez pas un second.",

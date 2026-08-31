@@ -3,7 +3,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 /**
  * Marketing: the composer, segments and templates — deliberately small.
  *
- * **Twelve tests, one project** — nine of them before the gaps branch, and the
+ * **Thirteen tests, one project** — nine of them before the gaps branch, and the
  * header said "eight" for two branches before anybody counted. `tests/campaign-schema.test.ts` answers
  * everything a schema can, against 28 captured payloads: the status vocabulary,
  * the transition flags, both capability-scoped nulls, the three ways `send`
@@ -53,6 +53,43 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
  * `toBeVisible()` is a strict-mode violation before it reaches its own
  * assertion. Every project here bar one is phone-sized, so the table is the copy
  * that is never painted.
+ *
+ * ## What item 8 changed here: **four steps, and the render moved into step two**
+ *
+ * Twelve declarations before and **thirteen** after. Twelve of them assert the
+ * same facts they always did and only moved; the thirteenth is new because the
+ * fold created a fact that did not exist before — `sandbox=""` on a frame the
+ * panel now injects a shopkeeper's HTML into. That attribute is the whole safety
+ * property and it is one token away from not being one, so it is asserted in the
+ * DOM as well as pinned offline in `tests/mail-preview.test.ts`.
+ *
+ * What moved, and where:
+ *
+ *   - **"Étape N sur 5" is "Étape N sur 4" everywhere**, and every `continue`
+ *     loop lost one iteration. `COMPOSER_STEPS` is `audience → content → test →
+ *     send`; `tests/campaign-schema.test.ts` pins the list itself, so these
+ *     assertions are about the *sentence a person reads* rather than about the
+ *     array.
+ *   - **The preview is on the compose step and is a sandboxed `iframe`**, so
+ *     three assertions that used to read `preview-body` now read through
+ *     `frameLocator`. `preview-body` still exists and is still a `<pre>`: it is
+ *     the mail's **text** part, behind the "Texte" chip, which is the other half
+ *     of a multipart message rather than a fallback view of the first.
+ *   - **The subject-is-rendered-by-the-server claim needed a new mechanism.** It
+ *     used to be proved by walking from content to preview, because the walk
+ *     saved. Nothing walks now, so the claim is proved where it is stronger: the
+ *     subject is edited, the preview goes visibly stale, `refresh-preview`
+ *     saves, and the resolved subject comes back — all on one step, which is
+ *     also the only place the *staleness* behaviour can be asserted at all.
+ *
+ * **Unexecuted, and that is not a formality.** The suite needs a live shop and a
+ * staff Application Password; `BLOCKED.md` records the 401 that has stopped every
+ * run of it on this machine. Everything below was written against the panel's
+ * real markup and the mock's real payloads, and the browser facts it leans on —
+ * that a `srcdoc` frame is reachable through `frameLocator`, that `page.frames()`
+ * finds it, that the panel's `dir` does not cross into it — were measured in a
+ * real Chromium against `scripts/mock-api.mjs`. What has not been measured is
+ * this file running against the shop.
  */
 
 /**
@@ -168,58 +205,119 @@ test.describe("the hub", () => {
 });
 
 test.describe("the composer", () => {
-  test("walks the five steps and saves as it goes", async ({ page }) => {
+  test("walks the four steps and saves as it goes", async ({ page }) => {
     /*
-     * The wizard's central claim: each forward move PATCHes, so the preview two
-     * steps later is a render of what the **server** holds rather than of what
-     * this browser thinks it sent. Asserted by editing the subject at step two
-     * and finding it rendered — with its `{{shop_name}}` resolved — at step three.
+     * The wizard's central claim, and item 8 moved where it is provable.
+     *
+     * It used to be proved by the *walk*: each forward move PATCHes, so the
+     * preview two steps later rendered what the **server** held rather than what
+     * this browser thought it sent. The preview is on the compose step now and
+     * nothing walks to reach it — so the same claim is proved on one step and
+     * proves two more things while it is there. The subject is edited, the card
+     * says out loud that the frame is behind ("L'aperçu montre le dernier
+     * enregistrement"), `refresh-preview` saves, and the subject comes back with
+     * `{{shop_name}}` **resolved** — which only the server can do.
+     *
+     * The staleness half could not have been asserted at all before this branch:
+     * the old preview step had no live form under it to disagree with.
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
     await openCampaign(page, DRAFT_NAME, "Ouvrir le composeur");
 
     // 1. audience
-    await expect(page.getByText("Étape 1 sur 5")).toBeVisible();
+    await expect(page.getByText("Étape 1 sur 4")).toBeVisible();
     await expect(page.getByTestId("eligible")).toBeVisible();
     await page.getByTestId("continue").click();
 
-    // 2. content
-    await expect(page.getByText("Étape 2 sur 5")).toBeVisible();
+    // 2. content — the form, the two bodies and the render, on one step.
+    await expect(page.getByText("Étape 2 sur 4")).toBeVisible();
+    await expect(page.getByTestId("preview-frame")).toBeVisible();
+    await expect(page.getByTestId("preview-stale")).toHaveCount(0);
+
     const subject = page.getByLabel("Objet");
     await subject.fill("{{shop_name}} — test du composeur, {{first_name}}");
-    await page.getByTestId("continue").click();
 
-    // 3. preview — the subject comes back rendered, from the server.
-    await expect(page.getByText("Étape 3 sur 5")).toBeVisible();
-    await expect(page.getByTestId("preview-body")).toBeVisible();
+    // The frame is now a render of something else, and says so.
+    await expect(page.getByTestId("preview-stale")).toBeVisible();
+    await page.getByTestId("refresh-preview").click();
+
+    // Saved, re-read, re-rendered — and the tokens came back resolved.
+    await expect(page.getByTestId("preview-stale")).toHaveCount(0);
     await expect(page.getByText(/Algerian Commerce — test du composeur/)).toBeVisible();
 
     await page.getByTestId("continue").click();
-    await expect(page.getByText("Étape 4 sur 5")).toBeVisible();
+    await expect(page.getByText("Étape 3 sur 4")).toBeVisible();
     await page.getByTestId("continue").click();
-    await expect(page.getByText("Étape 5 sur 5")).toBeVisible();
+    await expect(page.getByText("Étape 4 sur 4")).toBeVisible();
   });
 
   test("names the tokens that will render empty", async ({ page }) => {
     /*
-     * The reason the preview is a step of its own. `{{firstname}}` is not
-     * `{{first_name}}` and renders as nothing — invisible in a preview that has a
-     * name in it from another token — so the warning names the token rather than
-     * leaving somebody to spot a missing word.
+     * The one thing the retired preview step existed for, now one step earlier
+     * and beside the body that caused it. `{{firstname}}` is not `{{first_name}}`
+     * and renders as nothing — invisible in a message that has a name in it from
+     * another token — so the warning names the token rather than leaving somebody
+     * to spot a missing word.
+     *
+     * The second assertion reads **into the frame**, which is what the fold
+     * changed: the HTML part is drawn now rather than quoted, so "Bonjour ," is a
+     * rendered paragraph in a sandboxed document rather than text in a `<pre>`.
+     * `frameLocator` reaches it — the frame has an opaque origin under
+     * `sandbox=""` and Playwright addresses frames below the origin boundary
+     * anyway.
      */
     await signIn(page, "fr");
     await openCampaigns(page, "fr");
     await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
     await page.getByTestId("continue").click();
-    await page.getByTestId("continue").click();
+    await expect(page.getByText("Étape 2 sur 4")).toBeVisible();
 
     const warning = page.getByTestId("unknown-tokens");
     await expect(warning).toBeVisible();
     await expect(warning).toContainText("{{firstname}}");
-    // And the render really is empty where it was, which is why it hides.
-    await expect(page.getByTestId("preview-body")).toContainText("Bonjour ,");
+
+    // And the render really is empty where the name was, which is why it hides.
+    const mail = page.frameLocator('[data-testid="preview-frame"]');
+    await expect(mail.locator("body")).toContainText("Bonjour ,");
+  });
+
+  test("renders the mail in a frame that grants nothing", async ({ page }) => {
+    /*
+     * **The attribute is the safety property**, and it is one edit away from not
+     * being one — so it is asserted rather than trusted. `sandbox=""` is every
+     * restriction on: no scripts, no forms, no popups, no top navigation, and an
+     * **opaque origin**, which is what keeps a body that reached this screen away
+     * from the panel's cookies and DOM. The HTML is sanitised on save
+     * (`EmailHtml::sanitize()`); this is the belt under those braces.
+     *
+     * `tests/mail-preview.test.ts` pins the same constant offline. This one pins
+     * that the constant reaches the DOM, which a unit test cannot see.
+     *
+     * The text part is still a `<pre>` behind the second chip, because it **is**
+     * text — §85's rule is that it is authored rather than stripped from the HTML,
+     * so it is the other half of a multipart message rather than a fallback view
+     * of the first.
+     */
+    await signIn(page, "fr");
+    await openCampaigns(page, "fr");
+    await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
+    await page.getByTestId("continue").click();
+
+    const frame = page.getByTestId("preview-frame");
+    await expect(frame).toBeVisible();
+    await expect(frame).toHaveAttribute("sandbox", "");
+    await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+
+    // The caveat is read before the picture, not after it.
+    await expect(page.getByText(/pas celui d’une messagerie/)).toBeVisible();
+
+    // The other part, and it is the authored text rather than the HTML's source.
+    // A `FilterTabs` chip is a real `<button>`, the same shape `selectSegment()`
+    // clicks one screen over.
+    await page.getByRole("button", { name: "Texte", exact: true }).click();
+    await expect(page.getByTestId("preview-body")).toContainText("Votre panier vous attend.");
   });
 
   test("reports a test send that the transport refused, without calling it an error", async ({
@@ -235,8 +333,8 @@ test.describe("the composer", () => {
     await openCampaigns(page, "fr");
     await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
-    for (let step = 0; step < 3; step += 1) await page.getByTestId("continue").click();
-    await expect(page.getByText("Étape 4 sur 5")).toBeVisible();
+    for (let step = 0; step < 2; step += 1) await page.getByTestId("continue").click();
+    await expect(page.getByText("Étape 3 sur 4")).toBeVisible();
 
     await page.getByLabel("Adresse de test").fill("ops@example.test");
     await page.getByTestId("send-test").click();
@@ -260,8 +358,8 @@ test.describe("the composer", () => {
     await openCampaigns(page, "fr");
     await openCampaign(page, "Relance panier — brouillon", "Ouvrir le composeur");
 
-    for (let step = 0; step < 4; step += 1) await page.getByTestId("continue").click();
-    await expect(page.getByText("Étape 5 sur 5")).toBeVisible();
+    for (let step = 0; step < 3; step += 1) await page.getByTestId("continue").click();
+    await expect(page.getByText("Étape 4 sur 4")).toBeVisible();
 
     await expect(page.getByText("Rien n’est envoyé depuis le panneau.")).toBeVisible();
     await expect(page.getByText("wp algerian-commerce send-campaigns").first()).toBeVisible();
@@ -330,7 +428,7 @@ test.describe("a campaign that is no longer a draft", () => {
     await openCampaigns(page, "fr");
     await openCampaign(page, "Rentrée — envoyée", "Ouvrir le registre");
 
-    await expect(page.getByText("Étape 1 sur 5")).toHaveCount(0);
+    await expect(page.getByText("Étape 1 sur 4")).toHaveCount(0);
     await expect(page.getByTestId("sent-body")).toBeVisible();
     await expect(page.getByText(/registre de ce qui a été envoyé/)).toBeVisible();
 
@@ -437,7 +535,7 @@ test.describe("the capability", () => {
     await expect(page.getByText(/demande la permission Clients/)).toBeVisible();
     await expect(page.getByTestId("eligible")).toHaveCount(0);
 
-    for (let step = 0; step < 4; step += 1) await page.getByTestId("continue").click();
+    for (let step = 0; step < 3; step += 1) await page.getByTestId("continue").click();
 
     await expect(page.getByTestId("send")).toBeDisabled();
     await expect(page.getByTestId("send-forbidden")).toContainText("permission Clients");
@@ -477,11 +575,23 @@ test.describe("Arabic", () => {
     page,
   }) => {
     /*
-     * One locale check rather than a sweep. The interesting property is the same
-     * one the notifications branch asserted from the other side: the **rendered
-     * mail does not mirror**. It is `dir="auto"` because its direction is a
-     * property of the campaign's own text, so a French body stays left-to-right
-     * inside an Arabic page.
+     * One locale check rather than a sweep, and item 8 made its central property
+     * sharper rather than changing it. The claim was always that the **rendered
+     * mail does not mirror**: its direction is a property of the campaign's own
+     * text, not of the panel, so a French body stays left-to-right inside an
+     * Arabic page. It used to be asserted as `dir="auto"` on a `<pre>` — the
+     * attribute, not the effect.
+     *
+     * Now it is asserted as the effect, because the mail is a **document** and a
+     * document computes its own direction: the panel's `dir="rtl"` does not cross
+     * into a frame at all, and the wrapper's `<html dir="auto">` resolves from the
+     * message's first strong character. A French body therefore computes `ltr`
+     * inside an `rtl` page, which is the whole claim in one number.
+     *
+     * `page.frames()` reaches it. The frame's origin is opaque under `sandbox=""`
+     * — `contentDocument` is null from the page's own script — but Playwright
+     * addresses frames below the origin boundary, which was measured in a real
+     * Chromium against the mock before this was written.
      */
     await signIn(page, "ar");
     await page.goto("/ar/marketing/campaigns");
@@ -489,14 +599,23 @@ test.describe("Arabic", () => {
 
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
     await openCampaign(page, "Relance panier — brouillon", "فتح المُحرِّر");
-    await expect(page.getByText("الخطوة 1 من 5")).toBeVisible();
+    await expect(page.getByText("الخطوة 1 من 4")).toBeVisible();
 
     await page.getByTestId("continue").click();
-    await page.getByTestId("continue").click();
+    await expect(page.getByText("الخطوة 2 من 4")).toBeVisible();
 
-    const body = page.getByTestId("preview-body");
-    await expect(body).toBeVisible();
-    await expect(body).toHaveAttribute("dir", "auto");
-    await expect(body).toContainText("Bonjour");
+    const frame = page.getByTestId("preview-frame");
+    await expect(frame).toBeVisible();
+    await expect(page.frameLocator('[data-testid="preview-frame"]').locator("body")).toContainText(
+      "Bonjour",
+    );
+
+    const mail = page.frames().find((one) => one !== page.mainFrame());
+    expect(mail, "the srcdoc frame is not attached").toBeDefined();
+    expect(await mail!.evaluate(() => document.documentElement.getAttribute("dir"))).toBe("auto");
+    expect(
+      await mail!.evaluate(() => getComputedStyle(document.documentElement).direction),
+      "a French mail mirrored inside an Arabic panel",
+    ).toBe("ltr");
   });
 });
