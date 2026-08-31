@@ -8,7 +8,7 @@ import { acRead } from "@/lib/api/browser";
 import { providerLabel } from "@/lib/payments";
 import type { Payment, PaymentMethod } from "@/lib/api/schemas/payment";
 import { useOnline } from "@/lib/use-online";
-import { formatDay, formatWhen } from "@/lib/format/date";
+import { formatWhen } from "@/lib/format/date";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
   DataTable,
@@ -198,12 +198,16 @@ export function PaymentsLedger({
    * A first draft carried four — order, method, and the two dates. Every one of
    * them restated a control standing six inches above it: the term is in its own
    * box, the method is the `Select`'s selected option, and each date bound is
-   * printed in the page's own language by `echo` directly under its own picker.
-   * That last one was the draft's strongest argument for keeping them — that a
-   * native date input renders `mm/dd/yyyy` and only a chip could show the applied
-   * bound legibly — and `echo` had already answered it two lines away. The status
-   * was excluded from the chips for exactly this reason; the reason applies to
-   * all five.
+   * legible in its own picker. The status was excluded from the chips for exactly
+   * this reason; the reason applies to all five.
+   *
+   * **The dates were the draft's strongest case for keeping chips, and that case
+   * has now gone twice over.** The argument was that a native `<input type="date">`
+   * renders `mm/dd/yyyy` under an Arabic label, so only a chip could show the
+   * applied bound legibly. `echo` answered it first, by printing the bound a
+   * second time underneath in the page's own language. The drawn `DateField`
+   * answers it properly: the field itself reads in the reader's own field order,
+   * so `echo` is deleted and there is nothing left for a chip to add.
    *
    * So this is shipping's and coupons' rule at four dimensions rather than two.
    * Products ships chips because its seven live behind a *closed* drawer, where
@@ -310,14 +314,16 @@ export function PaymentsLedger({
                 to express — it is a 200 with zero rows rather than a refusal, so
                 nothing on screen would explain it.
 
-                `echo` on both, and it is a measured defence rather than a
-                nicety: a native date input follows the *browser's* locale and
-                there is no way to change it, so the Arabic panel renders
-                `mm/dd/yyyy` — a US ordering in a right-to-left screen for a shop
-                in Algeria. The readback underneath is the only place the applied
-                bound is legible. `Isolate` and never `Ltr`: it is `Intl`-formatted
-                and forcing a direction over the marks ICU inserts renders an
-                Arabic date backwards.
+                **`echo` was on both and is deleted with the drawn picker.** It
+                read the applied bound back underneath in the page's own language,
+                because the native `<input type="date">` above it printed that
+                same bound in the *browser's* — `mm/dd/yyyy` under an Arabic
+                label. `DatePicker` renders the field in the reader's own field
+                order, so a readback would now print the same date twice.
+
+                Both ends are still whole calendar days in **UTC**, which is a
+                property of `/payments` rather than of the control: `dayFromInput`
+                is where that is enforced.
               */}
               <div className="w-full sm:w-44">
                 <DateField
@@ -326,11 +332,6 @@ export function PaymentsLedger({
                   max={query.dateTo === "" ? undefined : query.dateTo}
                   onChange={(next) =>
                     commitFilter({ ...query, dateFrom: dayFromInput(next) })
-                  }
-                  echo={
-                    query.dateFrom === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateFrom, locale)}</Isolate>
-                    )
                   }
                 />
               </div>
@@ -341,11 +342,6 @@ export function PaymentsLedger({
                   value={query.dateTo}
                   min={query.dateFrom === "" ? undefined : query.dateFrom}
                   onChange={(next) => commitFilter({ ...query, dateTo: dayFromInput(next) })}
-                  echo={
-                    query.dateTo === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateTo, locale)}</Isolate>
-                    )
-                  }
                 />
               </div>
 

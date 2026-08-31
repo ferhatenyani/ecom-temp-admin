@@ -69,6 +69,14 @@ export const ICON_NAMES = [
   "external",
   "user",
   "logout",
+  /*
+   * Added with the drawn date picker. Not `clock`, which is beside it in this
+   * list and already means something else in this panel: `clock` marks an
+   * *instant* — an order's timestamp, a movement — and this marks a **calendar
+   * day**, which is the distinction `lib/format/date.ts` draws between
+   * `formatDate` and `formatDay` and the one `DatePicker` is built on.
+   */
+  "calendar",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -299,6 +307,13 @@ export function IconSprite() {
         <symbol id="ac-icon-logout" viewBox="0 0 24 24">
           <path d="M15 8V6a1.5 1.5 0 0 0-1.5-1.5h-7A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 15 18v-2" />
           <path d="M11 12h9m0 0-3-3m3 3-3 3" />
+        </symbol>
+        {/* The two tabs, the frame and the rule under the header row. Drawn at
+            the same 1.5 stroke and the same 4.5/19.5 margins as `box` beside it,
+            so a calendar and a package read as one family at 16px. */}
+        <symbol id="ac-icon-calendar" viewBox="0 0 24 24">
+          <rect x="4" y="6" width="16" height="13.5" rx="1.5" />
+          <path d="M4 10.5h16M8.5 4v4M15.5 4v4" />
         </symbol>
       </defs>
     </svg>

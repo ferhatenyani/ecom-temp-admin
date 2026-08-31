@@ -124,11 +124,28 @@ export function MovementFilters({
         </Section>
 
         {/*
-          Native date inputs. `/inventory/movements` validates `YYYY-MM-DD` and
-          answers 400 to anything else — measured on `?date_from=zzz` — so the
-          control that can only produce that shape is the right one, and it is
-          already localised and already accessible in both locales. Bounded to
-          each other so a reversed pair is hard to express.
+          `/inventory/movements` validates `YYYY-MM-DD` and answers 400 to
+          anything else — measured on `?date_from=zzz` — so a control that can
+          only hand over that shape is the right one. `DateField` still is: it
+          takes and returns `Y-m-d` and reports the empty string for anything it
+          cannot read, so a half-typed date reaches this screen as "no filter"
+          rather than as a 400. Bounded to each other so a reversed pair is hard
+          to express.
+
+          This comment used to say **"native date inputs"** and add that the
+          platform control was already localised. The first half is no longer
+          true — `DateField` is drawn now, on Radix Popover — and the second half
+          was the claim that turned out to be wrong: the native control was
+          localised to the *browser*, so the Arabic drawer rendered `mm/dd/yyyy`.
+          `components/ui/DatePicker.tsx` carries the argument.
+
+          **This drawer is one of the two reasons the calendar is a Popover and
+          never collapses to a Modal below `sm`.** §3.1 forbids nesting overlays
+          — "a modal that needs a second modal is a modal that needs steps" — and
+          at the 340px floor a `Drawer` is already full screen, so a modal date
+          picker opened from inside one would erase the filters behind it.
+          `Float.tsx`'s `Popover` takes that collapse; `DatePicker` deliberately
+          does not, and its grid fits the floor width instead.
         */}
         <Section title={t("filter.window")}>
           <div className="flex flex-col gap-3">

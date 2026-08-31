@@ -709,6 +709,75 @@
       min-block-size: 2.75rem;
     }
   }
+
+  /* ----------------------------------------------------------- calendar ---
+   * `components/ui/DatePicker.tsx` — the drawn date picker that retired the
+   * panel's last native `<input type="date">`, and the same shape `.ui-listbox`
+   * above has: two Radix custom properties that a Tailwind utility cannot name
+   * without an arbitrary value, and a coarse-pointer floor.
+   *
+   * ## The three figures below are one arithmetic, and it is §5 at 340px
+   *
+   * The panel's floor width is 340. `DatePicker` opens with `collisionPadding:
+   * 8`, so the widest the popover may be there is 324. Inside it: 2px of
+   * `.ui-float` border, 8px of `p-1` padding, and seven day cells. §5 asks for
+   * 44px on a coarse pointer, and 7 × 44 = 308 — so 308 + 8 + 2 = 318, and it
+   * fits with 6px to spare. At the 12px collision padding `Float.tsx` and
+   * `.ui-listbox` use it does not: 316 available against 318 needed, and the
+   * last column is clipped.
+   *
+   * `max-inline-size` is the belt to that braces. The available width is a live
+   * figure Radix recomputes on every open and every flip, so a narrower viewport
+   * than the floor, or a scrollbar, shrinks the cells rather than pushing the
+   * grid off the screen — `min-inline-size` on the day is deliberately absent
+   * for the same reason, since a cell that refuses to shrink is a grid that
+   * overflows.
+   */
+  .ui-calendar {
+    inline-size: max-content;
+    max-inline-size: var(--radix-popover-content-available-width);
+    max-block-size: var(--radix-popover-content-available-height);
+  }
+  .ui-calendar-day {
+    min-block-size: 2rem;
+  }
+  .ui-calendar-grid {
+    /* The seven columns are equal fractions of whatever width survives the
+       clamp above, so the grid mirrors in Arabic by itself — a table's column
+       order follows the document direction and nothing here names an edge. */
+    inline-size: 100%;
+  }
+  @media (pointer: coarse) {
+    .ui-calendar-day {
+      min-block-size: 2.75rem;
+    }
+  }
+
+  /* The calendar button inside the date field, and the two month buttons above
+     the grid. §5's floor on both pointers — 32px and 44px — expressed as a real
+     box rather than as `.ui-tap`'s pseudo-element, and that is deliberate: this
+     button sits *last at the inline end of a full-width field*, which is the
+     exact position whose 4px `.ui-tap` overhang joined the document's scrollable
+     overflow on the products-detail branch and failed the harness at 768.
+
+     **On a coarse pointer this makes the field 46px rather than 44**, and that
+     is a consequence rather than an oversight. `.ui-field`'s 2.75rem is a
+     border-box *minimum*, so a 44px child inside a 1px border grows it by the
+     two borders. Shrinking the button back to 42px to keep the field at exactly
+     44 would put the touch target 2px under the figure §5 states, which is the
+     wrong half of the trade to lose: a field that is 2px taller than its
+     minimum is still a field that satisfies the rule. */
+  .ui-date-trigger {
+    inline-size: 2rem;
+    block-size: 2rem;
+  }
+  @media (pointer: coarse) {
+    .ui-date-trigger {
+      inline-size: 2.75rem;
+      block-size: 2.75rem;
+    }
+  }
+
   .ui-tab:hover:not([aria-current="page"]) {
     color: var(--color-ui-fg);
   }

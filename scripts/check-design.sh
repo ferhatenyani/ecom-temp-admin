@@ -252,7 +252,40 @@ cd "$(dirname "$0")/.." || exit 2
 # they would.
 #
 # Raised by the same margin of 2 the history above keeps.
-FLOOR=334
+#
+# 338 at the date-picker branch, floor 336. **Two files**, and they are the
+# fourth entry in the run of reversals that began when `Listbox.tsx` retired the
+# panel's last native `<select>`: this one retires the last native
+# `<input type="date">`.
+#
+#   components/ui/DatePicker.tsx   the drawn control — Radix Popover for the
+#                                  portal, the popper, collision detection and
+#                                  dismissal; a typed text field, a calendar
+#                                  grid and every visual property ours.
+#   lib/calendar.ts                the arithmetic and the locale reading
+#
+# **`lib/calendar.ts` is the one that had to be its own module**, on the test the
+# last seven entries all apply — a block that is only markup stays in its screen;
+# a block that owns decisions gets a file. It owns four, and every one is a claim
+# about `Intl` that was measured rather than assumed: that both `fr-DZ` and
+# `ar-DZ` write day-month-year, so the ordering defect was never between the
+# panel's two languages but between both of them and the browser's `mm/dd/yyyy`;
+# that `ar-DZ`'s own separator is `‏/` — a U+200F RIGHT-TO-LEFT MARK before the
+# slash — which is why the field prints the locale's *order* with an ASCII
+# separator a person can actually type; that CLDR's `firstDay` for both is
+# **Saturday**, not the Sunday-or-Monday the item assumed; and that every date
+# here is UTC for the same reason `formatDay` is. None of those is assertable
+# from inside a render, which is what `tests/calendar.test.ts` exists for.
+#
+# It is +2 rather than the +2-and-a-deletion a finished swap would have been:
+# `DateField` stays in `components/ui/Form.tsx` and is now `DatePicker` in the
+# field frame, exactly as `Select` is `Listbox` in it. All six calling screens
+# swapped with no change but the deletion of the `echo` readback, which existed
+# only to print the date a second time in a format the field itself could not
+# use.
+#
+# Raised by the same margin of 2 the history above keeps.
+FLOOR=336
 failures=0
 checks=0
 

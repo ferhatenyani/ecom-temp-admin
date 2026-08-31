@@ -473,6 +473,18 @@ pickers, date ranges, filter groups, help.
 - Below `sm`, a `Popover` that would exceed 90vw renders as a `Modal` instead.
   One prop on the primitive, not a decision each caller re-makes.
 
+  **`DatePicker`'s calendar is the one anchored surface that does not take that
+  collapse**, and the reason is this section's own rule two entries down: two of
+  the six date fields in the panel are already *inside* an overlay —
+  `MovementFilters` in a `Drawer`, `RangeControl` in a `Modal` — and at the 340px
+  floor both of those are full screen. A calendar that became a `Modal` there
+  would be a modal over a modal, which "never nested" forbids and which would
+  erase the form the date belongs to. So it stays anchored at every width, the
+  way `Menu` does, and its grid is sized to fit the floor instead: seven 44px
+  cells is 308px, plus 8px of padding and 2px of border, against the 324px that
+  8px of collision padding leaves at 340. Measured, not assumed — 12px of
+  collision padding leaves 316 and clips the last column.
+
 **`<Menu>`** — a list of actions from a trigger. Replaces `ActionSheet`.
 
 - Items 32px, 13px, optional leading icon and trailing shortcut.
@@ -711,6 +723,53 @@ link         accent, underline on hover
   > maps `""` to a private sentinel and back, so the empty case stays a real,
   > choosable value — the same argument `ChoiceGroup` makes for why "all" has to
   > be a value rather than an absence.
+- **A date is drawn, not native.** `components/ui/DatePicker.tsx` is the
+  primitive — a typed text field and a calendar grid on Radix Popover — and
+  `Form.tsx`'s `DateField` is that primitive in the field frame. It is the only
+  date control in the panel; six screens go through it.
+
+  > **Corrected in the build, and it reverses what this section used to say**, in
+  > the same shape and for the same reason the `Select` correction above does.
+  >
+  > `DateField` was a real `<input type="date">` for the whole redesign run, and
+  > its case was recorded in its own docblock: the platform picker is already
+  > localised, already keyboard navigable, a phone renders it as a wheel, and it
+  > needs no portal, no collision detection and no grid of our own. All four are
+  > still true, and three of them had to be rebuilt by hand.
+  >
+  > What the argument left out is that **a date input renders its segments in the
+  > *browser's* locale and nothing the page says reaches that.** `lang` is the
+  > only hint the platform offers and Chromium was measured ignoring it —
+  > 2026-08-19 by the coupons branch, re-measured 2026-08-31 in the harness's own
+  > Chromium and reproducing: an empty `<input type="date" lang="ar">` under
+  > `<html lang="ar" dir="rtl">` renders `mm/dd/yyyy` under a `fr-FR` browser
+  > locale, under an `ar-DZ` one, and under `--lang` set to each of them. Read
+  > off a screenshot of the control, because the segments live in a **closed** UA
+  > shadow root with no property to query. So the Arabic panel printed a **US**
+  > ordering, in a right-to-left screen, for a shop in Algeria — and neither of
+  > this panel's two languages ever got its own. Both are day-month-year; the
+  > disagreement was never between them.
+  >
+  > **What the reversal costs, named rather than buried:** the phone's wheel, the
+  > same trade `Listbox` made; Chromium's Up/Down segment stepping, since there
+  > is no segmented caret in a plain text field; and the UA's clear ×. What buys
+  > them back is that **a date can still be typed without the calendar ever
+  > opening** — the field is an ordinary `<input type="text">` with no mask and no
+  > intercepted keys — and that the grid's own cells are 44px on a coarse pointer,
+  > which §5 asks for and a platform picker honoured on a phone and nowhere else.
+  >
+  > It also deletes something: `DateField`'s `echo`, which printed the value a
+  > second time underneath in the page's own language because the field above it
+  > could not. Six callers carried it and none does now. A field that reads
+  > correctly and *also* echoes is a screen printing the same date twice.
+  >
+  > Two things are read from CLDR rather than written down, and both were
+  > measured: the field order (`fr-DZ` and `ar-DZ` are both day-month-year) and
+  > the first day of the week, which for both is **Saturday** — Algeria's week,
+  > not the Sunday or Monday a hand-written table would have guessed. The
+  > separator is an ASCII `/` and deliberately not the locale's own: `ar-DZ`
+  > writes `‏/`, with a U+200F RIGHT-TO-LEFT MARK in front of it, and a field
+  > cannot print a character nobody can type and then demand it back.
 - Focus: `border-color: accent` + a 3px `--color-selection` ring. The global
   `:focus-visible` outline stays as the fallback for everything else.
 - Help text below, `--text-label --color-muted`. Written before the error, not

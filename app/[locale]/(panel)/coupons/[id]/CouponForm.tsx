@@ -718,27 +718,27 @@ export function CouponForm({
                   value={draft.date_expires}
                   onChange={(value) => set("date_expires", value)}
                   /*
-                    **A native date input follows the *browser's* locale and there is
-                    no way to change it** — the Arabic form renders `mm/dd/yyyy`, a
-                    US ordering in a right-to-left screen. `lang` is the only hint
-                    the platform offers, `<html lang>` already carries it and the
-                    control inherits it, and Chromium was measured on 2026-08-19 not
-                    to honour it anyway. The control's internals cannot be styled or
-                    relabelled either.
+                    **`echo` used to hang here and is deleted with the drawn
+                    picker.** This is the field it was invented for. A native date
+                    input follows the *browser's* locale and no attribute changes
+                    it — the Arabic form rendered `mm/dd/yyyy`, a US ordering in a
+                    right-to-left screen, and Chromium was measured on 2026-08-19
+                    not to honour `lang` — so the value was printed a second time
+                    underneath in the page's own language, and a person confirmed
+                    the date there rather than in the field.
 
-                    So the value is echoed underneath in the page's own language and
-                    a person can confirm the date they set without having to trust a
-                    format they do not recognise, which is the part that matters.
+                    `DatePicker` renders the field itself in the reader's own field
+                    order, which is what the readback was standing in for. Keeping
+                    it would put the expiry on this card twice, directly above the
+                    hint that explains what it means.
 
-                    `Isolate`, not `Ltr`: this is `Intl`-formatted, and forcing a
-                    direction over the marks it inserts renders an Arabic date as
-                    `17ص 12:03 .2026/08/`.
+                    **`expiryInputValue()` is untouched and still required.** It is
+                    a different problem wearing a similar hat: the API *writes*
+                    `date_expires` as `Y-m-d` and *reads it back* as full ISO, so
+                    the response has to be trimmed before it reaches a control that
+                    takes `Y-m-d`. That asymmetry is the API's and survives every
+                    change to the control.
                   */
-                  echo={
-                    draft.date_expires !== "" ? (
-                      <Isolate>{formatDate(draft.date_expires, locale, false)}</Isolate>
-                    ) : undefined
-                  }
                   error={errors.date_expires}
                   hint={t("hint.expiry")}
                 />
