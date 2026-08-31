@@ -1974,7 +1974,7 @@
     "chooseFile": "اختيار ملف",
     "pickTitle": "اختيار صورة",
     "selectedCount": "{count, plural, zero {لا صور محددة} one {صورة واحدة محددة} two {صورتان محددتان} few {# صور محددة} many {# صورةً محددة} other {# صورة محددة}}",
-    "alreadyAdded": "مُضافة بالفعل",
+    "alreadyAdded": "{name} — مُضافة بالفعل",
     "detailTitle": "تفاصيل الملف",
     "metadata": "الوصف",
     "metadataNote": "اختياري، ويمكن تعديله بعد الرفع.",

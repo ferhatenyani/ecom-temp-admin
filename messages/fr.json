@@ -1974,7 +1974,7 @@
     "chooseFile": "Choisir un fichier",
     "pickTitle": "Choisir une image",
     "selectedCount": "{count, plural, one {# image sélectionnée} other {# images sélectionnées}}",
-    "alreadyAdded": "Déjà ajoutée",
+    "alreadyAdded": "{name} — déjà ajoutée",
     "detailTitle": "Détails du fichier",
     "metadata": "Description",
     "metadataNote": "Facultatif, et modifiable après le téléversement.",

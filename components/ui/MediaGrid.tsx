@@ -249,16 +249,31 @@ export function MediaGrid({
                      */
                     disabled={held || !hydrated}
                     aria-busy={!hydrated || undefined}
+                    /*
+                     * Named by the label everywhere except here, and the
+                     * exception is `DataTable`'s `Checkbox` precedent: a tick
+                     * that is already the caller's has to *say* so, or a screen
+                     * reader gets a checked box named "Burnous" and no reason
+                     * for it.
+                     *
+                     * An `sr-only` phrase inside the label was the first
+                     * attempt and it is subtly wrong: the name computation
+                     * trims each node before joining, so the separator between
+                     * the caption and the phrase is whatever CSS says — a
+                     * space in a browser, where the caption is `display:block`,
+                     * and *nothing* wherever no stylesheet is loaded. A name
+                     * that depends on CSS having loaded is a name that is
+                     * sometimes "BurnousDéjà ajoutée". One message with the
+                     * label interpolated is the same words, in one text run,
+                     * with the order left to the translator.
+                     */
+                    aria-label={
+                      held ? tMedia("alreadyAdded", { name: label.text }) : undefined
+                    }
                     onChange={(event) => selection.onToggle(item, event.target.checked)}
                     className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
                   />
                   <TileFace item={item} label={label} state={state} ring />
-                  {/* In the label, so it is in the control's accessible name —
-                      `CheckRow`'s rule about its count, which is the same
-                      argument: a fact rendered *beside* a control is a fact a
-                      screen reader never reaches. Visually the tick and the
-                      muted caption already say it. */}
-                  {held ? <span className="sr-only">{tMedia("alreadyAdded")}</span> : null}
                 </label>
               ) : (
                 <button
