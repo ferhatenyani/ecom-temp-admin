@@ -971,3 +971,141 @@ credential (`BLOCKED.md`).
   *measurement* — `test` and `send` were 503 before `seed-campaigns.mjs` — and the ADMIN_PANEL one
   is a block quotation of the README line, so rewriting either would falsify a dated record or
   break the quotation. The two unreachable steps are still `test` and `send`; only the total moved.
+
+---
+
+# Next: fix the carried-forward issues
+
+All eight steps above are built and merged in both repos. This section is the work list that
+follows from them, with the decisions already taken so they are not re-litigated. Written for a
+fresh session to pick up cold.
+
+## State at hand-off
+
+Both repos are on `main`, clean, everything merged.
+
+| | verified |
+| --- | --- |
+| admin | `tsc` silent · 16/16 design checks (floor 344, 346 scanned) · **1561** unit tests / 28 files · `npm run test:email-roundtrip` clean |
+| backend | orders **290**/0 · shipping **129**/0 · cart **65**/0 · campaigns **120**/0 · attributes **59**/0 · unit **OK (2075 tests, 5081 assertions)** |
+
+Pre-existing backend failures, unrelated and not to be chased: `account` 1, `cms` 1, `seed` 2,
+`analytics` 8.
+
+## The credential block is CLEARED
+
+Real Application Passwords now exist and were verified over HTTP. They live in
+**`ecom-temp/.env`**, which is gitignored (`.gitignore:1`) — **never commit them, never echo them
+into a file, never paste them into a docblock or a commit message.**
+
+```
+AC_TEST_ADMIN_USER / AC_TEST_ADMIN_PASS       ac_panel_super_admin
+AC_TEST_SUPPORT_USER / AC_TEST_SUPPORT_PASS   ac_panel_support_agent
+```
+
+Measured over real HTTP on 2026-08-31 — the first time anything in this build was:
+
+```
+super_admin    /auth/me 200 · /orders 200 · /products 200 · /campaigns 200 · /settings 200
+support_agent  /auth/me 200 · /orders 403 · /products 403 · /campaigns 403 · /settings 403
+```
+
+So **`BLOCKED.md`'s item 1 is now closed** and its entry should be rewritten to say so. The
+transport questions it listed — Application Password authentication, capability enforcement against
+a real `Authorization` header, and the 401/403 split against something other than
+`wp_set_current_user()` — are answered above. CORS preflight, nonce handling and reverse-proxy
+behaviour are still unmeasured, and should stay listed.
+
+**Only the courier credentials remain blocked** (`BLOCKED.md` item 2), and they are explicitly out
+of scope for this work.
+
+## Decisions taken — do not re-litigate
+
+| # | Issue | Decision |
+| --- | --- | --- |
+| 1 | Quantity **and** delivery fee on an order already holding stock | **Warn, allow, record.** Show what is reserved, let staff proceed, audit every change. An order paused awaiting confirmation is exactly when amendments happen. |
+| 2 | Country accepts any two letters | **Dropdown of real countries**, Algeria pre-selected. |
+| 3 | Duplicating a grouped/external product loses its contents | **Refuse with a reason.** Guard only — do not fix the backend. Unreachable today (0 grouped, 0 external; the create form offers only simple and variable), so this is cheap insurance for the day one appears via wp-admin. |
+| 4 | `{{first name}}` mails verbatim | **Correct it automatically** to `{{first_name}}` on save. Tell the operator it was corrected — automatic, not silent. |
+| 5 | Segment naming a deleted product/wilaya | **Warn on screen, still allow saving.** Deleting a product must not silently rewrite somebody's saved segment. |
+| 6 | Variation generation cap | **Raise 50 → 200.** Keep the count-before-firing and the partial-failure report. |
+| 7 | Arabic slugs are percent-encoded | **Leave it.** The page works, shoppers see the Arabic name, and the slug field is editable. Recorded, not fixed. |
+| 8 | No shop brand colour | **Skip.** Staff pick a colour per campaign. No backend change. |
+| 9 | e2e suite | **Run it and report only.** Change nothing. It has never been executed, so failures unrelated to this work are expected — list them, do not patch tests to green. |
+
+## The work list
+
+Grouped so each unit is one coherent change. Sequential where files overlap.
+
+### A — Orders (`app/[locale]/(panel)/orders/`, plus backend guards)
+
+1. **Warn-allow-record on a stock-holding order.** Quantity and delivery-fee edits currently pass
+   silently while a manual price is refused (409). Make all three consistent under the chosen
+   policy: the edit proceeds, the operator is warned naming what is reserved, and the change lands
+   in the audit snapshot. **This reverses part of step 1's backend step 6** — read
+   `OrderService::guardManualPricesWritable()` and its docblock first, and rewrite the argument
+   rather than deleting it. `OrderService::snapshot()` is where the audit record is built.
+2. **Country dropdown.** `AddressFields.tsx`. The API validates shape only (`^[A-Z]{2}$`), so the
+   list is the panel's. Keep the existing local shape rule as the backstop.
+3. **`OrderLinesDrawer.addLine`'s merge rule never matches** — it merges on `price.trim() === ""`,
+   never true for a picker-added row, so pressing add twice opens two rows instead of quantity 2.
+   The create drawer's rule (match on product *and* seeded price) is the working model.
+4. **Bind the `details`-less 400.** `billing.email` values like `a@b.c` return 400 with no
+   `details.fields`, so nothing highlights the box. The summary line already renders; point it at
+   the email control.
+
+### B — Products (`app/[locale]/(panel)/products/`)
+
+5. **Refuse duplicating a grouped/external product**, with the reason on the disabled control.
+6. **Raise the variation cap to 200** in `variable-product.ts`. The count-before-firing sentence
+   and the partial-failure report stay.
+7. **Multi-select in the media picker.** Adding five gallery images is five trips today. The fix
+   named in `ProductMedia.tsx` is a `selected` prop on `MediaGrid`.
+
+### C — Attributes
+
+8. **`AttributeRepository::fromWpError()` files WooCommerce refusals under
+   `details.fields.attribute`, a key no control has** — so the three most likely slug failures
+   render nothing. The panel works around it with `splitFieldErrors()`; **fix it at the source** so
+   the key names the field that failed, and drop the workaround if it becomes dead.
+
+### D — Marketing
+
+9. **Auto-correct malformed merge tags.** `TemplateRenderer::PATTERN` is
+   `/\{\{\s*([a-z0-9_]{1,40})\s*\}\}/i`, so `{{first name}}` matches nothing and is neither
+   substituted nor reported. Correct it on save and say so on screen. Keep the existing
+   `unknown_tokens` misspelling warning — this is a second, different check.
+10. **Warn on a segment criterion naming something deleted.** The backend does no existence check
+    by design (`SegmentCriteria` is pure), so this is the panel's. `useResolvedProducts` already
+    resolves names and already renders an unresolvable id as itself — add the warning beside it.
+11. **The campaign preview spins forever on a failed read.** `usePreview` can error and
+    `MailPreview` only branches on `preview === null`, so an error and a pending read look
+    identical. Needs a message and a retry.
+12. **Rebind the composer's draft to the PATCH response.** A paragraph containing `<b>` comes back
+    with the tag stripped, visible only on the next load — and the derived hand-edit flag then
+    correctly reports a disagreement nobody understands. **Read step 7's note first: this changes
+    how the whole wizard saves**, so it is the riskiest item here and wants its own agent.
+
+### E — Verification
+
+13. **Run the e2e suite** (`npm run test:e2e`) with the credentials above. **Report only.** Say
+    plainly what fails and whether it relates to this work.
+14. **Rewrite `BLOCKED.md` item 1** to record the block as cleared, keeping the three transport
+    questions that remain genuinely unmeasured.
+
+## Rules for whoever picks this up
+
+- **Read `AGENTS.md` first.** Next 16.3.1, not stock — guides in `node_modules/next/dist/docs/`.
+- Heavy docblocks that argue *why*, matching the neighbours. When reversing an earlier decision,
+  keep its argument and say what changed — every branch in this build did.
+- Design tokens only; `npm run test:design` must pass, floor raised or lowered **deliberately**.
+  `lib/theme-color.ts` and `lib/email-palette.ts` are the only colour exemptions.
+- Verify API claims against `ecom-temp` source and cite file:symbol. Distinguish **read from
+  source** / **measured in-process via `rest_do_request()`** / **measured over HTTP** — all three
+  are now possible, so say which.
+- A screen that reaches a route needs its mock; an allowlist change needs its `boundary.test.ts`
+  assertion.
+- French and Arabic in exact sync. Arabic at the 340px floor is where controls fail first — twice
+  in this build it was the only thing that caught a defect.
+- `npm run build` before `scripts/capture.mjs`; it serves a stale `.next` otherwise.
+- Branch per unit, `feat/<slug>`, commit and merge with the message style in `git log`.
