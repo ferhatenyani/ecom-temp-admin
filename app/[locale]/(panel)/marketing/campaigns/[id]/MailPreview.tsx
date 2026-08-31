@@ -215,12 +215,28 @@ export type MailPreviewState = {
    * question — *have you typed since you last pressed save* — which is the same
    * answer almost always and the wrong one exactly when it matters.
    *
-   * The case where the two differ is worth having: `body_html` is sanitised on
-   * save, so a hand-edited body carrying something the allowlist removes comes
-   * back changed and stays marked. `changes.md` records that the composer does not
-   * rebind its draft to the PATCH response, and that the difference was *"visible
-   * only on the next load"*. It is visible here now. The sentence stays true —
-   * the preview does show the last save, and the form does not match it.
+   * **This paragraph described a defect, and item 12 has since fixed it. The
+   * comparison is unchanged; what it now reports is different, and the difference
+   * is worth keeping on the record rather than quietly overwriting.**
+   *
+   * It used to read: `body_html` is sanitised on save, so a hand-edited body
+   * carrying something the allowlist removes comes back changed and *stays*
+   * marked — step 8 recorded that as "the stale marker can now expose the
+   * un-rebound draft, and that is left visible on purpose", because the marker
+   * was saying something true about a draft the composer never rebound.
+   *
+   * `Composer.save()` now rebinds the draft to the re-read (item 12), so that
+   * case resolves instead of persisting: the sanitiser's edit lands in the text
+   * area as well as in the frame, the two agree, and the marker clears. The
+   * operator watches their `<b>` disappear, which is the honest report — it is
+   * gone from what will be mailed.
+   *
+   * What still marks the frame is the ordinary thing: somebody has typed since
+   * the last save. And one unusual thing worth naming, because it is the reason
+   * the comparison is against the server's copy and not against the draft's own
+   * history — a save whose *re-read* failed leaves the draft holding what was
+   * sent and the query holding the older row, and the marker correctly says the
+   * frame is behind.
    */
   stale: boolean;
   /** A save is in flight. The refresh control is the composer's own `save()`. */

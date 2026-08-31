@@ -95,6 +95,46 @@ import { readValues, seededValues, writeValues } from "./body-fields";
  * the banner says how old the draft on screen is, and **advance, send and test
  * are all disabled with that same sentence** rather than failing on click.
  */
+/**
+ * A campaign as the form holds it — **what the server stored, and nothing the
+ * panel decided.**
+ *
+ * Extracted on item 12's branch so that the first paint and every save bind the
+ * same way. It was inline in `useState` before, which is why the rebind was easy
+ * to leave out: there was no function to call, only an initialiser that had
+ * already run.
+ *
+ * Two properties are load-bearing and both are absences:
+ *
+ * **No seeding.** The shop's logo reaches a campaign that has never been saved,
+ * once, at mount — see the branch in `useState` below. A `draftOf()` that seeded
+ * would restore a logo the operator had just cleared, on the save that cleared
+ * it, and the form would appear to refuse the edit.
+ *
+ * **No generation.** `body_html` and `body_text` are copied, never rebuilt from
+ * `body_fields`. `handEdited()` exists to compare the two, and a binding that
+ * regenerated would make them equal by construction and the flag always false.
+ * What comes back from the API is what the API holds, markup stripped and all;
+ * that disagreement is the thing this screen now shows rather than hides.
+ *
+ * `customer_ids` is copied rather than aliased: the draft's array is mutated by
+ * the audience picker and the query's row must not move under the cache.
+ */
+export function draftOf(campaign: Campaign, locale: string): Draft {
+  return {
+    name: campaign.name,
+    subject: campaign.subject,
+    body_html: campaign.body_html,
+    body_text: campaign.body_text,
+    body: readValues(campaign.body_fields, directionFor(locale)),
+    audience: {
+      type: campaign.audience.type,
+      segment_id: campaign.audience.segment_id,
+      customer_ids: [...campaign.audience.customer_ids],
+    },
+  };
+}
+
 export function Composer({
   locale,
   initial,
@@ -190,12 +230,20 @@ export function Composer({
      * The seed's branding is applied only to the *blank* case, and only when the
      * campaign has no body yet. A saved campaign's answers are its answers: a logo
      * cleared on purpose must not come back because the shop still has one.
+     *
+     * **The seeding is this branch and never `draftOf()`'s**, which is what makes
+     * the rebind below safe. `draftOf()` states what the server holds and nothing
+     * else; branding a campaign the shop has never saved is a decision taken once,
+     * at the first paint, by the reader who opened an empty draft. A rebind that
+     * re-seeded would put a cleared logo back every time somebody pressed save.
      */
-    const stored = readValues(initial.body_fields, directionFor(locale));
+    const bound = draftOf(initial, locale);
     const blank =
-      stored !== null &&
+      bound.body !== null &&
       initial.body_html.trim() === "" &&
       initial.body_text.trim() === "";
+
+    if (!blank) return bound;
 
     /*
      * The seeded body is **generated as well as seeded**, and skipping that is a
@@ -206,20 +254,9 @@ export function Composer({
      * seed is `emptyValues()` and `buildEmail()` answers two empty strings, so this
      * changes nothing and `furthestStep()` still holds the wizard at `content`.
      */
-    const seeded = blank ? buildEmail(seed) : null;
+    const seeded = buildEmail(seed);
 
-    return {
-      name: initial.name,
-      subject: initial.subject,
-      body_html: seeded?.html ?? initial.body_html,
-      body_text: seeded?.text ?? initial.body_text,
-      body: blank ? seed : stored,
-      audience: {
-        type: initial.audience.type,
-        segment_id: initial.audience.segment_id,
-        customer_ids: [...initial.audience.customer_ids],
-      },
-    };
+    return { ...bound, body: seed, body_html: seeded.html, body_text: seeded.text };
   });
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -352,7 +389,48 @@ export function Composer({
         ...(draft.audience.type === "segment" ? { segment_id: draft.audience.segment_id } : {}),
         ...(draft.audience.type === "ids" ? { customer_ids: draft.audience.customer_ids } : {}),
       });
-      await refetch();
+
+      /*
+       * **The draft is rebound to what the server stored**, and until this round
+       * it was not — which is the defect step 7 recorded and item 12 is here to
+       * close.
+       *
+       * `CampaignInput` sanitises on the way in. `body_fields` string values that
+       * look like markup come back with the markup gone (`EmailHtml::sanitize()`,
+       * read from source at `Campaigns/EmailHtml.php`), so a paragraph containing
+       * `<b>` was stored one way and held in the form another. Nothing on screen
+       * said so. The disagreement surfaced only on the *next* load — where
+       * `handEdited()` correctly reported a hand edit nobody had made, because it
+       * regenerates from the answers and compares against the stored bodies, and
+       * the stored bodies were no longer what these answers generate.
+       *
+       * ## Rebound to the re-read, not to the PATCH response
+       *
+       * `SettingsForm.save()` rebinds to the response and says why; this rebinds
+       * to the `refetch()` that was already here, and the reason is `MailPreview`
+       * rather than a preference. `contentChanged` compares this draft against
+       * `campaign` — the query's row, which is also the row the preview was
+       * rendered from — and the frame's stale marker is that comparison. Binding
+       * the form to one read and the marker's other side to a different one makes
+       * "the frame shows what the form says" a claim about two fetches that can
+       * disagree. One read, both sides, and the marker cannot lie.
+       *
+       * It costs nothing that was not already being spent: the `GET` was here
+       * before this change, and `PATCH /campaigns/{id}` answering the whole
+       * campaign (`CampaignController::update()` returns `->toArray()`, read from
+       * source) is what makes either option available at all.
+       *
+       * ## A failed re-read leaves the draft alone
+       *
+       * `refetch()` can answer without data — offline, or a 403 arriving between
+       * the write and the read. The write still succeeded, so this returns `true`
+       * either way; what it must not do is blank the form on a read that failed.
+       * The draft then still holds what was sent, which is the state this screen
+       * was in before this change and is honest rather than empty.
+       */
+      const { data: stored } = await refetch();
+      if (stored) setDraft(draftOf(stored, locale));
+
       await client.invalidateQueries({ queryKey: ["campaigns", campaign.id, "preview"] });
       await client.invalidateQueries({ queryKey: ["campaigns", "list"] });
       return true;
