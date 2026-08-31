@@ -41,6 +41,7 @@ import {
   usePreview,
   type Draft,
 } from "./Steps";
+import { previewFailure } from "./MailPreview";
 import { buildEmail, directionFor, type EmailImage, type EmailValues } from "./email-body";
 import { readValues, seededValues, writeValues } from "./body-fields";
 
@@ -656,6 +657,25 @@ export function Composer({
                  * whose contents it changes.
                  */
                 onRefresh: () => void save(),
+                /*
+                 * **Item D11.** `usePreview` could always error and the card only
+                 * branched on `preview === null`, so a failed read drew the
+                 * skeleton for ever — step 8 recorded it and did not fix it.
+                 *
+                 * `isError` rather than `error !== null`, because react-query
+                 * keeps the last error on the query after a *successful* refetch
+                 * and only `isError` says the current state is a failure. That
+                 * distinction is what makes the pair `(preview.data, failure)`
+                 * honest: both present means a good render beside a failed
+                 * re-read, and the card draws the render and marks it.
+                 *
+                 * The retry is `refetch()` and never `save()`. `MailPreviewState
+                 * .onRetry` argues the split; the short version is that a failed
+                 * **read** must not provoke a **write**, least of all on the 403,
+                 * where the write is the thing that must not be retried.
+                 */
+                failure: preview.isError ? previewFailure(preview.error) : null,
+                onRetry: () => void preview.refetch(),
               }}
             />
           ) : step === "test" ? (
