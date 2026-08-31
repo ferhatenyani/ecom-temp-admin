@@ -112,6 +112,48 @@ import { parseAttachmentId } from "../new-product";
  * the end, and offers `Reorder` — the panel's existing pair of buttons, chosen
  * over a drag on the argument that file already carries about touch and the
  * keyboard.
+ *
+ * ## The gallery picker is multi-select now, and the featured image is not
+ *
+ * This screen shipped with *"picking is the commit and the overlay closes"* for
+ * both controls, and said what it cost: a second picture is a second trip
+ * through the grid. Five gallery images were five. That sentence also named the
+ * fix and where it belonged — a `selected` prop on `MediaGrid` — and refused to
+ * build it *"for one screen's convenience"*. The convenience is now item 7 of
+ * the fix round, so it is built, opt-in, and `MediaGrid`'s docblock carries the
+ * reversal in full.
+ *
+ * **`image_id` is untouched by any of it**, and that is the shape of the data
+ * rather than a scope decision: it is one attachment. A picker that let somebody
+ * tick four tiles and then kept the last would be a control lying about what it
+ * does. So `target` decides which contract the picker gets — `onPick` for the
+ * image, `selection` for the gallery — and the two paths of this file's one
+ * overlay stay as different as the two fields are.
+ *
+ * ### Five picks are one write, and it takes doing
+ *
+ * `onGalleryChange` replaces the whole array, so calling it once per pick would
+ * hand it `[...galleryIds, id]` five times against a `galleryIds` that has not
+ * re-rendered between the calls — four of the five would be dropped and the
+ * fifth would look like a working feature. Confirming therefore computes one
+ * array and calls it **once**. Downstream that is already one request:
+ * `ProductDetail`'s draft is local until the save bar is pressed, and its
+ * `save()` sends one `PATCH /products/{id}` carrying the whole body — so five
+ * pictures cost one write to the API, and always did; what changes is that they
+ * now cost one trip through the overlay too.
+ *
+ * ### What the picker is told about the gallery it is adding to
+ *
+ * `held={galleryIds}`, so the tiles already on the product are ticked, muted and
+ * refused. That closes the loop on the sentence being reversed — *"a grid that
+ * cannot say which tiles are already in"* — and it is why the picker path can no
+ * longer earn `galleryDuplicate`: there is no press left that would.
+ *
+ * The selection is **the pick order**, appended in the order the tiles were
+ * ticked, because that is the only order anybody authored. And it is emptied
+ * when the picker opens rather than kept between openings: a basket that
+ * remembered what you did not confirm last time is a control that acts on an
+ * intention you already abandoned.
  */
 export function ProductMedia({
   /** `ac_manage_content`, which every `/media` route sits behind — see above. */
@@ -163,6 +205,16 @@ export function ProductMedia({
   const [target, setTarget] = useState<Target>("image");
 
   /**
+   * The gallery basket: ticked in the grid, not yet in the draft.
+   *
+   * Above the picker because the panel is chromeless and the confirm is in the
+   * `Modal`'s footer — `MediaPicker`'s docblock argues the ownership — and it is
+   * an ordered array rather than a `Set` because what goes into the draft is a
+   * sequence and the pick order is the one the operator chose.
+   */
+  const [chosen, setChosen] = useState<number[]>([]);
+
+  /**
    * Every URL this screen has learned, keyed by attachment id.
    *
    * Held rather than derived, because an attachment id does not carry a URL and
@@ -181,12 +233,18 @@ export function ProductMedia({
   const [manualGalleryId, setManualGalleryId] = useState("");
   const [badId, setBadId] = useState<string | null>(null);
   /**
-   * *Already in the gallery* — and it is separate from `badId` because it can
-   * happen on **both** paths, which is easy to miss: the picker closes on a
-   * pick, so somebody who chose a tile that is already in the list would
-   * otherwise land back on a form where nothing had changed and nothing said
-   * why. `badId` binds to the fallback's field, where §3.4 wants it; this is a
-   * line in the group, where both paths can see it.
+   * *Already in the gallery* — separate from `badId`, and now reachable from one
+   * path rather than two.
+   *
+   * It was written for both because the picker closed on a pick, so somebody who
+   * chose a tile that was already in the list landed back on a form where
+   * nothing had changed and nothing said why. **The picker cannot produce it any
+   * more**: those tiles arrive as `held`, ticked and refused, so the press that
+   * earned this message no longer exists. What is left is the capability
+   * fallback's add box, where a person types an id and cannot see what is in the
+   * gallery without looking up. `badId` binds to that field, where §3.4 wants
+   * it; this stays a line in the group, which is also where a *future* second
+   * path would find it.
    */
   const [duplicate, setDuplicate] = useState<string | null>(null);
 
@@ -221,6 +279,10 @@ export function ProductMedia({
     setTarget(next);
     setStep("picker");
     setDuplicate(null);
+    /* Emptied on the way in, not on the way out: closing on Escape, on the
+       scrim and on Close are three exits and only one of them is a button this
+       file draws. Resetting where the overlay is *opened* covers all of them. */
+    setChosen([]);
     setOpen(true);
   };
 
@@ -228,6 +290,7 @@ export function ProductMedia({
   const currentImageUrl =
     /^\d+$/.test(currentImageId) ? (urls.get(Number(currentImageId)) ?? null) : null;
 
+  /** The fallback's add box. One id, one refusal, one append. */
   const addToGallery = (id: number) => {
     /*
      * Refused rather than appended, because the API would collapse it silently:
@@ -243,6 +306,27 @@ export function ProductMedia({
     setDuplicate(null);
     onGalleryChange([...galleryIds, id]);
     return true;
+  };
+
+  /**
+   * The multi-select commit: **one** call, whatever was ticked.
+   *
+   * Not `chosen.forEach(addToGallery)`, and the difference is not style. Each
+   * call would build its array from the `galleryIds` prop, which does not change
+   * between them — five ticks would append the fifth and lose four, and the
+   * screen would look like it worked for anybody who ticked one.
+   *
+   * The `filter` is belt and braces rather than a live path: `held` makes a tile
+   * already in the gallery untickable, so `chosen` cannot hold one. It stays
+   * because the alternative to filtering here is trusting a prop two components
+   * away to keep a promise the API answers for — and the API's answer is
+   * `array_unique`, i.e. a silent shortening.
+   */
+  const confirmGallery = () => {
+    const additions = chosen.filter((id) => !galleryIds.includes(id));
+    if (additions.length > 0) onGalleryChange([...galleryIds, ...additions]);
+    setChosen([]);
+    setOpen(false);
   };
 
   return (
@@ -566,6 +650,27 @@ export function ProductMedia({
               <Button variant="secondary" icon="plus" onClick={() => setStep("upload")}>
                 {tMedia("upload")}
               </Button>
+              {target === "gallery" ? (
+                /*
+                 * **The count is on this button and not only in the picker's
+                 * bar, and that is a 340px decision.** The overlay's body
+                 * scrolls and its footer does not, so the bar is the first thing
+                 * off screen the moment somebody scrolls to the fourth row of
+                 * tiles — leaving a confirm control and no number anywhere. The
+                 * SEO card on this screen records refusing to say the same thing
+                 * twice; this is not that. The bar is where the *clear* is and
+                 * says what it would clear; this is the commit, and it is the
+                 * copy that is always visible.
+                 *
+                 * Disabled at zero rather than absent, which is the exception
+                 * §3.3 already makes for a step's forward control: the upload
+                 * step's send button beside it is disabled the same way, and a
+                 * footer whose buttons come and go moves the two that stay.
+                 */
+                <Button disabled={chosen.length === 0} onClick={confirmGallery}>
+                  {t("galleryAddSelected", { count: chosen.length })}
+                </Button>
+              ) : null}
             </>
           )
         }
@@ -573,35 +678,59 @@ export function ProductMedia({
         {step === "upload" ? (
           <MediaUploadFields upload={upload} idPrefix="product-media-upload" />
         ) : (
-          <MediaPicker
-            /* `MediaPicker`'s own gate on the request rather than on the
-               render: without it every product detail in the panel would fetch
-               a media library nobody has opened. It is `open` and not `step ===
-               "picker"` only because the picker is unmounted on the upload step
-               anyway — the two are the same condition here. */
-            active={open}
-            onPick={(item) => {
-              remember(item.id, item.url);
-
-              if (target === "image") {
+          /*
+           * Two contracts, one overlay. `active` is `MediaPicker`'s own gate on
+           * the request rather than on the render — without it every product
+           * detail in the panel would fetch a media library nobody has opened.
+           * It is `open` and not `step === "picker"` only because the picker is
+           * unmounted on the upload step anyway; the two are the same condition
+           * here.
+           */
+          target === "image" ? (
+            <MediaPicker
+              active={open}
+              /*
+               * **Picking is still the commit for the featured image**, and the
+               * overlay still closes — the paragraph this replaces argued that
+               * for both fields and it survives for this one, because
+               * `image_id` is one attachment and there is nothing a second tick
+               * could mean. What it also said — that staying open would need a
+               * grid able to say which tiles are already in — is what the
+               * gallery branch below now has.
+               */
+              onPick={(item) => {
+                remember(item.id, item.url);
                 onImageIdChange(String(item.id));
-              } else {
-                /*
-                 * **Picking is the commit and the overlay closes**, for the
-                 * gallery as for the featured image — which costs a second trip
-                 * through the grid to add a second picture, and is deliberate.
-                 * Staying open would mean a grid that cannot say which tiles are
-                 * already in, because `MediaGrid` has no selected state; adding
-                 * one is a change to the component the full-page library and the
-                 * banner form also render, for one screen's convenience. If this
-                 * bites, that prop is the fix and it belongs on `MediaGrid`.
-                 */
-                addToGallery(item.id);
-              }
-
-              setOpen(false);
-            }}
-          />
+                setOpen(false);
+              }}
+            />
+          ) : (
+            <MediaPicker
+              active={open}
+              selection={{
+                selected: chosen,
+                /* The draft's gallery, not the stored product's: a person who
+                   removed a row and has not saved is looking at a gallery that
+                   does not have it, and the grid must agree with the form in
+                   front of them. */
+                held: galleryIds,
+                onToggle: (item, next) => {
+                  /* Remembered on the way *in* and never on the way out. The
+                     URL cache only grows — the field's own docblock — so
+                     unticking and re-ticking redraws a thumbnail instead of a
+                     placeholder, and so does confirming a picture whose row is
+                     later removed and put back. */
+                  if (next) remember(item.id, item.url);
+                  setChosen((current) =>
+                    next
+                      ? [...current, item.id]
+                      : current.filter((id) => id !== item.id),
+                  );
+                },
+                onClear: () => setChosen([]),
+              }}
+            />
+          )
         )}
       </Modal>
     </>
