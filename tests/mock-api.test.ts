@@ -4877,6 +4877,48 @@ describe("the writes", () => {
   });
 
   /**
+   * **And the create route answers it too, which this mock did not used to.**
+   *
+   * `OrderService::create()` wraps `$this->repository->create($input)` in the
+   * same `save()` that `update()` uses — read from source — so the
+   * `WC_Data_Exception` from `set_billing_email()` is re-thrown identically on
+   * both verbs. The mock answered it on the PATCH alone, which is a divergence
+   * rather than a difference, and it is the shape `NewOrderDrawer`'s binding for
+   * a `details`-less 400 fires against.
+   *
+   * The docblock above carries the measurement; nothing here claims a second
+   * one. This asserts that the two routes now agree.
+   */
+  it("answers the same gap on POST /orders, with no field key either", () => {
+    const error = refusedWith(
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        customer_note: "created alongside",
+        billing: { email: "a@b.c" },
+      }),
+      400,
+      "invalid_request",
+    );
+
+    expect(error.apiMessage).toBe("Invalid billing email address");
+    expect(error.fields).toBeNull();
+    expect(error.details).toEqual({});
+
+    // An address both rules reject is still named normally here, so the two
+    // cases stay distinguishable on this route as they are on the other.
+    expect(
+      refusedWith(
+        write("POST", "/orders", {
+          line_items: [{ product_id: 101, quantity: 1 }],
+          billing: { email: "nope" },
+        }),
+        400,
+        "invalid_request",
+      ).fields,
+    ).toEqual({ "billing.email": "Must be a valid email address." });
+  });
+
+  /**
    * **The 409 that shapes the panel's payload builder.**
    *
    * `OrderService::update()` guards `line_items` and `shipping_amount` on

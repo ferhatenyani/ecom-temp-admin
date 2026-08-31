@@ -357,11 +357,21 @@ export function OrderLinesDrawer({
       }
 
       /*
-       * Everything else with nothing to bind: the `is_editable` 409 — reachable
-       * by racing a status change against this save — and the `details`-less
-       * 400 `OrderEditDrawer` documents at length. §3.4 renders a failure with
-       * no control on screen as plain text rather than as a link that goes
-       * nowhere.
+       * Everything else with nothing to bind: the `is_editable` 409, reachable
+       * by racing a status change against this save.
+       *
+       * **This form is the one that keeps the plain fallback**, and the reason
+       * is worth stating now that the other two have stopped needing it.
+       * `OrderEditDrawer` binds the `details`-less billing-email 400 to its
+       * email control; this drawer cannot receive that refusal at all. It draws
+       * no address, `draftOf(order)` re-seeds billing from the order every time
+       * it opens, and `buildEditPayload` is a diff — so `billing` is never in
+       * the body and `set_billing_email()` is never called. The only
+       * `details`-less refusal that reaches here is the empty-body 400, which
+       * `isEditDirty` already makes unreachable through the disabled button.
+       *
+       * §3.4 renders a failure with no control on screen as plain text rather
+       * than as a link that goes nowhere, and here that is the true shape.
        */
       setFields({});
       setStockLines([]);

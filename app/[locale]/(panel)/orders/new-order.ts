@@ -1002,6 +1002,103 @@ export function bindRefusals(
 }
 
 /**
+ * The control a **`details`-less 400** belongs to — or `null` for *none of them*,
+ * which is the honest answer for one of the two the route can produce.
+ *
+ * ## Two refusals on this route carry no `details.fields`, and only one has a box
+ *
+ * Read from source, in `ecom-temp`'s `wp-content/plugins/algerian-commerce-core`.
+ * `src/Orders/` contains exactly two calls to `ApiException::invalidRequest()`
+ * with no details argument, and they are unrelated:
+ *
+ *   `OrderService.php:245`    *"No supported fields were provided."* — the
+ *                             `$input->isEmpty()` guard at the top of `update()`.
+ *                             `{"total":"1.00"}` alone reaches it, because
+ *                             `OrderInput::READ_ONLY` is stripped **before** the
+ *                             unknown-key sweep, so a body of read-only keys is
+ *                             an empty body rather than a named refusal.
+ *                             Measured in-process via `rest_do_request()` —
+ *                             `BLOCKED.md`'s table, *"a body of only read-only
+ *                             fields reads as an empty body"*.
+ *
+ *   `OrderService.php:1238`   `save()` catching `WC_Data_Exception` and
+ *                             re-throwing with the exception's own message.
+ *                             Reached from **both verbs** — `create()` wraps
+ *                             `$this->repository->create($input)` in it exactly
+ *                             as `update()` does. In practice this is
+ *                             `WC_Order::set_billing_email()`: `AddressInput`
+ *                             validates with `filter_var()` so the class stays
+ *                             loadable without WordPress, WooCommerce validates
+ *                             again with `is_email()`, and the two disagree on
+ *                             `a@b.c` and `a@[127.0.0.1]`. Measured in-process,
+ *                             *"a filter_var-valid address WooCommerce refuses
+ *                             has no field key"*: `400 invalid_request "Invalid
+ *                             billing email address"`, `details.fields` absent,
+ *                             and nothing written — the whole PATCH rolls back.
+ *
+ * The panel used to render both as an unlinked summary line, which is right for
+ * the first and useless for the second: the operator is told an address is
+ * invalid and no box on the screen is marked.
+ *
+ * ## Discriminating on what the form sent, and not on the message
+ *
+ * **The test is `billing.email` being in the body, and it is exact rather than a
+ * heuristic.** `isEmpty()` is false whenever any supported field survives
+ * normalisation, and `billing` is one — so a body carrying a billing address
+ * *cannot* reach `OrderService.php:245`. The two are mutually exclusive by
+ * construction, not by likelihood, which is the strongest form this check could
+ * take.
+ *
+ * **Matching on the message was the obvious alternative and is refused.**
+ * `"Invalid billing email address"` is not this API's sentence — it is
+ * WooCommerce's, passed through `__()`, so a WordPress running in French emits a
+ * French one and the binding silently stops working on the install most likely
+ * to be running this panel. It is also free to be reworded by any WooCommerce
+ * release, and a string comparison that quietly stops matching degrades to
+ * exactly the behaviour this fixes, with nothing on fire to say so. The panel
+ * therefore never reads that string; it only ever *renders* it.
+ *
+ * ## What it costs when it is wrong, stated rather than left to be found
+ *
+ * `save()` wraps every `WC_Data_Exception`, not only the email one. Today that
+ * is the only one reachable: `OrderRepository::applyProps()` calls
+ * `set_{billing|shipping}_{field}` per stated key plus the payment pair, the
+ * note and the customer, and `set_billing_email()` is the only one of those
+ * WooCommerce validates with a throw — read from source. `email` on a *shipping*
+ * address never gets that far, refused by name by `AddressInput`.
+ *
+ * If a future WooCommerce adds a second throwing setter, a body that happens to
+ * carry a billing email would mark the email box for it. The cost is bounded and
+ * worth naming: **the sentence rendered is still the API's own, verbatim**, so
+ * the operator reads something true beside the wrong control rather than
+ * something false beside the right one — and they have the message, which names
+ * the real problem, exactly as they do today.
+ *
+ * Returns a **key**, in the API's own vocabulary, so the caller merges it into
+ * `fields` like any 400 and the existing `FIELD_IDS` map resolves the DOM id.
+ * That is what keeps the summary honest: one refusal is one entry in `fields`
+ * and no `refusal` line beside it. `bindRefusals` above is the measurement that
+ * makes that non-negotiable — folding a refusal into two places counted it twice
+ * and printed *"2 champs empêchent l'enregistrement"* for one bad value.
+ */
+export function unkeyedRefusalField(
+  status: number,
+  payload: Record<string, unknown>,
+): string | null {
+  if (status !== 400) return null;
+
+  const billing = payload.billing;
+  if (typeof billing !== "object" || billing === null || Array.isArray(billing)) return null;
+
+  const email = (billing as Record<string, unknown>).email;
+
+  /* Non-empty, because `AddressInput::parse()` maps `''` to a cleared field and
+     `validateEmail()` returns early on it — an emptied email is written, never
+     validated, so it cannot be what refused. */
+  return typeof email === "string" && email.trim() !== "" ? "billing.email" : null;
+}
+
+/**
  * The client-side rules, as field keys the drawer binds exactly as it binds a
  * 400's.
  *

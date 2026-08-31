@@ -11,6 +11,7 @@ import {
   parseQuantity,
   quoteFill,
   quoteFor,
+  unkeyedRefusalField,
   type DraftLine,
   type OrderDraft,
   type QuoteRow,
@@ -933,6 +934,112 @@ describe("one bad value produces one refusal, not two", () => {
   it("remaps nothing when the two blocks are genuinely two blocks", () => {
     const fields = { "billing.country": COUNTRY, "shipping.country": COUNTRY };
     expect(bindRefusals(fields, false)).toEqual(fields);
+  });
+});
+
+/**
+ * `unkeyedRefusalField` — which of the two `details`-less 400s just arrived.
+ *
+ * ## The trap this is built around
+ *
+ * Both routes can refuse with a 400 carrying no `details.fields` at all, for two
+ * completely unrelated reasons — read from source, `src/Orders/OrderService.php`,
+ * where those are the only two `invalidRequest()` calls without a details
+ * argument:
+ *
+ *   *"No supported fields were provided."*   line 245, the `isEmpty()` guard.
+ *   *"Invalid billing email address"*        line 1238, `save()` re-throwing
+ *                                            WooCommerce's `WC_Data_Exception`.
+ *
+ * Binding the second to the email control means being certain it is not the
+ * first, and the certainty is structural rather than probabilistic: `isEmpty()`
+ * is false whenever a supported field survives normalisation, and `billing` is
+ * one, so a body carrying a billing address **cannot** produce the empty-body
+ * refusal. That is the property these assert.
+ *
+ * ## And why the message is never read
+ *
+ * *"Invalid billing email address"* is WooCommerce's string, passed through
+ * `__()`. A WordPress running in French emits a French one, and any WooCommerce
+ * release may reword it — so a string comparison would degrade, silently, to
+ * exactly the behaviour this fixes. There is deliberately no assertion here that
+ * matches on it, and there must not be one.
+ */
+describe("which control a details-less 400 belongs to", () => {
+  const body = (billing: Record<string, unknown> | unknown) => ({
+    line_items: [{ product_id: 101, quantity: 1 }],
+    status: "pending",
+    billing,
+  });
+
+  it("names the email control when the body stated a billing email", () => {
+    expect(unkeyedRefusalField(400, body({ email: "a@b.c", city: "Alger" }))).toBe(
+      "billing.email",
+    );
+  });
+
+  it("names nothing when the body carried no billing block at all", () => {
+    /* Which is every empty-body refusal, by construction — `isEmpty()` cannot be
+       true while `billing` survives normalisation, so this is the arm that keeps
+       "No supported fields were provided." an orphan line. */
+    expect(unkeyedRefusalField(400, { line_items: [], status: "pending" })).toBeNull();
+    expect(unkeyedRefusalField(400, {})).toBeNull();
+    expect(unkeyedRefusalField(400, { total: "1.00" })).toBeNull();
+  });
+
+  it("names nothing for a billing block that stated no email", () => {
+    expect(unkeyedRefusalField(400, body({ city: "Alger", country: "DZ" }))).toBeNull();
+  });
+
+  it("names nothing for an email being cleared", () => {
+    /* `AddressInput::parse()` maps `''` to a cleared field and `validateEmail()`
+       returns early on it, so an emptied address is written and never validated.
+       It cannot be what refused, and marking the box would be a guess. */
+    expect(unkeyedRefusalField(400, body({ email: "" }))).toBeNull();
+    expect(unkeyedRefusalField(400, body({ email: "   " }))).toBeNull();
+  });
+
+  it("only ever speaks about a 400", () => {
+    /*
+     * The other unbound refusals on these routes are 409s — the status
+     * transition on create, `is_editable` and the stock guard on update — and
+     * every one of them is about the *order* rather than about a value. Marking
+     * a control for one would tell the operator their address is wrong when
+     * nothing is.
+     */
+    const withEmail = body({ email: "a@b.c" });
+    expect(unkeyedRefusalField(409, withEmail)).toBeNull();
+    expect(unkeyedRefusalField(404, withEmail)).toBeNull();
+    expect(unkeyedRefusalField(500, withEmail)).toBeNull();
+  });
+
+  it("survives a billing key that is not an object", () => {
+    /* `{"billing": "nope"}` is a real refusal — `fields["billing"]`, measured —
+       so it arrives with details and never reaches here. The guard is for a body
+       built by hand, and it must not throw on one. */
+    expect(unkeyedRefusalField(400, body("nope"))).toBeNull();
+    expect(unkeyedRefusalField(400, body(null))).toBeNull();
+    expect(unkeyedRefusalField(400, body(["a@b.c"]))).toBeNull();
+    expect(unkeyedRefusalField(400, body({ email: 42 }))).toBeNull();
+  });
+
+  it("reads a create body straight through, since that one states the address whole", () => {
+    /*
+     * On this route `payloadAddress` emits every filled field of a touched
+     * block, so "the operator typed an email" and "the body carries one" are the
+     * same fact. The *edit* route is where they come apart —
+     * `buildEditPayload` is a diff — and `tests/order-edit.test.ts` asserts that
+     * half, beside the builder it is about.
+     */
+    const withEmail = buildPayload(
+      draftWith({
+        billing: { ...emptyAddress(), city: "Alger", email: "a@b.c" },
+        shippingSameAsBilling: false,
+      }),
+    );
+    expect(unkeyedRefusalField(400, withEmail)).toBe("billing.email");
+
+    expect(unkeyedRefusalField(400, buildPayload(draftWith()))).toBeNull();
   });
 });
 
