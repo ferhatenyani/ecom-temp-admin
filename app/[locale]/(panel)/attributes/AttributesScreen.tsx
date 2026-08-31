@@ -80,11 +80,20 @@ export function AttributesScreen({
   const [nameError, setNameError] = useState<string | undefined>(undefined);
   const [slugError, setSlugError] = useState<string | undefined>(undefined);
   /**
-   * The refusals with nowhere to go: WooCommerce's `fields.attribute`, and the
-   * message of a 409 that carries no `details` at all. Both are measured, both
-   * are about the slug, and neither can be bound to the slug control by key —
-   * see `attribute-write.ts` for why. A banner above the form is where a person
-   * reading the box they just typed in will actually see it.
+   * The refusals with nowhere to go, and there is one class of them left.
+   *
+   * It used to be two. WooCommerce's own slug refusals arrived under
+   * `fields.attribute` — a key no control has — and the fix round's item 8 moved
+   * them onto `name` or `slug`, so those now land under a box like any other
+   * validation error. What still reaches this banner is the **duplicate slug**:
+   * a 409 whose message is WooCommerce's and already names the slug, with the
+   * clashing value under `details.slug` and deliberately no `fields`, because
+   * `fields` is the API's 400 channel and no conflict writes to it.
+   *
+   * And anything the API names that this form does not draw — `type`,
+   * `order_by`, `terms` — which is what `splitFieldErrors` is for. A banner
+   * above the form is where a person reading the box they just typed in will
+   * actually see it.
    */
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -136,11 +145,19 @@ export function AttributesScreen({
         /*
          * Three shapes, and the banner takes the two a control cannot:
          *
-         *   400 fields.name / fields.slug   bound above, banner stays empty
-         *   400 fields.attribute            WooCommerce's, no control by that
-         *                                   name — `loose` collects it
-         *   409 no details at all           only `message`, and it is
-         *                                   WooCommerce's and names the slug
+         *   400 fields.name / fields.slug   bound above, banner stays empty —
+         *                                   and since the fix round's item 8
+         *                                   this includes WooCommerce's own
+         *                                   too-long and reserved-word
+         *                                   refusals, which used to arrive
+         *                                   under `fields.attribute` and show
+         *                                   nowhere at all
+         *   400 fields.<anything else>      `type`, `order_by`, `terms` — real
+         *                                   keys this form draws no box for,
+         *                                   collected by `loose`
+         *   409 details.slug, no fields     only `message` is renderable, and
+         *                                   it is WooCommerce's and names the
+         *                                   slug
          *
          * The last branch is why the fallback is conditional rather than
          * unconditional: a plain 400 that named `name` would otherwise get its

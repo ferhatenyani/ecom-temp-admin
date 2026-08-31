@@ -280,25 +280,54 @@ describe("the term write bodies", () => {
  */
 describe("splitting a refusal into what a control can wear", () => {
   /**
-   * **`attribute` is not a field.** `AttributeRepository::fromWpError()` cannot
-   * tell which key WooCommerce meant, so it files every non-conflict `WP_Error`
-   * under that literal string — and measured, all of WooCommerce's own slug
-   * refusals arrive that way:
+   * **This test used to assert the opposite and the change is the point.**
+   * `AttributeRepository::fromWpError()` filed every non-conflict `WP_Error`
+   * under `details.fields.attribute` — a key no control has — so WooCommerce's
+   * own slug refusals rendered nowhere, and this suite asserted that the split
+   * rescued them into the banner. The fix round's item 8 fixed it at the source:
+   * the code now names the field, so those two sentences arrive under `slug` or
+   * `name` and belong under a box.
    *
-   *     Slug "type" is not allowed because it is a reserved term. Change it, please.
-   *     Slug "…" is too long. Please use a shorter slug.
+   * Which of the two is decided by the payload rather than by the refusal.
+   * `wc_create_attribute()` derives the slug from the *name* when none is
+   * stated, then refuses what it derived — so the person who left the slug box
+   * empty is pointed at the label that produced it. Measured through
+   * `rest_do_request()` after the change (`tests/Api/attributes.php`, **64
+   * passed, 0 failed**):
    *
-   * A form binding `details.fields` to its inputs by key renders **nothing** for
-   * these. This is the split that stops that.
+   *     {"name": "Type"}                 → fields.name
+   *     {"name": "Type", "slug": "type"} → fields.slug
    */
-  it("routes WooCommerce's `attribute` key to the banner, not to a control", () => {
-    const { bound, loose } = splitFieldErrors(
-      { attribute: 'Slug "type" is not allowed because it is a reserved term. Change it, please.' },
+  it("binds WooCommerce's own slug refusals, which now name a real control", () => {
+    const stated = splitFieldErrors(
+      { slug: 'Slug "type" is not allowed because it is a reserved term. Change it, please.' },
       ["name", "slug"],
     );
+    expect(stated.bound.slug).toContain("reserved term");
+    expect(stated.loose).toEqual([]);
+
+    const derived = splitFieldErrors(
+      { name: 'Slug "longueurlongueur…" is too long. Please use a shorter slug.' },
+      ["name", "slug"],
+    );
+    expect(derived.bound.name).toContain("too long");
+    expect(derived.loose).toEqual([]);
+  });
+
+  /**
+   * And the reason the split is kept rather than deleted with the defect that
+   * motivated it: `ProductAttributes.tsx` binds `["attributes"]` against
+   * `AttributeInput::listFromPayload()`, which reports **per entry** — so its
+   * keys can never match and `loose` is structurally load-bearing there. That
+   * screen was never affected by `fromWpError()` at all.
+   */
+  it("still rescues a per-entry key that no bare control name can match", () => {
+    const { bound, loose } = splitFieldErrors(
+      { "attributes[0].options": "At least one option is required." },
+      ["attributes"],
+    );
     expect(bound).toEqual({});
-    expect(loose).toHaveLength(1);
-    expect(loose[0]).toContain("reserved term");
+    expect(loose[0]).toContain("At least one option");
   });
 
   it("binds a plain field refusal to its control and reports both at once", () => {
@@ -330,9 +359,12 @@ describe("splitting a refusal into what a control can wear", () => {
   });
 
   /**
-   * A **409 has no `fields` at all** — `ApiException::conflict($message)` takes
-   * one argument for a duplicate slug — so `null` has to be a shape this
-   * function accepts rather than one the caller guards against.
+   * A **409 has no `fields` at all** — a conflict carries the offending value at
+   * the top of `details` (`details.slug`, or `details.term_id` for a duplicate
+   * term name) and never under `fields`, which is this API's 400 validation
+   * channel. So `null` has to be a shape this function accepts rather than one
+   * the caller guards against; it is what lets one `onError` cover a bound 400,
+   * a loose 400 and a conflict.
    */
   it("accepts a failure with no fields, which is what a 409 is", () => {
     expect(splitFieldErrors(null, ["name"])).toEqual({ bound: {}, loose: [] });

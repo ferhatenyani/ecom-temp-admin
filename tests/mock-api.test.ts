@@ -7609,9 +7609,14 @@ describe("the catalogue vocabularies", () => {
  * The four that matter more than the CRUD:
  *
  *  1. an empty `PATCH` is a 400 with **no `details` key at all**;
- *  2. WooCommerce's own refusals arrive under `details.fields.attribute`, which
- *     is **not a field any form has**;
- *  3. a duplicate slug is a **409 with no details**, not a 400 naming the field;
+ *  2. WooCommerce's own refusals arrive under **the control that produced
+ *     them** — `slug` when the caller stated one, `name` when the slug was
+ *     derived from the label. Items 2 and 3 both used to say something worse,
+ *     and the fix round's item 8 is why they changed: every non-conflict
+ *     `WP_Error` was filed under the literal key `attribute`, which no form has;
+ *  3. a duplicate slug is a **409 carrying `details.slug`** and no `fields`,
+ *     because `fields` is the 400 validation channel and no conflict in the
+ *     plugin writes to it;
  *  4. a slug change is reported in **`meta`**, and an ordinary write carries no
  *     `meta` at all — so a flag that is always present is a flag nothing can
  *     branch on.
@@ -7710,21 +7715,34 @@ describe("the attribute and term writes", () => {
   });
 
   /**
-   * **WooCommerce's three refusals arrive under a key no control is called**,
-   * and this is the assertion the screen's error handling is built on.
-   * `AttributeRepository::fromWpError()` cannot tell which field WooCommerce
-   * meant, so it files every non-conflict `WP_Error` under the literal string
-   * `attribute`. A form binding `details.fields` to its inputs by key shows
-   * **nothing** for these, which is why the screens split them out and render
-   * them above the form.
+   * **WooCommerce's refusals arrive under the field that failed, and this test
+   * used to assert that they did not.**
+   *
+   * `AttributeRepository::fromWpError()` filed every non-conflict `WP_Error`
+   * under the literal string `attribute` — a key no control is called — so a
+   * form binding `details.fields` by key showed nothing at all. The fix round's
+   * item 8 mapped each WooCommerce code to a real control, and this fixture
+   * follows it: reproducing the old key would make the panel's binding look
+   * broken against a backend that has been fixed.
+   *
+   * **Which control is decided by the payload rather than by the code**, which
+   * is the pair below. `wc_create_attribute()` derives the slug from the *name*
+   * when none is stated, so the same reserved word answers `slug` for a caller
+   * who typed one and `name` for a caller who did not — because the name is the
+   * box that produced it and the box that can fix it.
    */
-  it("files WooCommerce's own refusals under `attribute`, which is not a field", () => {
-    const reserved = apiError(write("POST", "/attributes", { name: "Type", slug: "type" }));
-    expect(reserved.status).toBe(400);
-    expect(reserved.fields?.attribute).toBe(
+  it("files WooCommerce's own refusals under the control that produced them", () => {
+    const stated = apiError(write("POST", "/attributes", { name: "Type", slug: "type" }));
+    expect(stated.status).toBe(400);
+    expect(stated.fields?.slug).toBe(
       'Slug "type" is not allowed because it is a reserved term. Change it, please.',
     );
-    expect(reserved.fields?.slug).toBeUndefined();
+    expect(stated.fields?.attribute).toBeUndefined();
+
+    const derived = apiError(write("POST", "/attributes", { name: "Type" }));
+    expect(derived.status).toBe(400);
+    expect(derived.fields?.name).toContain("reserved term");
+    expect(derived.fields?.slug).toBeUndefined();
   });
 
   /**
@@ -7733,8 +7751,15 @@ describe("the attribute and term writes", () => {
    *
    * A slug the *caller* sent is checked by `GlobalAttributeInput` and refused
    * under `slug`, a real control. A slug WooCommerce *derived* is checked inside
-   * `wc_create_attribute()` and refused under `attribute`. Both measured, and
-   * the boundary is exact: 29 bytes is 201 and 30 is 400.
+   * `wc_create_attribute()` — and since the fix round's item 8 is refused under
+   * `name`, the box that produced it, rather than under the catch-all key this
+   * test used to assert. Both measured, and the boundary is exact: 29 bytes is
+   * 201 and 30 is 400.
+   *
+   * The two keys are still worth asserting apart even though both are now real
+   * controls, because the *messages* differ and only one of them can quote the
+   * derived string: `GlobalAttributeInput` explains the budget, WooCommerce
+   * names the slug it built.
    *
    * It is **bytes**, which is the whole reason it matters here rather than being
    * a detail: an Arabic letter costs two and a Latin letter one, so a
@@ -7749,12 +7774,14 @@ describe("the attribute and term writes", () => {
     expect(typed.fields?.slug).toContain("29 bytes");
 
     /* Seventeen Arabic characters, thirty-three bytes, and no slug was sent —
-       so the refusal is WooCommerce's and lands under `attribute`. Measured:
+       so the refusal is WooCommerce's and lands under `name`, the box that
+       produced it. Measured:
        `Slug "المقاس-بالسنتيمتر" is too long. Please use a shorter slug.` */
     const derived = apiError(write("POST", "/attributes", { name: "المقاس بالسنتيمتر" }));
     expect(derived.status).toBe(400);
-    expect(derived.fields?.attribute).toContain("is too long");
+    expect(derived.fields?.name).toContain("is too long");
     expect(derived.fields?.slug).toBeUndefined();
+    expect(derived.fields?.attribute).toBeUndefined();
   });
 
   /**
