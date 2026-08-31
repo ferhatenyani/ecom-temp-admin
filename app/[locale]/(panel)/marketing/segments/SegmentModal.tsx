@@ -146,6 +146,13 @@ export function SegmentModal({
    * is at most two ids and often none, and an empty list asks nothing at all.
    * `product-lookup.ts` carries the whole argument, including why the route is
    * `/coupons/eligible-products` rather than `/products`.
+   *
+   * **Passed down whole rather than unpacked** — item D10. It used to be
+   * destructured into `resolved` and `resolvePending` at the call site and its
+   * third field, `failed`, was returned by the hook and read by nobody. That
+   * field is the difference between *the shop has no such product* and *the
+   * panel could not ask*, which is the difference decision 5's warning stands or
+   * falls on, so the row now receives all three and `productRefState()` decides.
    */
   const productIds = SEGMENT_CRITERIA.filter(
     (key) => CRITERION_CONTROL[key] === "product",
@@ -390,8 +397,7 @@ export function SegmentModal({
                     wilayas={wilayas}
                     locale={locale}
                     canPickProducts={canPickProducts}
-                    resolved={products.names}
-                    resolvePending={products.pending}
+                    lookup={products}
                     disabled={save.isPending}
                   />
                 ) : (

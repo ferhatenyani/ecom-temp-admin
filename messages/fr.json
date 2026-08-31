@@ -2348,11 +2348,14 @@
         "tooLargeCount": "Au plus {max}."
       },
       "wilayaUnknown": "Wilaya n° {id}",
-      "wilayaUnknownWhy": "Cet identifiant ne correspond à aucune wilaya connue. Il est conservé tel quel.",
+      "wilayaMissing": "Aucune wilaya de la boutique ne porte ce numéro.",
       "wilayasUnavailable": "La liste des wilayas n’a pas pu être chargée. La valeur enregistrée est conservée.",
+      "refKept": "La valeur est conservée telle quelle et l’enregistrement reste possible.",
       "productNone": "Aucun produit",
       "productSearchFirst": "Cherchez un produit pour le choisir.",
       "productUnknown": "Produit n° {id} — introuvable",
+      "productMissing": "La boutique ne trouve plus ce produit : il a pu être supprimé.",
+      "productTrashed": "Ce produit est dans la corbeille. Le critère le désigne toujours ; restaurez-le pour lui rendre son sens.",
       "productIdWhy": "Votre compte ne peut pas lire le catalogue, la recherche n’est donc pas disponible. L’API refuse un identifiant inconnu.",
       "unknownCriterionKept": "Ce critère n’est pas connu de ce panneau. Sa valeur est conservée telle quelle.",
       "conflict": {

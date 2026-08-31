@@ -51,6 +51,7 @@ import {
   testDelivered,
   unsubscribeNote,
 } from "@/lib/campaigns";
+import { productRefState } from "@/app/[locale]/(panel)/marketing/segments/product-lookup";
 import { parseApiDate } from "@/lib/format/date";
 import fr from "@/messages/fr.json";
 import ar from "@/messages/ar.json";
@@ -627,6 +628,91 @@ describe("segments", () => {
     const details = segmentInUseDetails.parse(err.details);
     expect(details.campaigns).toBeGreaterThan(0);
     expect(details.fix).toBeTypeOf("string");
+  });
+
+  /**
+   * Item D10 — a criterion naming something the shop cannot find.
+   *
+   * `productRefState()` is the whole of the panel's judgement and it is a pure
+   * function of a resolution, which is what makes it assertable at all: the
+   * states that matter are the ones where the lookup **failed** or has not
+   * finished, and those are exactly the states a render test would have to fake
+   * anyway. `product-lookup.ts` argues the five; this pins the two that could be
+   * collapsed into each other by a plausible-looking edit.
+   */
+  const lookupOf = (
+    rows: readonly { id: number; name: string; sku: string | null; status: string }[],
+    flags: { pending?: boolean; failed?: boolean } = {},
+  ) => ({
+    names: new Map(rows.map((row) => [row.id, row])),
+    pending: flags.pending ?? false,
+    failed: flags.failed ?? false,
+  });
+
+  const LIVE = { id: 104, name: "Tapis kilim", sku: "AC-CAT-0104", status: "publish" };
+  const BINNED = { id: 211, name: "Ancienne référence", sku: "AC-OLD-0211", status: "trash" };
+
+  it("says nothing at all while it does not know", () => {
+    /*
+     * The branch decision 5 is most easily got wrong on. A failed resolution and
+     * an empty resolution produce the same `names` map, and only `failed` tells
+     * them apart — so a verdict built from `names` alone would announce that a
+     * perfectly healthy product had been deleted every time a request was
+     * dropped, or every time the reader lacked `ac_manage_coupons` and the query
+     * never ran.
+     */
+    expect(productRefState(104, lookupOf([], { failed: true }))).toBe("unresolvable");
+    expect(productRefState(104, lookupOf([], { pending: true }))).toBe("pending");
+    // `failed` outranks `pending`: react-query reports a failed query as settled,
+    // but a caller that set both must not be told the id is missing.
+    expect(productRefState(104, lookupOf([], { pending: true, failed: true }))).toBe(
+      "unresolvable",
+    );
+  });
+
+  it("separates an id that came back trashed from one that did not come back", () => {
+    /*
+     * The distinction the widened `post_status` creates, and the reason the two
+     * get different sentences: a trashed product is still there and the criterion
+     * still means what it meant, where a missing one cannot be named at all.
+     * `product-lookup.ts` records that whether the live route really returns the
+     * trash could not be verified from here — which is why `missing`'s message
+     * says *the shop cannot find it* and never *it was deleted*, and why both
+     * branches exist.
+     */
+    expect(productRefState(211, lookupOf([BINNED]))).toBe("trashed");
+    expect(productRefState(987654, lookupOf([LIVE]))).toBe("missing");
+    expect(productRefState(104, lookupOf([LIVE]))).toBe("listed");
+  });
+
+  it("warns on the trash and on nothing else the widened window can return", () => {
+    /*
+     * A segment criterion is about orders that already happened, so a product
+     * being unlisted today says nothing about whether it was bought. Only `trash`
+     * earns a sentence; `draft` — which the picker itself offers — and the
+     * further statuses `any` can produce are `listed` like any other.
+     */
+    for (const status of ["publish", "draft", "pending", "private", "future"]) {
+      expect(productRefState(104, lookupOf([{ ...LIVE, status }])), status).toBe("listed");
+    }
+  });
+
+  it("names both halves of every warning in both locales", () => {
+    /*
+     * The sentence and its consequence are two keys, and `refKept` is shared by
+     * all three call sites — the one that says the value survives and the save
+     * still works. A warning missing that half reads as a refusal, which is the
+     * one thing decision 5 forbids.
+     */
+    for (const messages of [fr, ar]) {
+      const segment = messages.campaigns.segment as Record<string, unknown>;
+      for (const key of ["wilayaMissing", "productMissing", "productTrashed", "refKept"]) {
+        expect(segment[key], `no ${key}`).toBeTypeOf("string");
+      }
+    }
+    // Not the same string in the two locales, which is what a copy-paste of the
+    // French into `ar.json` would produce and no key-presence check would catch.
+    expect(fr.campaigns.segment.refKept).not.toBe(ar.campaigns.segment.refKept);
   });
 });
 

@@ -96,6 +96,8 @@ import { acRead } from "@/lib/api/browser";
  * that matters: **an id that does not come back is not an error.** A product can
  * be deleted after a segment names it, and the API still stores and still
  * validates the id — so an unresolved id keeps its value and renders as itself.
+ * `productRefState()` below is that sentence made into a verdict the form can
+ * warn about; item D10.
  */
 
 /** What a criterion needs to know about a product, and nothing more. */
@@ -159,7 +161,7 @@ export function useProductSearch(search: string, enabled: boolean) {
 export function useResolvedProducts(
   ids: readonly number[],
   enabled: boolean,
-): { names: Map<number, EligibleProduct>; pending: boolean; failed: boolean } {
+): ProductLookup {
   const wanted = [...new Set(ids)].sort((a, b) => a - b);
 
   const { data, isPending, isError } = useQuery({
@@ -183,4 +185,111 @@ export function useResolvedProducts(
     pending: wanted.length > 0 && isPending,
     failed: isError,
   };
+}
+
+/** What `useResolvedProducts` returns, named so a verdict can take it whole. */
+export type ProductLookup = {
+  names: Map<number, EligibleProduct>;
+  pending: boolean;
+  failed: boolean;
+};
+
+/**
+ * What the panel can **honestly** say about one product id a segment names.
+ *
+ * ## Decision 5, and the half of it that is not the message
+ *
+ * *"Warn on screen, still allow saving. Deleting a product must not silently
+ * rewrite somebody's saved segment."* The wording is the easy half. The hard half
+ * is that three of the five states below are states in which the panel **does not
+ * know** whether anything is wrong, and a warning shown in any of them is a
+ * screen inventing a fact:
+ *
+ *   `pending`      the lookup is in flight, or has not been enabled — a segment
+ *                  with no product criterion, or a reader without
+ *                  `ac_manage_coupons`, for whom the query never runs at all.
+ *   `unresolvable` the lookup **failed**. A 403, a dropped request, an offline
+ *                  tab. The id may name a perfectly healthy product; nothing was
+ *                  learnt. Absence of evidence, and the one branch a warning
+ *                  would be most tempting to collapse into `missing`.
+ *   `listed`       resolved, with a status the picker itself would have offered.
+ *   `trashed`      resolved, and in the trash. See below — this is the branch the
+ *                  widened status window exists for, and the one that cannot be
+ *                  verified from here.
+ *   `missing`      the lookup **succeeded** and the id was not in the answer.
+ *                  `CouponRepository::eligibleProducts():175-178` reports
+ *                  `count($items)` rather than `found_posts` and an id naming
+ *                  nothing is simply absent — not a 404 and not a null row — so
+ *                  this is the only branch that is evidence of anything.
+ *
+ * ## Why `missing` does not say "deleted", and why that is not timidity
+ *
+ * Because the panel cannot tell a deletion from a disappearance. `include`
+ * widens `post_status` from the picker's `publish, draft` to WordPress's `any`
+ * — that much is **read from source**, `CouponRepository:135-143` — and the
+ * plugin's comment beside the line says what it expects of it: *"a trashed
+ * product in that set still has a name"*. `CMS/CmsController::statusArg()`
+ * states the same belief in the opposite direction, refusing WordPress's `any`
+ * *"which includes the trash"*.
+ *
+ * **Both may be wrong, and neither could be checked here.** `WP_Query` is
+ * understood to expand `post_status => 'any'` to *every status except those
+ * registered `exclude_from_search`*, and `trash` is registered `internal`, which
+ * is what `exclude_from_search` defaults to — in which case the trash is
+ * excluded by the very clause the plugin added in order to include it. That
+ * sentence is recollection, not a citation: WordPress core is in neither
+ * repository (it lives in the `wordpress_data` volume `compose.yaml` mounts,
+ * and `class-wp-query.php` exists nowhere on this machine), and this lane may
+ * not start the stack. So it is **neither read from source nor measured**, and
+ * it is written down as the open question it is rather than as a finding.
+ *
+ * So the code is built to be correct under **both** readings, which is why the
+ * question did not have to be answered first:
+ *
+ *   * if `any` really does return the trash, a trashed product arrives named and
+ *     carrying `status: "trash"`, and `trashed` gets its own, softer sentence —
+ *     the criterion still means what it meant, and the remedy is the trash rather
+ *     than this form;
+ *   * if it does not, `trashed` is dead against the live shop and every trashed
+ *     product arrives as `missing` — where the message deliberately says *the
+ *     shop cannot name it* rather than *it was deleted*, which is true of a
+ *     trashed product, a force-deleted one, and one that never existed alike.
+ *
+ * The mock takes the plugin at its word — `eligibleProductsListing()` resolves an
+ * `include` out of `catalogue()`, which holds the trashed product 211 — so the
+ * `trashed` branch is exercised there whatever the shop does.
+ *
+ * ## Nothing here can refuse a save
+ *
+ * A verdict is a string this module returns and `SegmentModal.save` never reads.
+ * The value on the wire comes from `criteria`, which the warning does not touch,
+ * and the API validates the id with `ctype_digit` and nothing else
+ * (`Campaigns/SegmentCriteria.php`, documented *"Pure — no WordPress, no
+ * database"*). A panel that cleared the field because it could not name it would
+ * be editing a segment nobody asked to edit — and would do so most eagerly in
+ * `unresolvable`, where it knows least.
+ */
+export type ProductRefState =
+  | "pending"
+  | "unresolvable"
+  | "listed"
+  | "trashed"
+  | "missing";
+
+export function productRefState(id: number, lookup: ProductLookup): ProductRefState {
+  /* Order matters and is the order of what is known. `failed` is tested before
+     `pending` because react-query reports a failed query as settled, and
+     `pending` before the map because an empty map is what a query in flight
+     always has. */
+  if (lookup.failed) return "unresolvable";
+  if (lookup.pending) return "pending";
+
+  const row = lookup.names.get(id);
+  if (row === undefined) return "missing";
+  /* The one status worth a sentence of its own. `draft`, and any of the further
+     statuses the widened window can return — `pending`, `private`, `future` —
+     are **not** warned about: a segment criterion is about orders that already
+     happened, so a product being unlisted today says nothing about whether it
+     was bought. `CouponRepository:159` sends `$post->post_status` verbatim. */
+  return row.status === "trash" ? "trashed" : "listed";
 }
