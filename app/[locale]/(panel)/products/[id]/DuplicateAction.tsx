@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useMutation } from "@tanstack/react-query";
 import type { Product } from "@/lib/api/schemas/product";
 import { acWrite } from "@/lib/api/browser";
+import { isDuplicable } from "@/lib/product-status";
 import { useOnline } from "@/lib/use-online";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/primitives/Toast";
@@ -59,6 +60,27 @@ import { useToast } from "@/components/primitives/Toast";
  * both screens, it takes nothing away, and §3.1 reserves the confirm dialog for
  * destructive acts — putting one here would train the dialog away from the
  * delete two menu items down.
+ *
+ * ## The one product this refuses to duplicate, and where the refusal is stated
+ *
+ * `isDuplicable()` in `lib/product-status.ts` carries the whole argument:
+ * `ProductRepository::duplicate()` picks `WC_Product_Simple` for **every** type
+ * that is not `variable`, so a product of any third type comes back as a simple
+ * product carrying none of what made it that type — and the 201 reports it as a
+ * success, because it is one, of the wrong thing.
+ *
+ * Both controls guard, and both say why in the same string,
+ * `products.duplicate.typeRefused`. One key rather than two on `OrderItems`'
+ * precedent — *"both read `orders.detail.editableNo`, so the tooltip and the
+ * paragraph under it cannot drift into saying two different things about one
+ * rule"* — and it names the stored type verbatim rather than translating it,
+ * because `products.type.*` holds labels for exactly the two types this API
+ * writes and a third one has no label to be wrong about.
+ *
+ * The mutation itself is **not** guarded. It takes an id and nothing else, and a
+ * hook that refused an id would have to fetch the product to know the type; the
+ * two callers hold the whole product already, so the refusal lives where the
+ * evidence is.
  */
 function useDuplicate(locale: string, onDone?: () => void) {
   const t = useTranslations("products.duplicate");
@@ -101,12 +123,36 @@ function useDuplicate(locale: string, onDone?: () => void) {
  * `Menu` because that menu is destructive top to bottom — the primitive colours,
  * separates and sinks destructive items — and a create sitting above two deletes
  * in a red-tinted list is a create somebody will misread once.
+ *
+ * ## The refused type prints its reason, and `title` is not enough
+ *
+ * §3.3: a disabled control that does not say why is a dead end. Offline already
+ * fails that test and gets away with it, because a person who is offline has a
+ * browser telling them so and every other write on the screen is dead beside this
+ * one. A refusal that is a fact about *this record* has no such second signal:
+ * nothing else on the detail is disabled, so a greyed button with a `title` is a
+ * control that appears broken to a pointer that never hovers and to every touch
+ * device, where there is no hover at all.
+ *
+ * So the sentence is rendered, under the button, and the `title` carries the same
+ * string for the pointer that does hover. `PageHeader` lays its actions out as
+ * `flex-wrap` inside a block that is full width below `sm`, so the paragraph wraps
+ * within the row rather than widening it; `max-w-64` is what keeps it from
+ * squeezing the title at `sm` and above, where the title's own `min-w-0 truncate`
+ * takes the rest.
  */
 export function DuplicateAction({
   productId,
+  type,
   locale,
 }: {
   productId: number;
+  /**
+   * `product.type` as stored — `z.string()` on the schema, deliberately, because
+   * `product_type` is a taxonomy and the API publishes whatever term is on the
+   * post. This is the only input the refusal reads.
+   */
+  type: string;
   locale: string;
 }) {
   const t = useTranslations("products.duplicate");
@@ -114,7 +160,10 @@ export function DuplicateAction({
   const online = useOnline();
   const duplicate = useDuplicate(locale);
 
-  return (
+  const refused = isDuplicable(type) ? undefined : t("typeRefused", { type });
+  const blocked = refused ?? (online ? undefined : tStates("offlineWrites"));
+
+  const button = (
     <Button
       variant="secondary"
       /* `plus`, because the act creates a product. There is no `copy` glyph in
@@ -122,12 +171,21 @@ export function DuplicateAction({
          clipboard" — one icon meaning two different copies, three rows apart. */
       icon="plus"
       loading={duplicate.isPending}
-      disabled={!online}
-      title={online ? undefined : tStates("offlineWrites")}
+      disabled={blocked !== undefined}
+      title={blocked}
       onClick={() => duplicate.mutate(productId)}
     >
       {t("action")}
     </Button>
+  );
+
+  if (refused === undefined) return button;
+
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1">
+      {button}
+      <p className="max-w-64 text-ui-caption text-ui-subtle">{refused}</p>
+    </div>
   );
 }
 

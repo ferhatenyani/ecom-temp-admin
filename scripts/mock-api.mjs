@@ -4964,6 +4964,145 @@ function applyProductMedia() {
   }
 }
 
+/**
+ * ── `MOCK_PRODUCT_TYPES` — a product this API can serve and cannot copy ──────
+ *
+ * **Nothing in this shop has a `type` other than `simple` or `variable`**: 28
+ * measured products and eleven filterable ones, all one of the two, and the
+ * create drawer offers exactly those two because `Products/ProductInput.php::TYPES`
+ * accepts exactly those two. So the state below is unreachable from the panel —
+ * which is precisely why it needs a fixture, on `MOCK_PRODUCT_MEDIA`'s argument
+ * one collection over: *"a screen cannot be verified against a state it can never
+ * reach"*.
+ *
+ * The state is worth reaching because `ProductRepository::duplicate()` mishandles
+ * it silently. Read from source, the copy's class is
+ * `$product->get_type() === 'variable' ? WC_Product_Variable::class :
+ * WC_Product_Simple::class` — so **`simple` is the fallback for every third
+ * type**, and the child loop under it skips anything that is not a
+ * `WC_Product_Variation`. A grouped product duplicated through this API comes
+ * back as a simple product with none of its children and a 201 that reports
+ * success. `DuplicateAction` refuses it now; this is what the refusal is
+ * photographed against.
+ *
+ *     MOCK_PRODUCT_TYPES=exotic node scripts/capture.mjs /products/231
+ *
+ * Read once at module load and applied at every `resetState()`, like
+ * `MOCK_IDENTITY` and `MOCK_PRODUCT_MEDIA`, so `respond()` stays pure. The
+ * default is `none` and **every test runs under it** — under `none` the array
+ * below is empty, `catalogue()` spreads nothing and every byte of every existing
+ * fixture is what it was.
+ *
+ * ## Two rows, and what each is for
+ *
+ * **231, `grouped`** — the case with children. `ProductPresenter::toArray()` emits
+ * `'variations' => array_map('intval', $product->get_children())`, and
+ * `get_children()` on a grouped product is *the products it groups*, not
+ * variations — so this row carries `[101, 103]`, two ordinary catalogue ids. That
+ * is the whole defect in one field: `DuplicateAction`'s toast reads
+ * `copy.variations.length`, and the copy of this product would honestly report
+ * zero while the source plainly shows two.
+ *
+ * **232, `external`** — the case with none, so that the refusal is not accidentally
+ * built on the children being non-empty. An external product is a name and a link;
+ * everything that makes it one lives in fields this API does not present at all.
+ *
+ * ## What this fixture deliberately does **not** do
+ *
+ * It does not put either row in a listing. `ProductRepository::paginate()` passes
+ * `'type' => ['simple', 'variable']` to `wc_get_products()`, so `GET /products`
+ * cannot return one — `listed()` below carries that filter for the same reason,
+ * and it was added with this variant because until now no row could test it. The
+ * products list's own duplicate guard is therefore unreachable *through this
+ * harness as well as through the API*, which is the honest result: the guard is
+ * insurance against a widened `paginate()`, not a state anybody can photograph.
+ *
+ * A second thing it exposes and does not repair: the detail form's type control
+ * is `PRODUCT_TYPES.map(…)`, so a `grouped` product selects none of its options
+ * and any save sends `type: "grouped"` into a 400. Named here rather than worked
+ * around — this variant's job is to make that visible, not to hide it.
+ */
+const EXOTIC_PRODUCT_SEED = [
+  {
+    id: 231,
+    type: "grouped",
+    name: "Coffret thé — trio",
+    slug: "coffret-the-trio",
+    /* Real catalogue ids, because `get_children()` on a grouped product returns
+       the products it groups and a made-up id would resolve to nothing. */
+    children: [101, 103],
+  },
+  {
+    id: 232,
+    type: "external",
+    name: "Balance de cuisine (partenaire)",
+    slug: "balance-de-cuisine-partenaire",
+    children: [],
+  },
+];
+
+const REQUESTED_PRODUCT_TYPES = process.env.MOCK_PRODUCT_TYPES ?? "none";
+if (!["none", "exotic"].includes(REQUESTED_PRODUCT_TYPES)) {
+  throw new Error(
+    `MOCK_PRODUCT_TYPES must be one of none, exotic — got "${REQUESTED_PRODUCT_TYPES}".`,
+  );
+}
+
+/**
+ * The rows themselves, built once at load. Empty under the default, which is what
+ * keeps `catalogue()` byte-identical to what it has always been.
+ *
+ * Every field is `blankProduct()`'s, written out rather than borrowed from it:
+ * that helper is a `const` declared eight thousand lines below `resetState()`,
+ * and reaching it from here is the temporal dead zone `mediaRows()` was turned
+ * into a `function` to escape.
+ */
+const EXOTIC_PRODUCTS =
+  REQUESTED_PRODUCT_TYPES === "exotic"
+    ? EXOTIC_PRODUCT_SEED.map((row) => ({
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        type: row.type,
+        status: "publish",
+        featured: false,
+        catalog_visibility: "visible",
+        sku: "",
+        description: "",
+        short_description: "",
+        price: "",
+        regular_price: "",
+        sale_price: "",
+        on_sale: false,
+        manage_stock: false,
+        stock_quantity: null,
+        stock_status: "instock",
+        weight: "",
+        category_ids: [],
+        tag_ids: [],
+        attributes: [],
+        variations: [...row.children],
+        image_id: 0,
+        gallery_image_ids: [],
+        image: null,
+        gallery: [],
+        permalink: `https://boutique.example.test/produit/${row.slug}`,
+        seo: {
+          title: row.name,
+          description: "",
+          canonical: "",
+          robots: { index: true, follow: true, directive: "index, follow" },
+          overrides: [],
+        },
+        date_created: iso(60 * 24 * 30),
+        date_modified: iso(60 * 24 * 30),
+      }))
+    : [];
+
+/** A no-op unless `MOCK_PRODUCT_TYPES=exotic`. See the docblock above. */
+function applyExoticProducts() {
+  for (const row of EXOTIC_PRODUCTS) state.products.set(row.id, { ...row });
+}
 
 /*
  * The bytes follow the variant. An empty library has no files behind it, so
@@ -8872,6 +9011,11 @@ export function resetState() {
   // rows into products, and `state.media` is cleared eleven lines up. A no-op
   // unless `MOCK_PRODUCT_MEDIA=attached`.
   applyProductMedia();
+
+  // And after `state.products` is cleared, for the same reason: it seeds two
+  // rows into that map so `productById()` can find them. A no-op unless
+  // `MOCK_PRODUCT_TYPES=exotic`, which is every test and every default capture.
+  applyExoticProducts();
 }
 
 resetState();
@@ -8923,10 +9067,43 @@ const catalogue = () => [
   ...CATALOGUE.filter((product) => !state.gone.has(product.id)).map(
     (product) => state.products.get(product.id) ?? product,
   ),
+  /*
+   * Last, and empty under the default — `MOCK_PRODUCT_TYPES=exotic` is the only
+   * thing that fills it. Last rather than first because these are not new rows a
+   * caller made; `sortProducts()` re-sorts every listing anyway, so this decides
+   * only the order a caller reading `catalogue()` directly sees.
+   */
+  ...EXOTIC_PRODUCTS.filter((product) => !state.gone.has(product.id)).map(
+    (product) => state.products.get(product.id) ?? product,
+  ),
 ];
 
-/** What `/products` lists: everything readable except the trash. */
-const listed = () => catalogue().filter((product) => product.status !== "trash");
+/**
+ * What `/products` lists: everything readable except the trash — **and except a
+ * product whose type this API does not list.**
+ *
+ * The second clause is `ProductRepository::paginate()`, read from source:
+ *
+ *     // Variations are addressed through their parent, never listed
+ *     // alongside top-level products.
+ *     'type' => ['simple', 'variable'],
+ *
+ * It is a `wc_get_products()` argument, so it is a filter on the query rather
+ * than a refusal — a grouped or external product is simply not in the collection,
+ * while `GET /products/{id}` on the same row answers 200 because
+ * `ProductRepository::find()` is a bare `wc_get_product()` with no type clause at
+ * all. The two halves of that asymmetry are what make the panel's duplicate guard
+ * reachable on the detail and unreachable on the list.
+ *
+ * Written now rather than when the filter was read, because until
+ * `MOCK_PRODUCT_TYPES` there was no row it could exclude: every seeded product is
+ * one of the two types, so the line was a no-op nobody could tell from an
+ * omission. It is not a no-op under `exotic`.
+ */
+const listed = () =>
+  catalogue().filter(
+    (product) => product.status !== "trash" && PRODUCT_TYPES.includes(product.type),
+  );
 
 /** One row by id, through the write state. Undefined once it has been forced. */
 const productById = (id) =>
@@ -13835,6 +14012,20 @@ function duplicateProduct(source) {
     ...source,
     id,
     name: `${source.name} (copy)`,
+    /*
+     * **The copy's type is the ternary, not the source's**, and the difference is
+     * the whole reason `MOCK_PRODUCT_TYPES` exists. `ProductRepository::duplicate()`
+     * is `$product->get_type() === 'variable' ? WC_Product_Variable::class :
+     * WC_Product_Simple::class`, so `simple` is the fallback for **every** third
+     * type — a grouped source produces a simple copy, and the 201 says `simple`
+     * where the source said `grouped`.
+     *
+     * This line spread `source.type` until the guard branch, which was a no-op on
+     * every fixture in this file (all of them are one of the two) and a lie the
+     * moment one is not. The paragraph above already described the behaviour; the
+     * code did not have it.
+     */
+    type: source.type === "variable" ? "variable" : "simple",
     status: "draft",
     sku: "",
     // A draft has no slug in this shop — `DRAFT_NO_SLUG_PRODUCT` is the measured

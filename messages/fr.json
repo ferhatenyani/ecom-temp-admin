@@ -603,7 +603,8 @@
     "duplicate": {
       "action": "Dupliquer",
       "done": "« {name} » créé — brouillon, sans SKU, {count, plural, =0 {sans déclinaison} one {avec # déclinaison} other {avec # déclinaisons}}.",
-      "failed": "La duplication a échoué."
+      "failed": "La duplication a échoué.",
+      "typeRefused": "Type « {type} » : la copie serait un produit simple, pas une copie de celui-ci."
     },
     "variants": {
       "title": "Caractéristiques et déclinaisons",

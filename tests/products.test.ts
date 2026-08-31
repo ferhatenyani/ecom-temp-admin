@@ -23,7 +23,14 @@ import {
   termVocabulary,
   truncation,
 } from "@/lib/products";
-import { DEFAULT_SORT_KEY, SORTS, sortFromKey, sortKey } from "@/lib/product-status";
+import {
+  DEFAULT_SORT_KEY,
+  PRODUCT_TYPES,
+  SORTS,
+  isDuplicable,
+  sortFromKey,
+  sortKey,
+} from "@/lib/product-status";
 import {
   EMPTY_QUERY,
   isFiltered,
@@ -455,5 +462,51 @@ describe("the embedded product image", () => {
     });
     expect(parsed.gallery_image_ids).toHaveLength(2);
     expect(parsed.gallery).toHaveLength(0);
+  });
+});
+
+/**
+ * `isDuplicable()` — the panel's refusal to copy a product
+ * `ProductRepository::duplicate()` would flatten.
+ *
+ * Asserted as pure logic rather than through either screen, for
+ * `variable-product.ts`'s reason: the interesting half is **what the panel refuses
+ * on its own**, and a `fireEvent` over a disabled menu item proves the wiring
+ * rather than the rule.
+ */
+describe("which product types the panel will duplicate", () => {
+  /**
+   * The two the backend actually branches on. `duplicate()`'s ternary is
+   * `get_type() === 'variable' ? WC_Product_Variable : WC_Product_Simple`, so
+   * these are the two cases where the class it picks is the class the source
+   * already had.
+   */
+  it("allows exactly the two types this API writes", () => {
+    expect(PRODUCT_TYPES.every(isDuplicable)).toBe(true);
+    expect([...PRODUCT_TYPES]).toEqual(["simple", "variable"]);
+  });
+
+  /**
+   * WooCommerce's other two core types, and they are named **here** rather than
+   * in the implementation on purpose: the plugin's source mentions neither, so
+   * the panel refuses by allowlist and the test is where the two slugs anybody
+   * would actually meet get pinned. A type registered by a third-party plugin is
+   * the same answer for the same reason.
+   */
+  it("refuses every other type, whoever registered it", () => {
+    for (const type of ["grouped", "external", "subscription", "bundle", ""]) {
+      expect(isDuplicable(type), type).toBe(false);
+    }
+  });
+
+  /**
+   * Compared exactly, not case-folded or trimmed. `product_type` is a taxonomy
+   * term slug and `ProductPresenter` emits `get_type()` verbatim; a guard that
+   * accepted `"Simple"` would be accepting a value this API cannot produce, and
+   * would let one through on the day something else can.
+   */
+  it("compares the stored slug exactly", () => {
+    expect(isDuplicable("Simple")).toBe(false);
+    expect(isDuplicable(" simple")).toBe(false);
   });
 });
