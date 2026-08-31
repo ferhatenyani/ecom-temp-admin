@@ -198,8 +198,6 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["products", "12"], "DELETE").allowed).toBe(true);
     expect(checkAllowed(["products", "12", "variations"], "GET").allowed).toBe(true);
     expect(checkAllowed(["product-categories"], "GET").allowed).toBe(true);
-    expect(checkAllowed(["attributes"], "GET").allowed).toBe(true);
-    expect(checkAllowed(["attributes", "100", "terms"], "GET").allowed).toBe(true);
 
     /*
      * **`POST /products` is allowed now, and this assertion is inverted rather
@@ -217,26 +215,165 @@ describe("the proxy allowlist", () => {
     });
 
     /*
-     * …and the rule is tested by what stayed off. `POST /products/bulk` and
-     * `POST /products/{id}/duplicate` are registered on the identical guard —
-     * `ProductController::registerRoutes()` builds one
-     * `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` for all of them —
-     * so if "the credential can reach it" were the rule, both would be here.
-     * Neither has a screen, so neither is. A create form is not a licence to
-     * reach the two routes beside the one it needed.
+     * …and the rule is tested by what stayed off. `POST /products/bulk` is
+     * registered on the identical guard — `ProductController::registerRoutes()`
+     * builds one `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` for all
+     * of them — so if "the credential can reach it" were the rule, it would be
+     * here. It has no screen, so it is not.
+     *
+     * `POST /products/{id}/duplicate` stood beside it in this assertion for two
+     * branches and has moved to the case below, **with its screen**. That it
+     * moved rather than being quietly added is the whole demonstration: the
+     * companion it leaves behind is still refused, on the same guard, for the
+     * same reason it always was.
      */
-    expect(checkAllowed(["products", "12", "duplicate"], "POST").allowed).toBe(false);
     expect(checkAllowed(["products", "bulk"], "POST").allowed).toBe(false);
-    expect(checkAllowed(["products", "12", "variations"], "POST").allowed).toBe(false);
     // A create on the collection is not a replace or a delete on it either, and
     // the API offers neither: a product is trashed through its own id.
     expect(checkAllowed(["products"], "PUT").allowed).toBe(false);
     expect(checkAllowed(["products"], "DELETE").allowed).toBe(false);
-    // §88's writes belong to the attributes screen, on its own branch. Reading a
-    // term list is what the facet vocabulary needs; writing one is not.
-    expect(checkAllowed(["attributes"], "POST").allowed).toBe(false);
-    expect(checkAllowed(["attributes", "100", "terms"], "POST").allowed).toBe(false);
-    expect(checkAllowed(["attributes", "100"], "DELETE").allowed).toBe(false);
+  });
+
+  /**
+   * **The routes step 4 named, allowed here with the screens that reach them.**
+   *
+   * This case was written on the attributes branch as *"still refuses the
+   * variation writes and duplicate, which have no screen"*, and it was written
+   * to be inverted rather than swept: the products block in
+   * `lib/api/allowlist.ts` names `POST /products/{id}/duplicate` outright as
+   * *the test of whether the rule survived being satisfied once*, so adding that
+   * entry on the strength of a screen nobody could check for would have retired
+   * the rule instead of widening the list. Its instruction was to invert these
+   * lines *in the same change that draws the variations editor and the duplicate
+   * action, not before*.
+   *
+   * That change is this one. The screens are
+   * `app/[locale]/(panel)/products/[id]/ProductVariations.tsx` and
+   * `DuplicateAction.tsx`, both in this commit, and both named in the comment
+   * beside the rules so a reader can check the claim rather than trust it. This
+   * is the same flip `POST /products` made next to `NewProductDrawer`, and the
+   * third time this file has recorded one.
+   *
+   * **One line did not invert**, and it is the reason the case still earns its
+   * name. `GET /products/{id}/variations/{variation_id}` is a real route on the
+   * same guard, and nothing reads one variation: the list read fills the table,
+   * `POST` answers 201 with the created row and `PATCH` answers 200 with the
+   * updated one. The rule is "a screen reaches it", not "the step listed it", so
+   * the method with no caller stays off — which also keeps this assertion a real
+   * boundary rather than five lines that now all say `true`.
+   */
+  it("permits the variation writes and duplicate, and no method with no caller", () => {
+    /*
+     * `DuplicateAction.tsx` — the products list's row menu and the detail's
+     * header menu. Read from source it answers 201 with the whole product body,
+     * which is what lets the panel land on the copy's detail without a second
+     * request.
+     */
+    expect(checkAllowed(["products", "12", "duplicate"], "POST")).toEqual({
+      allowed: true,
+      path: "/products/12/duplicate",
+    });
+
+    /*
+     * `ProductVariations.tsx`. The `POST` is reached twice — the table's own add
+     * control and the generate-combinations button, which fans out one request
+     * per missing cell because `VariationController::registerRoutes()` registers
+     * no batched route to fan into.
+     */
+    expect(checkAllowed(["products", "12", "variations"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["products", "12", "variations", "9001"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["products", "12", "variations", "9001"], "DELETE").allowed).toBe(true);
+
+    // The read the detail has done since the products branch, unchanged.
+    expect(checkAllowed(["products", "12", "variations"], "GET").allowed).toBe(true);
+
+    /*
+     * The refusal that survives, and the one that makes the four above mean
+     * something. `reason: "method"` and not `"path"` is the load-bearing half:
+     * the path matches a rule, so this is the allowlist refusing a *verb* on a
+     * route it otherwise serves — which is only checkable because the three
+     * methods beside it are allowed.
+     */
+    expect(checkAllowed(["products", "12", "variations", "9001"], "GET")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+
+    // And the shape of the rules is still a shape: `bulk` is not an id, a fifth
+    // segment is nobody's route, and the collection takes no PUT.
+    expect(checkAllowed(["products", "bulk", "variations"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["products", "12", "variations", "9001", "x"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["products", "12", "variations"], "PUT").allowed).toBe(false);
+    expect(checkAllowed(["products", "12", "duplicate"], "GET").allowed).toBe(false);
+  });
+
+  /**
+   * §88's writes, allowed here **with the screen that reaches them** —
+   * `app/[locale]/(panel)/attributes/`, which is in this change.
+   *
+   * The set is every route `AttributeController::registerRoutes()` registers and
+   * no more, which is a stronger claim than "the writes the screen happens to
+   * send": the four rules are the API's own surface, verified method by method.
+   * Everything below is either a route the controller registers or a method it
+   * does not.
+   */
+  it("permits every attribute route the API registers, and no method it does not", () => {
+    // The reads, which predate this branch and are what the products filter
+    // sheet is built on — a facet group omits its zero-count values, so the term
+    // list is the only place the full vocabulary exists.
+    expect(checkAllowed(["attributes"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100", "terms"], "GET").allowed).toBe(true);
+
+    // The writes. `POST /attributes` is the create card on the list screen;
+    // `PATCH` and `DELETE` on one attribute are the settings form and the row
+    // menu; the term routes are the vocabulary editor.
+    expect(checkAllowed(["attributes"], "POST")).toEqual({ allowed: true, path: "/attributes" });
+    expect(checkAllowed(["attributes", "100"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100"], "DELETE").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100", "terms"], "POST").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100", "terms", "1000"], "PATCH").allowed).toBe(true);
+    expect(checkAllowed(["attributes", "100", "terms", "1000"], "DELETE").allowed).toBe(true);
+
+    /*
+     * **`GET /attributes/{id}` is not in the step's list of writes and is here
+     * anyway**, because the screen cannot be honest without it.
+     * `AttributeController::index()` omits usage per row on purpose — "the
+     * single read carries usage; the list does not, two queries per row" — so
+     * `product_count` exists only here, and `product_count` is the number that
+     * decides whether a delete is silent or detaches a catalogue. Allowing the
+     * DELETE and refusing the read that explains it is the trade
+     * `DELETE /media/{id}` spent eleven branches refusing to make.
+     */
+    expect(checkAllowed(["attributes", "100"], "GET").allowed).toBe(true);
+
+    /*
+     * **There is no `GET` on a single term**, and the refusal is the API's shape
+     * rather than a panel decision: `registerRoutes()` puts `PATCH` and `DELETE`
+     * on `/attributes/(?P<id>\d+)/terms/(?P<term_id>\d+)` and nothing else, and
+     * a `GET` is measured `rest_no_route`. An allowlist entry for a route that
+     * does not exist is the one over-permission that can never be justified by a
+     * screen, because no screen could use it.
+     *
+     * `method` rather than `path` is what distinguishes this from a guessed URL:
+     * the pattern matches, the verb does not.
+     */
+    expect(checkAllowed(["attributes", "100", "terms", "1000"], "GET")).toEqual({
+      allowed: false,
+      reason: "method",
+    });
+    expect(checkAllowed(["attributes", "100", "terms", "1000"], "POST").allowed).toBe(false);
+
+    // And the verbs the collection routes do not take. A create is not a
+    // replace, and an attribute is deleted through its own id.
+    expect(checkAllowed(["attributes"], "PUT").allowed).toBe(false);
+    expect(checkAllowed(["attributes"], "DELETE").allowed).toBe(false);
+    expect(checkAllowed(["attributes", "100"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["attributes", "100", "terms"], "DELETE").allowed).toBe(false);
+
+    // A fifth segment is nobody's route, and `/attributes/{id}/terms/{id}` is
+    // the deepest path in this API.
+    expect(checkAllowed(["attributes", "100", "terms", "1000", "x"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["attributes", "100", "nonsense"], "GET").allowed).toBe(false);
   });
 
   it("permits the inventory routes the screens call, and only those", () => {

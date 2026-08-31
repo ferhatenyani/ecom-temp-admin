@@ -36,6 +36,7 @@ import { TableSkeleton, RecordListSkeleton } from "@/components/ui/Skeleton";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { CountBadge } from "@/components/ui/Badge";
 import { Menu } from "@/components/ui/Menu";
+import { useDuplicateProduct } from "./[id]/DuplicateAction";
 import { Isolate } from "@/components/primitives/Ltr";
 import {
   buildColumns,
@@ -147,8 +148,12 @@ export function ProductsList({
   const tA11y = useTranslations("a11y");
   const tUi = useTranslations("ui");
   const tStates = useTranslations("states");
+  const tDuplicate = useTranslations("products.duplicate");
   const router = useRouter();
   const searchParams = useSearchParams();
+  /* The behaviour lives in one hook shared with the detail's header button, so
+     the two cannot drift on the day the 201's shape changes. */
+  const duplicate = useDuplicateProduct(locale);
 
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(initialQuery.perPage);
@@ -673,6 +678,25 @@ export function ProductsList({
                     label: t("preview"),
                     icon: "search",
                     onSelect: () => setPeek(String(product.id)),
+                  },
+                  /*
+                   * **The create path for a shop selling one kind of thing.** A
+                   * shop with forty rugs makes the forty-first by copying the
+                   * fortieth — not by filling in a form from nothing — so this is
+                   * a row action rather than an afterthought behind the detail.
+                   *
+                   * Not destructive and not confirmed: it creates a **draft**
+                   * with no SKU (`ProductRepository::duplicate()` sets both), so
+                   * nothing reaches the storefront and the delete already on this
+                   * row undoes it. §3.1 keeps the confirm dialog for acts that
+                   * take something away.
+                   */
+                  {
+                    key: "duplicate",
+                    label: tDuplicate("action"),
+                    icon: "plus",
+                    disabled: duplicate.isPending,
+                    onSelect: () => duplicate.mutate(product.id),
                   },
                   {
                     key: "copy",

@@ -176,7 +176,83 @@ cd "$(dirname "$0")/.." || exit 2
 # The two draft keys stayed in `ProductDetail.tsx` and that is the half that had
 # to: its docblock argues an explicit writable field list against a derived one,
 # and every key in that list now has a control. Same margin of 2.
-FLOOR=323
+#
+# 332 at the attributes branch, floor 330. **Seven files, the largest single
+# addition since the marketing redesign**, and the number is the shape of the
+# thing rather than a screen drawn twice:
+#
+#   attributes/{page,AttributesScreen,loading}.tsx        the list and its create
+#   attributes/[id]/{page,AttributeDetail,loading}.tsx    one attribute and its terms
+#   attributes/attribute-write.ts                         the bodies and the refusals
+#
+# **Two routes and not one**, which is the branch's overlay decision and is
+# argued at length in `AttributeDetail.tsx`. In short: a term list is a paginated
+# collection the API expects to be browsed (`search`, `hide_empty`, `orderby`,
+# `per_page` up to 100), every row of it can raise a destructive confirm, and
+# §3.1 forbids a `Modal` over a `Drawer` — the collision the product-create
+# branch four entries up had to work around. `content/faqs/categories` settled
+# the identical two-level CRUD the same way and states the rule: a second level
+# is not a step of the first.
+#
+# `attribute-write.ts` is the seventh and passes the same test the last five
+# entries apply: **a block that is only markup stays in its screen; a block that
+# owns decisions gets a file.** It owns three. That an empty `PATCH` is a 400
+# with no `details`, so the panel answers `null` and never sends one. That
+# WooCommerce's refusals arrive under `details.fields.attribute`, which is not a
+# field any form has — so a screen binding errors by key renders nothing for the
+# three most likely ones. And the 29-**byte** slug budget, which is a rule about
+# Arabic rather than about length: a French letter costs one byte and an Arabic
+# letter two.
+#
+# Raised by the same margin of 2 the history above keeps.
+#
+# 336 at the variations branch, floor 334. **Four files**, all under
+# `products/[id]/`, and each one passes the test the last six entries apply:
+# **a block that is only markup stays in its screen; a block that owns decisions
+# gets a file so the decisions have somewhere to be argued.**
+#
+#   products/[id]/variable-product.ts      the whole-list rule, the mapping
+#                                          guard, the grid and the cap
+#   products/[id]/ProductAttributes.tsx    spec or variant, and the confirm
+#   products/[id]/ProductVariations.tsx    the per-row table and the fan-out
+#   products/[id]/DuplicateAction.tsx      one call, two screens
+#
+# `variable-product.ts` is the one that had to exist. It owns the reversal of the
+# deferral `ProductDetail.tsx` has carried since the products branch — editing a
+# product's `attributes` was refused there because a *partial* list wipes a
+# variable product's variation mapping — and the reversal is only safe because a
+# partial list is unreachable: `attachedFrom()` copies every entry the product
+# carries, `attributesBody()` emits every entry of the draft, and
+# `tests/variable-product.test.ts` asserts the key set of the body equals the key
+# set of the product for every operation the editor offers. That invariant cannot
+# live inside a component, because the thing being asserted is that no code path
+# produces a subset — which is a claim about a module, not about a render.
+#
+# It also owns `mappingLosses()` (which variations each of the three destructive
+# edits would orphan, counted before the confirm), the combination grid and its
+# **cap of 50** — borrowed from `OptionSet::MAX_CHOICES` rather than invented,
+# because the API has no ceiling of its own and `GET /products/{id}/variations`
+# is unpaginated, so the panel is the only thing between a shopkeeper and
+# `OptionSet`'s 7,776 example.
+#
+# **Two components and not one**, which is this branch's split decision. They are
+# two *writes* to two different routes with two different failure shapes: the
+# attributes card PATCHes the product once and asks a destructive confirm first;
+# the variations table PATCHes one row per request and treats partial failure as
+# the normal outcome. One component would have held both, plus a fan-out loop,
+# in a file already past 500 lines — and the reason `ProductAttributes` is not a
+# section of `ProductDetail.tsx` is the same reason `ProductMedia` was not: the
+# form beneath it sends a hand-written subset of writable keys on every save, and
+# `attributes` must not join that list.
+#
+# `DuplicateAction.tsx` is the fourth and is the smallest, and it is a file
+# because it is used from **two screens** — the detail's header and the products
+# list's row menu. The behaviour is one hook so the two cannot drift on the day
+# the 201's shape changes; a second copy inside `ProductsList` is exactly how
+# they would.
+#
+# Raised by the same margin of 2 the history above keeps.
+FLOOR=334
 failures=0
 checks=0
 

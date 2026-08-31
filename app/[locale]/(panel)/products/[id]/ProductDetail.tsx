@@ -21,18 +21,14 @@ import {
   PRODUCT_STATUS_TONE,
   PRODUCT_TYPES,
   STOCK_STATUSES,
-  STOCK_TONE,
   type ProductStatus,
-  type ReadableStatus,
-  type StockStatus,
 } from "@/lib/product-status";
-import { describeAttribute, priceSpan, variationLabel } from "@/lib/products";
 import { formatMoney } from "@/lib/format/money";
 import { formatDate, formatWhen } from "@/lib/format/date";
 import { useOnline } from "@/lib/use-online";
 import { DetailGrid } from "@/components/ui/Detail";
 import { Card, DataList, DataRow } from "@/components/ui/Card";
-import { Badge, Dot } from "@/components/ui/Badge";
+import { Badge } from "@/components/ui/Badge";
 import { Notice, SectionError, StaleBanner } from "@/components/ui/States";
 import {
   CheckRow,
@@ -49,6 +45,8 @@ import {
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
 import { ProductMedia } from "./ProductMedia";
+import { ProductAttributes } from "./ProductAttributes";
+import { ProductVariations } from "./ProductVariations";
 
 /**
  * The fields the panel writes.
@@ -70,13 +68,27 @@ import { ProductMedia } from "./ProductMedia";
  * `variations`, `id`, `date_created`, `date_modified`, `bundle`,
  * `options_problems`.
  *
- * `attributes` is deliberately absent from what this form sends, and that is a
- * correctness decision rather than a scope one: replacing a variable product's
+ * `attributes` is **still** deliberately absent from what this form sends, and
+ * the reason has hardened rather than expired. Replacing a variable product's
  * attribute list drops its *variation* attribute, and WooCommerce then clears
  * every variation's attribute map — measured on products 12 and 21, whose three
  * and two variations came back with `attributes: {}` and could no longer be told
- * apart. Editing attributes belongs with the attributes screen, which can build
- * the whole list rather than a partial one.
+ * apart. Read from source since: `ProductRepository::update()` is
+ * `set_attributes($this->buildAttributes(…))`, a whole-list replace with no merge
+ * of any kind, and `VariationService::variationAttributes()` makes a variation's
+ * combination meaningful only while the parent still marks that attribute for
+ * variations.
+ *
+ * **The attribute list is editable now, and it is `ProductAttributes` that edits
+ * it — a separate card with a separate write.** That separation is the point.
+ * Every key in *this* list is sent on every save of this form, which is right for
+ * a name and a price and is exactly wrong for the attribute list: it would
+ * rewrite the whole mapping whenever somebody fixed a typo in a description, so
+ * any drift between what this page read and what is now stored would destroy
+ * variations on an unrelated save. `ProductAttributes` PATCHes `{attributes: […]}`
+ * alone, only when its own card is dirty, always with the complete list, and asks
+ * before the three edits that orphan rows. `variable-product.ts` carries the
+ * whole argument.
  *
  * `options` is absent for the reason the warning banner now states outright — see
  * the `options_problems` block further down. `tag_ids` is absent because nothing
@@ -512,8 +524,6 @@ export function ProductDetail({
 
   const fieldId = (key: string) => `product-${key}`;
 
-  const span = priceSpan((variations ?? []).map((v) => v.price));
-  const termMap = new Map(Object.entries(terms));
   const problems = product.options_problems ?? [];
 
   /*
@@ -899,144 +909,58 @@ export function ProductDetail({
 
             {/* ---------------------------------------------- attributes --- */}
             {/*
-              Read-only, with the reason on screen rather than in a comment:
+              **Editable now, and it is its own card with its own write.** The
+              footnote that used to sit here said the list was read-only because
               sending `attributes` on a variable product wipes every variation's
-              attribute map — measured on products 12 and 21 — so a partial editor
-              here is worse than none, and the attributes screen owns it.
+              attribute map. That is still true of a *partial* list — see the
+              `Draft` docblock above and `variable-product.ts` — and the way to
+              have the editor at all was to make a partial list unreachable, not
+              to add one more key to this form.
             */}
-            <Card
-              title={tDetail("attributes")}
-              /*
-               * One sentence: read-only everywhere in this panel, and the
-               * measured reason why.
-               *
-               * It used to branch to `localAttributeReason` — "a local attribute
-               * can be neither filtered nor counted" — which is taxonomy
-               * education rather than something a shopkeeper can act on, and on a
-               * product with a local attribute it was the *only* sentence, so the
-               * one thing a reader needed (why the list cannot be edited at all)
-               * was the half that went missing. The `Local` badge beside the
-               * values already carries the distinction visually.
-               */
-              footnote={tDetail("attributesLater")}
-            >
-              {product.attributes.length === 0 ? (
-                <p className="text-ui-body text-ui-muted">{tDetail("noAttributes")}</p>
-              ) : (
-                <DataList>
-                  {product.attributes.map((attribute) => {
-                    const described = describeAttribute(attribute, attributes, termMap);
-                    return (
-                      <DataRow key={attribute.name} label={described.label} stacked>
-                        <span className="flex flex-wrap items-center gap-1.5">
-                          {/* Attribute values are user content — "Bois d'olivier",
-                              "قطن" — so each resolves its own direction rather
-                              than inheriting the page's. */}
-                          <span dir="auto" className="min-w-0">
-                            {described.values.join(", ")}
-                          </span>
-                          {!described.global ? (
-                            <Badge tone="neutral">{tDetail("localAttribute")}</Badge>
-                          ) : null}
-                        </span>
-                      </DataRow>
-                    );
-                  })}
-                </DataList>
-              )}
-            </Card>
+            <ProductAttributes
+              product={product}
+              variations={variations}
+              attributes={attributes}
+              terms={terms}
+              onSaved={(next) => {
+                setProduct(next);
+                /*
+                 * The form's draft is re-seeded too, and it has to be: the write
+                 * answered with the whole product, so anything the server derived
+                 * from the attribute change — a variable product's `price`
+                 * collapsing when its last variation axis went — is now stale in
+                 * a form the person may not have touched.
+                 */
+                setDraft(draftOf(next));
+              }}
+            />
 
             {/* ---------------------------------------------- variations --- */}
             {/*
-              Read-only, and it is a boundary rather than a scope call:
-              `POST /products/{id}/variations` is refused by the panel's own
-              allowlist and `tests/boundary.test.ts` asserts the refusal. A route
-              no screen reaches must not be reachable by guessing a URL.
+              **Editable now**, and the comment this replaces is exactly why it
+              was not: *"`POST /products/{id}/variations` is refused by the
+              panel's own allowlist and `tests/boundary.test.ts` asserts the
+              refusal. A route no screen reaches must not be reachable by guessing
+              a URL."* True at the time and no longer — `ProductVariations` is the
+              screen, the four allowlist entries landed in the same change, and
+              the boundary case that asserted the refusal was inverted beside
+              them rather than deleted.
+
+              **Rendered whenever the product has a variation axis, not only when
+              it already has rows.** The old test was `product.variations.length >
+              0`, which is right for a read-only list and wrong for an editor: a
+              variable product whose axes were just chosen has no variations yet,
+              and that is precisely the product that needs the generate button.
+              `ProductVariations` decides what to say for each of those states.
             */}
-            {product.variations.length > 0 ? (
-              <Card
-                title={tDetail("variations")}
-                footnote={
-                  span
-                    ? tDetail("variationSpan", {
-                        min: asMoney(span.min),
-                        max: asMoney(span.max),
-                      })
-                    : tDetail("variationsReadOnly")
-                }
-              >
-                {variations === null ? (
-                  <SectionError>{tDetail("sectionFailed")}</SectionError>
-                ) : (
-                  <ul className="flex flex-col">
-                    {variations.map((v) => (
-                      <li
-                        key={v.id}
-                        className="flex min-w-0 flex-col gap-1 border-b border-ui-line py-2.5 first:pt-0 last:border-b-0 last:pb-0"
-                      >
-                        {/*
-                          Two lines of two, rather than a label above a row of
-                          three. Measured on the 340px capture: the SKU, the stock
-                          and the price competing for one line left the SKU about
-                          60px and `truncate` cut `AC-CAT-0104-2` to `AC-CAT-010…`
-                          — a value on screen with no way to read it, which §2.1
-                          forbids by name. Pairing the price with the short
-                          attribute label frees the whole second line for the SKU
-                          and its stock.
-                        */}
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span
-                            dir="auto"
-                            className="min-w-0 flex-1 truncate text-ui-compact text-ui-fg"
-                          >
-                            {variationLabel(v, product, termMap).join(" · ") ||
-                              tDetail("variationNoAttributes")}
-                          </span>
-                          {v.status !== "publish" ? (
-                            <Badge
-                              tone={
-                                PRODUCT_STATUS_TONE[v.status as ReadableStatus] ??
-                                "neutral"
-                              }
-                            >
-                              {tStatus(v.status)}
-                            </Badge>
-                          ) : null}
-                          <Ltr className="shrink-0 text-ui-compact text-ui-fg">
-                            {asMoney(v.price)}
-                          </Ltr>
-                        </span>
-                        <span className="flex min-w-0 items-baseline gap-3">
-                          {/* `""` means the variation inherits its parent's SKU;
-                              the API reports what is stored so a read body can be
-                              written back, and the panel says which it is.
-                              `break-all` rather than `truncate`, for the shop's
-                              60-character SKU: it wraps rather than being cut. */}
-                          {v.sku ? (
-                            <Ltr className="min-w-0 flex-1 break-all text-ui-label text-ui-muted">
-                              {v.sku}
-                            </Ltr>
-                          ) : (
-                            <span className="min-w-0 flex-1 text-ui-label text-ui-subtle">
-                              {tDetail("skuInherited")}
-                            </span>
-                          )}
-                          <span className="flex shrink-0 items-center gap-1.5 text-ui-label text-ui-muted">
-                            <Dot
-                              tone={STOCK_TONE[v.stock_status as StockStatus] ?? "warning"}
-                            />
-                            {v.manage_stock && v.stock_quantity !== null ? (
-                              <Isolate>{t("inStock", { count: v.stock_quantity })}</Isolate>
-                            ) : (
-                              <span>{tStock(v.stock_status)}</span>
-                            )}
-                          </span>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Card>
+            {product.type === "variable" || product.variations.length > 0 ? (
+              <ProductVariations
+                product={product}
+                variations={variations}
+                terms={terms}
+                attributes={attributes}
+                locale={locale}
+              />
             ) : null}
           </>
         }
