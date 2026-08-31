@@ -1109,3 +1109,201 @@ Grouped so each unit is one coherent change. Sequential where files overlap.
   in this build it was the only thing that caught a defect.
 - `npm run build` before `scripts/capture.mjs`; it serves a stale `.next` otherwise.
 - Branch per unit, `feat/<slug>`, commit and merge with the message style in `git log`.
+
+---
+
+# After the fix round
+
+All fourteen items are built and merged in both repos. Written in the same voice as the
+"After step N" sections above, and for the same reason: what was found and **not** fixed is
+the part that costs somebody a day if it is not written down.
+
+## State
+
+| | verified |
+| --- | --- |
+| admin | `tsc` silent · 16/16 design checks · **1648** unit tests / 32 files · `npm run test:email-roundtrip` clean |
+| backend | orders **305**/0 · attributes **64**/0 · shipping 129/0 · campaigns 120/0 · products 144/0 · unit **OK (2075 tests, 5081 assertions)** |
+
+**The "pre-existing failures" list from the hand-off is stale in both directions**, verified on
+a stashed pristine tree: `analytics` now passes **83/0**, and `cart` **61/4** and
+`shipping-rules` **47/4** fail. Those eight are database pollution from the panel's own e2e
+seed — `seed-shipping-rules.mjs` writes a national fallback at 800, wilaya 16 at 500 and
+commune 484 at 350, and those exact amounts appear in the failure output ("a rule survived
+cleanup", "quoted 800.00"). Nothing in this round goes near cart or shipping. **The dev
+database wants a reset between a panel e2e run and a backend suite run**, in either order, or
+each will keep reading the other's fixtures as regressions.
+
+## The work list's own text, corrected
+
+The list was written from the step sections above rather than from source, and eight of its
+claims did not survive contact with the code. Recorded because the next list will be written
+the same way.
+
+- **Item 5's two type names do not exist in the plugin.** `grouped` and `external` are named
+  nowhere in `ecom-temp`; `ProductRepository::duplicate()` is one ternary —
+  `get_type() === 'variable' ? WC_Product_Variable : WC_Product_Simple` — so `simple` is the
+  fallback for *every* third type. The guard is therefore an **allowlist of
+  `ProductInput::TYPES`**, not a denylist of two slugs, and the slugs are pinned in
+  `tests/products.test.ts` where WooCommerce-owned names belong.
+- **Item 5's list-side guard is unreachable in principle, not for want of a fixture.**
+  `ProductRepository::paginate()` passes `'type' => ['simple','variable']` to
+  `wc_get_products()`, so `GET /products` can never return such a product. `find()` is a bare
+  `wc_get_product()`, so the detail can. Guarded both anyway, as insurance against a widened
+  `paginate()`, and said so in the code.
+- **Item 6's "no ceiling anywhere in the API" is true of cardinality and false of rate.**
+  `Security/RateLimitGuard::guard()` counts every non-`GET` in the namespace against
+  `DEFAULT_WRITES = 120` in a fixed 60-second window, against a `user:` counter **and** an
+  `ip:` counter, answering 429 with `details.retry_after` (read from source). A 200-cell
+  generate cannot complete inside one window, and the allowance is shared with everything else
+  the operator does that minute. At 50 this could never bite; at 200 it always can.
+- **Item 7's "a `selected` prop on `MediaGrid`" is not sufficient.** A bare array cannot say
+  how a tile toggles and cannot distinguish "ticked now" from "already on the product". It
+  shipped as a `selection` object (`selected` / `held` / `onToggle`). Also: the product create
+  drawer has **no gallery at all** — its picker sets `image_id` only — so there was nothing
+  there to convert.
+- **Item 3's "the defect is already acknowledged in `OrderLinesDrawer`'s own docblock" is
+  false.** The comment beside `addLine` presented the broken rule as a deliberate choice, and
+  `NewOrderDrawer`'s docblock actively *defended* it — *"an empty price box there means 'this
+  line came off the catalogue'"* — which is half wrong, because that drawer has the same
+  picker. Both corrected, quoting the retired text.
+- **Item 4's "the summary line already renders; point it at the email control" cannot be done
+  as written.** The existing orphan line has no id to point anywhere, and giving it one *plus*
+  a `fields` entry double-counts — the exact `bindRefusals()` defect recorded one branch below.
+  Moving the refusal **into** `fields` is what produces one linked line. The item also says
+  "two forms"; there are three, and `OrderLinesDrawer` needed a reasoned exemption rather than
+  the same wiring, because it draws no address and its payload is a diff, so `billing` is never
+  in its body.
+- **Item 10's "a since-trashed product still resolves" is not established.**
+  `CouponRepository` really does set `post_status = 'any'` for an id set, and the plugin's
+  comment expects the trash back — but `WP_Query`'s `'any'` is every status *except* those
+  registered `exclude_from_search`, and `trash` is registered `internal`. If that holds, the
+  clause excludes exactly what it was added to include, and `CmsController::statusArg()`'s
+  mirror-image claim is wrong too. **It could not be settled here**: WordPress core lives in a
+  Docker volume, not in either repository. Written into `product-lookup.ts` as an open question
+  rather than as a finding, and the panel is built for both readings — `missing`'s sentence says
+  *the shop cannot find it* rather than *it was deleted*, which is true of a trashed, a
+  force-deleted and a never-existing id alike.
+- **Item 1's audit half was already done.** `OrderService::snapshot()` already carried
+  `manual_prices`, one row per hand-chosen amount with `charged` against
+  `CATALOGUE_PRICE_META`, on both halves of `order.updated` and flat on `order.created`. What
+  was missing was the other half of the question — *had the stock moved?* — which no status name
+  can answer, since an `on-hold` order can hold nothing having arrived from `cancelled`. One key
+  added, `stock_reduced`, and it reaches `POST /orders` for free.
+
+## The credential block is not as clear as the hand-off recorded
+
+`c4fcbe2` recorded item 1's block as cleared and named `AC_TEST_ADMIN_*` / `AC_TEST_SUPPORT_*`
+in `ecom-temp/.env` as verified over HTTP on 2026-08-31. **Those credentials do not
+authenticate.** Both users exist and each holds exactly one Application Password named
+`panel-e2e`, but the stored plaintext answers `401 incorrect_password` — which is the state a
+regenerated password leaves behind, since the plaintext is shown once and only the hash is
+kept.
+
+**The conclusion it drew is right and its evidence is stale.** The table was reproduced here
+with a credential minted by `scripts/mint-credential.sh`:
+
+```
+super_admin    /auth/me 200 · /orders 200 · /products 200 · /campaigns 200 · /settings 200
+support_agent  /auth/me 200 · /orders 403 · /products 403 · /campaigns 403 · /settings 403
+```
+
+and the negative controls the entry listed as open were measured too — no header is
+`401 unauthenticated`, a wrong password is `401 incorrect_password`, and the eleventh attempt
+is `429 too_many_requests`. `BLOCKED.md` is rewritten accordingly.
+
+**A spent rate-limit bucket is indistinguishable from a bad password**, and it cost an hour
+here: the limiter is ten failures per fifteen minutes per IP and once spent it refuses a
+*correct* credential too. Two measurement passes returned 401 for credentials that were merely
+untested, then 429 for credentials that were valid. Run `scripts/reset-rate-limit.sh`
+immediately before measuring, and read a 429 as "the bucket, not the password".
+
+## Decisions worth recording
+
+- **The country list is generated from ICU at authoring time and committed** (item 2), not
+  resolved through `Intl.DisplayNames` at render. Three reasons, each measured or reasoned in
+  `lib/countries.ts`: a runtime without Arabic CLDR falls back to *English* rather than
+  throwing, which breaks fr/ar sync silently; client components are server-rendered, so labels
+  are produced by Node's CLDR and hydrated against the browser's; and CLDR revises country
+  names — one ICU here answers `Türkiye` for `en` and `Turquie` for `fr`. A re-sort at render
+  is a hydration mismatch on every row after the first disagreement, not on one. The list is
+  ICU's 280 resolvable regions minus 31 named non-countries, which lands on exactly the 249 of
+  ISO 3166-1.
+- **Item 9 repairs a merge tag only onto a token that already exists.** Normalising everything
+  brace-shaped makes things strictly worse: `{{numéro de suivi}}` mails verbatim today —
+  visible, embarrassing, caught by whoever reads the test send — where
+  `{{numero_de_suivi}}` would be a *well formed unknown* token and render **empty**, which is
+  the failure the whole token subsystem exists to prevent.
+- **And item 9 has to regenerate rather than repair text, which a test found rather than a
+  reading.** `safeHref()` drops a call to action whose href is not a well formed token — the
+  whole block, not just the link — so a CTA pointing at `{{unsubscribe url}}` produces no
+  button, and text-repairing the generated HTML finds nothing to fix. The answers would hold a
+  good href beside a body with no button, and `handEdited()` would report an edit nobody made:
+  **item 12's defect, manufactured by item 9's fix.** The repair runs through `nextBodies()`,
+  which rebuilds while the bodies still match and leaves a hand-edited body alone, because a
+  repair must not do what Undo asks permission for.
+- **Item 12 rebinds to the re-read and not to the PATCH response**, which is the opposite of
+  `SettingsForm`'s precedent and for a reason that is this screen's own: `MailPreview`'s stale
+  marker compares the draft against the query's row, which is also the row the preview was
+  rendered from. Binding the form to one fetch and the marker's other side to a different one
+  would make *"the frame shows what the form says"* a claim about two reads that can disagree.
+- **Item 1's warning names the order's quantities and never the draft's.** What stock holds is
+  what was taken when the status moved; summing the draft would report a proposal as though the
+  shelf had already moved. No per-line reserved count exists on the read shape and none was
+  invented.
+- **Item 7's multi-select is opt-in through a discriminated union**, not a boolean beside a
+  still-required `onOpen` — which would let a caller ask for a tile that both opens a drawer and
+  toggles a checkbox. The three single-select callers render an identical tree.
+- **Item 11 gives a 403 no retry.** `CampaignService::preview()` asserts the same capability the
+  whole screen is gated on, so a 403 there means the capability moved under an open tab, and
+  asking again cannot grant a permission. The retry is `refetch()` and never the card's existing
+  refresh, which is `save()` — a failed *read* must not provoke a *write*.
+- **Item 8 decides `slug` versus `name` from the payload, not from the error code.**
+  `wc_create_attribute()` derives the slug from the name when none is stated and then refuses
+  what it derived, so reddening an empty slug box would point at the control the person did not
+  fill.
+
+## Real defects found, not fixed
+
+- **A 429 is not a parent refusal.** `isParentRefusal()` tests `status === 409`, so the write
+  limiter's 429 lands in the per-combination list and the generate loop keeps going, producing
+  up to 80 identical *"Too many requests"* rows — precisely the "identical failures behind a
+  progress bar" shape that function exists to prevent. The fix is a third abandon branch
+  reporting `retry_after` as "resume in N seconds"; not a retry loop and not a throttle, which
+  would make a legitimate run take two minutes to avoid a recoverable error. A test pins that a
+  429 is *not* currently caught, so the day that changes is a deliberate day.
+- **`ProductDetail.tsx`'s type control is `PRODUCT_TYPES.map(…)`**, so a grouped product selects
+  none of its options and **every save sends `type: "grouped"` into a 400**. Newly visible under
+  `MOCK_PRODUCT_TYPES=exotic`, outside item 5's scope, and deliberately not hidden.
+- **`GET /products/{id}/variations` on a non-variable product: source says 409, the mock says
+  200 `[]` and calls itself measured.** `VariationService::requireVariableParent()` throws
+  `conflict('Only variable products have variations…')`. One of the two is stale, and this is
+  now testable over HTTP.
+- **`Select` wires only `hint` and `error` into `aria-describedby`**, so item 10's warning line
+  is not announced with the control. Widening `components/ui/Form.tsx` for one screen while
+  three lanes were editing it was refused; named in the docblock.
+- **`ErrorState` exposes no busy state**, so item 11's retry looks inert while it is in flight —
+  react-query keeps `status: "error"` until the refetch succeeds.
+- **`Form.tsx`'s `Select` accepts no `className` while `TextField` does.** The country picker is
+  wrapped in a sizing `div` and says so.
+- **`ProductMedia`'s `disabled` prop is not re-checked inside the open modal.** Pre-existing and
+  unreachable, since the save bar is behind the overlay.
+
+## Not verifiable here
+
+- **Item 11's two states have no mock arm at all** — nothing makes `/campaigns/{id}/preview`
+  fail on its own, and `MOCK_IDENTITY=no_marketing` 403s the whole section at page level. A
+  `MOCK_PREVIEW=fail|forbidden` variant would close it; not added, to keep that lane's conflict
+  surface at zero.
+- **Item 10's unknown-wilaya warning needs a seeded criterion**, because a `Select` cannot emit
+  `999`. Same class as step 6's un-photographed bare-id fallback. The two product states *are*
+  reachable through the panel: pick a product into a segment, save, then trash it and reopen.
+- **Item 7's `held` state needs one press of "next page"** — under `MOCK_PRODUCT_MEDIA=attached`
+  every attached image sits on page 2 of the picker's default listing. The seed was not changed.
+
+## Still blocked on a human
+
+Courier credentials (`BLOCKED.md` item 2) are unchanged and were explicitly out of scope.
+`BLOCKED.md` item 1 is now down to CORS preflight, cookie and nonce handling, and whatever a
+reverse proxy does to a `PATCH` body or a 409 — there is no proxy in front of this stack, so
+those measurements cannot be taken here at all.
