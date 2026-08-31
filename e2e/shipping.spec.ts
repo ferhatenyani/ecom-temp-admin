@@ -201,9 +201,13 @@ test.describe("parcels", () => {
     await page.goto("/fr/shipping");
 
     // The positive control: with no filter there are parcels.
-    await expect(page.locator("text=/MAN-|TRK-|FAKE-/").first()).toBeVisible({
-      timeout: 15000,
-    });
+    /* Filtered to what is on screen: `DataTable` keeps the table and the stacked
+       record list both mounted and hides one per breakpoint, so `.first()` alone
+       picks the table's copy at a phone width and asserts a hidden element is
+       visible. */
+    await expect(
+      page.locator("text=/MAN-|TRK-|FAKE-/").filter({ visible: true }).first(),
+    ).toBeVisible({ timeout: 15000 });
 
     /*
      * `pending` is a real status the API accepts and no parcel in this shop
@@ -425,7 +429,8 @@ test.describe("Arabic", () => {
      * catch a bidi bug. A tracking number reordered by the bidi algorithm is a
      * different tracking number, and the customer reading it back gets nothing.
      */
-    const tracking = page.locator("text=/MAN-\\d+-\\d+/").first();
+    /* Visible copy only — see the parcels list above for why both are mounted. */
+    const tracking = page.locator("text=/MAN-\\d+-\\d+/").filter({ visible: true }).first();
     await expect(tracking).toBeVisible({ timeout: 15000 });
     const text = await tracking.innerText();
     expect(text).toMatch(/MAN-\d+-\d+/);

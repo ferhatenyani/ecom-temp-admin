@@ -429,11 +429,19 @@ test.describe("the product detail and its write path", () => {
     await signIn(page, "fr");
     await openBySku(page, "fr", "AC-BUR-010");
 
-    const section = page.getByRole("heading", { name: "Déclinaisons" });
+    /* `exact`, because the attributes section above this one is headed
+       "Caractéristiques et déclinaisons" and an accessible-name match is a
+       substring match — so the unscoped name resolved to both and failed on
+       strict mode rather than on the variations section being absent. */
+    const section = page.getByRole("heading", { name: "Déclinaisons", exact: true });
     await expect(section).toBeVisible();
-    // Three variations, each with its own SKU and stock.
-    await expect(page.getByText("AC-BUR-010-S")).toBeVisible();
-    await expect(page.getByText("AC-BUR-010-L")).toBeVisible();
+    /* Three variations, each with its own SKU and stock — and given the same
+       15 s the rest of this suite gives API-backed content. The rows arrive from
+       `GET /products/{id}/variations` after the section heading renders, so the
+       default 5 s is a race the section wins and the rows lose; the failure
+       snapshot showed all three present, just late. */
+    await expect(page.getByText("AC-BUR-010-S")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("AC-BUR-010-L")).toBeVisible({ timeout: 15000 });
   });
 
   /**

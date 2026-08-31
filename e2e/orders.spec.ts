@@ -117,10 +117,20 @@ test.describe("the credential boundary", () => {
     await page.fill("#username", USER!);
     await page.fill("#password", "definitely not the right password");
     await page.click('button[type="submit"]');
-    /* Scoped to `main`: Next mounts its own route announcer as a second
-       `role="alert"` on every page, so an unscoped `getByRole("alert")` is a
-       strict-mode violation rather than the form's refusal. */
-    const alert = page.locator("main").getByRole("alert");
+    /*
+     * Next mounts its own route announcer as a second `role="alert"` on every
+     * page, so an unscoped `getByRole("alert")` is a strict-mode violation
+     * rather than the form's refusal. This scoped to `main` to avoid it — and
+     * **the login screen has no `main`**: it is the one route outside the panel
+     * shell, three nested `div`s in `(auth)/login/page.tsx`, so the locator
+     * matched nothing and the refusal it was waiting for was on screen the whole
+     * time.
+     *
+     * Excluding the announcer by name instead. It is the thing being avoided, so
+     * saying so is both narrower and more honest than picking a landmark that
+     * happens to contain one of the two.
+     */
+    const alert = page.locator('[role="alert"]:not(#__next-route-announcer__)');
     await expect(alert).toBeVisible();
     const wrongPassword = await alert.innerText();
 
