@@ -785,6 +785,53 @@ describe("the two address blocks", () => {
     expect(body).not.toHaveProperty("shipping");
   });
 
+  /*
+   * ── the Algeria default, and the two rules it had to not break ─────────────
+   *
+   * `emptyDraft()` opens both blocks on `DZ` so the country picker is answered
+   * before anybody reaches it. That is a fact the *form* states, and these three
+   * are the assertions that keep it from becoming a fact the *order* states.
+   */
+  it("opens both blocks on Algeria, and `emptyAddress()` on nothing", () => {
+    const draft = emptyDraft();
+    expect(draft.billing.country).toBe("DZ");
+    expect(draft.shipping.country).toBe("DZ");
+
+    /* The floor under a *stored* address is still blank, because
+       `[id]/order-edit.ts` seeds from it and an order that never carried a
+       country must keep saying so. */
+    expect(emptyAddress().country).toBe("");
+  });
+
+  it("does not put that default on the wire on its own", () => {
+    /*
+     * The regression this guards. Accumulate-and-check-for-empty would now emit
+     * `{"billing":{"country":"DZ"}}` for a form whose address section nobody
+     * opened — an order created carrying a country nobody stated. `buildPayload`
+     * defers to `isAddressEmpty`, so the default rides along only when there is
+     * an address for it to belong to.
+     */
+    const body = buildPayload(draftWith());
+    expect(body).not.toHaveProperty("billing");
+
+    const filled = buildPayload(
+      draftWith({ billing: { ...emptyDraft().billing, city: "Alger" } }),
+    );
+    expect(filled.billing).toEqual({ city: "Alger", country: "DZ" });
+  });
+
+  it("still lets a customer's address land in a block holding only the default", () => {
+    /*
+     * `chooseCustomer` copies a customer's stored address only into a block
+     * nobody has typed in, and the old all-eleven rule would have answered
+     * `false` for every freshly opened drawer — retiring the copy silently. The
+     * country is disregarded; anything else is not.
+     */
+    expect(isAddressEmpty(emptyDraft().billing)).toBe(true);
+    expect(isAddressEmpty({ ...emptyDraft().billing, country: "FR" })).toBe(true);
+    expect(isAddressEmpty({ ...emptyDraft().billing, city: "Alger" })).toBe(false);
+  });
+
   it("sends only the filled fields of a block somebody did", () => {
     const body = buildPayload(draftWith({ billing, shippingSameAsBilling: false }));
 
