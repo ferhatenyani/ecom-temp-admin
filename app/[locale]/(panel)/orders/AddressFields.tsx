@@ -2,7 +2,9 @@
 
 import { useTranslations } from "next-intl";
 import type { Wilaya } from "@/lib/api/schemas/order";
+import { countryName, countryOptions, isCountryShape } from "@/lib/countries";
 import { Select, TextField } from "@/components/ui/Form";
+import type { ListboxOption } from "@/components/ui/Listbox";
 import { ADDRESS_KEYS, type AddressDraft } from "./new-order";
 
 /**
@@ -21,7 +23,7 @@ import { ADDRESS_KEYS, type AddressDraft } from "./new-order";
  * `orders.create.address.*` and are now `orders.address.*` because they belong
  * to neither form in particular.
  *
- * ## `country` is a text field, and the panel now validates its shape itself
+ * ## `country` is a picker now, and the paragraph it replaces is kept below
  *
  * The API wants an ISO 3166-1 alpha-2 code, upper-cases what it is given, and
  * refuses a country *name* with a message that names `DZ` outright — so that
@@ -33,26 +35,73 @@ import { ADDRESS_KEYS, type AddressDraft } from "./new-order";
  * `PATCH /orders/{id}`, recorded in BLOCKED.md — and the shop stores a country
  * that does not exist.
  *
- * The panel cannot close that hole and must not pretend to. A picker would need
- * a 249-row country table nobody here has measured, and `docs/API.md` and
- * `lib/api/schemas` are built on what the API returns rather than on a list typed
- * from memory. What it can do is the two honest things:
+ * That much is unchanged. What this file used to conclude from it was:
  *
- *   the rule   the same shape check, run locally, so the mistake that actually
- *              happens — a country name — is caught before a round trip rather
- *              than after one. `validate` is the caller's half of `useField`'s
- *              split: the rule is ours, the timing (blur, then live) is the
- *              layer's, so it stays silent while somebody is typing `D`.
- *   the hint   says the code is stored as typed and is not checked against a
- *              list of real countries. A form that implied otherwise would be
- *              claiming a guarantee no layer in this stack provides.
+ * > *"The panel cannot close that hole and must not pretend to. A picker would
+ * > need a 249-row country table nobody here has measured, and `docs/API.md` and
+ * > `lib/api/schemas` are built on what the API returns rather than on a list
+ * > typed from memory. What it can do is the two honest things:*
+ * >
+ * > *the rule — the same shape check, run locally, so the mistake that actually
+ * > happens (a country name) is caught before a round trip rather than after
+ * > one.*
+ * >
+ * > *the hint — says the code is stored as typed and is not checked against a
+ * > list of real countries. A form that implied otherwise would be claiming a
+ * > guarantee no layer in this stack provides."*
  *
- * This is the one place the panel duplicates a rule the API also enforces, and
- * `new-order.ts`'s `draftProblems` docblock explains why that is normally
+ * **Overturned, and quoted rather than deleted**, the way `new-order.ts`'s
+ * destination block and `ShipmentSubscriber::destinationOf()` handle their own
+ * retired paragraphs: a reader who remembers the old rule deserves to know it
+ * was reversed on purpose rather than forgotten.
+ *
+ * Not one of its premises was wrong. The unstated one was: **that a form without
+ * a list has no list.** It has one — it is in the operator's head, it is 249 rows
+ * long, it is unversioned, and it is differently wrong on every shift. A back
+ * office typing `AL` for *Algérie* stores Albania's code, which no courier will
+ * route, which nothing in this stack objects to, and which the person who typed
+ * it is never told about. Between a table the panel is answerable for and a
+ * table nobody can see, the honest choice is the one that can be read, diffed
+ * and tested.
+ *
+ * So the table is written down, and what the old paragraph correctly demanded is
+ * what `lib/countries.ts` spends its docblock on: it is **generated and
+ * recorded, not typed from memory** — ICU's own region names, minus 31 named
+ * non-countries, collated per locale at authoring time. Why it is a committed
+ * table rather than a runtime `Intl.DisplayNames` call is argued there, in three
+ * counts, of which the Arabic one is the sharpest.
+ *
+ * ## The shape rule stays, doing a different job
+ *
+ * Nobody can type a country any more, so the local `^[A-Za-z]{2}$` check can no
+ * longer catch an operator writing `Algeria`. It is kept because **a stored
+ * order may already carry anything**: `ZZ`, which this API's shape-only rule
+ * accepts with a 200, or a country *name* written by wp-admin, by the storefront,
+ * or by any client that is not this panel. Such a value gets an option of its own
+ * at the foot of the list, so the control renders what is stored rather than
+ * silently dropping it — a picker that quietly replaced a value the operator
+ * never saw would be strictly worse than the text box it replaced — and the
+ * shape rule is what splits that case in two, so `ZZ` and `Algeria` get
+ * different sentences instead of one shrug.
+ *
+ * This is still the one place the panel duplicates a rule the API also enforces,
+ * and `new-order.ts`'s `draftProblems` docblock explains why that is normally
  * refused: the API says something better than the panel could. Here the API says
- * *less* than the panel can, which is the exception rather than a softening of
- * it — and the rule is on the control, not in `draftProblems`, so nothing about
- * which drafts are submittable changed.
+ * *less* than the panel can. Nothing about which drafts are submittable changed —
+ * the off-list note is a hint and an option's second line, never a `fields` entry
+ * and never a `draftProblems` key.
+ *
+ * ## Why `Select` and not a native one
+ *
+ * Because every other picker in this file and beside it already is: `Select` is
+ * `Listbox` in a `FieldFrame`, and `Listbox`'s own docblock argues at length
+ * that a `<select>`'s open list is unstyleable on every engine, so the panel's
+ * surface, its focus ring and its dark theme all stop at the moment somebody
+ * opens the control. It also buys the thing this list actually needs: a
+ * **second line under an option**, which `<option>` cannot carry and which
+ * `CriterionField`'s product picker already uses for a SKU. That is where the
+ * off-list note goes, and it is the reason an unrecognised code can be rendered
+ * *with its explanation attached to it* rather than as a bare two letters.
  */
 
 /**
@@ -96,6 +145,66 @@ function wilayaOptions(
   ];
 }
 
+/**
+ * What the control has to say about a stored country that is not in the list —
+ * or `null` when there is nothing to say, which is the ordinary case.
+ *
+ * Two sentences and not one, because the two states are different mistakes and
+ * a reader can only act on one of them. `ZZ` is a **well-formed code that names
+ * no country**: the API took it, the shop stored it, and it is unroutable but
+ * not malformed. `Algeria` is **not a code at all**: some other client wrote a
+ * name where a code belongs, which is the exact failure
+ * `AddressInput::validateCountry()` refuses with `Must be a two-letter ISO
+ * country code, such as DZ.` — so the panel says the same thing it has always
+ * said about that, `countryShape`, rather than inventing a third phrasing.
+ *
+ * The empty string is not off-list: it is the "not stated" option, which is a
+ * real value here and the state most of this shop's orders are in.
+ */
+function offListNote(
+  country: string,
+  locale: string,
+  t: (key: string) => string,
+): string | null {
+  const stored = country.trim();
+  if (stored === "" || countryName(stored, locale) !== null) return null;
+  return isCountryShape(stored) ? t("countryUnknown") : t("countryShape");
+}
+
+/**
+ * The country picker's options: *not stated*, then the 249, then — only when the
+ * stored value is one of neither — the stored value itself.
+ *
+ * **The third arm is the whole reason this is a function.** Radix renders the
+ * trigger's label from the option whose `value` matches, so a control offered a
+ * list that does not contain its own value shows `placeholder` and looks like a
+ * blank field; the first selection anybody made would then overwrite a country
+ * they were never shown. Appending it is what makes the picker strictly additive
+ * over the text box it replaced: every value that could be typed before can
+ * still be seen, and only the *typing* is gone.
+ *
+ * At the foot rather than at the head, because it is an exception and a list
+ * that opened on one would read as though it were the recommendation. The
+ * off-list note rides on the option as its second line — see `offListNote` for
+ * why there are two of them.
+ */
+function countryPickerOptions(
+  country: string,
+  locale: string,
+  none: string,
+  note: string | null,
+): ListboxOption[] {
+  const options: ListboxOption[] = [
+    { value: "", label: none },
+    ...countryOptions(locale),
+  ];
+
+  const stored = country.trim();
+  if (note !== null) options.push({ value: stored, label: stored, secondary: note });
+
+  return options;
+}
+
 export function AddressFields({
   /** The form's own id namespace. See `addressFieldId`. */
   idPrefix,
@@ -125,11 +234,19 @@ export function AddressFields({
   const id = (key: string) => addressFieldId(idPrefix, prefix, key);
   const error = (key: string) => fields[`${prefix}.${key}`];
 
-  /** The shape rule, and only the shape — see the docblock. */
-  const country = (next: string) =>
-    next.trim() === "" || /^[A-Za-z]{2}$/.test(next.trim())
-      ? undefined
-      : t("countryShape");
+  /*
+   * The country control's two derived facts. Computed on every render rather
+   * than memoised: both are a lookup in a frozen table, and `countryOptions`
+   * caches the 249-row array itself so the only per-render allocation is the
+   * three-element spread around it.
+   */
+  const countryNote = offListNote(value.country, locale, t);
+  const countryChoices = countryPickerOptions(
+    value.country,
+    locale,
+    t("noCountry"),
+    countryNote,
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -218,18 +335,38 @@ export function AddressFields({
       />
 
       <div className="flex flex-wrap gap-3">
-        <TextField
-          id={id("country")}
-          label={t("country")}
-          hint={t("countryHint")}
-          value={value.country}
-          onChange={(next) => onChange({ country: next })}
-          error={error("country")}
-          validate={country}
-          disabled={disabled}
-          isolate
-          className="min-w-30 flex-1"
-        />
+        {/* `min-w-40` where the text box had `min-w-30`, which is the whole of
+            the layout change and it is measured rather than tidied. The box
+            held two letters; the trigger holds a name, and the longest of the
+            249 is `Géorgie du Sud-et-les Îles Sandwich du Sud` at 42
+            characters in French and `جورجيا الجنوبية وجزر ساندويتش الجنوبية`
+            at 38 in Arabic — both measured out of the table rather than
+            guessed at. At `min-w-30` beside the phone field neither is legible
+            at any width; at `min-w-40` the pair wraps to two rows before
+            either has to truncate, which is what `flex-wrap` is here for. At
+            the 340px floor the row is stacked in both scripts either way.
+
+            The wrapper carries the sizing because `Select` takes no
+            `className`: `FieldFrame` owns the field's box and the trigger
+            stretches to it. `TextField` beside it does take one, which is a
+            difference in those two primitives and not one this file gets to
+            resolve. */}
+        <div className="min-w-40 flex-1">
+          <Select
+            id={id("country")}
+            label={t("country")}
+            /* The hint says what the *stored* value is, not what the list is:
+               `countryHint` is the ordinary sentence and the off-list note
+               replaces it, so a person looking at `ZZ` is told why without
+               having to open the list to find the second line. */
+            hint={countryNote ?? t("countryHint")}
+            value={value.country}
+            onChange={(next) => onChange({ country: next })}
+            error={error("country")}
+            disabled={disabled}
+            options={countryChoices}
+          />
+        </div>
         <TextField
           id={id("phone")}
           label={t("phone")}

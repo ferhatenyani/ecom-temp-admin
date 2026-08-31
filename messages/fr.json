@@ -314,7 +314,9 @@
       "wilaya": "Wilaya",
       "noWilaya": "Non renseignée",
       "country": "Pays",
-      "countryHint": "Code ISO à deux lettres, par exemple DZ. L’API n’en vérifie que la forme : un code qui ne désigne aucun pays serait enregistré tel quel.",
+      "noCountry": "Non renseigné",
+      "countryHint": "Le pays est enregistré sous son code ISO à deux lettres. L’API n’en vérifie que la forme : la liste est celle de la boutique.",
+      "countryUnknown": "Ce code ne désigne aucun pays connu de la boutique. Il reste enregistré tel quel, mais aucun transporteur ne saura l’acheminer.",
       "countryShape": "Deux lettres, par exemple DZ — pas le nom du pays.",
       "phone": "Téléphone",
       "email": "E-mail"

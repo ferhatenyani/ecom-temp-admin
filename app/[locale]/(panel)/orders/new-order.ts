@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from "@/lib/countries";
 import { CREATABLE_STATUSES, type OrderStatus } from "@/lib/order-status";
 import type { DeliveryType } from "@/lib/shipment-status";
 
@@ -378,6 +379,19 @@ export type OrderDraft = {
   shippingAmount: string;
 };
 
+/**
+ * Eleven empty strings, and the country is one of them.
+ *
+ * **Blank here even though a new order opens on `DZ`.** This function has two
+ * callers and only one of them is stating a new fact: `emptyDraft()` below seeds
+ * the default on top of it, and `[id]/order-edit.ts`'s `addressDraftOf()` uses
+ * it as the floor under a *stored* address, where a default would be the form
+ * inventing a country the order never carried. `order-edit.ts` draws exactly
+ * that line for `deliveryType` — *"The create draft can honestly open on `home`
+ * because it is stating a new fact; this one is reporting an existing one, so an
+ * order that says nothing opens on nothing"* — and this is the same rule one
+ * field over.
+ */
 export function emptyAddress(): AddressDraft {
   return Object.fromEntries(ADDRESS_KEYS.map((key) => [key, ""])) as AddressDraft;
 }
@@ -389,14 +403,33 @@ export function emptyAddress(): AddressDraft {
  * therefore the only one that is safe as a default: a form whose default was
  * `processing` would decrement the catalogue for anybody who filled in the lines
  * and pressed save without reading the status picker.
+ *
+ * ## And both addresses open on Algeria
+ *
+ * `DEFAULT_COUNTRY`, from `lib/countries.ts`, which is where the argument for
+ * the value lives. The argument for it being *here* is `deliveryType: "home"`
+ * four fields down, word for word: a form has to draw something, and the honest
+ * default is the one that is right for almost every order this shop takes by
+ * phone and visible in a picker the moment it is not.
+ *
+ * Two consequences, both deliberate and both handled below rather than left to
+ * be discovered:
+ *
+ *   `isAddressEmpty`   now disregards the country, or `chooseCustomer` would
+ *                      stop copying a customer's address into a block that
+ *                      only ever held a default nobody typed.
+ *   `payloadAddress`   still omits a block whose only content is that default,
+ *                      so a form nobody filled in still sends no `billing` at
+ *                      all — which is the rule that function was written for
+ *                      and this must not quietly repeal.
  */
 export function emptyDraft(): OrderDraft {
   return {
     lines: [],
     customerId: null,
     status: "pending",
-    billing: emptyAddress(),
-    shipping: emptyAddress(),
+    billing: { ...emptyAddress(), country: DEFAULT_COUNTRY },
+    shipping: { ...emptyAddress(), country: DEFAULT_COUNTRY },
     shippingSameAsBilling: true,
     paymentMethod: "",
     paymentMethodTitle: "",
@@ -448,8 +481,35 @@ export function emptyDraft(): OrderDraft {
   };
 }
 
+/**
+ * Has anybody put anything in this block?
+ *
+ * ## The country is not counted, and that clause is load-bearing
+ *
+ * This used to be `Object.values(address).every(…)` over all eleven, which was
+ * exactly right while a blank draft's eleven fields were eleven empty strings.
+ * `emptyDraft()` now opens both blocks on `DEFAULT_COUNTRY`, so an untouched
+ * address is no longer all-empty and the old rule would answer `false` for every
+ * form that had just been opened — which would silently retire the *only* thing
+ * this function is used for. `chooseCustomer` copies a customer's stored address
+ * **only into a block nobody has typed in**, and it would have stopped copying
+ * into any of them.
+ *
+ * So the question this answers is sharpened rather than widened: not *is this
+ * block blank* but **has a person put anything here that a record would
+ * overwrite** — and a default the form drew on their behalf is not that. A
+ * country somebody deliberately changed to `FR` is not that either, strictly,
+ * and it is still disregarded; that is the one case this rule gets wrong, it
+ * costs a country being replaced by the customer's own, and the alternative —
+ * comparing against `DEFAULT_COUNTRY` — would answer differently depending on
+ * whether the operator's deliberate choice happened to equal the default, which
+ * is worse and much harder to explain.
+ *
+ * `ADDRESS_KEYS` rather than `Object.values`, so the exclusion is by *name* and
+ * a twelfth field added to the list is counted by default.
+ */
 export function isAddressEmpty(address: AddressDraft): boolean {
-  return Object.values(address).every((value) => value.trim() === "");
+  return ADDRESS_KEYS.every((key) => key === "country" || address[key].trim() === "");
 }
 
 /**
@@ -671,11 +731,29 @@ export function parseQuantity(raw: string): number | null {
  * equivalent to a person reading the request, and a 400 that named
  * `billing.country` on a form where nobody typed an address would be the API
  * answering a question the panel never asked.
+ *
+ * ## "Never touched" now has to survive a default, and `isAddressEmpty` is how
+ *
+ * `emptyDraft()` opens both blocks on `DEFAULT_COUNTRY`, so the accumulate-and-
+ * check-for-empty that used to be enough would now emit `{"billing":{"country":
+ * "DZ"}}` for a form nobody opened the address section of — an order created
+ * with an address consisting of a country the operator never stated. That is
+ * precisely the "answering a question the panel never asked" the paragraph above
+ * refuses, so the emptiness test is delegated to `isAddressEmpty`, which is
+ * where the meaning of *untouched* is now defined and argued once.
+ *
+ * The consequence at the edge is worth naming: an operator who changes the
+ * country to `FR`, fills in nothing else and saves sends no address at all. That
+ * is a country with nobody and nowhere attached to it, and dropping it loses
+ * nothing an order could use — while the reverse, a lone `DZ` on every guest
+ * order the shop takes, would put a fact in the database that nobody asserted.
  */
 function payloadAddress(
   address: AddressDraft,
   { email }: { email: boolean },
 ): Record<string, string> | null {
+  if (isAddressEmpty(address)) return null;
+
   const out: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(address)) {
