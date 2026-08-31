@@ -1,0 +1,160 @@
+{
+  "cases": {
+    "full-ltr": {
+      "direction": "ltr",
+      "brandColour": "#B21F2D",
+      "logo": {
+        "src": "https://shop.test/wp-content/uploads/logo.png",
+        "alt": "Tapis & Co",
+        "width": 320
+      },
+      "title": "Soldes d'été < 1000 DA",
+      "paragraphs": [
+        "Bonjour {{first_name}}, la collection d'été est arrivée.",
+        "Livraison offerte\ndès 5000 DA, partout en Algérie."
+      ],
+      "image": {
+        "src": "https://shop.test/wp-content/uploads/hero.jpg",
+        "alt": "Tapis berbère",
+        "width": 1600
+      },
+      "cta": {
+        "label": "Voir la collection",
+        "href": "https://shop.test/boutique?utm=ete&page=1"
+      },
+      "footer": "Tapis & Co, 12 rue Didouche Mourad, Alger. Vous recevez cet e-mail car vous êtes client de {{shop_name}}."
+    },
+    "full-rtl": {
+      "direction": "rtl",
+      "brandColour": "#0A5",
+      "logo": {
+        "src": "https://shop.test/wp-content/uploads/logo.png",
+        "alt": "متجر الزرابي",
+        "width": 320
+      },
+      "title": "تخفيضات الصيف",
+      "paragraphs": [
+        "مرحبا {{first_name}}، وصلت مجموعة الصيف.",
+        "التوصيل مجاني ابتداء من 5000 دج."
+      ],
+      "image": {
+        "src": "https://shop.test/wp-content/uploads/hero.jpg",
+        "alt": "زربية",
+        "width": 1600
+      },
+      "cta": {
+        "label": "اكتشف المجموعة",
+        "href": "https://shop.test/boutique"
+      },
+      "footer": "متجر الزرابي، الجزائر العاصمة."
+    },
+    "minimal": {
+      "direction": "ltr",
+      "brandColour": "",
+      "logo": null,
+      "title": "Merci",
+      "paragraphs": [
+        "Votre commande {{order_number}} est en route."
+      ],
+      "image": null,
+      "cta": null,
+      "footer": ""
+    },
+    "hostile": {
+      "direction": "ltr",
+      "brandColour": "rgb(255, 0, 0)",
+      "logo": {
+        "src": "data:image/png;base64,AAAA",
+        "alt": "x",
+        "width": 40
+      },
+      "title": "<script>alert(1)</script> & \"quotes\" 'and' <b>bold</b>",
+      "paragraphs": [
+        "<img src=x onerror=alert(1)> mais aussi https://ok.test/a?b=1&c=2"
+      ],
+      "image": null,
+      "cta": {
+        "label": "Cliquez",
+        "href": "javascript:alert(1)"
+      },
+      "footer": "Se désabonner : {{unsubscribe_url}}"
+    },
+    "attributes": {
+      "direction": "ltr",
+      "brandColour": "#0b62d6",
+      "logo": {
+        "src": "https://shop.test/l.png?v=1&size=2",
+        "alt": "L'Artisan \"Alger\" & Co",
+        "width": 200
+      },
+      "title": "",
+      "paragraphs": [
+        "L'été & les \"soldes\" < 5000 DA"
+      ],
+      "image": null,
+      "cta": {
+        "label": "L'offre",
+        "href": "https://shop.test/x?a=1&b=l'ete"
+      },
+      "footer": ""
+    },
+    "cta-token": {
+      "direction": "ltr",
+      "brandColour": "#ffd60a",
+      "logo": null,
+      "title": "",
+      "paragraphs": [
+        "Vous ne voulez plus de nos e-mails ?"
+      ],
+      "image": null,
+      "cta": {
+        "label": "Se désabonner",
+        "href": "{{unsubscribe_url}}"
+      },
+      "footer": ""
+    },
+    "empty": {
+      "direction": "rtl",
+      "brandColour": "#123456",
+      "logo": null,
+      "title": "   ",
+      "paragraphs": [
+        "",
+        "  "
+      ],
+      "image": null,
+      "cta": null,
+      "footer": "\n"
+    }
+  },
+  "sanitised": {
+    "full-ltr": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<img src=\"https://shop.test/wp-content/uploads/logo.png\" alt=\"Tapis &amp; Co\" width=\"180\" style=\"display:block;margin:0;border:0;max-width:100%;height:auto\">\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<h1 style=\"margin:0;font-size:28px;line-height:34px;font-weight:600;color:#191d23;direction:ltr;text-align:left\">Soldes d'été &lt; 1000 DA</h1>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:16px 24px 0px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">Bonjour {{first_name}}, la collection d'été est arrivée.</p>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:16px 24px 0px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">Livraison offerte<br>dès 5000 DA, partout en Algérie.</p>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<img src=\"https://shop.test/wp-content/uploads/hero.jpg\" alt=\"Tapis berbère\" width=\"552\" style=\"display:block;margin:0;border:0;max-width:100%;height:auto\">\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"left\" style=\"border-collapse:collapse\">\n<tr>\n<td align=\"center\" style=\"background-color:#b21f2d;border-radius:6px;padding:12px 20px\">\n<a href=\"https://shop.test/boutique?utm=ete&amp;page=1\" target=\"_blank\" style=\"margin:0;font-size:16px;line-height:24px;font-weight:600;color:#ffffff;text-decoration:none;display:block\">Voir la collection</a>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 24px;direction:ltr;text-align:left\">\n<hr style=\"border:0;border-top:1px solid #e2e5ea;margin:0 0 16px\">\n<p style=\"margin:0;font-size:13px;line-height:20px;color:#59616e;direction:ltr;text-align:left\">Tapis &amp; Co, 12 rue Didouche Mourad, Alger. Vous recevez cet e-mail car vous êtes client de {{shop_name}}.</p>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "Tapis & Co\n\nSoldes d'été < 1000 DA\n\nBonjour {{first_name}}, la collection d'été est arrivée.\n\nLivraison offerte\ndès 5000 DA, partout en Algérie.\n\nTapis berbère\n\nVoir la collection: https://shop.test/boutique?utm=ete&page=1\n\nTapis & Co, 12 rue Didouche Mourad, Alger. Vous recevez cet e-mail car vous êtes client de {{shop_name}}."
+    },
+    "full-rtl": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"right\" style=\"padding:24px 24px 0px;direction:rtl;text-align:right\">\n<img src=\"https://shop.test/wp-content/uploads/logo.png\" alt=\"متجر الزرابي\" width=\"180\" style=\"display:block;margin:0 0 0 auto;border:0;max-width:100%;height:auto\">\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:24px 24px 0px;direction:rtl;text-align:right\">\n<h1 style=\"margin:0;font-size:28px;line-height:34px;font-weight:600;color:#191d23;direction:rtl;text-align:right\">تخفيضات الصيف</h1>\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:16px 24px 0px;direction:rtl;text-align:right\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:rtl;text-align:right\">مرحبا {{first_name}}، وصلت مجموعة الصيف.</p>\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:16px 24px 0px;direction:rtl;text-align:right\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:rtl;text-align:right\">التوصيل مجاني ابتداء من 5000 دج.</p>\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:24px 24px 0px;direction:rtl;text-align:right\">\n<img src=\"https://shop.test/wp-content/uploads/hero.jpg\" alt=\"زربية\" width=\"552\" style=\"display:block;margin:0 0 0 auto;border:0;max-width:100%;height:auto\">\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:24px 24px 0px;direction:rtl;text-align:right\">\n<table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"right\" style=\"border-collapse:collapse\">\n<tr>\n<td align=\"center\" style=\"background-color:#00aa55;border-radius:6px;padding:12px 20px\">\n<a href=\"https://shop.test/boutique\" target=\"_blank\" style=\"margin:0;font-size:16px;line-height:24px;font-weight:600;color:#191d23;text-decoration:none;display:block\">اكتشف المجموعة</a>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n<tr>\n<td align=\"right\" style=\"padding:24px 24px 24px;direction:rtl;text-align:right\">\n<hr style=\"border:0;border-top:1px solid #e2e5ea;margin:0 0 16px\">\n<p style=\"margin:0;font-size:13px;line-height:20px;color:#59616e;direction:rtl;text-align:right\">متجر الزرابي، الجزائر العاصمة.</p>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "متجر الزرابي\n\nتخفيضات الصيف\n\nمرحبا {{first_name}}، وصلت مجموعة الصيف.\n\nالتوصيل مجاني ابتداء من 5000 دج.\n\nزربية\n\nاكتشف المجموعة: https://shop.test/boutique\n\nمتجر الزرابي، الجزائر العاصمة."
+    },
+    "minimal": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<h1 style=\"margin:0;font-size:28px;line-height:34px;font-weight:600;color:#191d23;direction:ltr;text-align:left\">Merci</h1>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:16px 24px 24px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">Votre commande {{order_number}} est en route.</p>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "Merci\n\nVotre commande {{order_number}} est en route."
+    },
+    "hostile": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<h1 style=\"margin:0;font-size:28px;line-height:34px;font-weight:600;color:#191d23;direction:ltr;text-align:left\">&lt;script&gt;alert(1)&lt;/script&gt; &amp; \"quotes\" 'and' &lt;b&gt;bold&lt;/b&gt;</h1>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:16px 24px 0px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">&lt;img src=x onerror=alert(1)&gt; mais aussi https://ok.test/a?b=1&amp;c=2</p>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 24px;direction:ltr;text-align:left\">\n<hr style=\"border:0;border-top:1px solid #e2e5ea;margin:0 0 16px\">\n<p style=\"margin:0;font-size:13px;line-height:20px;color:#59616e;direction:ltr;text-align:left\">Se désabonner : {{unsubscribe_url}}</p>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "<script>alert(1)</script> & \"quotes\" 'and' <b>bold</b>\n\n<img src=x onerror=alert(1)> mais aussi https://ok.test/a?b=1&c=2\n\nSe désabonner : {{unsubscribe_url}}"
+    },
+    "attributes": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<img src=\"https://shop.test/l.png?v=1&amp;size=2\" alt=\"L&apos;Artisan &quot;Alger&quot; &amp; Co\" width=\"180\" style=\"display:block;margin:0;border:0;max-width:100%;height:auto\">\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:16px 24px 0px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">L'été &amp; les \"soldes\" &lt; 5000 DA</p>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 24px;direction:ltr;text-align:left\">\n<table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"left\" style=\"border-collapse:collapse\">\n<tr>\n<td align=\"center\" style=\"background-color:#0b62d6;border-radius:6px;padding:12px 20px\">\n<a href=\"https://shop.test/x?a=1&amp;b=l&apos;ete\" target=\"_blank\" style=\"margin:0;font-size:16px;line-height:24px;font-weight:600;color:#ffffff;text-decoration:none;display:block\">L'offre</a>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "L'Artisan \"Alger\" & Co\n\nL'été & les \"soldes\" < 5000 DA\n\nL'offre: https://shop.test/x?a=1&b=l'ete"
+    },
+    "cta-token": {
+      "html": "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;background-color:#f6f7f9\">\n<tr>\n<td align=\"center\" style=\"padding:24px 12px\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\" style=\"width:100%;max-width:600px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e5ea;border-radius:8px\">\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 0px;direction:ltr;text-align:left\">\n<p style=\"margin:0;font-size:16px;line-height:26px;color:#191d23;direction:ltr;text-align:left\">Vous ne voulez plus de nos e-mails ?</p>\n</td>\n</tr>\n<tr>\n<td align=\"left\" style=\"padding:24px 24px 24px;direction:ltr;text-align:left\">\n<table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"left\" style=\"border-collapse:collapse\">\n<tr>\n<td align=\"center\" style=\"background-color:#ffd60a;border-radius:6px;padding:12px 20px\">\n<a href=\"{{unsubscribe_url}}\" target=\"_blank\" style=\"margin:0;font-size:16px;line-height:24px;font-weight:600;color:#191d23;text-decoration:none;display:block\">Se désabonner</a>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>\n</td>\n</tr>\n</table>",
+      "text": "Vous ne voulez plus de nos e-mails ?\n\nSe désabonner: {{unsubscribe_url}}"
+    },
+    "empty": {
+      "html": "",
+      "text": ""
+    }
+  }
+}

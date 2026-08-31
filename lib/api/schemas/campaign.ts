@@ -58,6 +58,43 @@ export const campaign = z.looseObject({
   body_html: z.string(),
   /** Authored, never stripped from the HTML. Both parts are required on write. */
   body_text: z.string(),
+  /**
+   * **The composer form's own answers, and `null` is a claim rather than a gap.**
+   *
+   * A nullable `mediumtext` column added on this branch —
+   * `migrations/014_add_campaign_body_fields.php:109` — emitted on every campaign
+   * read, present-and-`null` rather than absent (`Campaigns/Campaign.php:355`). The
+   * two states mean different things and the panel branches on both:
+   *
+   *   `null` — no answers were ever recorded. Hand-written HTML, a template, a
+   *   campaign that predates the column, or a column that would not parse. The
+   *   composer opens the **HTML editor**, so it can never regenerate an empty
+   *   message over a body somebody wrote by hand.
+   *
+   *   `{}` — the form was used and every answer is blank. The composer opens the
+   *   **form**. `CampaignsList.tsx` sends `body_fields: {}` on create so a campaign
+   *   the panel makes lands on this side.
+   *
+   * `z.unknown()` and not a modelled object, deliberately. The shape is
+   * `body-fields.ts`'s to know and `readValues()` there degrades field by field
+   * rather than throwing — a document written by an older shape of that file, or one
+   * whose value the backend's sanitiser rewrote, must open the campaign rather than
+   * blank the screen. Typing it here would move that decision to the boundary, where
+   * the only outcome available is a thrown parse.
+   *
+   * **`.optional()`, even though the branch's backend emits it on every read.**
+   * `Campaign::toArray()` always includes the key — so against a shop running this
+   * branch it is never absent — but the column arrives with a migration, and a shop
+   * that has not run it answers without the key at all. Requiring it here would turn
+   * a deployment ordering into a thrown parse on every campaign screen, which is the
+   * failure this file's header opens by refusing. The captured fixtures in
+   * `tests/campaign-schema.test.ts` are exactly that shop, and they still parse.
+   *
+   * Absent and `null` are the same claim to the panel — *no answers were ever
+   * recorded* — and `readValues()` answers `null` for both, so the degradation needs
+   * no second branch anywhere.
+   */
+  body_fields: z.unknown().optional(),
   audience: audience,
   status: z.enum(CAMPAIGN_STATUSES),
   /** Published, so the panel never carries its own transition table. */

@@ -44,11 +44,38 @@ export const storeSettings = z.looseObject({
   logo_id: z.number(),
   /**
    * The resolved attachment, or null. Read-only beside its own id — the same
-   * pairing a banner's `image`/`image_id` has, and the reason the panel shows
-   * the id rather than offering a picker: `MediaPicker` is `ac_manage_content`
-   * and would be the only control on this screen able to 403 on its own.
+   * pairing a banner's `image`/`image_id` has, and the reason the settings screen
+   * shows the id rather than offering a picker: `MediaPicker` is
+   * `ac_manage_content` and would be the only control on that screen able to 403
+   * on its own.
+   *
+   * ## It was `z.unknown()` for eleven branches, and it is modelled now
+   *
+   * The old note said the shape "was never captured", which was true and is no
+   * longer: `Settings\SettingsService::image()` is eight lines and returns exactly
+   * three keys — `SettingsService.php:194-209`, read from source on
+   * `feat/campaign-composer`.
+   *
+   *   `id`   the attachment id, the same number as `logo_id`
+   *   `url`  `wp_get_attachment_url()`, so **already absolute** — nothing needs to
+   *          call `/media/{id}` to resolve it. The host is this backend's
+   *          WordPress URL and deliberately not `storefront_url`, which is a
+   *          different value (`SettingsService.php:126-132`)
+   *   `alt`  `_wp_attachment_image_alt`, `""` when the attachment has none
+   *
+   * **There is no `width`**, which the campaign composer's logo prefill has to
+   * live with: `EmailImage.width` is `number | null` precisely for a source that
+   * does not know one, and the generator uses it only to avoid upscaling.
+   *
+   * **Branch on `logo`, never on `logo_id`.** The two disagree in one real state:
+   * an attachment deleted after being set leaves `logo_id` non-zero while
+   * `wp_get_attachment_url()` answers nothing, and the service reports `null`
+   * rather than a broken URL a storefront would render as a gap
+   * (`SettingsService.php:199-201`).
    */
-  logo: z.unknown().nullable(),
+  logo: z
+    .looseObject({ id: z.number(), url: z.string(), alt: z.string() })
+    .nullable(),
 });
 
 export const contactSettings = z.looseObject({

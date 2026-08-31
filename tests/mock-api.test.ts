@@ -14077,6 +14077,41 @@ describe("MOCK_SETTINGS", () => {
   });
 
   /**
+   * **The store logo, which had no fixture either — and the shape is read rather
+   * than invented.**
+   *
+   * The mock's own note used to say the resolved attachment "was never captured"
+   * and that making one up is forbidden. `Settings\SettingsService::image()` is
+   * eight lines and settles it: `id`, `url` from `wp_get_attachment_url()` and
+   * therefore already absolute, `alt` from `_wp_attachment_image_alt`, and **no
+   * width**. That last absence is the one the campaign composer's branding prefill
+   * has to live with.
+   *
+   * The default document keeps `logo_id: 0` and `logo: null`, which is the measured
+   * state of this install — so the prefill has a fixture on both sides.
+   */
+  it("resolves the store logo to an absolute URL, and to null by default", async () => {
+    try {
+      const populated = await freshSettings("populated");
+
+      expect(populated.store.logo).not.toBeNull();
+      expect(populated.store.logo?.id).toBe(populated.store.logo_id);
+      expect(populated.store.logo?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
+      expect(populated.store.logo?.alt).not.toBe("");
+      // `SettingsService::image()` publishes three keys and a width is not one of
+      // them, which is why `EmailImage.width` is null on a prefilled logo.
+      expect("width" in (populated.store.logo ?? {})).toBe(false);
+
+      const empty = await freshSettings("empty");
+      expect(empty.store.logo_id).toBe(0);
+      expect(empty.store.logo).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  /**
    * The long values, which the default cannot exercise at all: a form of empty
    * inputs proves nothing about DESIGN.md's "long strings render". Counted in
    * **code points** rather than UTF-16 units, which is the difference the Arabic
@@ -15388,6 +15423,243 @@ describe("the campaign writes", () => {
     expect(testDelivered(data)).toBe(false);
     expect(data.to).toBe("essai@example.test");
     expect(parse(recipientList, get("/campaigns/318/recipients")).data).toEqual([]);
+  });
+});
+
+/**
+ * ── `body_fields`: the composer form's answers, and the two states of the column ─
+ *
+ * Read from source in `../ecom-temp` on `feat/campaign-composer` rather than
+ * measured: the column is another agent's uncommitted work, so there is no live
+ * shop with it and nothing to run in-process from here. Each assertion names the
+ * PHP it reproduces, so a divergence is a diff against a cited line rather than an
+ * argument about what the API probably does.
+ */
+describe("the campaign's body fields", () => {
+  const draft = (body?: unknown) =>
+    write("POST", "/campaigns", {
+      name: "composeur",
+      subject: "s",
+      body_html: "",
+      body_text: "",
+      audience_type: "all",
+      ...(body === undefined ? {} : { body_fields: body }),
+    });
+
+  /**
+   * **The state every campaign in this shop is in.** The migration adds the column
+   * `NULL DEFAULT NULL` and argues the default at length: *"Defaulting to `{}` would
+   * tell the panel that every campaign in the shop's history was composed with a
+   * form that did not exist when they were written."* The panel answers `null` by
+   * opening the HTML editor.
+   */
+  it("reads null on every campaign that predates the composer", () => {
+    for (const id of [318, 319, 320]) {
+      const { data } = parse(campaignSchema, get(`/campaigns/${id}`));
+      expect(data.body_fields, `campaign ${id}`).toBeNull();
+    }
+
+    // Present-and-null rather than absent — `Campaign::toArray()` emits the key
+    // unconditionally, and the panel's `readValues()` leans on that being stable.
+    // The schema keeps it `.optional()` for a shop that has not run the migration,
+    // so only this can tell the two apart.
+    const row = (get("/campaigns/318").body as { data: Record<string, unknown> }).data;
+    expect("body_fields" in row).toBe(true);
+  });
+
+  it("leaves the column null when a create does not mention it", () => {
+    expect(parse(campaignSchema, draft()).data.body_fields).toBeNull();
+  });
+
+  /**
+   * **`{}` is a different claim from `null`, and it survives as an object.**
+   * `Campaign::encodedFields()` substitutes `new stdClass()` for a wholly empty
+   * top-level document so the column holds `{}` and not `[]`, and `toArray()` casts
+   * the outermost level back. This is the line the panel's create button depends on:
+   * without it a new draft would open the raw-HTML editor.
+   */
+  it("stores the empty form as an object and not as a list", () => {
+    const { data } = parse(campaignSchema, draft({}));
+
+    expect(data.body_fields).toEqual({});
+    expect(Array.isArray(data.body_fields)).toBe(false);
+  });
+
+  it("round-trips a composed document byte for byte", () => {
+    const answers = {
+      direction: "rtl",
+      brand_colour: "#c41e3a",
+      logo: { src: "https://shop.test/logo.png", alt: "Boutique", width: 320 },
+      title: "Soldes",
+      paragraphs: ["Bonjour {{first_name}},", "Tout à < 500 DA"],
+      image: null,
+      cta: { label: "Voir", href: "{{unsubscribe_url}}" },
+      footer: "",
+    };
+
+    const created = parse(campaignSchema, draft(answers)).data;
+    expect(created.body_fields).toEqual(answers);
+
+    // Including the two values that look like they might not survive: a hex colour,
+    // and prose with a bare `<` in it. `EmailHtml::looksLikeMarkup()` is
+    // `/<[a-zA-Z\/!]/`, and neither matches — no letter follows that `<`.
+    expect(parse(campaignSchema, get(`/campaigns/${created.id}`)).data.body_fields).toEqual(
+      answers,
+    );
+  });
+
+  /**
+   * **`EmailHtml::sanitizeDocument()` walks values only.** The key is copied
+   * verbatim; a string value that looks like markup goes through the same allowlist
+   * `body_html` does, which in this file is the `<script>` case and no more.
+   */
+  it("rewrites a value that looks like markup and leaves everything else alone", () => {
+    const { data } = parse(
+      campaignSchema,
+      draft({
+        title: "<script>alert(1)</script>ok",
+        footer: "Tout à < 500 DA",
+        brand_colour: "#c41e3a",
+        count: 3,
+        logo: null,
+      }),
+    );
+
+    expect(data.body_fields).toEqual({
+      title: "alert(1)ok",
+      // No letter follows the `<`, so `looksLikeMarkup()` does not match and the
+      // string is returned byte-identical.
+      footer: "Tout à < 500 DA",
+      brand_colour: "#c41e3a",
+      // Not strings, so nothing reaches them at all.
+      count: 3,
+      logo: null,
+    });
+  });
+
+  /**
+   * **A nested empty object comes back as `[]`, and a nested list stays a list.**
+   * The assoc decode plus a `stdClass` cast that is deliberately shallow, because
+   * *"a repeater of blocks is a list on purpose"*. `docs/API.md:1232` states it.
+   * The panel writes an absent block as `null` precisely so this cannot reach it.
+   */
+  it("loses a nested empty object, which the top level does not", () => {
+    const { data } = parse(campaignSchema, draft({ cta: {}, paragraphs: [], title: "x" }));
+
+    expect(data.body_fields).toEqual({ cta: [], paragraphs: [], title: "x" });
+  });
+
+  /**
+   * **`array_key_exists`, not `??`** — `Campaign::with()` at `Campaign.php:228` makes
+   * the distinction and its docblock calls it load-bearing. Three behaviours, and
+   * the panel uses two of them: it omits the key for a campaign with no answers and
+   * sends an object for one with them. It never sends `null`.
+   */
+  it("leaves the answers untouched when a patch omits the key", () => {
+    const id = parse(campaignSchema, draft({ title: "avant" })).data.id;
+
+    const patched = parse(campaignSchema, write("PATCH", `/campaigns/${id}`, { name: "après" }));
+    expect(patched.data.name).toBe("après");
+    expect(patched.data.body_fields).toEqual({ title: "avant" });
+  });
+
+  it("clears the answers on an explicit null, which is a write on its own", () => {
+    const id = parse(campaignSchema, draft({ title: "avant" })).data.id;
+
+    // Not "No supported fields were provided": `CampaignInput::isEmpty()` tests the
+    // field list rather than the values in it, so this is a real write.
+    const cleared = parse(campaignSchema, write("PATCH", `/campaigns/${id}`, {
+      body_fields: null,
+    }));
+    expect(cleared.data.body_fields).toBeNull();
+  });
+
+  it("replaces the answers wholesale rather than merging them", () => {
+    const id = parse(campaignSchema, draft({ title: "avant", footer: "pied" })).data.id;
+
+    const { data } = parse(
+      campaignSchema,
+      write("PATCH", `/campaigns/${id}`, { body_fields: { title: "après" } }),
+    );
+    expect(data.body_fields).toEqual({ title: "après" });
+  });
+
+  /**
+   * The five refusals, each with the sentence `CampaignInput` writes, all under
+   * `details.fields.body_fields` — which is what binds them to a control in the
+   * composer's `ErrorSummary`.
+   */
+  it("refuses a value that is not an object", () => {
+    for (const value of ["{}", 7, true]) {
+      const refused = draft(value);
+      expect(refused.status, String(value)).toBe(400);
+      expect(apiError(refused).fields?.body_fields).toBe(
+        "Must be a JSON object of the composer form's answers, or null to clear it — not a string, a list or a JSON-encoded string.",
+      );
+    }
+  });
+
+  it("refuses a non-empty list while accepting an empty one", () => {
+    expect(apiError(draft(["a"])).fields?.body_fields).toBe(
+      "Must be a JSON object: a form's answers are named, so a top-level array has nowhere to put the names.",
+    );
+
+    // `[]` and `{}` are the same value once PHP has decoded them, so an empty
+    // document is read as the empty object it almost certainly was.
+    expect(parse(campaignSchema, draft([])).data.body_fields).toEqual({});
+  });
+
+  /**
+   * The top level is depth 0 and ten further levels are allowed, so the twelfth
+   * array level is the first refusal. Bracketed rather than asserted at one point,
+   * because an off-by-one here is a 400 on a document the panel considers legal.
+   */
+  it("accepts a document at the depth cap and refuses one past it", () => {
+    const wrap = (times: number) => {
+      let value: unknown = "x";
+      for (let at = 0; at < times; at += 1) value = { a: value };
+      return value;
+    };
+
+    expect(draft(wrap(10)).status).toBe(201);
+    expect(apiError(draft(wrap(12))).fields?.body_fields).toBe(
+      "Nested deeper than 10 levels. Refused rather than trimmed, so the answers that come back are the answers that were sent.",
+    );
+  });
+
+  it("refuses a key over 64 bytes and a key containing markup", () => {
+    expect(apiError(draft({ ["a".repeat(65)]: 1 })).fields?.body_fields).toBe(
+      "A field name is at most 64 characters.",
+    );
+    expect(apiError(draft({ "<b>x": 1 })).fields?.body_fields).toBe(
+      "A field name may not contain markup.",
+    );
+  });
+
+  /**
+   * 65 536 bytes of encoded JSON, measured on the **pre-sanitised** document — which
+   * is the one refusal the composer can actually walk into, because `paragraphs` is
+   * unbounded and somebody can paste a book into it.
+   */
+  it("refuses a document over the byte cap rather than truncating it", () => {
+    const refused = draft({ paragraphs: ["x".repeat(70_000)] });
+
+    expect(refused.status).toBe(400);
+    expect(apiError(refused).fields?.body_fields).toContain("At most 65536 bytes of JSON.");
+    // Refused rather than truncated, because half a document reads back as no
+    // answers at all.
+    expect(apiError(refused).fields?.body_fields).toContain("Refused rather than truncated");
+  });
+
+  /**
+   * **Editing a non-draft is still 409, and the payload is checked first.**
+   * `CampaignInput::forUpdate()` runs before the editability guard, so an invalid
+   * `body_fields` sent to a sent campaign is a 400 and not a 409. Named because it
+   * is the kind of ordering a panel gets wrong when it guesses.
+   */
+  it("keeps the 409 on a sent campaign, behind the payload check", () => {
+    const sent = write("PATCH", "/campaigns/320", { body_fields: { title: "x" } });
+    expect(sent.status).toBe(409);
   });
 });
 
