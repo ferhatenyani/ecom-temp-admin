@@ -21,10 +21,18 @@ import {
   CAMPAIGN_STATUSES,
   CAMPAIGN_TONE,
   COMPOSER_STEPS,
+  CRITERION_CONTROL,
+  CRITERION_PAIRS,
+  MAX_ORDERS,
+  MAX_SPENT,
   RECIPIENT_STATUSES,
   REFUSED_CRITERIA,
   SEGMENT_CRITERIA,
   audienceProblem,
+  availableCriteria,
+  criterionBounds,
+  criterionProblem,
+  pairProblems,
   canAdvance,
   canCancel,
   canDelete,
@@ -451,13 +459,166 @@ describe("segments", () => {
     expect(hasCriteria({ min_orders: 1 })).toBe(true);
   });
 
-  it("refuses the seven the panel never offers, by name", () => {
+  it("refuses the eight the panel never offers, by name", () => {
     const err = error(fixtures.segmentRefusedCriterion);
     expect((err.details.fields as Record<string, string>).sql).toBeTypeOf("string");
     // Every refused name is one the criteria form has no control for.
     for (const name of REFUSED_CRITERIA) {
       expect(SEGMENT_CRITERIA).not.toContain(name as never);
     }
+  });
+
+  /**
+   * **Sub-task 4 of item 6, as a property rather than as a list.**
+   *
+   * The item asks that the screen stay *structurally incapable* of offering
+   * `consent` or `email_contains` — not that it happen not to offer them today,
+   * which is a thing a later edit removes without noticing.
+   *
+   * The compiler carries the first half: `CRITERION_CONTROL` is a
+   * `Record<SegmentCriterion, …>`, so a twelfth key is an excess-property error
+   * and a missing one is a missing-property error, and `CriterionField`'s switch
+   * over its values is exhaustive. A refused name therefore has no control to be
+   * drawn with, and adding one does not compile. That is not assertable from a
+   * test — `tsc --noEmit` is what asserts it — so this asserts the runtime half:
+   * the two vocabularies do not intersect, the option list is drawn from
+   * `SEGMENT_CRITERIA` alone, and every one of the eleven resolves to a control
+   * while none of the eight does.
+   *
+   * `REFUSED_CRITERIA` grew from seven to eight on this branch, read out of
+   * `SegmentCriteria::REFUSED` rather than counted from the note that said seven
+   * — `marketing_consent` is `consent`'s twin and both lists had missed it.
+   */
+  it("cannot offer a refused criterion, because none of them has a control", () => {
+    expect(REFUSED_CRITERIA).toHaveLength(8);
+    expect(REFUSED_CRITERIA).toContain("marketing_consent");
+
+    const controls = Object.keys(CRITERION_CONTROL);
+    // Exactly the eleven, in the same set — no more and no fewer.
+    expect(controls.toSorted()).toEqual([...SEGMENT_CRITERIA].toSorted());
+
+    for (const refused of REFUSED_CRITERIA) {
+      expect(controls, `${refused} has a control`).not.toContain(refused);
+      // And the picker, whose options are this function's answer and nothing else.
+      expect(availableCriteria([]), `${refused} is offered`).not.toContain(refused as never);
+    }
+
+    // Every criterion the picker offers can actually be drawn.
+    for (const key of availableCriteria([])) {
+      expect(CRITERION_CONTROL[key], `${key} has no control`).toBeTypeOf("string");
+    }
+  });
+
+  /**
+   * **A criterion appears at most once, and that is the wire's shape.**
+   *
+   * `criteria` is a JSON object keyed by criterion name — `fromPayload()`
+   * iterates `foreach ($payload as $field => $value)` and `Segment::toRow()`
+   * persists the result with `json_encode` — so two `min_spent` entries are not
+   * something the API refuses but something JSON cannot express. The UI's job is
+   * therefore not to reject a duplicate but to stop offering one whose value
+   * would silently replace the first.
+   */
+  it("stops offering a criterion the draft already holds", () => {
+    expect(availableCriteria(["min_spent"])).not.toContain("min_spent");
+    expect(availableCriteria([...SEGMENT_CRITERIA])).toEqual([]);
+    // An unknown key on a stored record consumes nothing.
+    expect(availableCriteria(["zzz"])).toHaveLength(SEGMENT_CRITERIA.length);
+  });
+
+  /**
+   * **Money and counts are not one rule**, which is what the shared
+   * `inputMode="decimal"` field made them look like.
+   *
+   * Each clause below is a line of `SegmentCriteria::parse()`: `^\d+(\.\d{1,2})?$`
+   * against `ctype_digit`, `MAX_SPENT = '99999999.99'` against
+   * `MAX_ORDERS = 100_000`, and the ceiling naming the two count fields so that
+   * the three id fields have none.
+   */
+  it("holds money and counts to the two different grammars the API has", () => {
+    // Money: two decimal places, no more, and no sign.
+    expect(criterionProblem("min_spent", "5000")).toBeNull();
+    expect(criterionProblem("min_spent", "5000.00")).toBeNull();
+    expect(criterionProblem("min_spent", "5000.5")).toBeNull();
+    expect(criterionProblem("min_spent", "10.999")).toBe("money");
+    expect(criterionProblem("min_spent", "-1")).toBe("money");
+    expect(criterionProblem("min_spent", MAX_SPENT)).toBeNull();
+    expect(criterionProblem("min_spent", "100000000")).toBe("range");
+
+    // A count: digits only. The decimal point money accepts is a 400 here.
+    expect(criterionProblem("min_orders", "3")).toBeNull();
+    expect(criterionProblem("min_orders", "3.0")).toBe("count");
+    expect(criterionProblem("min_orders", "-5")).toBe("count");
+    expect(criterionProblem("min_orders", String(MAX_ORDERS))).toBeNull();
+    expect(criterionProblem("min_orders", String(MAX_ORDERS + 1))).toBe("range");
+
+    // An id shares the count's shape and has **no ceiling** — `parse()`'s range
+    // clause names `min_orders` and `max_orders` and nothing else.
+    expect(criterionProblem("wilaya_id", "16")).toBeNull();
+    expect(criterionProblem("wilaya_id", "16.5")).toBe("id");
+    expect(criterionProblem("bought_product_id", String(MAX_ORDERS * 99))).toBeNull();
+
+    /* A date is the API's own `^\d{4}-\d{2}-\d{2}$` and nothing looser — no
+       `T`, no offset, no unpadded month. `parse()`'s second gate, `checkdate`,
+       is `DateField`'s: `parseEntry` reports `""` for 31 February, so a value
+       that reaches here has already been through a `Date.UTC` round trip. */
+    expect(criterionProblem("ordered_after", "2026-08-31")).toBeNull();
+    expect(criterionProblem("ordered_after", "2026-8-31")).toBe("date");
+    expect(criterionProblem("ordered_after", "2026-08-31T00:00:00Z")).toBe("date");
+    expect(criterionProblem("ordered_after", "31/08/2026")).toBe("date");
+
+    // Empty is not a problem: it is how a criterion is left unfilled, and
+    // `fromPayload()` skips a blank rather than refusing it.
+    for (const key of SEGMENT_CRITERIA) expect(criterionProblem(key, "  ")).toBeNull();
+  });
+
+  /**
+   * The five cross-field refusals, mirrored from `checkRanges()` — refusals the
+   * panel had no idea existed and that a form of individually perfect fields can
+   * still earn.
+   */
+  it("refuses an inverted range and a product bought and not bought", () => {
+    expect(CRITERION_PAIRS).toHaveLength(4);
+
+    expect(pairProblems({ min_spent: "500", max_spent: "100" })).toEqual({
+      max_spent: { rule: "order", other: "min_spent" },
+    });
+    expect(pairProblems({ min_spent: "100", max_spent: "500" })).toEqual({});
+    expect(pairProblems({ min_orders: "9", max_orders: "2" })).toEqual({
+      max_orders: { rule: "order", other: "min_orders" },
+    });
+    // Dates compare as fixed-width text, which is what `checkRanges()` does.
+    expect(pairProblems({ ordered_after: "2026-08-31", ordered_before: "2026-01-01" })).toEqual({
+      ordered_before: { rule: "order", other: "ordered_after" },
+    });
+    expect(
+      pairProblems({ registered_after: "2026-01-01", registered_before: "2026-08-31" }),
+    ).toEqual({});
+    expect(pairProblems({ bought_product_id: "2481", not_bought_product_id: "2481" })).toEqual({
+      not_bought_product_id: { rule: "same", other: "bought_product_id" },
+    });
+
+    // Half a pair is a perfectly good segment, and a malformed value is the
+    // *value's* problem — a range check over one is noise on top of a refusal.
+    expect(pairProblems({ min_spent: "500" })).toEqual({});
+    expect(pairProblems({ min_spent: "abc", max_spent: "100" })).toEqual({});
+  });
+
+  /**
+   * The bounds one half of a date pair puts on the other's calendar. They stop
+   * the grid drawing days `checkRanges()` would refuse; the refusal itself still
+   * comes from `pairProblems`, because `DatePicker` bounds a pointer and never
+   * the keyboard.
+   */
+  it("bounds a date criterion by the other end of its pair", () => {
+    const draft = { ordered_after: "2026-01-01", ordered_before: "2026-08-31" };
+    expect(criterionBounds("ordered_after", draft)).toEqual({ max: "2026-08-31" });
+    expect(criterionBounds("ordered_before", draft)).toEqual({ min: "2026-01-01" });
+    // Pairs do not cross: a registration date is not bounded by an order date.
+    expect(criterionBounds("registered_after", draft)).toEqual({});
+    expect(criterionBounds("ordered_after", {})).toEqual({});
+    // Nothing that is not a date has bounds at all.
+    expect(criterionBounds("min_spent", { max_spent: "500" })).toEqual({});
   });
 
   it("refuses to delete a segment a campaign uses, naming how many", () => {

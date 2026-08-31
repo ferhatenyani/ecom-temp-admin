@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Segment } from "@/lib/api/schemas/campaign";
+import type { Wilaya } from "@/lib/api/schemas/order";
 import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import { useOnline } from "@/lib/use-online";
 import { formatWhen } from "@/lib/format/date";
@@ -87,6 +88,8 @@ export function SegmentsList({
   initialSegments,
   initialTotal,
   canCount,
+  wilayas,
+  canPickProducts,
 }: {
   locale: string;
   initialQuery: SegmentsQuery;
@@ -100,6 +103,15 @@ export function SegmentsList({
    * permission they are.
    */
   canCount: boolean;
+  /**
+   * The 69, for the editor's wilaya criterion. Fetched once by the page rather
+   * than by the dialog, which is what the panel's other five wilaya pickers do
+   * and what keeps an unpaginated public list from being re-fetched per open.
+   * `[]` when the read failed; the editor draws that state.
+   */
+  wilayas: Wilaya[];
+  /** `ac_manage_coupons`. `product-lookup.ts` argues the capability. */
+  canPickProducts: boolean;
 }) {
   const t = useTranslations("campaigns");
   const tStates = useTranslations("states");
@@ -359,6 +371,9 @@ export function SegmentsList({
           open
           segment={editing === "new" ? null : editing}
           canCount={canCount}
+          wilayas={wilayas}
+          locale={locale}
+          canPickProducts={canPickProducts}
           returnFocusTo={
             editing === "new" ? createId : segmentOpenerId(editing.id)
           }

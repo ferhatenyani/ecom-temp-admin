@@ -925,7 +925,21 @@ describe("the proxy allowlist", () => {
     // accumulating is what makes "one *live* shipment per order" the constraint.
     expect(checkAllowed(["shipments", "220"], "DELETE").allowed).toBe(false);
 
-    // The commune picker the rule form and the rate tester both need.
+    /*
+     * The wilaya list, and the commune picker the rule form and the rate tester
+     * both need.
+     *
+     * **No allowlist change on the segment-pickers branch**, and that is worth
+     * asserting rather than assuming: the segment criteria form grew a wilaya
+     * picker and a product search, and all three routes they reach —
+     * `/locations/wilayas` here, `/coupons/eligible-products` below, and
+     * `/products` which that screen deliberately does not read — were already on
+     * this list. A screen reaching a route it was not given is the thing this
+     * file exists to catch, and a screen whose new controls needed no widening
+     * at all is the thing worth writing down.
+     */
+    expect(checkAllowed(["locations", "wilayas"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["locations", "wilayas"], "POST").allowed).toBe(false);
     expect(checkAllowed(["locations", "wilayas", "16", "communes"], "GET").allowed).toBe(true);
     expect(checkAllowed(["locations", "communes", "484"], "GET").allowed).toBe(false);
     expect(checkAllowed(["locations", "coverage"], "GET").allowed).toBe(false);

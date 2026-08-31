@@ -197,6 +197,7 @@ import {
 import {
   CAMPAIGN_STATUSES,
   RECIPIENT_STATUSES,
+  REFUSED_CRITERIA,
   SEGMENT_CRITERIA,
   canCancel,
   canDelete,
@@ -9985,6 +9986,71 @@ describe("the coupon pickers", () => {
     ).toBe(1);
   });
 
+  /**
+   * **`?include=` — the only batch lookup this API has**, served here from the
+   * segment-pickers branch on and unserved before it.
+   *
+   * `CouponController::pickerArgs():274-292` declares it beside `search`;
+   * `CouponRepository:135-143` is what makes it worth having. It is the reason
+   * the segment criteria form names its two product ids in **one** request,
+   * where `/products` — which declares no `include` at all,
+   * `ProductController::indexArgs()` — offers no way to do it under any number
+   * of requests but one per id.
+   */
+  it("resolves an explicit id set in one request, outside the page", () => {
+    const { data, meta } = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "include=201,104"),
+    );
+
+    expect(data.map((row) => row.id).sort()).toEqual([104, 201]);
+    expect(meta.total).toBe(2);
+
+    // Deduped, like `CouponController::idList()`'s `array_unique`.
+    expect(
+      parseList(eligibleProductList, get("/coupons/eligible-products", "include=104,104"))
+        .data,
+    ).toHaveLength(1);
+
+    /*
+     * **The status window widens to `any`** — `$args['post_status'] = 'any'`,
+     * under the plugin's own comment *"a trashed product in that set still has a
+     * name"*. Product 211 is the fixture's trashed row and is absent from every
+     * listing above; a segment that named it before it was trashed still reads
+     * back with a name rather than as a bare number, which is the whole case a
+     * resolution exists for.
+     */
+    const trashed = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "include=211"),
+    );
+    expect(trashed.data).toHaveLength(1);
+    expect(trashed.data[0].status).toBe("trash");
+
+    /* **Paging is bypassed** — `posts_per_page = count($include)` — so a
+       resolution can never come back short of what it asked for. */
+    const three = parseList(
+      eligibleProductList,
+      get("/coupons/eligible-products", "include=104,201,207&per_page=1"),
+    );
+    expect(three.data).toHaveLength(3);
+
+    // `search` is folded in only when `include` is empty (`CouponRepository:171`).
+    expect(
+      parseList(
+        eligibleProductList,
+        get("/coupons/eligible-products", "include=104&search=zzzqqq"),
+      ).data,
+    ).toHaveLength(1);
+
+    /* An id naming nothing is simply absent — not a 404, and not a null row.
+       That is what a segment holding a since-deleted product gets, and the panel
+       renders the bare id rather than clearing a value the API still stores. */
+    const gone = parseList(eligibleProductList, get("/coupons/eligible-products", "include=99999"));
+    expect(gone.data).toEqual([]);
+    expect(gone.meta.total).toBe(0);
+  });
+
   /** GET only. The allowlist gives these two no other verb. */
   it("refuses every verb but GET on both pickers", () => {
     expect(write("POST", "/coupons/eligible-products", {}).status).toBe(404);
@@ -14966,11 +15032,20 @@ describe("POST /segments — the refusals", () => {
   });
 
   /**
-   * The seven refused by name, verbatim. They are quoted rather than
+   * The **eight** refused by name, verbatim. They are quoted rather than
    * paraphrased because a person reading `lib/campaigns.ts` will wonder why
    * `email_contains` is not a criterion, and the reason is the answer.
+   *
+   * It was seven here and seven in `lib/campaigns.ts` until the segment-pickers
+   * branch read `SegmentCriteria::REFUSED` instead of counting the note that
+   * said seven. `marketing_consent` is the eighth — `consent`'s twin, refused
+   * under the name the customer record uses for the flag — and the two lists
+   * agreeing had been two copies of one gap rather than a check.
+   *
+   * `REFUSED_CRITERIA` is iterated rather than spelled out, so the next name the
+   * shop adds cannot be missed here the way this one was.
    */
-  it("refuses the seven by name, each with the reason the shop gives", () => {
+  it("refuses the eight by name, each with the reason the shop gives", () => {
     expect(apiError(post({ name: "p", criteria: { sql: "1" } })).fields?.sql).toBe("No.");
     expect(apiError(post({ name: "p", criteria: { limit: 10 } })).fields?.limit).toBe(
       "A segment is a definition, not a page of results. A campaign sends to everyone the definition matches.",
@@ -14978,9 +15053,19 @@ describe("POST /segments — the refusals", () => {
     expect(apiError(post({ name: "p", criteria: { consent: 1 } })).fields?.consent).toContain(
       "Consent is applied to every audience by the resolver",
     );
-    for (const key of ["email", "email_contains", "role", "commune_id"]) {
-      expect(apiError(post({ name: "p", criteria: { [key]: "x" } })).fields?.[key], key)
-        .toBeTruthy();
+    expect(
+      apiError(post({ name: "p", criteria: { marketing_consent: 1 } })).fields
+        ?.marketing_consent,
+    ).toBe("Consent is applied to every audience by the resolver and is never a criterion.");
+
+    expect(REFUSED_CRITERIA).toHaveLength(8);
+    for (const key of REFUSED_CRITERIA) {
+      const refused = post({ name: "p", criteria: { [key]: "x" } });
+      expect(refused.status, key).toBe(400);
+      // Its own sentence, never the generic "Unknown criterion" — the plugin
+      // walks `REFUSED` before it walks `FIELDS`.
+      expect(apiError(refused).fields?.[key], key).toBeTruthy();
+      expect(apiError(refused).fields?.[key], key).not.toContain("Unknown criterion");
     }
   });
 
@@ -15018,6 +15103,94 @@ describe("POST /segments — the refusals", () => {
       apiError(post({ name: "p", criteria: { registered_after: "nope" } })).fields
         ?.registered_after,
     ).toBe("Must be Y-m-d.");
+  });
+
+  /**
+   * **Three grammars this file used to be looser about than the shop is**, and
+   * every one of them is the mock being *more permissive than the wire* — the
+   * failure the `/customers` gate is written up as having cost: a mock that
+   * accepts what the API refuses manufactures a passing screenshot of a broken
+   * screen.
+   *
+   * The 2026-08-28 pass measured the *sentence* each kind answers with by
+   * sending one wrong value per kind, which is a different question from what
+   * each kind **accepts**. These are read out of `SegmentCriteria::parse()`,
+   * because a regex is exact where a sample of one is not.
+   */
+  it("holds money to two decimal places and a count to digits alone", () => {
+    // `^\d+(\.\d{1,2})?$` — this file had `(\.\d+)?` and took `10.999`.
+    expect(post({ name: "p", criteria: { min_spent: "10.99" } }).status).toBe(201);
+    expect(apiError(post({ name: "p", criteria: { min_spent: "10.999" } })).fields?.min_spent).toBe(
+      'Must be a decimal amount, e.g. "5000.00".',
+    );
+
+    // `ctype_digit` — no sign. This file had `/^-?\d+$/` and took `-5`.
+    expect(apiError(post({ name: "p", criteria: { min_orders: "-5" } })).fields?.min_orders).toBe(
+      "Must be a whole number.",
+    );
+    // And no decimal point, which is the whole difference from money.
+    expect(apiError(post({ name: "p", criteria: { min_orders: "3.0" } })).fields?.min_orders).toBe(
+      "Must be a whole number.",
+    );
+
+    /* The two ceilings — `MAX_ORDERS = 100_000` and `MAX_SPENT = 99999999.99` —
+       neither of which existed here, so a segment asking for a million orders
+       was a 201. `Out of range.` is its own sentence, not the shape one. */
+    expect(post({ name: "p", criteria: { min_orders: 100000 } }).status).toBe(201);
+    expect(apiError(post({ name: "p", criteria: { min_orders: 100001 } })).fields?.min_orders).toBe(
+      "Out of range.",
+    );
+    expect(post({ name: "p", criteria: { min_spent: "99999999.99" } }).status).toBe(201);
+    expect(apiError(post({ name: "p", criteria: { max_spent: "100000000" } })).fields?.max_spent)
+      .toBe("Out of range.");
+
+    /* **The ceiling names the two count fields and nothing else.** A product id
+       is not a quantity, and `parse()`'s range clause says so by field name — so
+       an id far past 100 000 is a 201. */
+    expect(post({ name: "p", criteria: { bought_product_id: 9_900_000 } }).status).toBe(201);
+  });
+
+  /**
+   * `SegmentCriteria::checkRanges()` — four cross-field rules this file did not
+   * have at all, and refusals a form of individually perfect fields can earn.
+   *
+   * They run only once every value has parsed, which is `fromPayload()`'s own
+   * order, so an inverted range never masks a malformed value.
+   */
+  it("refuses an inverted range and a product both bought and not bought", () => {
+    expect(
+      apiError(post({ name: "p", criteria: { min_spent: "500", max_spent: "100" } })).fields
+        ?.max_spent,
+    ).toBe("Must be at least min_spent.");
+    expect(
+      apiError(post({ name: "p", criteria: { min_orders: 9, max_orders: 2 } })).fields
+        ?.max_orders,
+    ).toBe("Must be at least min_orders.");
+    expect(
+      apiError(
+        post({
+          name: "p",
+          criteria: { ordered_after: "2026-08-31", ordered_before: "2026-01-01" },
+        }),
+      ).fields?.ordered_before,
+    ).toBe("Must not be earlier than ordered_after.");
+    expect(
+      apiError(
+        post({
+          name: "p",
+          criteria: { bought_product_id: 104, not_bought_product_id: 104 },
+        }),
+      ).fields?.not_bought_product_id,
+    ).toBe("Cannot be the same product as bought_product_id.");
+
+    // The right way round is a 201, and equal ends are not inverted.
+    expect(post({ name: "p", criteria: { min_spent: "100", max_spent: "500" } }).status).toBe(201);
+    expect(post({ name: "p", criteria: { min_orders: 2, max_orders: 2 } }).status).toBe(201);
+
+    // A malformed value is reported alone: the range check never ran.
+    const both = apiError(post({ name: "p", criteria: { min_spent: "abc", max_spent: "1" } }));
+    expect(both.fields?.min_spent).toBeTruthy();
+    expect(both.fields).not.toHaveProperty("max_spent");
   });
 
   it("creates with 201 and refuses to delete a segment a campaign names", () => {

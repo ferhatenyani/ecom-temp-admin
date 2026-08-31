@@ -2169,8 +2169,8 @@
       "registered_after": "سُجِّل بعد",
       "registered_before": "سُجِّل قبل",
       "wilaya_id": "ولاية التسليم",
-      "bought_product_id": "اشترى المنتج رقم",
-      "not_bought_product_id": "لم يشترِ المنتج رقم"
+      "bought_product_id": "اشترى المنتج",
+      "not_bought_product_id": "لم يشترِ المنتج"
     },
     "recipient": {
       "pending": "قيد الانتظار",
@@ -2330,7 +2330,21 @@
         "money": "مبلغ عشري، مثل 5000.00.",
         "count": "عدد صحيح.",
         "id": "رقم صحيح.",
-        "date": "تاريخ بصيغة سنة-شهر-يوم."
+        "date": "تاريخ بصيغة سنة-شهر-يوم.",
+        "tooLargeMoney": "{max} على الأكثر.",
+        "tooLargeCount": "{max} على الأكثر."
+      },
+      "wilayaUnknown": "الولاية رقم {id}",
+      "wilayaUnknownWhy": "هذا المعرّف لا يطابق أي ولاية معروفة. يُحتفظ به كما هو.",
+      "wilayasUnavailable": "تعذّر تحميل قائمة الولايات. تبقى القيمة المحفوظة كما هي.",
+      "productNone": "لا منتج",
+      "productSearchFirst": "ابحث عن منتج لاختياره.",
+      "productUnknown": "المنتج رقم {id} — غير موجود",
+      "productIdWhy": "لا يستطيع حسابك قراءة الكتالوج، لذلك البحث غير متاح. ترفض الواجهة أي معرّف غير معروف.",
+      "unknownCriterionKept": "هذا المعيار غير معروف لدى هذه اللوحة. تبقى قيمته كما هي.",
+      "conflict": {
+        "order": "يجب ألّا يقلّ عن «{name}».",
+        "sameProduct": "لا يمكن أن يكون نفس منتج «{name}»."
       }
     },
     "template": {

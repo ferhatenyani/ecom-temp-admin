@@ -347,7 +347,259 @@ export function isSegmentCriterion(value: string): value is SegmentCriterion {
 }
 
 /**
- * The seven refused **by name, with a reason**, and the reasons are worth
+ * Which **control** draws each criterion — and this map is the whole of what
+ * makes the refused names structurally unreachable rather than merely unoffered.
+ *
+ * `CRITERION_KIND` above says what the *wire* wants and is unchanged: it is what
+ * decides whether a value is sent as a number or as a string, and three
+ * criteria share the kind `id` because the wire cannot tell them apart. A screen
+ * keyed on it can only ever draw one id field three times, which is the state
+ * this item was opened to fix, so the rendering question gets its own map rather
+ * than a widened version of that one. Two maps, two questions, neither guessing
+ * at the other's answer.
+ *
+ * **`Record<SegmentCriterion, …>` is load-bearing and not a type annotation for
+ * its own sake.** TypeScript requires this object to have *exactly* the eleven
+ * keys: a twelfth is an excess-property error and a missing one is a
+ * missing-property error. `SegmentModal` reaches its control through this map
+ * and through nothing else, so `consent`, `marketing_consent`, `email_contains`
+ * and the five beside them have no control to be drawn with — not "no option is
+ * offered for them today", which is a property a later edit can quietly remove,
+ * but *no code path exists that could draw one*. Adding one would not compile.
+ * `tests/campaign-schema.test.ts` asserts the runtime half of the same claim.
+ *
+ *   money     a decimal field. `NumberField`.
+ *   count     a whole number with a ceiling. `NumberField` under a different rule
+ *             — see `criterionProblem`, the two are genuinely different grammars.
+ *   date      `DateField`, item 5's drawn calendar. `Y-m-d` in, `Y-m-d` out.
+ *   wilaya    a `Select` over the 69, showing the name and storing the id.
+ *   product   a search that shows a product's name and stores its id.
+ */
+export const CRITERION_CONTROL: Record<
+  SegmentCriterion,
+  "money" | "count" | "date" | "wilaya" | "product"
+> = {
+  min_spent: "money",
+  max_spent: "money",
+  min_orders: "count",
+  max_orders: "count",
+  ordered_after: "date",
+  ordered_before: "date",
+  registered_after: "date",
+  registered_before: "date",
+  wilaya_id: "wilaya",
+  bought_product_id: "product",
+  not_bought_product_id: "product",
+};
+
+/**
+ * Which criteria may still be added, given the ones a draft already holds.
+ *
+ * **A criterion can appear at most once, and that is the wire's shape rather
+ * than a rule this panel invented.** `criteria` is a JSON *object keyed by
+ * criterion name* — `SegmentCriteria::fromPayload()` iterates
+ * `foreach ($payload as $field => $value)` and writes `$fields[$field]`, and
+ * `Segment::toRow()` persists the result with `json_encode`. Two `min_spent`
+ * entries are therefore not something the API refuses; they are something JSON
+ * cannot express, and a body carrying both is collapsed to the last by the
+ * decoder before any of the plugin's code runs. Read from source rather than
+ * measured, because the measurement cannot be constructed.
+ *
+ * So the UI does not need a duplicate rule — it needs to not *offer* a second
+ * copy of a criterion whose value would silently replace the first, which is
+ * what this does. The draft is a `Record` for the same reason: the state and the
+ * wire have the same shape, so a duplicate is unrepresentable in both.
+ */
+export function availableCriteria(used: readonly string[]): SegmentCriterion[] {
+  return SEGMENT_CRITERIA.filter((key) => !used.includes(key));
+}
+
+/* ------------------------------------------------- what a value has to be --- */
+
+/**
+ * The two ceilings, read from `Campaigns/SegmentCriteria.php:93-96`.
+ *
+ * They are the plugin's own constants — `MAX_ORDERS = 100_000` under the comment
+ * *"A segment asking for a million orders is a typo, not a query"*, and
+ * `MAX_SPENT = '99999999.99'`. Neither was reachable from this screen before,
+ * because nothing here validated anything.
+ *
+ * **The order ceiling applies to `min_orders`/`max_orders` and to nothing
+ * else.** `parse()`'s range clause names those two fields explicitly, so
+ * `wilaya_id`, `bought_product_id` and `not_bought_product_id` are unbounded
+ * above — which is correct, since a product id is not a quantity.
+ */
+export const MAX_ORDERS = 100_000;
+export const MAX_SPENT = "99999999.99";
+
+/**
+ * **Money and counts are not one rule wearing two labels**, and this function is
+ * where that stops being true of the panel.
+ *
+ * Both were a `TextField` with `inputMode="decimal"` and no validation at all,
+ * so the screen offered the same grammar for an amount and for a quantity and
+ * refused neither. The API has never agreed — `SegmentCriteria::parse()`:
+ *
+ *   money   `preg_match('/^\d+(\.\d{1,2})?$/', $raw)`, then `> MAX_SPENT`.
+ *           **At most two decimal places**, which is the part no message in this
+ *           panel said: `10.999` is a 400 reading "Must be a decimal amount".
+ *           Returned as the **string** it arrived as, never a float.
+ *   count   `ctype_digit($raw)`, then `> MAX_ORDERS`. No decimal point at all,
+ *           and **no sign** — `-1` fails at `ctype_digit`, which is why the
+ *           `$number < 0` line beneath it is unreachable. Cast to `int`.
+ *   id      `ctype_digit` and nothing more. Existence is **not** checked: the
+ *           class is documented "Pure — no WordPress, no database", so
+ *           `wilaya_id: 999` and a product id naming nothing are both stored.
+ *
+ * The panel's own controls now produce well-formed values for all three, so this
+ * exists for what a person can still type into them — and for the ceiling, which
+ * a picker cannot enforce because there is nothing to pick.
+ *
+ * Returns a key rather than a sentence: the words are the message files' and the
+ * hint under the field has to say the same thing before the refusal as after it.
+ */
+export function criterionProblem(
+  key: SegmentCriterion,
+  raw: string,
+): "money" | "count" | "id" | "date" | "range" | null {
+  const value = raw.trim();
+  if (value === "") return null;
+
+  const kind = CRITERION_KIND[key];
+
+  if (kind === "date") {
+    /*
+     * `parse()`'s date arm is two gates and this is only the first of them —
+     * `^\d{4}-\d{2}-\d{2}$`, then `checkdate($m, $d, $y)` so that `2026-02-31`
+     * is *"Not a real date."* rather than a pattern that MySQL would quietly
+     * read as March.
+     *
+     * The second gate lives one layer up rather than here, and deliberately:
+     * `DateField` reports `parseEntry(text) ?? ""` and `parseEntry` goes through
+     * `makeYmd`, whose whole method is a `Date.UTC` round trip compared back
+     * against what was asked — which is `checkdate` in JavaScript. So a caller
+     * of this function cannot be holding 31 February, because the control that
+     * produced the value already refused it in the reader's own words. Repeating
+     * the calendar arithmetic here would make `lib/campaigns.ts` import
+     * `lib/calendar.ts` for a case that cannot arrive, and this module's first
+     * line is that it has no dependencies.
+     */
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? null : "date";
+  }
+
+  if (kind === "money") {
+    if (!/^\d+(\.\d{1,2})?$/.test(value)) return "money";
+    /* `(float) $raw > (float) self::MAX_SPENT` — a float comparison on the
+       plugin's side too, so this mirrors it rather than comparing strings. */
+    return Number(value) > Number(MAX_SPENT) ? "range" : null;
+  }
+
+  /* `ctype_digit`, for a count and for an id alike. The two differ below it. */
+  if (!/^\d+$/.test(value)) return kind === "count" ? "count" : "id";
+
+  return kind === "count" && Number(value) > MAX_ORDERS ? "range" : null;
+}
+
+/**
+ * The four cross-field rules, mirrored from `SegmentCriteria::checkRanges()`.
+ *
+ * **These are refusals the panel had no idea existed**, and every one of them is
+ * reachable from a form whose fields are individually perfect:
+ *
+ *   max_spent              `Must be at least min_spent.`
+ *   max_orders             `Must be at least min_orders.`
+ *   ordered_before         `Must not be earlier than ordered_after.`
+ *   registered_before      the same, for the registration pair
+ *   not_bought_product_id  `Cannot be the same product as bought_product_id.`
+ *
+ * The plugin refuses an inverted range rather than resolving it to an empty
+ * audience, and says why in its own docblock: *"an audience of nobody looks
+ * exactly like a segment whose customers have not shopped yet"*. That is the
+ * same argument this screen already makes about `wilaya_id`, so the panel says
+ * it in its own words **before** the request rather than surfacing the API's
+ * English after it.
+ *
+ * The date comparison is lexical and that is safe rather than lucky: the format
+ * is a fixed-width `Y-m-d` the API validates with `^\d{4}-\d{2}-\d{2}$`, so
+ * lexical order *is* chronological order — the same property `sendProgress`
+ * relies on for an offsetless stamp, one collection over.
+ *
+ * Keyed by the field the API blames, so the message lands on the control the
+ * API would have named. A pair with a hole in it is not a conflict: one endpoint
+ * of a range is a perfectly good segment.
+ */
+export const CRITERION_PAIRS = [
+  ["min_spent", "max_spent"],
+  ["min_orders", "max_orders"],
+  ["ordered_after", "ordered_before"],
+  ["registered_after", "registered_before"],
+] as const;
+
+/** The verdict, and **the other field it is about** — the message names it. */
+export type PairProblem = { rule: "order" | "same"; other: SegmentCriterion };
+
+export function pairProblems(
+  criteria: Readonly<Record<string, string>>,
+): Partial<Record<SegmentCriterion, PairProblem>> {
+  const problems: Partial<Record<SegmentCriterion, PairProblem>> = {};
+
+  const read = (key: SegmentCriterion) => {
+    const value = criteria[key]?.trim() ?? "";
+    return value === "" || criterionProblem(key, value) !== null ? null : value;
+  };
+
+  for (const [lower, upper] of CRITERION_PAIRS) {
+    const low = read(lower);
+    const high = read(upper);
+    if (low === null || high === null) continue;
+
+    /* Numbers compare as numbers and dates as text, which is the same split
+       `checkRanges()` makes — `(float)`/`(int)` for the first two pairs and a
+       bare `>` on two fixed-width strings for the other two. */
+    const inverted =
+      CRITERION_KIND[lower] === "date" ? low > high : Number(low) > Number(high);
+    if (inverted) problems[upper] = { rule: "order", other: lower };
+  }
+
+  const bought = read("bought_product_id");
+  if (bought !== null && bought === read("not_bought_product_id")) {
+    problems.not_bought_product_id = { rule: "same", other: "bought_product_id" };
+  }
+
+  return problems;
+}
+
+/**
+ * The bounds one half of a date pair puts on the other, for `DateField`'s grid.
+ *
+ * `DatePicker` refuses an out-of-range day to a **pointer** and never to the
+ * keyboard, and its own docblock says why: a typed value has to reach the
+ * field's rule and the API's message, and a control that silently clamped what
+ * was typed would hide both. So this makes the calendar stop drawing days the
+ * pair above has already ruled out, while `pairProblems` stays the thing that
+ * actually speaks. `RangeControl` and the filter rows pass bounds on exactly
+ * that understanding.
+ */
+export function criterionBounds(
+  key: SegmentCriterion,
+  criteria: Readonly<Record<string, string>>,
+): { min?: string; max?: string } {
+  for (const [after, before] of CRITERION_PAIRS) {
+    if (CRITERION_KIND[after] !== "date") continue;
+    if (key === after) {
+      const upper = criteria[before]?.trim();
+      return upper ? { max: upper } : {};
+    }
+    if (key === before) {
+      const lower = criteria[after]?.trim();
+      return lower ? { min: lower } : {};
+    }
+  }
+  return {};
+}
+
+/**
+ * The **eight** refused by name, with a reason, and the reasons are worth
  * reading rather than paraphrasing:
  *
  *   consent  "Consent is applied to every audience by the resolver and is never
@@ -359,9 +611,26 @@ export function isSegmentCriterion(value: string): value is SegmentCriterion {
  * from the UI. They are listed because a person reading this file will wonder why
  * `email_contains` is not a criterion, and because the criteria form's help text
  * says so.
+ *
+ * **`marketing_consent` was the eighth and this list did not have it**, found on
+ * the segment-pickers branch by reading `SegmentCriteria::REFUSED` rather than by
+ * trusting the count. It is `consent`'s twin — the same refusal under the name a
+ * client is more likely to reach for, since `consent` is what the *resolver*
+ * calls the flag and `marketing_consent` is what the customer record calls it —
+ * and the plugin refuses both with near-identical sentences. Nothing on screen
+ * changed: the panel offered neither before and offers neither now. What changed
+ * is that this list is a **complete** copy of a server-side constant again, which
+ * is the only thing that makes the test beneath it worth running. `scripts/
+ * mock-api.mjs` carried the same gap and is corrected with it.
+ *
+ * These are refused **explicitly and by name**, not merely by being absent from
+ * `FIELDS`: `fromPayload()` walks `REFUSED` first and answers each one with its
+ * own bespoke reason, where an unrecognised name gets the generic "Unknown
+ * criterion. Supported: …". Two different 400 bodies for two different mistakes.
  */
 export const REFUSED_CRITERIA = [
   "consent",
+  "marketing_consent",
   "email",
   "email_contains",
   "role",

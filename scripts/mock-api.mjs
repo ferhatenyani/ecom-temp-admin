@@ -16264,15 +16264,85 @@ function couponsListing(params) {
  * SKUs here are load-bearing — the 60-character one the overflow assertion needs,
  * and `AC-CAT-0101`, which is what makes the products 409 reachable.
  */
+/**
+ * ── `?include=` — the one batch lookup in this API, added on the pickers branch ──
+ *
+ * `CouponController::pickerArgs():274-292` declares it beside `search`, with the
+ * pattern `^$|^[0-9]+(,[0-9]+)*$`, and it was **not served here** — a request
+ * carrying it got the unfiltered first page, which is the shape of mock defect
+ * this file's own `/customers` note calls out: a screen resolving two ids would
+ * have looked like it worked and been reading whichever products sorted first.
+ *
+ * The marketing segments form is what needs it. A saved segment carries at most
+ * one `bought_product_id` and one `not_bought_product_id` — `criteria` is a JSON
+ * object keyed by criterion name, so two of either is unrepresentable — and
+ * naming them is one request rather than two, because `/products` declares no
+ * `include` at all (`ProductController::indexArgs()`) and never has.
+ *
+ * Three behaviours, all from `CouponRepository:135-143`, and each one matters to
+ * a caller:
+ *
+ *   paging is bypassed    `posts_per_page = count($include)`, `paged = 1`. An id
+ *                         set is never truncated by a page size, so a resolution
+ *                         cannot come back short.
+ *   the status widens     `post_status = 'any'`, under the plugin's own comment
+ *                         *"a trashed product in that set still has a name"*. So
+ *                         a segment naming a since-trashed product still reads
+ *                         back with a name — which the default `publish, draft`
+ *                         window would not give it, and which is exactly the case
+ *                         a resolution exists for.
+ *   `search` is ignored   `CouponRepository:171-173` folds the SKU match in only
+ *                         when `include` is empty. The two are never combined.
+ *
+ * `total` is `count($items)` rather than `found_posts` (`:175-178`), so the
+ * envelope reports what came back rather than the size of the catalogue. An id
+ * naming nothing is simply absent — not a 404, and not a null row.
+ *
+ * Read from source rather than measured, and said so: the live route is 401 to
+ * this harness (`BLOCKED.md`), and `include`'s three behaviours are all in the
+ * one `if` above.
+ */
 function eligibleProductsListing(params) {
   // The listed catalogue: a trashed product cannot be picked, and a draft can —
   // a coupon may legitimately be restricted to one.
-  const rows = listed().map((product) => ({
+  const shape = (product) => ({
     id: product.id,
     name: product.name,
     sku: product.sku === "" ? null : product.sku,
     status: product.status,
-  }));
+  });
+
+  const include = (params.get("include") ?? "")
+    .split(",")
+    .map((part) => Number.parseInt(part.trim(), 10))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (include.length > 0) {
+    /* `catalogue()` and not `listed()`: the status window widens to `any`, so a
+       trashed product resolves. Deduped like `CouponController::idList()`, and
+       ordered by title the way `WP_Query` is asked to order it. A product that
+       has been **forced** out of existence is gone from `catalogue()` too, which
+       is the id-names-nothing case and is correctly absent rather than null. */
+    const wanted = new Set(include);
+    const rows = catalogue()
+      .filter((product) => wanted.has(product.id))
+      .map(shape)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    /*
+     * The rows are **not** sliced — `posts_per_page = count($include)` — but the
+     * meta is still built from the request's own `page` and `per_page`, because
+     * `eligibleProducts()` hands those straight to `Response::paginationMeta()`
+     * without consulting `include`. So a two-id lookup reports `per_page: 20`
+     * beside two rows, which looks wrong and is what the route does. The paging
+     * parameters are still validated, since they are validated by `args` before
+     * the handler runs at all.
+     */
+    const page = paginate(rows, params);
+    return page.error ?? ok(rows, page.meta);
+  }
+
+  const rows = listed().map(shape);
 
   const term = fold((params.get("search") ?? "").trim());
   const matched =
@@ -19775,6 +19845,20 @@ const SEGMENT_CRITERIA = [
 const REFUSED_CRITERIA = {
   consent:
     "Consent is applied to every audience by the resolver and is never a criterion — a criterion that could set it could switch it off.",
+  /*
+   * **The eighth, and it was missing here and in `lib/campaigns.ts` alike.**
+   *
+   * The note above says "all seven were re-measured on 2026-08-28 and all seven
+   * match lib/campaigns.ts" — and both lists were short by one, so the agreement
+   * was two copies of the same gap rather than a check. `SegmentCriteria::REFUSED`
+   * has eight entries; this is `consent`'s twin, refused under the name the
+   * *customer record* uses for the flag where `consent` is what the resolver
+   * calls it, with its own shorter sentence. Read from source on the
+   * segment-pickers branch rather than measured, because a refusal list is a
+   * constant and reading it is exact where probing it one name at a time is not.
+   */
+  marketing_consent:
+    "Consent is applied to every audience by the resolver and is never a criterion.",
   email:
     "A segment is not a search box. Mail one customer from their own record, not from an audience definition.",
   email_contains:
@@ -19826,7 +19910,37 @@ const EMPTY_CRITERIA =
   'Empty criteria would match every customer; use audience_type "all" for that.';
 const UNKNOWN_CRITERION = `Unknown criterion. Supported: ${SEGMENT_CRITERIA.join(", ")}.`;
 
-const MONEY = /^\d+(\.\d+)?$/;
+/*
+ * ── Three grammars this file used to be looser about than the shop is ────────
+ *
+ * The block above records the 2026-08-28 pass, which measured the *sentence*
+ * each kind answers with by sending one wrong value per kind. That is a
+ * different question from what each kind **accepts**, and on the segment-pickers
+ * branch the answer to the second was read out of `SegmentCriteria::parse()`
+ * rather than probed, because a regex is exact where a sample of one is not:
+ *
+ *   money   `/^\d+(\.\d{1,2})?$/` — **at most two decimal places**, where this
+ *           file had `(\.\d+)?` and accepted `10.999`.
+ *   count   `ctype_digit($raw)` — digits only, **no sign**, where this file had
+ *           `INTEGER = /^-?\d+$/` and accepted `-5`. (`parse()` has a `< 0`
+ *           branch underneath, which `ctype_digit` makes unreachable.)
+ *   range   `MAX_ORDERS = 100_000` on `min_orders`/`max_orders` only, and
+ *           `MAX_SPENT = '99999999.99'` on the two money fields. Neither
+ *           ceiling existed here, so a segment asking for a million orders was
+ *           a 201.
+ *
+ * All three are the mock being **more permissive than the wire**, which is the
+ * failure `/customers` is written up two thousand lines down as having cost:
+ * *"a mock more permissive than the wire does not merely fail to catch a defect
+ * — it manufactures a passing screenshot of the broken state."* A criteria form
+ * with real controls is exactly the screen that would have been photographed
+ * accepting values the shop refuses.
+ */
+const MONEY = /^\d+(\.\d{1,2})?$/;
+const WHOLE = /^\d+$/;
+const MAX_ORDERS = 100_000;
+const MAX_SPENT = "99999999.99";
+const OUT_OF_RANGE = "Out of range.";
 
 /**
  * The measured sentence when the value does not fit its criterion, and the
@@ -19837,15 +19951,68 @@ const MONEY = /^\d+(\.\d+)?$/;
 function readCriterion(key, value) {
   const kind = CRITERION_KIND[key];
   if (kind === "money") {
-    if (typeof value === "number") return { value: value.toFixed(2) };
-    return MONEY.test(String(value)) ? { value: String(value) } : { error: CRITERION_VALUE.money };
+    /* A JSON number reaches `parse()` as `(string) $value`, so `5000` is `"5000"`
+       and passes; `toFixed(2)` is this file's rendering of the same acceptance
+       and predates the branch. */
+    const raw = typeof value === "number" ? value.toFixed(2) : String(value);
+    if (!MONEY.test(raw)) return { error: CRITERION_VALUE.money };
+    return Number(raw) > Number(MAX_SPENT) ? { error: OUT_OF_RANGE } : { value: raw };
   }
   if (kind === "date") {
     return DAY.test(String(value)) ? { value: String(value) } : { error: CRITERION_VALUE.date };
   }
-  return INTEGER.test(String(value))
-    ? { value: Number.parseInt(String(value), 10) }
-    : { error: CRITERION_VALUE.count };
+  if (!WHOLE.test(String(value))) return { error: CRITERION_VALUE.count };
+  const number = Number.parseInt(String(value), 10);
+  /* The ceiling names the two count fields and not the three ids: a product id
+     is not a quantity, and `parse()`'s range clause says so by field name. */
+  return kind === "count" && number > MAX_ORDERS
+    ? { error: OUT_OF_RANGE }
+    : { value: number };
+}
+
+/**
+ * `SegmentCriteria::checkRanges()` — the four cross-field rules, which this file
+ * did not have at all.
+ *
+ * They run **after** every value has parsed and are skipped entirely if any did
+ * not, which is the plugin's own order: `fromPayload()` calls this only when
+ * `$errors === []`. So an inverted range never masks a malformed value.
+ *
+ * The date comparison is a bare `>` on two strings in the plugin too, and it is
+ * exact rather than lucky: the format is a fixed-width `Y-m-d`, so lexical order
+ * is chronological order.
+ */
+function checkRanges(fields) {
+  const errors = {};
+
+  if (fields.min_spent !== undefined && fields.max_spent !== undefined) {
+    if (Number(fields.min_spent) > Number(fields.max_spent)) {
+      errors.max_spent = "Must be at least min_spent.";
+    }
+  }
+  if (fields.min_orders !== undefined && fields.max_orders !== undefined) {
+    if (fields.min_orders > fields.max_orders) {
+      errors.max_orders = "Must be at least min_orders.";
+    }
+  }
+  for (const [after, before] of [
+    ["ordered_after", "ordered_before"],
+    ["registered_after", "registered_before"],
+  ]) {
+    if (fields[after] !== undefined && fields[before] !== undefined) {
+      if (fields[after] > fields[before]) {
+        errors[before] = `Must not be earlier than ${after}.`;
+      }
+    }
+  }
+  if (
+    fields.bought_product_id !== undefined &&
+    fields.bought_product_id === fields.not_bought_product_id
+  ) {
+    errors.not_bought_product_id = "Cannot be the same product as bought_product_id.";
+  }
+
+  return errors;
 }
 
 /**
@@ -19897,6 +20064,17 @@ function readCriteria(criteria) {
     // No `supported` key here, which is the whole distinction.
     return { error: fail(400, "invalid_request", "The segment criteria are invalid.", { fields }) };
   }
+
+  // Only once every value parsed, which is `fromPayload()`'s own order.
+  const ranges = checkRanges(value);
+  if (Object.keys(ranges).length > 0) {
+    return {
+      error: fail(400, "invalid_request", "The segment criteria are invalid.", {
+        fields: ranges,
+      }),
+    };
+  }
+
   return { error: null, value };
 }
 
