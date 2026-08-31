@@ -201,12 +201,37 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["attributes"], "GET").allowed).toBe(true);
     expect(checkAllowed(["attributes", "100", "terms"], "GET").allowed).toBe(true);
 
-    // Nothing creates a product yet, and a route no screen reaches must not be
-    // reachable by guessing a URL — the list grows one branch at a time.
-    expect(checkAllowed(["products"], "POST").allowed).toBe(false);
+    /*
+     * **`POST /products` is allowed now, and this assertion is inverted rather
+     * than deleted.** It read `expect(…).toBe(false)` under the comment
+     * *"nothing creates a product yet, and a route no screen reaches must not be
+     * reachable by guessing a URL"*, and the rule it enforced is the one that
+     * lets it flip: `NewProductDrawer` is now the screen that reaches it, opened
+     * from the products list's primary action. The route is `ac_manage_products`
+     * — the same capability the list, the detail and the export already require
+     * — so nothing about the credential widened.
+     */
+    expect(checkAllowed(["products"], "POST")).toEqual({
+      allowed: true,
+      path: "/products",
+    });
+
+    /*
+     * …and the rule is tested by what stayed off. `POST /products/bulk` and
+     * `POST /products/{id}/duplicate` are registered on the identical guard —
+     * `ProductController::registerRoutes()` builds one
+     * `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` for all of them —
+     * so if "the credential can reach it" were the rule, both would be here.
+     * Neither has a screen, so neither is. A create form is not a licence to
+     * reach the two routes beside the one it needed.
+     */
     expect(checkAllowed(["products", "12", "duplicate"], "POST").allowed).toBe(false);
     expect(checkAllowed(["products", "bulk"], "POST").allowed).toBe(false);
     expect(checkAllowed(["products", "12", "variations"], "POST").allowed).toBe(false);
+    // A create on the collection is not a replace or a delete on it either, and
+    // the API offers neither: a product is trashed through its own id.
+    expect(checkAllowed(["products"], "PUT").allowed).toBe(false);
+    expect(checkAllowed(["products"], "DELETE").allowed).toBe(false);
     // §88's writes belong to the attributes screen, on its own branch. Reading a
     // term list is what the facet vocabulary needs; writing one is not.
     expect(checkAllowed(["attributes"], "POST").allowed).toBe(false);

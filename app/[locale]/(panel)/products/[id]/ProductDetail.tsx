@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/Form";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
+import { ProductMedia } from "./ProductMedia";
 
 /**
  * The fields the panel writes.
@@ -78,9 +79,40 @@ import { useToast } from "@/components/primitives/Toast";
  * the whole list rather than a partial one.
  *
  * `options` is absent for the reason the warning banner now states outright — see
- * the `options_problems` block further down. `tag_ids`, `image_id` and
- * `gallery_image_ids` are absent because nothing on this screen edits them and a
- * field the form sends but never shows is a field it can silently clobber.
+ * the `options_problems` block further down. `tag_ids` is absent because nothing
+ * on this screen edits it and **a field the form sends but never shows is a field
+ * it can silently clobber**.
+ *
+ * **`image_id` and `gallery_image_ids` are here and are new**, and they arrive by
+ * satisfying that same rule rather than by being excused from it: both are on
+ * screen, in `ProductMedia` beside the descriptions, with a control apiece. The
+ * rule is the reason they were absent and it is the reason the way to add them
+ * was to draw them — not to start sending two more keys quietly.
+ *
+ * Which leaves exactly one key in `Draft` with no control, and it is not one:
+ * `seo` travels whole (see below) and three of its five parts are edited on
+ * screen while `robots` and `overrides` are shown read-only. Every other key in
+ * this list has a visible control. That is the invariant this docblock exists to
+ * keep, and the list being written out by hand is what makes it checkable.
+ *
+ * `image_id` is a **string** on the draft where the API takes a number, which is
+ * `stock_quantity`'s trick for a different reason. There it keeps an empty box
+ * distinguishable from a count of zero. Here it keeps a *typo* reachable:
+ * `Number("12a")` is `NaN` and `JSON.stringify(NaN)` is `null`, and `null` is one
+ * of the three values `ProductInput` reads as *clear the featured image* — so a
+ * body built through `Number()` would answer 200 and quietly detach the picture
+ * for text nobody meant as a number. The string rides as typed, the API answers
+ * *"Must be an attachment id, or 0 to clear."*, and it binds to the control like
+ * any other refusal. `new-product.ts` names the same trap as the `?? 0` one and
+ * takes the other way out of it, because a create that drops the key gets a 201
+ * with nothing to say.
+ *
+ * `gallery_image_ids` is **not sorted**, and that is the one place it parts
+ * company with `category_ids` two fields up. Order is preserved end to end —
+ * `array_unique` keeps first position, `set_gallery_image_ids()` stores a
+ * sequence, the presenter reads it back in order — and it is the order the
+ * storefront shows the pictures in. `ProductMedia`'s docblock carries the three
+ * hops. Sorting a gallery by attachment id would rearrange the shop.
  *
  * **`seo` is here and is new**, and it travels whole. `mustBeSeo` on the mock and
  * the live API both refuse a partial block — `title`, `description`, `canonical`,
@@ -107,6 +139,8 @@ type Draft = {
   weight: string;
   category_ids: number[];
   seo: ProductSeo;
+  image_id: string;
+  gallery_image_ids: number[];
 };
 
 function draftOf(product: Product): Draft {
@@ -146,6 +180,22 @@ function draftOf(product: Product): Draft {
     // adds tomorrow travels back untouched rather than being dropped by a
     // hand-written literal.
     seo: { ...product.seo },
+    /*
+     * `0` reads as *no featured image* and is written back as `""`, which is the
+     * same fact in the form's own vocabulary: an empty box is what "there is no
+     * image" looks like, and a box reading `0` is a number somebody would have
+     * to be told is not an id. `ProductInput` normalises `''`, `null` and `0` to
+     * one value on the way back in, so the round trip is exact.
+     */
+    image_id: product.image_id === 0 ? "" : String(product.image_id),
+    /*
+     * Copied and **not sorted** — see the docblock. The dirty check is a
+     * structural comparison, so this is also what makes reordering the gallery
+     * register as a change at all: sorted, moving the third picture to the front
+     * would produce an array identical to the stored one and a save bar that
+     * never appeared.
+     */
+    gallery_image_ids: [...product.gallery_image_ids],
   };
 }
 
@@ -157,13 +207,48 @@ function draftOf(product: Product): Draft {
  * refused by the server say the identical sentence, and nobody has to wonder
  * whether they are looking at two different problems.
  *
- * **Nothing here is a rule the server does not hold.** In particular there is no
- * `sale_price <= regular_price` check: nothing has measured whether the API
- * rejects an inverted pair, and a client rule the server does not keep is the
- * same defect as a control that does nothing — it refuses work the shop is
- * allowed to do. `weight` gets no numeric rule either, for the same reason: the
- * API validates it as a *string*, so "1,5 kg" is accepted there and would be
- * refused here.
+ * **Nothing here is a rule the server does not hold**, and the principle stands
+ * while **both of the facts this block used to rest it on were wrong**. They are
+ * struck through rather than deleted, because each is a claim a reader would
+ * otherwise carry away from a screen that no longer makes it:
+ *
+ * ~~"there is no `sale_price <= regular_price` check: nothing has measured
+ * whether the API rejects an inverted pair"~~ — **overturned, read from source.**
+ * `Products\ProductInput::validateSalePrice()` refuses the pair with *"Cannot be
+ * higher than the regular price."* under `fields.sale_price`, whenever **both**
+ * prices are in one payload — which on this form they always are, because the
+ * draft sends every key. There is a second guard as well and it is asymmetric:
+ * `ProductService::guardSalePriceAgainstStored()` is wired into `update()` and
+ * **not** into `create()`, and compares a lone `sale_price` against the *stored*
+ * regular price. This screen cannot reach it — a lone `sale_price` is a body it
+ * never builds — so the pair-in-one-payload rule is the only one that fires
+ * here, and it fires on the server.
+ *
+ * **No local copy of that comparison was added**, and that is now a decision
+ * about a rule the server keeps rather than about one nobody had measured. Two
+ * reasons, and the second is the load-bearing one: `validate` is per-field and a
+ * cross-field comparison does not fit it, and `orders/new-order.ts`'s standing
+ * argument about the three amount sentences applies — a second copy of a
+ * comparison the server already makes can only become a second authority that
+ * drifts. The API's sentence binds to `sale_price` like any other 400.
+ *
+ * ~~"`weight` gets no numeric rule either… the API validates it as a *string*,
+ * so '1,5 kg' is accepted there"~~ — **overturned, read from source.**
+ * `ProductInput::normalize()` runs `!is_numeric($payload['weight']) || (float)
+ * $payload['weight'] < 0` and answers *"Must be a non-negative number."* — one
+ * sentence for both failures. `''` and `null` clear it, which is why the rule
+ * below returns on the empty string. So "1,5 kg" is a 400 and always has been:
+ * the panel was carrying a permission the shop does not have, and the effect was
+ * that somebody typing a unit into the box learned it from a failed save instead
+ * of from the field. The mock refuses it now too, which is how this screen found
+ * out.
+ *
+ * `weight()` is therefore a real rule and it is deliberately the **looser** of
+ * the two directions: `Number.isFinite(Number(v))` where PHP runs `is_numeric`.
+ * The two agree on everything a person types; where they part — `"0x1A"`, a
+ * whitespace-only box — this accepts and the server refuses, which costs a round
+ * trip. The other direction would print a refusal on a value that saves, and an
+ * advisory rule that is wrong in *that* direction is worse than no rule at all.
  *
  * **They do not block the save**, and that is deliberate. The API is the
  * authority — the panel does not carry a second copy of the rules, which is the
@@ -193,6 +278,21 @@ function quantity(value: string): string | undefined {
   return Number.parseInt(value, 10) < 0 ? "Cannot be negative." : undefined;
 }
 
+/**
+ * `ProductInput::normalize()`'s weight rule, in the API's own sentence — one
+ * message for both failures, because the source has one.
+ *
+ * `""` returns clean: an empty weight is how a weight is removed, and the source
+ * reads `''` and `null` as the same *clear it*.
+ */
+function weight(value: string): string | undefined {
+  if (value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0
+    ? undefined
+    : "Must be a non-negative number.";
+}
+
 export function ProductDetail({
   locale,
   product: initial,
@@ -201,6 +301,7 @@ export function ProductDetail({
   categories,
   attributes,
   terms,
+  canPickMedia,
 }: {
   locale: string;
   product: Product;
@@ -212,6 +313,15 @@ export function ProductDetail({
   categories: ProductCategory[] | null;
   attributes: GlobalAttribute[];
   terms: Record<string, AttributeTerm[]>;
+  /**
+   * `ac_manage_content`, resolved on the server from `/auth/me` — which is not
+   * this route's capability. Every `/media` route sits behind it and this one
+   * sits behind `ac_manage_products`, so the media controls degrade for a
+   * Manager rather than rendering a `ForbiddenState` inside a product form.
+   * `ProductMedia` carries the whole argument, and `ProductsList` takes the
+   * identical prop for the create drawer.
+   */
+  canPickMedia: boolean;
 }) {
   const t = useTranslations("products");
   const tDetail = useTranslations("products.detail");
@@ -283,6 +393,22 @@ export function ProductDetail({
         delete body.stock_quantity;
       }
 
+      /*
+       * **Trimmed and otherwise sent as typed — never through `Number()`.**
+       * `ProductInput` runs `is_numeric()` and casts, so `"5001"` and `5001` are
+       * one value to it and `""` is the *clear the featured image* value beside
+       * `null` and `0`. What a cast here would do instead is turn `"12a"` into
+       * `NaN`, which `JSON.stringify` writes as `null` — a 200 that silently
+       * detaches the picture. The string keeps the refusal reachable, and the
+       * refusal is a sentence naming the value back at the person who typed it.
+       *
+       * `gallery_image_ids` needs nothing: it is a `number[]` on the draft
+       * because every value in it came from a picker or from the fetched body,
+       * and the one place a person can type one — the capability fallback's add
+       * box — parses before it appends.
+       */
+      body.image_id = draft.image_id.trim();
+
       return acWrite<Product>("PATCH", `/products/${product.id}`, body);
     },
     /* Cleared as the save starts, so a second failure with the same list passes
@@ -344,10 +470,12 @@ export function ProductDetail({
    * failure as a link to its field, with focus moved to it.
    *
    * **The orphan case is the one worth spelling out.** A 400 names every bad
-   * field including ones this form does not render — `tag_ids` and `image_id` are
-   * writable and have no control here, and `stock_quantity` has no control while
-   * the product manages no stock — and there is nowhere to send a person for
-   * those. `ErrorSummary` renders a failure with no `id` as text rather than as a
+   * field including ones this form does not render — `tag_ids` is writable and
+   * has no control here, and `stock_quantity` has no control while the product
+   * manages no stock — and there is nowhere to send a person for those.
+   * `image_id` used to be on that list and is not any more, which is the visible
+   * half of sub-task 5: it has a control now, so its refusal has somewhere to go.
+   * `ErrorSummary` renders a failure with no `id` as text rather than as a
    * link, which is the honest half; the label is what stops it reading as
    * machinery. `FIELD_LABELS` therefore covers every *writable* key rather than
    * only the rendered ones, and a key outside that set falls back to the raw name
@@ -419,6 +547,12 @@ export function ProductDetail({
     "short_description",
     "description",
     "seo",
+    /* Both unconditional: `ProductMedia` renders on every product and on both
+       sides of the capability branch, so the two ids always have a target — the
+       picker's button or the fallback's field for one, the gallery group for the
+       other. */
+    "image_id",
+    "gallery_image_ids",
     ...(draft.manage_stock ? ["stock_quantity"] : []),
     ...(categories !== null && categoryRows.length > 0 ? ["category_ids"] : []),
   ]);
@@ -491,7 +625,17 @@ export function ProductDetail({
         main={
           <>
             {/* ------------------------------------------------ identity --- */}
-            <Card title={tDetail("identity")} footnote={tDetail("mediaUnavailable")}>
+            {/*
+              **The footnote this card used to carry is gone**, and it is worth
+              saying what it said: *"no image on this screen — the media library
+              answers 403 for the Products permission, so neither the preview nor
+              the choice of an image is offered here."* Half of that is still
+              true and is the reason `ProductMedia` has a fallback at all; the
+              conclusion drawn from it was not. A library a role cannot read is a
+              reason to degrade the control, not to leave the two writable image
+              fields off the only screen that edits a product.
+            */}
+            <Card title={tDetail("identity")}>
               <div className="flex flex-col gap-4">
                 <TextField
                   id={fieldId("name")}
@@ -587,15 +731,19 @@ export function ProductDetail({
                   }
                   reason={tDetail("effectivePriceReason")}
                 />
-                {/* No `validate`: the API takes `weight` as a *string*, so a
-                    numeric rule here would refuse "1,5" where the shop is allowed
-                    to store it. `NumberField` is the keyboard, not a rule. */}
+                {/* `validate`, and it is **new**: this field carried no rule on
+                    the strength of a claim that the API takes `weight` as a
+                    string. It does not — *"Must be a non-negative number."*,
+                    read from source — so "1,5 kg" was a 400 the panel let
+                    somebody discover by pressing save. See the block above,
+                    which strikes the old claim rather than erasing it. */}
                 <NumberField
                   id={fieldId("weight")}
                   label={tDetail("weight")}
                   value={draft.weight}
                   onChange={(v) => set("weight", v)}
                   error={errors.weight}
+                  validate={weight}
                 />
               </div>
             </Card>
@@ -655,6 +803,36 @@ export function ProductDetail({
                 />
               </div>
             </Card>
+
+            {/* -------------------------------------------------- images --- */}
+            {/*
+              **After the descriptions rather than beside the name**, which is
+              where an image usually goes and is the wrong place here. This is a
+              tall block — a row per gallery entry, each carrying a 44px reorder
+              pair — and it sits in a column that a shopkeeper opens to change a
+              price or a stock count far more often than a picture. Putting it
+              second would push both of those below the fold on a phone for the
+              sake of the field they touch least. Filed with the descriptions
+              instead, which is what it is: the product's content.
+
+              The controls, the overlay and the capability branch are
+              `ProductMedia`'s; the two draft keys and everything about what is
+              sent stay here, which is the split this file's own docblock
+              requires.
+            */}
+            <ProductMedia
+              canPickMedia={canPickMedia}
+              storedImage={product.image}
+              storedGallery={product.gallery}
+              imageId={draft.image_id}
+              onImageIdChange={(next) => set("image_id", next)}
+              galleryIds={draft.gallery_image_ids}
+              onGalleryChange={(next) => set("gallery_image_ids", next)}
+              imageError={errors.image_id}
+              galleryError={errors.gallery_image_ids}
+              disabled={save.isPending}
+              fieldId={fieldId}
+            />
 
             {/* ----------------------------------------------------- SEO --- */}
             {/*

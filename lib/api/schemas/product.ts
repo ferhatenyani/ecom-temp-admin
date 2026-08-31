@@ -57,12 +57,52 @@ export const productSeo = z.looseObject({
 });
 export type ProductSeo = z.infer<typeof productSeo>;
 
-/** An attachment, as the API embeds it. Null on every product in this shop. */
+/**
+ * An attachment, as the product presenter embeds it — `image` and every entry
+ * of `gallery`.
+ *
+ * ## `url` was required and `ProductPresenter` has never sent one
+ *
+ * This block used to read `{id, url, alt?}` under the line *"Null on every
+ * product in this shop"*, and the second half is what hid the first.
+ * `ProductPresenter::image()` returns exactly `{id, src, thumbnail, alt}` —
+ * read from source — so **a product that has a picture threw at this
+ * boundary**, taking the detail screen, the peek and the list page with it. Not
+ * one of the 28 seeded rows carries `image_id`, so the shape was reachable
+ * through a write and no other way, and until this branch nothing in the panel
+ * could perform that write.
+ *
+ * The gallery is what made it live: sub-task 5 puts `image_id` and
+ * `gallery_image_ids` on the edit form, so the very next save resolves an
+ * embedded image into the response.
+ *
+ * **This is the CMS defect one collection over**, and the fix is deliberately
+ * the identical one rather than a second opinion: `lib/api/schemas/cms.ts`'s
+ * `embeddedImage` records the same slip against `MediaPresenter::image()` and
+ * settles it the same way — `id` required, every carrier of the picture
+ * optional, so both the presenter's `src` and the harness's `url` parse.
+ * `embeddedImageSrc` in `lib/cms.ts` is the one place that decides which key
+ * wins, and this screen calls it rather than minting a second rule.
+ *
+ * **Not shared with `embeddedImage` as one symbol**, and that is a decision:
+ * they are two private methods in two unrelated PHP classes that happen to
+ * agree today, and a single schema would assert that they must. They are kept
+ * in step by their docblocks pointing at each other, which is the honest
+ * strength of the claim.
+ */
 export const media = z.looseObject({
   id: z.number(),
-  url: z.string(),
+  /** `ProductPresenter::image()`'s own key — `wp_get_attachment_image_url($id, 'full')`. */
+  src: z.string().optional(),
+  /** The `woocommerce_thumbnail` size, falling back to `src`. */
+  thumbnail: z.string().optional(),
+  /** What the harness sends where the presenter sends `src`. See above. */
+  url: z.string().optional(),
   alt: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
 });
+export type ProductMediaItem = z.infer<typeof media>;
 
 export const product = z.looseObject({
   id: z.number(),

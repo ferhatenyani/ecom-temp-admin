@@ -124,7 +124,59 @@ cd "$(dirname "$0")/.." || exit 2
 # its first outside caller, which closes the "one hand-maintained copy" risk the
 # previous two entries were worrying about without moving a file. So this is +1
 # for the new block alone. Same margin of 2.
-FLOOR=319
+#
+# 324 at the product-create branch, floor 322. Three files, and the third is an
+# extraction rather than an addition:
+#
+#   products/new-product.ts        the draft and `buildPayload`/`draftProblems`,
+#                                  split from the markup the way `new-order.ts`
+#                                  is — the interesting half of a create form is
+#                                  which keys reach the wire, and that is a pure
+#                                  function of a plain object, unit-tested in
+#                                  `tests/new-product.test.ts` rather than
+#                                  through eleven `fireEvent`s per case.
+#   products/NewProductDrawer.tsx  the form itself, `POST /products`.
+#   components/ui/MediaUpload.tsx  the upload's state and fields, lifted out of
+#                                  `media/UploadModal.tsx`.
+#
+# **The third is the one that needed an argument, and it is `MediaPicker`'s.**
+# The create form attaches a featured image, so it needs the library picker *and*
+# a way to add a file that is not in it yet. §3.1 refuses nested overlays — "a
+# modal that needs a second modal is a modal that needs steps" — and a `Modal`
+# over a `Drawer` is that in a different vocabulary: at the 340px floor both are
+# full screen, so the second erases the first. `MediaPicker` was promoted from a
+# `Sheet` to a chrome-less panel on exactly this argument one branch earlier so
+# `BannerDrawer` could make it a step; this is that promotion for the upload,
+# and `UploadModal.tsx` is now a thin `Modal` around the same hook and fields —
+# so it is +1 with a file rewritten rather than the +1-and-a-deletion a whole
+# move would have been, and nothing was copied.
+#
+# Raised by the same margin of 2 the history above keeps.
+#
+# 325 at the product-create branch's second half, floor 323. One file:
+# `products/[id]/ProductMedia.tsx`, the featured image and the gallery on the
+# edit form — step 3's admin sub-task 5 and the edit half of sub-task 6.
+#
+# It is a new file rather than two more cards inside `ProductDetail.tsx`, on the
+# test the last four entries all apply and which is not line count: **a block
+# that is only markup stays in its screen; a block that owns decisions gets a
+# file so the decisions have somewhere to be argued.** This one owns three. An
+# overlay with two internal steps, which had to be argued *against* the create
+# drawer beside it: `NewProductDrawer` makes the picker and the upload steps
+# because §3.1 refuses a `Modal` over a `Drawer`, and `ProductDetail` is a
+# **route**, so the antecedent is absent and a step would be the worse shape —
+# it would take the `PageHeader` and the save bar off screen and leave the
+# browser's back button meaning "leave the product". A URL cache, which exists
+# because an attachment id does not carry one and resolving it would be a
+# `GET /media/{id}` against the route half the staff cannot call. And the
+# `ac_manage_content` fallback, which is a **live path** rather than a guard:
+# `Users\UserRoles::assignable()` hands out `[ac_super_admin, ac_manager]` and a
+# Manager holds `ac_manage_products` without `ac_manage_content`.
+#
+# The two draft keys stayed in `ProductDetail.tsx` and that is the half that had
+# to: its docblock argues an explicit writable field list against a derived one,
+# and every key in that list now has a control. Same margin of 2.
+FLOOR=323
 failures=0
 checks=0
 

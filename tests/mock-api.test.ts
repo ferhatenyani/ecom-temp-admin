@@ -6353,6 +6353,207 @@ describe("the product writes", () => {
     }
   });
 
+  /**
+   * **The image and the gallery, which is the pair the edit form grew on this
+   * branch** — and the pair `patchProduct` was silently mishandling in three
+   * ways while nothing could send it.
+   *
+   * Every claim below is read from source rather than measured over HTTP;
+   * `BLOCKED.md` records the 401 in the way. The three hops that decide the
+   * order are `ProductInput::normalize()` (`array_values(array_unique($ids))`),
+   * `ProductRepository::apply()` (`set_gallery_image_ids($ids)`) and
+   * `ProductPresenter::toArray()` (`array_map('intval', get_gallery_image_ids())`).
+   */
+  it("keeps a gallery in the order it was sent, and collapses a repeat", () => {
+    const sent = [5003, 5001, 5002];
+    const saved = parse(
+      product,
+      write("PATCH", "/products/101", { gallery_image_ids: sent }),
+    ).data;
+
+    // Not sorted, and that is the whole point: this is the order the storefront
+    // shows the pictures in, which is why `ProductDetail` does **not** sort this
+    // field where it sorts `category_ids`.
+    expect(saved.gallery_image_ids).toEqual(sent);
+    expect(parse(product, get("/products/101")).data.gallery_image_ids).toEqual(sent);
+
+    // The enriched read shape follows the ids, in the same order.
+    expect(saved.gallery.map((item) => item.id)).toEqual(sent);
+
+    /* `array_unique` keeps the **first** occurrence in place, so a repeat is
+       dropped from where it appears again and not from where it started. The
+       edit form refuses a duplicate before it can be sent, precisely so what it
+       drew and what the API stored cannot disagree. */
+    const deduped = parse(
+      product,
+      write("PATCH", "/products/101", { gallery_image_ids: [5004, 5005, 5004] }),
+    ).data;
+    expect(deduped.gallery_image_ids).toEqual([5004, 5005]);
+  });
+
+  /**
+   * **Clearing, and the two fields do not clear the same way.**
+   *
+   * `image_id` takes `0` — `ProductInput` normalises `''`, `null` and `0` to it
+   * and calls it a real edit. A **gallery** clears with `[]` and *cannot* use
+   * `0`: it goes through the int-list branch, where `(int) $id <= 0` is
+   * *"Ids must be positive integers."*
+   */
+  it("clears the image with 0 and the gallery with an empty array", () => {
+    write("PATCH", "/products/101", { image_id: 5001, gallery_image_ids: [5002, 5003] });
+
+    const cleared = parse(
+      product,
+      write("PATCH", "/products/101", { image_id: 0, gallery_image_ids: [] }),
+    ).data;
+    expect(cleared.image_id).toBe(0);
+    expect(cleared.image).toBeNull();
+    expect(cleared.gallery_image_ids).toEqual([]);
+    expect(cleared.gallery).toEqual([]);
+
+    // `''` and `null` are the same edit, which is why the form sends the empty
+    // string rather than casting it to a number first.
+    write("PATCH", "/products/101", { image_id: 5001 });
+    expect(parse(product, write("PATCH", "/products/101", { image_id: "" })).data.image_id).toBe(0);
+    write("PATCH", "/products/101", { image_id: 5001 });
+    expect(parse(product, write("PATCH", "/products/101", { image_id: null })).data.image_id).toBe(0);
+
+    // And `0` inside the gallery is a 400 rather than a clear.
+    expect(
+      apiError(write("PATCH", "/products/101", { gallery_image_ids: [0] })).fields,
+    ).toEqual({ gallery_image_ids: "Ids must be positive integers." });
+  });
+
+  /**
+   * **`ProductDetail` sends `image_id` as a string on purpose**, so the mock has
+   * to store the integer the source stores. A cast in the panel would turn a
+   * typo into `NaN`, which `JSON.stringify` writes as `null` — the *clear the
+   * image* value — so the string is what keeps the refusal reachable.
+   *
+   * Without the normalisation this asserts, the panel would have thrown at its
+   * own boundary on the answer to a save it had just made: the schema declares
+   * `image_id: z.number()`.
+   */
+  it("stores image_id as a number when the form sends the string it typed", () => {
+    const saved = parse(product, write("PATCH", "/products/101", { image_id: "5001" })).data;
+    expect(saved.image_id).toBe(5001);
+    expect(saved.image?.id).toBe(5001);
+    // The whole answer parses, which is the assertion `parse` above is making.
+    expect(parse(product, get("/products/101")).data.image_id).toBe(5001);
+
+    // A string that is not a number is refused rather than collapsed to 0.
+    expect(apiError(write("PATCH", "/products/101", { image_id: "12a" })).fields).toEqual({
+      image_id: "Must be an attachment id, or 0 to clear.",
+    });
+    expect(parse(product, get("/products/101")).data.image_id).toBe(5001);
+  });
+
+  /**
+   * `ProductRepository::assertImageAttachment()` on the **PATCH**, which is the
+   * task the create branch recorded and deliberately left: `apply()` is one
+   * method shared by `create()` and `update()`, so the refusal is the same 400
+   * on both verbs, and it now has a control on the edit form to bind to.
+   */
+  it("refuses an attachment id that is not an image, on the PATCH too", () => {
+    const refused = apiError(write("PATCH", "/products/101", { image_id: 999999 }));
+    expect(refused.status).toBe(400);
+    expect(refused.apiMessage).toBe("The product data is invalid.");
+    expect(refused.fields).toEqual({ image_id: "999999 is not an image attachment." });
+    // Nothing was written by the refused request.
+    expect(parse(product, get("/products/101")).data.image_id).toBe(0);
+
+    /* A bad gallery id reports under the **plural field name** rather than under
+       an index — the loop passes `$field` and not a position — so only the first
+       bad id is ever named. */
+    const gallery = apiError(
+      write("PATCH", "/products/101", { gallery_image_ids: [5001, 999999, 999998] }),
+    );
+    expect(gallery.fields).toEqual({
+      gallery_image_ids: "999999 is not an image attachment.",
+    });
+    expect(parse(product, get("/products/101")).data.gallery_image_ids).toEqual([]);
+  });
+
+  /**
+   * **The gate order, which is the order the reason reaches a screen.**
+   * `ProductService::update()` guards the SKU and *then* calls the repository,
+   * whose `apply()` asserts the attachments before `save()`. So a body wrong in
+   * both ways reports the SKU, and the image only on the retry.
+   */
+  it("reports a taken SKU before a dead attachment, and the fields before both", () => {
+    const taken = parse(product, get("/products/103")).data.sku;
+    expect(taken).not.toBe("");
+
+    const clash = apiError(write("PATCH", "/products/104", { sku: taken, image_id: 999999 }));
+    expect(clash.status).toBe(409);
+    expect(clash.apiMessage).toBe("That SKU is already in use.");
+    // Under `details.sku`, never under `details.fields` — which is why the form
+    // maps it onto the SKU control by hand rather than through the 400 path.
+    expect(clash.details.sku).toBe(taken);
+
+    // And the per-field breakdown comes before the SKU, for the same reason:
+    // `ProductInput::normalize()` throws before `guardSku()` is reached.
+    const fields = apiError(
+      write("PATCH", "/products/104", { sku: taken, status: "archived", image_id: 999999 }),
+    );
+    expect(fields.status).toBe(400);
+    expect(fields.fields).toEqual({
+      status: `Must be one of: ${PRODUCT_STATUSES.join(", ")}.`,
+    });
+  });
+
+  /**
+   * **The top-level message, corrected against source on this branch.**
+   *
+   * It read `Invalid parameter(s): <keys>`, which is **WordPress's own**
+   * `rest_invalid_param` — raised over the `args` a route declares, before a
+   * handler runs. `ProductController::registerRoutes()` declares
+   * `'args' => $this->idArg()` on the PATCH and nothing else, so that sentence
+   * can name `id` and can never name a body field. The handler's own refusal is
+   * `ProductInput::normalize()`'s, and it is one function for both verbs.
+   *
+   * This is DECISIONS.md's closed entry from the other side: that one was the
+   * mock putting an enum sentence where the wire puts `Invalid parameter(s)`;
+   * this was the mock putting `Invalid parameter(s)` where the wire cannot.
+   */
+  it("names a body refusal the way the handler does, on both verbs", () => {
+    const patched = apiError(write("PATCH", "/products/104", { status: "archived" }));
+    const posted = apiError(write("POST", "/products", { name: "x", status: "archived" }));
+
+    expect(patched.apiMessage).toBe("The product data is invalid.");
+    expect(patched.apiMessage).toBe(posted.apiMessage);
+    expect(patched.apiMessage).not.toMatch(/^Invalid parameter/);
+
+    // The breakdown — which is what every screen actually binds — is identical.
+    expect(patched.fields).toEqual(posted.fields);
+
+    /* The bare refusal keeps its own sentence, which is a different one and is
+       measured: a PATCH whose every key is read-only names nothing at all. */
+    expect(apiError(write("PATCH", "/products/104", { id: 104 })).apiMessage).toBe(
+      "No supported fields were provided.",
+    );
+  });
+
+  /**
+   * `GET /media/{id}/usage` reads `state.products`, so attaching a picture from
+   * the edit form is visible to the library's delete confirmation immediately —
+   * which is the point of that endpoint and the one cross-collection consequence
+   * of putting these two fields on a screen.
+   */
+  it("shows up in the media usage the library warns with", () => {
+    write("PATCH", "/products/101", { image_id: 5001, gallery_image_ids: [5002] });
+
+    const featured = parse(mediaUsage, get("/media/5001/usage")).data;
+    expect(featured.references).toContainEqual(
+      expect.objectContaining({ kind: "product", id: 101, slot: "featured_image" }),
+    );
+
+    const inGallery = parse(mediaUsage, get("/media/5002/usage")).data;
+    expect(inGallery.references).toContainEqual(
+      expect.objectContaining({ kind: "product", id: 101, slot: "gallery" }),
+    );
+  });
+
   /** Nothing survives a process start, which is what `resetState()` stands in for. */
   it("forgets every write when the state is rebuilt", () => {
     const seeded = parse(product, get("/products/104")).data;
@@ -6384,10 +6585,24 @@ describe("the product refusals, by fixture id", () => {
 
     // Every one of them, not the first — the form renders one message per
     // control, and a 400 that named only the first would hide the rest.
+    /*
+     * **`stock_quantity` said "Must be a number." and the source says one
+     * sentence for both of its failures** — *"Must be a whole number of zero or
+     * more."*, `ProductInput::normalize()`, which is one function for `PATCH`
+     * and `POST` alike. The mock's rule was written for this verb and never
+     * checked against the source; the create branch had to reproduce the source
+     * and corrected the shared table rather than forking it. Three other rules
+     * moved with it — `image_id`, `weight` and the two id-list sentences — and
+     * `PRODUCT_FIELD_RULES`' own docblock records each.
+     *
+     * `name` is unchanged and is the one message that is genuinely verb-specific:
+     * blanking a stored name is *"cannot be emptied"*, and never naming one on a
+     * create is *"is required"*.
+     */
     expect(error.fields).toEqual({
       name: "A product name cannot be emptied.",
       regular_price: "Cannot be negative.",
-      stock_quantity: "Must be a number.",
+      stock_quantity: "Must be a whole number of zero or more.",
       status: `Must be one of: ${PRODUCT_STATUSES.join(", ")}.`,
     });
     expect(Object.keys(error.fields ?? {}).length).toBeGreaterThanOrEqual(2);
@@ -6439,9 +6654,377 @@ describe("the product refusals, by fixture id", () => {
   it("999999 — a product that does not exist refuses every verb", () => {
     expect(write("PATCH", "/products/999999", { name: "x" }).status).toBe(404);
     expect(write("DELETE", "/products/999999").status).toBe(404);
-    // And the collection itself takes no writes: nothing in the panel creates a
-    // product, so `POST /products` must stay unreachable.
-    expect(write("POST", "/products", { name: "Nouveau" }).status).toBe(404);
+    /*
+     * **The collection takes a create now, and the two routes beside it still do
+     * not.** This assertion read `POST /products` → 404, under *"nothing in the
+     * panel creates a product, so it must stay unreachable"*. The panel creates
+     * one, so the fixture answers — and the rule that kept it out is what still
+     * keeps these two out, both of which the real API registers on the identical
+     * guard.
+     */
+    expect(write("POST", "/products/bulk", { ids: [101] }).status).toBe(404);
+    expect(write("POST", "/products/104/duplicate", {}).status).toBe(404);
+  });
+});
+
+/**
+ * **`POST /products`.** The create drawer's route, and the first write this
+ * collection has ever taken on its collection URL.
+ *
+ * Every expectation below is a refusal read from the plugin's own source
+ * (`Products\ProductInput`, `ProductService::guardSku()`,
+ * `ProductRepository::assertImageAttachment()`) or a status the backend's
+ * in-process suite (`tests/Api/products.php`) asserts. **Nothing here was
+ * measured over live HTTP** — `BLOCKED.md` records the 401 — which is a weaker
+ * provenance than the reads above and is why the messages are pinned by name:
+ * a message this file invents is a message the panel will render at somebody.
+ */
+describe("POST /products", () => {
+  /**
+   * The refusal envelope's `error`, typed enough to name a `details.fields` key
+   * *and* a sibling of `fields` — this route is the one place both shapes are
+   * live at once: a 400 reports under `details.fields`, and the SKU 409 reports
+   * under `details.sku` beside it.
+   */
+  const errorOf = (response: MockResponse) =>
+    (
+      response.body as {
+        error: {
+          code: string;
+          message: string;
+          details?: Record<string, unknown> & { fields?: Record<string, string> };
+        };
+      }
+    ).error;
+
+  it("creates a product and answers 201 carrying its id", () => {
+    const response = write("POST", "/products", {
+      name: "Tapis berbère",
+      type: "simple",
+      regular_price: "4500.00",
+      sku: "AC-NEW-0001",
+      description: "<p>Tissé main.</p>",
+      manage_stock: true,
+      stock_quantity: 7,
+    });
+    expect(response.status).toBe(201);
+
+    const { data } = parse(product, response);
+    // The suite's own two assertions: the name comes back, and there is an id.
+    expect(data.name).toBe("Tapis berbère");
+    expect(data.id).toBeGreaterThan(0);
+    expect(data.sku).toBe("AC-NEW-0001");
+    expect(data.stock_quantity).toBe(7);
+    // `price` is read-only and derived — the regular price when nothing is on
+    // sale — so the row a listing draws agrees with the form that made it.
+    expect(data.price).toBe("4500.00");
+    expect(data.on_sale).toBe(false);
+
+    // And it is the *same* product on the next GET, which is what the create
+    // drawer's route-to-the-detail depends on.
+    expect(parse(product, get(`/products/${data.id}`)).data).toEqual(data);
+  });
+
+  it("shows up in the listing, at the head of the default sort", () => {
+    const { data } = parse(product, write("POST", "/products", { name: "Nouveauté" }));
+
+    const listed = parseList(productList, get("/products", "per_page=100")).data;
+    expect(listed.some((row) => row.id === data.id)).toBe(true);
+    // `blankProduct` stamps the fixture epoch, which is the newest instant this
+    // file has, and `/products` rests at `date desc`.
+    expect(listed[0]?.id).toBe(data.id);
+  });
+
+  /**
+   * **`name` is the one field the route requires**, and the sentence is not the
+   * PATCH's. `ProductInput::normalize()` takes a `$requireName` boolean and it is
+   * the *only* difference between `forCreate()` and `forUpdate()`: never naming a
+   * product is "is required", blanking a stored one is "cannot be emptied".
+   */
+  it("requires a name, and says so in the create's own words", () => {
+    for (const body of [{}, { regular_price: "10" }, { name: "   " }, "not an object"]) {
+      const refused = write("POST", "/products", body);
+      expect(refused.status).toBe(400);
+      expect(errorOf(refused).details?.fields?.name).toBe("A product name is required.");
+    }
+
+    // …and the message is the other one on the update, which is the whole point
+    // of there being two.
+    const patched = write("PATCH", "/products/104", { name: "" });
+    expect(errorOf(patched).details?.fields?.name).toBe(
+      "A product name cannot be emptied.",
+    );
+  });
+
+  /**
+   * A create is a 400 naming `name` where a PATCH of the same body is the bare
+   * *"No supported fields were provided."* with **no `details` at all** —
+   * `ProductService::update()` calls `isEmpty()` and `create()` does not.
+   */
+  it("answers {} with a named field, unlike the PATCH's nameless refusal", () => {
+    const created = write("POST", "/products", {});
+    expect(created.status).toBe(400);
+    expect(errorOf(created).message).toBe("The product data is invalid.");
+    expect(errorOf(created).details?.fields).toBeTruthy();
+
+    const patched = write("PATCH", "/products/104", {});
+    expect(patched.status).toBe(400);
+    expect("details" in (patched.body as { error: object }).error).toBe(false);
+  });
+
+  it("lists every bad field at once, in the API's own English", () => {
+    const refused = write("POST", "/products", {
+      name: "Tapis",
+      type: "bundle",
+      status: "live",
+      regular_price: "-1",
+      stock_quantity: "twelve",
+      weight: "1,5 kg",
+      category_ids: [0],
+      tag_ids: "nope",
+      image_id: "later",
+      nonsense: 1,
+    });
+
+    expect(refused.status).toBe(400);
+    /*
+     * `status`' sentence is built from `PRODUCT_STATUSES` rather than written
+     * out, which is the technique the PATCH refusal above already uses and the
+     * reason it exists: the mock keeps its own copy of the vocabulary the panel's
+     * form offers, and the message is what pins the two copies together.
+     *
+     * The **order** differs from `ProductInput::STATUSES`, which is
+     * `draft, pending, private, publish`. That is a divergence in the sentence
+     * and not in the set, it predates this branch, and it is left alone
+     * deliberately: correcting it would mean the message stops being derived
+     * from the panel's list, which is the drift this assertion is here to catch.
+     */
+    expect(errorOf(refused).details?.fields).toEqual({
+      type: "Must be one of: simple, variable.",
+      status: `Must be one of: ${PRODUCT_STATUSES.join(", ")}.`,
+      regular_price: "Cannot be negative.",
+      stock_quantity: "Must be a whole number of zero or more.",
+      weight: "Must be a non-negative number.",
+      category_ids: "Ids must be positive integers.",
+      tag_ids: "Must be an array of ids.",
+      image_id: "Must be an attachment id, or 0 to clear.",
+      nonsense: "Unknown field.",
+    });
+  });
+
+  /**
+   * `ProductInput::validateSalePrice()`, and **when** it fires is half of it: the
+   * two prices have to be in the same payload. A lone `sale_price` is compared
+   * against the *stored* one by a guard wired into `update()` and not into
+   * `create()` — so on a create it is simply accepted, because there is nothing
+   * stored to compare it against.
+   */
+  it("refuses a sale price above the regular one, and only when both are stated", () => {
+    const refused = write("POST", "/products", {
+      name: "Tapis",
+      regular_price: "1000",
+      sale_price: "1500",
+    });
+    expect(refused.status).toBe(400);
+    expect(errorOf(refused).details?.fields?.sale_price).toBe(
+      "Cannot be higher than the regular price.",
+    );
+
+    // Equal is not higher, and a sale price alone is a create the API takes.
+    expect(
+      write("POST", "/products", {
+        name: "Tapis",
+        regular_price: "1000",
+        sale_price: "1000",
+      }).status,
+    ).toBe(201);
+    expect(write("POST", "/products", { name: "Tapis", sale_price: "900" }).status).toBe(
+      201,
+    );
+  });
+
+  /**
+   * **A taken SKU is a 409 with `details.sku`, and there are two of them.** The
+   * trashed one carries `details.trashed_product_id` and exists because
+   * WooCommerce's own insert otherwise threw from inside `save()` and surfaced as
+   * a 500 — the backend's suite pins that key by name. It is the message a person
+   * cannot work out for themselves: a trashed product is in no listing.
+   */
+  it("answers 409 for a SKU in use, and names the trash when that is where it is", () => {
+    const live = parse(product, get("/products/101")).data.sku;
+    const refused = write("POST", "/products", { name: "Copie", sku: live });
+    expect(refused.status).toBe(409);
+    expect(errorOf(refused).code).toBe("conflict");
+    expect(errorOf(refused).message).toBe("That SKU is already in use.");
+    expect(errorOf(refused).details).toEqual({ sku: live });
+
+    /* `ProductInput` trims every string field before anything looks at it, so a
+       padded SKU is the same SKU and collides with it — and a create that got
+       through would have stored the padding. */
+    expect(write("POST", "/products", { name: "Copie", sku: `  ${live}  ` }).status).toBe(
+      409,
+    );
+    expect(
+      parse(product, write("POST", "/products", { name: "  Tapis  ", sku: "  AC-T  " }))
+        .data,
+    ).toMatchObject({ name: "Tapis", sku: "AC-T" });
+
+    const doomed = parse(product, get("/products/209")).data.sku;
+    write("DELETE", "/products/209");
+    const trashed = write("POST", "/products", { name: "Renaissance", sku: doomed });
+    expect(trashed.status).toBe(409);
+    expect(errorOf(trashed).message).toBe("That SKU belongs to a product in the trash.");
+    expect(errorOf(trashed).details).toEqual({ sku: doomed, trashed_product_id: 209 });
+
+    // A permanent delete frees the code, which is the whole difference between
+    // the two deletes and the reason the second message exists at all.
+    write("DELETE", "/products/209", null, "force=true");
+    expect(write("POST", "/products", { name: "Renaissance", sku: doomed }).status).toBe(
+      201,
+    );
+  });
+
+  /**
+   * `ProductRepository::assertImageAttachment()` — a `get_post()` plus
+   * `wp_attachment_is_image()`, so an id naming nothing is refused **by name and
+   * with the id in the sentence**, which is what makes the create drawer's
+   * capability fallback a usable control rather than a dead end.
+   */
+  it("refuses an image_id that is not an attachment, naming the id back", () => {
+    const refused = write("POST", "/products", { name: "Tapis", image_id: 999999 });
+    expect(refused.status).toBe(400);
+    expect(errorOf(refused).details?.fields?.image_id).toBe(
+      "999999 is not an image attachment.",
+    );
+    // Nothing was created by the refused request.
+    expect(get("/products/999999").status).toBe(404);
+
+    // A real attachment lands, and the embedded read shape comes back with it.
+    const attached = parse(
+      product,
+      write("POST", "/products", { name: "Tapis", image_id: 5001 }),
+    ).data;
+    expect(attached.image_id).toBe(5001);
+    expect(attached.image?.id).toBe(5001);
+
+    // `0` is the *clear the image* value and is never looked up.
+    expect(write("POST", "/products", { name: "Tapis", image_id: 0 }).status).toBe(201);
+  });
+
+  /**
+   * The read-only half, identical to the PATCH's and for the same reason: a
+   * client that POSTed a fetched product back must not be told it invented
+   * eleven fields.
+   */
+  it("drops read-only keys in silence, and refuses unknown ones", () => {
+    const response = write("POST", "/products", {
+      name: "Tapis",
+      id: 999,
+      price: "1.00",
+      on_sale: true,
+      permalink: "https://example.invalid/hijacked",
+      variations: [1, 2, 3],
+      bundle: { items: [], available: 0 },
+    });
+    expect(response.status).toBe(201);
+
+    const { data } = parse(product, response);
+    expect(data.id).not.toBe(999);
+    expect(data.permalink).not.toContain("hijacked");
+    expect(data.variations).toEqual([]);
+
+    expect(
+      errorOf(write("POST", "/products", { name: "Tapis", nope: 1 })).details?.fields,
+    ).toEqual({ nope: "Unknown field." });
+  });
+
+  /**
+   * **The slug is written on publish and not before**, which is WordPress's own
+   * rule and the catalogue's measured state: the one product that has never been
+   * published carries `slug: ""`.
+   */
+  it("derives a slug only for a published product", () => {
+    const draft = parse(product, write("POST", "/products", { name: "Tapis kabyle" })).data;
+    expect(draft.status).toBe("draft");
+    expect(draft.slug).toBe("");
+
+    const live = parse(
+      product,
+      write("POST", "/products", { name: "Tapis kabyle", status: "publish" }),
+    ).data;
+    expect(live.slug).toBe("tapis-kabyle");
+  });
+
+  /**
+   * A variable product's parent holds no price — measured, `regular_price` is
+   * `""` on both variable rows in the catalogue — and the API will nonetheless
+   * store one, because `ProductInput` has no branch on `type` at all. That
+   * asymmetry is exactly what the create drawer hides its price fields on, and it
+   * is asserted here so the fixture cannot quietly start disagreeing with it.
+   */
+  it("stores a price on a variable parent and resolves none from it", () => {
+    const { data } = parse(
+      product,
+      write("POST", "/products", {
+        name: "Caftan",
+        type: "variable",
+        regular_price: "9000.00",
+      }),
+    );
+    expect(data.type).toBe("variable");
+    expect(data.regular_price).toBe("9000.00");
+    // Nothing resolves it: a just-created variable product has no variations.
+    expect(data.price).toBe("");
+    expect(data.variations).toEqual([]);
+  });
+
+  /**
+   * An unmanaged shelf carries no count — the catalogue's own invariant, 8 of 28
+   * rows — and a managed one distinguishes *nothing is counted* from *the count
+   * is zero*, which is why the create drawer sends `null` for an empty box.
+   */
+  it("keeps the two ways of holding no stock apart", () => {
+    const unmanaged = parse(
+      product,
+      write("POST", "/products", { name: "Tapis", stock_quantity: 12 }),
+    ).data;
+    expect(unmanaged.manage_stock).toBe(false);
+    expect(unmanaged.stock_quantity).toBeNull();
+
+    const unknown = parse(
+      product,
+      write("POST", "/products", {
+        name: "Tapis",
+        manage_stock: true,
+        stock_quantity: null,
+      }),
+    ).data;
+    expect(unknown.manage_stock).toBe(true);
+    expect(unknown.stock_quantity).toBeNull();
+
+    const zero = parse(
+      product,
+      write("POST", "/products", {
+        name: "Tapis",
+        manage_stock: true,
+        stock_quantity: 0,
+      }),
+    ).data;
+    expect(zero.stock_quantity).toBe(0);
+  });
+
+  /** SEO is derived and never sent by the create form — `overrides` proves it. */
+  it("derives an seo block whose overrides are empty", () => {
+    const { data } = parse(
+      product,
+      write("POST", "/products", { name: "Tapis", status: "publish" }),
+    );
+    expect(data.seo.title).toBe("Tapis");
+    expect(data.seo.overrides).toEqual([]);
+    expect(data.seo.robots.directive).toBe("index, follow");
+
+    const draft = parse(product, write("POST", "/products", { name: "Tapis" })).data;
+    expect(draft.seo.robots.directive).toBe("noindex, follow");
   });
 });
 

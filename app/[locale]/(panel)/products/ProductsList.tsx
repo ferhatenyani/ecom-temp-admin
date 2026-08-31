@@ -43,6 +43,7 @@ import {
   productRecord,
   type ProductColumnContext,
 } from "./columns";
+import { NewProductDrawer } from "./NewProductDrawer";
 import { ProductFilters } from "./ProductFilters";
 import { ProductPeek } from "./ProductPeek";
 import { toCsv } from "./export";
@@ -80,12 +81,26 @@ import {
  * fixture where id, title, sku and price all produced one sequence. The lesson
  * is in `SORTS`: a dated measurement is not a permanent fact.
  *
+ * ## It creates now, and the paragraph below used to say why it could not
+ *
+ * The primary action opens `NewProductDrawer` — `POST /products`, the core
+ * fields only, routing to the new product's detail on the 201. The empty state's
+ * own comment carried the old reasoning and is corrected in place rather than
+ * deleted: it said a "New product" button *"would be a button that 404s"*,
+ * because the route was deliberately off the proxy's allowlist on the rule that
+ * a route no screen reaches must not be reachable by guessing a URL. That rule
+ * has not changed; the screen exists, so the entry landed with it.
+ *
  * ## What is deliberately absent
  *
  * **No bulk writes.** Selection exports and does nothing else. `POST
  * /products/bulk` appears once, as a bare word in a shorthand list, with no verb,
  * body or response shape and nothing measured — and `lib/api/allowlist.ts` plus
  * `tests/boundary.test.ts` both assert it stays unreachable. See `export.ts`.
+ * `POST /products/{id}/duplicate` is refused on the same ground and by the same
+ * assertion, which is what makes the create's arrival a rule being *applied*
+ * rather than a rule being dropped: all three sit behind the identical guard,
+ * and only the one with a screen is on the list.
  *
  * **No separate SKU box.** `search` already matches SKUs; the parameter still
  * works, and `query.ts` says why it is kept.
@@ -103,6 +118,7 @@ export function ProductsList({
   categories,
   attributes,
   terms,
+  canPickMedia,
 }: {
   locale: string;
   initialQuery: ProductsQuery;
@@ -112,6 +128,18 @@ export function ProductsList({
   categories: ProductCategory[];
   attributes: GlobalAttribute[];
   terms: Record<string, AttributeTerm[]>;
+  /**
+   * `ac_manage_content`, resolved on the server from `/auth/me` — which is not
+   * this screen's own gate (`ac_manage_products` is) and is why it has to be
+   * threaded through rather than inferred here.
+   *
+   * It decides one control inside the create drawer: whether the image is
+   * chosen from the media library or typed as an attachment id.
+   * `NewProductDrawer` carries the argument, and the short version is that
+   * `Manager` — the only non-administrator role this API still hands out — holds
+   * products and not content.
+   */
+  canPickMedia: boolean;
 }) {
   const t = useTranslations("products");
   const tStatus = useTranslations("productStatus");
@@ -125,6 +153,7 @@ export function ProductsList({
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(initialQuery.perPage);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   /* Filters and the sort come from the URL; page and per-page from state. The
      split is the orders list's, and `query.ts` records why this screen adopted
@@ -434,6 +463,25 @@ export function ProductsList({
             >
               {t("export")}
             </ButtonLink>
+            {/*
+              The screen's one primary, and the id is what the drawer returns
+              focus to — clicking a `<button>` does not focus it on WebKit, so
+              the recorded opener there is `<body>`, which is focusable enough to
+              swallow the restore. `UploadModal` records the same trap.
+
+              Not gated on `online`, unlike the export beside it: that one leaves
+              the page and a navigation to a route that cannot answer replaces
+              the panel with the browser's own error page, while this opens a
+              form somebody can go on typing into. `NewProductDrawer`'s footer
+              makes the same call for its own submit.
+            */}
+            <Button
+              id={CREATE_OPENER_ID}
+              icon="plus"
+              onClick={() => setCreateOpen(true)}
+            >
+              {t("create.action")}
+            </Button>
           </>
         }
         toolbar={
@@ -531,11 +579,28 @@ export function ProductsList({
           <EmptyState
             icon={filtered ? "search" : "products"}
             message={filtered ? t("empty.noResults") : t("empty.noneYet")}
-            /* No-results offers to clear the filter. No-data offers nothing, and
-               that is correct rather than unfinished: `POST /products` is not on
-               the proxy allowlist and no screen in this panel creates a product,
-               so a "New product" button here would be a button that 404s. */
-            action={filtered ? { label: t("empty.clear"), onClick: clearAll } : undefined}
+            /*
+             * No-results offers to clear the filter; no-data offers the create.
+             *
+             * **The second half is new, and the comment it replaces is why.** It
+             * read: *"No-data offers nothing, and that is correct rather than
+             * unfinished: `POST /products` is not on the proxy allowlist and no
+             * screen in this panel creates a product, so a 'New product' button
+             * here would be a button that 404s."* Both clauses were true and
+             * both stopped being true together — the route is allowed because
+             * `NewProductDrawer` reaches it, which is the order
+             * `lib/api/allowlist.ts` requires.
+             *
+             * An empty catalogue is the one state where this offer is not a
+             * duplicate of the header's primary: there is nothing else on screen
+             * to press, and a shop with no products is a shop whose next act is
+             * certain.
+             */
+            action={
+              filtered
+                ? { label: t("empty.clear"), onClick: clearAll }
+                : { label: t("create.action"), onClick: () => setCreateOpen(true) }
+            }
           />
         ) : (
           <DataTable
@@ -660,6 +725,40 @@ export function ProductsList({
           if (!next) setPeek(null);
         }}
       />
+
+      <NewProductDrawer
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        categories={categories}
+        canPickMedia={canPickMedia}
+        returnFocusTo={CREATE_OPENER_ID}
+        /*
+         * **The detail, and the 201 is what names it.**
+         * `ProductController::store()` answers the whole product through
+         * `ProductPresenter::toArray()` with `id` as its first key, so this
+         * navigates to a record it has been handed rather than to one it
+         * guessed — and the backend's own suite pins both the 201 and
+         * `data.id > 0`.
+         *
+         * Routing away rather than refetching this list is the point of the
+         * item: variations, options, attributes and SEO are the four editors
+         * this form deliberately does not carry, and all four are on the screen
+         * this lands on. The list is left stale on purpose — the person is not
+         * looking at it any more, and Next re-renders the route when they come
+         * back.
+         */
+        onCreated={(product) => router.push(`/${locale}/products/${product.id}`)}
+      />
     </div>
   );
 }
+
+/**
+ * The create drawer's opener, named rather than left to the recorded node.
+ *
+ * A constant because two places need to agree on it: the button mints the id and
+ * the drawer's `returnFocusTo` restores to it. `UploadModal` records why the
+ * recorded opener is not good enough — WebKit does not focus a `<button>` on
+ * click, so what gets recorded is `<body>`.
+ */
+const CREATE_OPENER_ID = "products-create";
