@@ -1307,3 +1307,93 @@ Courier credentials (`BLOCKED.md` item 2) are unchanged and were explicitly out 
 `BLOCKED.md` item 1 is now down to CORS preflight, cookie and nonce handling, and whatever a
 reverse proxy does to a `PATCH` body or a 409 — there is no proxy in front of this stack, so
 those measurements cannot be taken here at all.
+
+## Item 13 — the e2e suite, run for the first time
+
+`scripts/test.sh e2e`, 2026-08-31, against the dev stack with credentials minted by
+`scripts/mint-credential.sh`. **604 passed, 151 failed, 9 skipped, in 1.9 hours** — 764 tests
+over four viewport projects, one worker.
+
+The decision was *run it and report only*, and this section is that report. The failures are
+**151 rows over 52 distinct tests**, because a test that fails usually fails in all four
+projects. They spread evenly across projects — 44 `phone`, 43 `phone-min`, 37 `phone-max`, 27
+`desktop` — which rules out a first-project artefact such as cold compilation.
+
+| spec | rows |
+| --- | --- |
+| `analytics` | 27 |
+| `customers` | 20 |
+| `campaigns` | 18 |
+| `shipping` | 18 |
+| `products` | 14 |
+| `orders` | 12 |
+| `content` | 10 |
+| `inventory` | 10 |
+| `admin` | 9 |
+| `notifications` | 9 |
+| `coupons` | 4 |
+
+**Does any of it relate to this round?** Two thirds of the rows are traced to two causes, and
+**neither is this round's work and neither is a product defect** — both are tests that encode
+behaviour the panel deliberately changed on earlier branches and that nobody re-ran, because
+this suite had never been executed.
+
+### Cause 1 — the sign-in helpers predate `landingPath()` (~50 rows)
+
+Every `signIn()` helper waits for a URL in a hard-coded alternation:
+
+```
+await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|shipping)`));
+```
+
+A Support Agent signs in successfully and is redirected to **`/fr/customers`**, which is not in
+that list, so the helper times out at 30 s and every test using that credential fails before it
+asserts anything. That is why the money gate, the capability boundaries and most forbidden-state
+tests fail together.
+
+**The panel is right and the tests are stale.** `landingPath()` in `components/ui/nav-tree.ts`
+exists precisely to fix this — its docblock records that four files hard-coded `/orders`, that
+DECISIONS.md §11 measured a Support Agent as 403 on `/orders` and 200 on `/customers`, and that
+those four therefore "sent that reader to a forbidden screen as the first thing they saw after
+typing a correct password". The helpers assert the defect that change removed.
+`not-found.spec.ts` is the only spec whose regex was ever updated.
+
+### Cause 2 — `selectOption` against the drawn `Listbox` (11 rows)
+
+`shipping.spec.ts` drives the wilaya and commune pickers with `locator.selectOption`, which only
+works on a native `<select>`. The call log shows what it actually found:
+
+```
+locator resolved to <button dir="ltr" type="button" role="combobox" data-state="closed" …>
+```
+
+Step 5's `Listbox` replaced the native control on purpose, and item 6's segment pickers and item
+2's country picker extended that. `selectOption` cannot drive a Radix combobox. Again the panel
+is right and the test was never updated.
+
+### The remaining ~90 rows, unclassified at the time of writing
+
+These are individual and are **not** explained by the two causes above. Listed so none is lost:
+
+- `admin.spec.ts` staff (3 tests) — the row for `ac_panel_suspended` is visible and contains
+  "Suspendu", but `row.getByRole("link")` never resolves.
+- `products.spec.ts:548` — `getByRole("status")` is expected to be absent while the browser is
+  online and one is present. Something renders a `role="status"` on the products list; `Notice`
+  defaults to that role, so this one **may** belong to this round and is the first to check.
+- `customers.spec.ts:189` — the consent label "Jamais demandé" is absent from a detail that
+  otherwise renders completely.
+- `orders.spec.ts:380` — no `main span[dir="ltr"]` at all in Arabic, where the assertion wants at
+  least one.
+- `analytics.spec.ts:434` — the RTL bar's `shorter` geometry is false.
+- plus `content`, `inventory`, `notifications`, `campaigns` and `shipping` singletons.
+
+### What this run does not establish
+
+- **It is not a before/after pair.** A baseline was started before the round and was lost when
+  the session it ran in exited, so there is no pre-change run to diff against. Attribution above
+  is by reading each failure, not by comparing two runs.
+- **It ran against `next dev`**, which `scripts/test.sh` requires. Several passing tests take
+  14–16 s, so the 30 s timeout has less headroom than it appears and some timeouts may be
+  compilation rather than defect.
+- **The dev database carries the panel's own e2e fixtures afterwards**, which is what makes the
+  backend's `cart` and `shipping-rules` suites fail. Reset between the two.
