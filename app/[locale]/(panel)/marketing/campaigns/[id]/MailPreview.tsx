@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import type { CampaignPreview } from "@/lib/api/schemas/campaign";
+import { BrowserApiError } from "@/lib/api/browser";
 import { unsubscribeNote } from "@/lib/campaigns";
 import { EMAIL_PALETTE } from "@/lib/email-palette";
 import { Card, DataList, DataRow } from "@/components/ui/Card";
 import { FilterTabs } from "@/components/ui/FilterBar";
 import { Button } from "@/components/ui/Button";
-import { Notice } from "@/components/ui/States";
+import { ErrorState, ForbiddenState, Notice } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr } from "@/components/primitives/Ltr";
@@ -199,6 +200,60 @@ export function previewDocument(html: string): string {
   ].join("\n");
 }
 
+/* ------------------------------------------------------------- the failure --- */
+
+/**
+ * **Item D11 — the third state, and the two kinds of nothing it tells apart.**
+ *
+ * `usePreview` could always error and this card only ever branched on
+ * `preview === null`, so a failed read and a pending one drew the same two grey
+ * rectangles. Inherited from `StepPreview` unchanged and recorded in step 8's own
+ * "found and not fixed" list: *"a preview that fails to load still renders as a
+ * skeleton for ever."* A skeleton is a promise that something is coming.
+ *
+ * Two kinds, because they are not the same failure and the second is the reason
+ * this is a classifier rather than a boolean:
+ *
+ *   `forbidden`  403. `CampaignService::preview():275` opens with
+ *                `Permissions::assert(Capabilities::MANAGE_MARKETING)` — read
+ *                from source — which is **the same capability the campaign read
+ *                and this whole screen are gated on**. So this is not a
+ *                Marketing Manager's ordinary state: `audienceCount():850-857`
+ *                is the only part of the response that needs a second capability
+ *                and it answers `null` rather than refusing (measured against
+ *                `ac_marketing_manager` on 2026-08-28 and recorded in
+ *                `scripts/mock-api.mjs`: `/campaigns/318/preview` 200 with a null
+ *                count). A 403 here therefore means the capability went away
+ *                under a tab that is still open — an edited user, a rotated
+ *                credential — and **retrying is not the remedy**, which is why
+ *                this branch offers no retry at all. §3.3: a control that cannot
+ *                act is not drawn.
+ *   `read`       everything else. A 500, a proxy timeout, a dropped connection, a
+ *                body the schema refused. The request is the thing that failed
+ *                and asking again is exactly the remedy.
+ *
+ * `detail` is the API's own sentence and is passed to `ErrorState.detail` rather
+ * than used as the message, which is the arrangement `analytics/page.tsx` reached
+ * for the identical shape: the panel says what happened in its own words and
+ * keeps the provider's English beside it, where it is information rather than the
+ * screen's voice. A `ZodError` is not that — it is a schema dump about the
+ * panel's own types — so only a `BrowserApiError` contributes one.
+ */
+export type PreviewFailure = { kind: "forbidden" | "read"; detail: string | null };
+
+export function previewFailure(error: unknown): PreviewFailure {
+  if (error instanceof BrowserApiError) {
+    return error.status === 403
+      ? { kind: "forbidden", detail: null }
+      : { kind: "read", detail: error.message };
+  }
+  /* Anything that is not the API refusing is a read that did not complete, and
+     its message is the panel's own machinery talking to itself. `campaignPreview
+     .parse()` throwing is the live example: a `ZodError`'s text names paths in a
+     TypeScript schema and would be the worst thing on this screen. */
+  return { kind: "read", detail: null };
+}
+
 /* ------------------------------------------------------------- the component --- */
 
 export type MailPreviewState = {
@@ -244,6 +299,51 @@ export type MailPreviewState = {
   /** §3.7's offline reason, or null. A refresh is a write and says why it cannot. */
   blocked: string | null;
   onRefresh: () => void;
+  /**
+   * The last read of the preview failed. `null` when it did not — item D11.
+   *
+   * **Present-and-independent of `preview`, rather than folded into it**, because
+   * the two really can be true at once and that pairing is the state a single
+   * nullable would have hidden. react-query keeps the last successful `data`
+   * through a failed refetch, so pressing refresh on a working screen and having
+   * the *re-read* fail leaves a real render on screen beside a failure — and the
+   * card must keep drawing the render (throwing away a good picture because a
+   * later request failed helps nobody) while saying that what it shows is not the
+   * latest answer.
+   */
+  failure: PreviewFailure | null;
+  /**
+   * Ask for the render again. **A read, and it is not `onRefresh`.**
+   *
+   * The two look adjacent and are opposites, which is why they are two callbacks
+   * rather than one control that changes meaning:
+   *
+   *   `onRefresh`  the composer's `save()` — a **PATCH**, then a refetch of the
+   *                campaign and an invalidation of this query. It exists because
+   *                the render is of what the *server holds*, so the only way to
+   *                move the picture is to store what is on the screen. It is
+   *                disabled unless `stale`, because with nothing to store it
+   *                would be a write that changes nothing.
+   *   `onRetry`    `refetch()` on the preview query alone. Nothing is wrong with
+   *                the stored campaign; the request for its rendering did not
+   *                arrive. It writes nothing.
+   *
+   * **A failed read must not provoke a write.** Sending a PATCH in order to get a
+   * picture back is a side effect nobody asked for — and it is worst in exactly
+   * the two cases that produce this state: on a 403 the write is the thing that
+   * must not be retried blindly, and on a network fault the PATCH fails too and
+   * the person is then told about a save they never requested.
+   *
+   * **Neither is ever offered twice, and they are never offered together.** The
+   * refresh lives in the card's `actions` slot, which exists only when there is a
+   * render to act on; the retry lives inside the failure block, which exists only
+   * when there is not. The one state that holds both a render and a failure — a
+   * refetch that failed over a good picture — draws the refresh it already had
+   * plus a marker saying the picture is behind, and adds **no** retry: two
+   * buttons in one card, one PATCHing and one GETting, both labelled with some
+   * variant of *try again*, is precisely the pair this split exists to avoid.
+   */
+  onRetry: () => void;
 };
 
 /**
@@ -253,6 +353,23 @@ export type MailPreviewState = {
  * about*, which is the text areas immediately above this component, not on a page
  * of its own two clicks away. It is the one thing the retired step existed for and
  * the one thing that could not survive being skipped.
+ *
+ * ## Item D11: three states where there were two
+ *
+ * `preview === null` used to be the whole branch, so a failed read drew the
+ * skeleton for ever. The failure is tested **first** and the skeleton keeps
+ * everything it had, which is the shape this needed rather than a redesign:
+ * nothing above this line changes, the sandbox argument is untouched, and the
+ * card is not rebuilt — a third state is added to a component that had two.
+ *
+ * `ForbiddenState` and `ErrorState` **replace** the card rather than sitting
+ * inside it, and that is not a layout preference. Both are `StateFrame`, which is
+ * already a `ui-card`, so nesting would draw a card in a card; and the header they
+ * would be nested under is a title, a description saying what the frame is, a
+ * footnote about the unsubscribe link and a refresh button — four pieces of
+ * chrome describing a render that does not exist. `analytics/AnalyticsScreen.tsx`
+ * settled the identical pair the identical way: the capability refusal and the
+ * failed load each take the block whole.
  */
 export function MailPreview({
   preview,
@@ -261,9 +378,32 @@ export function MailPreview({
   refreshing,
   blocked,
   onRefresh,
+  failure,
+  onRetry,
 }: MailPreviewState) {
   const t = useTranslations("campaigns");
   const [part, setPart] = useState<"html" | "text">("html");
+
+  if (preview === null && failure !== null) {
+    /*
+     * **No render, and a reason.** The 403 gets `ForbiddenState`, which names the
+     * capability and says who to ask, and offers no retry — asking again cannot
+     * grant a permission, and `previewFailure()` argues why a 403 on this route
+     * means the capability moved rather than that the reader is an ordinary
+     * Marketing Manager. Everything else gets `ErrorState`: the panel's own
+     * sentence, the API's beside it where there is one, and the retry, which is
+     * the whole of the remedy.
+     */
+    return failure.kind === "forbidden" ? (
+      <ForbiddenState capability="ac_manage_marketing" />
+    ) : (
+      <ErrorState
+        message={t("previewStep.failed")}
+        detail={failure.detail ?? undefined}
+        onRetry={onRetry}
+      />
+    );
+  }
 
   if (preview === null) {
     return (
@@ -458,6 +598,38 @@ export function MailPreview({
               >
                 <Icon name="clock" className="mt-0.5 size-4 shrink-0 text-ui-subtle" />
                 <span className="min-w-0">{t("previewStep.stale")}</span>
+              </p>
+            ) : null}
+            {/*
+              **The second half of item D11, and the half a nullable `preview`
+              could not have expressed.** react-query keeps the last successful
+              `data` through a failed refetch, so a refresh whose *re-read* fails
+              leaves a real render on screen and an error beside it — and with
+              only the two old branches that was the third silent state: the frame
+              would quietly go on showing an older answer while the card said
+              nothing.
+
+              It is §3.7-4's rule at the size of one card. `StaleBanner
+              reason="refreshFailed"` is the page-level form of the same
+              sentence — *the last refetch failed, with the interface perfectly
+              online* — and this is a marker in the block it is about rather than
+              a banner over a screen that otherwise works.
+
+              Warning-toned rather than muted, unlike the marker above it: that
+              one reports a normal consequence of typing, and this one reports a
+              request that did not arrive. No control beside it, deliberately —
+              the refresh in the card header is already the thing to press, and a
+              second button here would be `onRetry` under a heading that is not
+              about it.
+            */}
+            {failure !== null ? (
+              <p
+                role="status"
+                className="flex items-start gap-1.5 text-ui-label text-ui-warning-fg"
+                data-testid="preview-refresh-failed"
+              >
+                <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
+                <span className="min-w-0">{t("previewStep.refreshFailed")}</span>
               </p>
             ) : null}
             {/* Who "Amina Belkacem" is. `sampleContext()` is deliberately not a

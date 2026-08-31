@@ -2245,6 +2245,8 @@
       "stale": "L’aperçu montre le dernier enregistrement, pas vos modifications en cours.",
       "refresh": "Actualiser",
       "fresh": "L’aperçu correspond déjà à ce qui est enregistré.",
+      "failed": "L’aperçu n’a pas pu être chargé. Le message enregistré n’a pas changé.",
+      "refreshFailed": "La dernière tentative de rechargement a échoué : l’aperçu ci-dessus peut être en retard.",
       "unknownTokens": "{count, plural, one {Un champ inconnu s’affichera vide :} other {# champs inconnus s’afficheront vides :}}",
       "unknownWhy": "Vérifiez l’orthographe : {correct} et non {wrong}.",
       "unsubscribeAppended": "Le lien de désabonnement a été ajouté automatiquement. N’en ajoutez pas un second.",
