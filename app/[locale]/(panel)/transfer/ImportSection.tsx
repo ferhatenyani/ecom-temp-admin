@@ -163,14 +163,25 @@ export function ImportSection({
             (b) is false — Chromium lays the UA button out at the inline start
             and the filename beside it, correctly mirrored — and `.ui-field`
             gives it the coarse-pointer height, so (c) is false too. What
-            survives is (a), and it is not a thing a caller may fix: hiding the
-            input to replace its chrome costs the control's own keyboard
-            behaviour on two engines, which `FileField`'s docblock argues and
-            which is why the panel keeps `<select>` and `<input type="date">`
-            native as well. So `FileField` ships unextended, the field's own
-            label and hint say the same things in the reader's language, and the
-            UA prints the chosen filename itself — which is why nothing here
-            re-renders it.
+            survives is (a), and it is not a thing a **caller** may fix: hiding
+            the input to replace its chrome costs the control's own keyboard
+            behaviour on two engines. So `FileField` ships unextended, the
+            field's own label and hint say the same things in the reader's
+            language, and the UA prints the chosen filename itself — which is why
+            nothing here re-renders it.
+
+            **This paragraph used to end "which is why the panel keeps `<select>`
+            and `<input type="date">` native as well", and both of those are now
+            drawn** — `components/ui/Listbox.tsx` and `components/ui/DatePicker.tsx`.
+            Neither reversal reaches this control and the sentence is corrected
+            rather than deleted, because the *reason* it gave is still the right
+            test and it is what keeps a file input native: those two controls
+            render the **value** in a format the user agent chooses and will not
+            hand over, and a file input renders a button and a filename around a
+            value the OS dialog owns. `FileField` draws over exactly that chrome
+            while keeping the real `<input type="file">` focusable, so it already
+            has the panel's language *and* the platform's picker. There is
+            nothing left for a redraw to buy here.
 
             The CSV is read here and sent as the **raw request body** with
             `Content-Type: text/csv`. Not multipart, which is what `/media` takes

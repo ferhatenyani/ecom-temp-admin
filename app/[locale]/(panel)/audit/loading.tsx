@@ -24,9 +24,14 @@ import { TableSkeleton, RecordListSkeleton, Skeleton } from "@/components/ui/Ske
  * first paint — the actor picker's note that the system is not filterable, and
  * the date range's whole-day-UTC caveat — and each is drawn its own line count.
  *
- * Not drawn: the clear button and the two date `echo` readbacks, all three of
- * which are conditional on a filter being applied — and a first paint of
- * `/audit` with no query string has none. The actor picker is drawn because
+ * Not drawn: the clear button, which is conditional on a filter being applied —
+ * and a first paint of `/audit` with no query string has none.
+ *
+ * This used to name two more absentees, the date fields' `echo` readbacks. They
+ * are gone from `AuditList` itself now that the picker is drawn and the field
+ * reads in the page's own language, so there is nothing left to leave out; the
+ * skeleton's shape is unchanged, because it never drew them. The actor picker is
+ * drawn because
  * `/users` answers on every session that can open this page; if it ever does not,
  * the first row is one control narrower than this and the residual is 224px of
  * width on one line, not vertical shift.

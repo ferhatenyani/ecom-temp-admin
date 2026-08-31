@@ -12,7 +12,7 @@ import {
 } from "@/lib/notifications";
 import { useOnline } from "@/lib/use-online";
 import { useHydrated } from "@/lib/use-hydrated";
-import { formatDate, formatDay, formatWhen } from "@/lib/format/date";
+import { formatDate, formatWhen } from "@/lib/format/date";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
   DataTable,
@@ -66,10 +66,15 @@ async function fetchNotifications(query: NotificationsQuery) {
  * empty string would be a refusal rather than a redundant parameter.
  *
  * **No `FilterChips` for those three.** They restate controls standing six inches
- * above them: the status is the highlighted tab and each date bound is printed in
- * the page's own language by `echo`, directly under its own picker. That is
- * payments' argument at the same count. What the chip row *does* carry is the two
- * dimensions no control on screen restates — see below.
+ * above them: the status is the highlighted tab and each date bound is legible in
+ * its own picker. That is payments' argument at the same count.
+ *
+ * That last clause used to read "printed in the page's own language by `echo`,
+ * directly under its own picker", and the change is the drawn date control rather
+ * than a change of mind: the bound is now legible *in the field itself*, in the
+ * reader's own field order, so the readback that used to carry it is deleted and
+ * the argument against a chip is if anything stronger. What the chip row *does*
+ * carry is the two dimensions no control on screen restates — see below.
  *
  * ## `dedupe_key` and `subject_id` are URL-only, and they earn chips
  *
@@ -294,17 +299,16 @@ export function NotificationsList({
                 to express — it is a 200 with zero rows rather than a refusal, so
                 nothing on screen would explain it.
 
-                `echo` on both, and it is a measured defence rather than a nicety:
-                a native date input follows the *browser's* locale and there is no
-                way to change it, so the Arabic panel renders `mm/dd/yyyy` — a US
-                ordering in a right-to-left screen for a shop in Algeria. The
-                readback underneath is the only place the applied bound is legible.
+                **`echo` was on both and is deleted with the drawn picker.** It
+                read the applied bound back underneath in the page's own language,
+                because the native `<input type="date">` above it printed that same
+                bound in the *browser's* — `mm/dd/yyyy` under an Arabic label.
+                `DatePicker` renders the field in the reader's own field order, so
+                a readback would now put the same date on the screen twice.
 
-                `formatDay` and not `formatDate`: these are calendar days the
-                server draws in **UTC**, both ends inclusive of the whole day, not
-                instants in the shop's clock. `Isolate` and never `Ltr` — it is
-                `Intl`-formatted, and forcing a direction over the marks ICU
-                inserts renders an Arabic date backwards.
+                Both ends are still whole calendar days in **UTC**, which is a
+                property of `/notifications` rather than of the control:
+                `dayFromInput` is where that is enforced.
               */}
               <div className="w-full sm:w-44">
                 <DateField
@@ -312,11 +316,6 @@ export function NotificationsList({
                   value={query.dateFrom}
                   max={query.dateTo === "" ? undefined : query.dateTo}
                   onChange={(next) => commitFilter({ ...query, dateFrom: dayFromInput(next) })}
-                  echo={
-                    query.dateFrom === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateFrom, locale)}</Isolate>
-                    )
-                  }
                 />
               </div>
 
@@ -326,11 +325,6 @@ export function NotificationsList({
                   value={query.dateTo}
                   min={query.dateFrom === "" ? undefined : query.dateFrom}
                   onChange={(next) => commitFilter({ ...query, dateTo: dayFromInput(next) })}
-                  echo={
-                    query.dateTo === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateTo, locale)}</Isolate>
-                    )
-                  }
                 />
               </div>
 

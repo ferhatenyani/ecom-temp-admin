@@ -25,10 +25,11 @@
  */
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NextIntlClientProvider } from "next-intl";
 import fr from "@/messages/fr.json";
+import ar from "@/messages/ar.json";
 import {
   CheckRow,
   ChoiceGroup,
@@ -48,10 +49,19 @@ const HINT = "Un seul segment, sans barre oblique.";
 const SLASH = "Must not contain a slash.";
 const API = "Must be a number.";
 
-/** `ErrorSummary` and `SaveBar` own their chrome's strings, so they need a provider. */
-function withIntl(node: React.ReactNode) {
+/**
+ * `ErrorSummary` and `SaveBar` own their chrome's strings, so they need a
+ * provider — and so, since the date-picker branch, does `DateField`: it reads
+ * the locale to decide the field order and the calendar's month names, exactly
+ * as `Select` reads it for its popper direction.
+ *
+ * The locale is a parameter because §6 of DESIGN.md is not satisfied by testing
+ * one of two languages, and because Arabic is where this control has always
+ * failed first.
+ */
+function withIntl(node: React.ReactNode, locale: "fr" | "ar" = "fr") {
   return (
-    <NextIntlClientProvider locale="fr" messages={fr}>
+    <NextIntlClientProvider locale={locale} messages={locale === "ar" ? ar : fr}>
       {node}
     </NextIntlClientProvider>
   );
@@ -102,18 +112,24 @@ describe("the accessible name is the label, and only the label", () => {
     expect(screen.getByRole("combobox", { name: LABEL })).toHaveAccessibleDescription(HINT);
   });
 
-  it("keeps a date field reachable by its label, and its segments LTR", () => {
+  it("keeps a date field reachable by its label, and its value LTR", () => {
     /*
-     * A date input is the one shape whose only handle is its label — it has no
-     * useful implicit role, so `RangeControl`'s analytics tests find "Du" and
-     * "Au" with `getByLabel`. `dir="ltr"` is asserted because a date's segments
-     * are ordered by the platform's locale and must not be re-ordered by an
-     * Arabic paragraph around them.
+     * A date field's only handle is its label — `RangeControl`'s analytics tests
+     * find "Du" and "Au" with `getByLabel`, and that had to keep working across
+     * the swap from `<input type="date">` to the drawn control. `<label htmlFor>`
+     * still names it because the thing it points at is still a real `<input>`;
+     * only its `type` changed.
+     *
+     * `dir="ltr"` is asserted because `14/03/2026` is a run of digits and
+     * separators, and an Arabic paragraph around it reorders the groups.
+     *
+     * **The value is the locale's field order now, not the wire format.** That
+     * is the whole point of the branch and §2 below holds it in both languages.
      */
-    render(<DateField label="Du" value="2026-01-01" onChange={() => {}} hint={HINT} />);
+    render(withIntl(<DateField label="Du" value="2026-01-01" onChange={() => {}} hint={HINT} />));
 
     const input = screen.getByLabelText("Du");
-    expect(input).toHaveValue("2026-01-01");
+    expect(input).toHaveValue("01/01/2026");
     expect(input).toHaveAccessibleDescription(HINT);
     expect(input).toHaveAttribute("dir", "ltr");
   });
@@ -271,11 +287,21 @@ describe("nothing is typeable before React has hydrated it", () => {
      * Had the regex been left matching `select` alone it would have found seven
      * again — six real controls plus that bubble — and passed while the trigger
      * went entirely unchecked. The count is here to close exactly that hole.
+     *
+     * **Nine on the date-picker branch, and the ninth is the same shape of
+     * finding.** `DateField` used to be one `<input type="date">`; it is now a
+     * text input *and* a button that opens the calendar, so it contributes two
+     * controls where it contributed one. The button is the reason this number
+     * had to move rather than the count being loosened: a drawn control that
+     * shipped its trigger enabled before hydration would open a popover whose
+     * `onPick` reached no React, which is the exact defect this whole section
+     * exists for, one control further along.
      */
     const controls = html.match(/<(?:button|input|select|textarea)\b[^>]*>/g) ?? [];
-    // Seven controls above, plus Radix's hidden bubble. A regex that matched
-    // nothing must not report success.
-    expect(controls).toHaveLength(8);
+    // Seven fields above — eight controls, since the date field is an input and
+    // a button — plus Radix's hidden bubble. A regex that matched nothing must
+    // not report success.
+    expect(controls).toHaveLength(9);
     for (const control of controls) {
       expect(control).toContain("disabled");
     }
@@ -621,6 +647,448 @@ describe("a field the API refuses to write", () => {
     expect(screen.getByText("Identifiant")).toBeInTheDocument();
     expect(screen.getByText("1023")).toBeInTheDocument();
     expect(screen.getByText("Attribué par la boutique.")).toBeInTheDocument();
+  });
+});
+
+/* ───────────────────────────────────────────────── 6. the drawn date field ─── */
+
+/**
+ * `DateField` on `components/ui/DatePicker.tsx`, which retired the panel's last
+ * native `<input type="date">`.
+ *
+ * **Everything here runs in both languages**, and the Arabic half is not
+ * symmetry for its own sake: the step this was built for says outright that
+ * Arabic is where this control has always failed first, and the defect the
+ * reversal exists to fix — `mm/dd/yyyy` under a right-to-left label — was only
+ * ever visible there.
+ *
+ * The five properties are the five things the native control gave and a drawn
+ * one usually loses:
+ *
+ *   1. the field reads in the **page's** order, not the browser's
+ *   2. a date can be typed with the keyboard **without opening the calendar**
+ *   3. the `Y-m-d` contract on the wire is unchanged in both directions
+ *   4. a refusal still waits for the blur, and a grid pick does not
+ *   5. the calendar is a real grid, with today, the selection and a live month
+ */
+
+/** The one thing a caller sees. Returns the last `Y-m-d` the field emitted. */
+function dateField(props: Partial<Parameters<typeof DateField>[0]> = {}, locale: "fr" | "ar" = "fr") {
+  const emitted: string[] = [];
+  function Harness() {
+    const [value, setValue] = useState(props.value ?? "");
+    return (
+      <DateField
+        label="Du"
+        {...props}
+        value={value}
+        onChange={(next) => {
+          emitted.push(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+  render(withIntl(<Harness />, locale));
+  return {
+    input: screen.getByLabelText("Du"),
+    emitted,
+    last: () => emitted.at(-1),
+  };
+}
+
+describe("the drawn date field reads in the page's language, not the browser's", () => {
+  /**
+   * The whole branch in one assertion. A native date input renders its segments
+   * in the *browser's* locale and no attribute changes it, which is how the
+   * Arabic panel came to print a US `mm/dd/yyyy`. Both of this panel's locales
+   * are day-month-year — measured in `tests/calendar.test.ts` §1 — so both must
+   * show the day first, and neither may show the wire format.
+   */
+  it("prints the day first in French and in Arabic", () => {
+    for (const locale of ["fr", "ar"] as const) {
+      const { input } = dateField({ value: "2026-03-14" }, locale);
+      expect(input, locale).toHaveValue("14/03/2026");
+      cleanup();
+    }
+  });
+
+  /**
+   * The proof that the `echo` readback could be deleted rather than merely
+   * dropped. It existed because the field could not be made to show a legible
+   * date; a field that shows one in both languages is a field printing the date
+   * twice if the readback stays. Asserting the *absence* of a second copy is
+   * what stops it being reintroduced by somebody being helpful.
+   */
+  it("prints the date once, with no second copy underneath", () => {
+    dateField({ value: "2026-03-14" }, "ar");
+    /* `queryAllByText`, which answers an empty list rather than throwing —
+       "there is no second copy" is the assertion, so nothing found is a pass. */
+    expect(screen.queryAllByText(/14/)).toHaveLength(0);
+  });
+
+  it("shows nothing at all for no date, which every filter offers", () => {
+    const { input } = dateField({ value: "" });
+    expect(input).toHaveValue("");
+  });
+
+  it("carries the locale's own field order into the placeholder", () => {
+    const { input } = dateField({}, "fr");
+    /* `jj` before `aaaa`, because the order is read from CLDR rather than
+       written out — and the separators carry U+200E so the Arabic words below
+       are not laid out right-to-left inside this `dir="ltr"` field. */
+    expect(input.getAttribute("placeholder")).toBe("jj‎/mm‎/aaaa");
+  });
+
+  /**
+   * **The U+200E LEFT-TO-RIGHT MARKs in this string are load-bearing and were
+   * measured**, so this assertion is written against the exact bytes rather
+   * than a regex that would let them be dropped.
+   *
+   * The three Arabic words are strong RTL runs; the two slashes between them are
+   * neutral. Without the marks the neutrals take the surrounding RTL direction
+   * and the whole hint is laid out right-to-left *inside* a `dir="ltr"` field —
+   * so the reader is shown year, month, day, while the value that replaces it is
+   * day, month, year. Measured in Chromium with the words swapped for countable
+   * runs of `ا` (1 = day, 2 = month, 3 = year), in the field's own
+   * `dir="ltr"; unicode-bidi: isolate` box:
+   *
+   *   with the marks     | / || / |||     ← same order as `14/033/2026`
+   *   without them       ||| / || / |     ← year first, which is the defect
+   *
+   * So dropping them would put the exact ordering error this control exists to
+   * fix back into the control, in the one language it matters in.
+   */
+  it("and into the Arabic one, in the same order rather than mirrored", () => {
+    const { input } = dateField({}, "ar");
+    expect(input.getAttribute("placeholder")).toBe("يوم‎/شهر‎/سنة");
+  });
+});
+
+describe("a date can be typed without the calendar ever opening", () => {
+  /**
+   * The hardest requirement, and the one a drawn picker usually loses. The field
+   * is an ordinary `<input type="text">`: no mask, no auto-advancing caret, no
+   * intercepted keys. `queryByRole("grid")` is the half that makes this test
+   * mean something — it says the calendar was never mounted.
+   */
+  it("emits Y-m-d from the locale's order, with no grid ever mounted", () => {
+    for (const locale of ["fr", "ar"] as const) {
+      const { input, last } = dateField({}, locale);
+      fireEvent.change(input, { target: { value: "14/03/2026" } });
+      expect(last(), locale).toBe("2026-03-14");
+      expect(screen.queryByRole("grid"), locale).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("takes the wire format typed literally, which is what a URL carries", () => {
+    const { input, last } = dateField({}, "ar");
+    fireEvent.change(input, { target: { value: "2026-03-14" } });
+    expect(last()).toBe("2026-03-14");
+  });
+
+  /**
+   * Reformatting while somebody is typing moves the caret out from under them,
+   * so `1/3/2026` is tidied on the way out and not before. Blur is already the
+   * moment the latch arms, so nothing new is being introduced.
+   */
+  it("tidies a short entry on blur and not on the keystroke", () => {
+    const { input } = dateField();
+    fireEvent.change(input, { target: { value: "1/3/2026" } });
+    expect(input).toHaveValue("1/3/2026");
+    fireEvent.blur(input);
+    expect(input).toHaveValue("01/03/2026");
+  });
+
+  /**
+   * The half-typed value. The native control reported the **empty** string for a
+   * half-entered date rather than a partial one, and `DateField`'s blur latch
+   * was written around exactly that; the drawn one keeps the behaviour, so a
+   * caller never holds a date the field is not showing.
+   */
+  it("reports the empty value while the text is not yet a date", () => {
+    const { input, emitted } = dateField({ value: "2026-03-14" });
+    fireEvent.change(input, { target: { value: "14/0" } });
+    expect(emitted.at(-1)).toBe("");
+    /* And the text is *not* wiped by the empty value coming back round. */
+    expect(input).toHaveValue("14/0");
+  });
+
+  /**
+   * The other side of the bridge, and the half that is easy to lose while fixing
+   * the one above: a `value` the *caller* changed — a reset, a preset range —
+   * has to replace the text, including when the text is mid-edit garbage.
+   */
+  it("adopts a date set from outside, over whatever is in the field", () => {
+    function Harness() {
+      const [value, setValue] = useState("2026-03-14");
+      return (
+        <>
+          <DateField label="Du" value={value} onChange={setValue} />
+          <button type="button" onClick={() => setValue("2026-07-01")}>
+            reset
+          </button>
+        </>
+      );
+    }
+    render(withIntl(<Harness />));
+    const input = screen.getByLabelText("Du");
+
+    fireEvent.change(input, { target: { value: "zz" } });
+    expect(input).toHaveValue("zz");
+    fireEvent.click(screen.getByRole("button", { name: "reset" }));
+    expect(input).toHaveValue("01/07/2026");
+  });
+
+  it("refuses a date that is not a date, on blur and not before", () => {
+    const { input } = dateField();
+    fireEvent.change(input, { target: { value: "31/02/2026" } });
+    expect(screen.queryByText(fr.ui.date.unreadable)).toBeNull();
+    fireEvent.blur(input);
+    expect(screen.getByText(fr.ui.date.unreadable)).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("says so in Arabic in the Arabic panel", () => {
+    const { input } = dateField({}, "ar");
+    fireEvent.change(input, { target: { value: "hier" } });
+    fireEvent.blur(input);
+    expect(screen.getByText(ar.ui.date.unreadable)).toBeInTheDocument();
+  });
+
+  it("stops saying so the moment the value becomes readable", () => {
+    const { input, last } = dateField();
+    fireEvent.change(input, { target: { value: "zz" } });
+    fireEvent.blur(input);
+    expect(screen.getByText(fr.ui.date.unreadable)).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "14/03/2026" } });
+    expect(screen.queryByText(fr.ui.date.unreadable)).toBeNull();
+    expect(last()).toBe("2026-03-14");
+  });
+
+  /**
+   * The caller's own rule still receives a `Y-m-d`, never the typed text. A
+   * screen's `validate` was written against the wire format and none of the six
+   * callers was touched for this branch, so this is the assertion that says the
+   * contract really was unchanged.
+   */
+  it("hands the caller's own rule a Y-m-d and not what was typed", () => {
+    const seen: string[] = [];
+    render(
+      withIntl(
+        <DateField
+          label="Du"
+          value="2026-03-14"
+          onChange={() => {}}
+          validate={(value) => {
+            seen.push(value);
+            return undefined;
+          }}
+        />,
+      ),
+    );
+    expect(seen).not.toHaveLength(0);
+    for (const value of seen) expect(value).toBe("2026-03-14");
+  });
+});
+
+describe("the calendar is a real grid, and Arabic mirrors it", () => {
+  const openCalendar = (locale: "fr" | "ar" = "fr", props = {}) => {
+    const field = dateField({ value: "2026-03-14", ...props }, locale);
+    fireEvent.click(screen.getByRole("button", { name: (locale === "ar" ? ar : fr).ui.date.open }));
+    return field;
+  };
+
+  it("names the month in the reader's language, in a live region", () => {
+    openCalendar("fr");
+    const caption = screen.getByText("mars 2026");
+    expect(caption).toHaveAttribute("aria-live", "polite");
+    cleanup();
+
+    openCalendar("ar");
+    expect(screen.getByText("مارس 2026")).toBeInTheDocument();
+  });
+
+  /**
+   * §5 asks for real table semantics, and APG's date picker is a `role="grid"`
+   * over one. The seven column headings carry the **full** weekday name for a
+   * screen reader while showing the narrow letter — French's narrow has two
+   * `M`s, for *mardi* and *mercredi*, so the letter alone is not a name.
+   */
+  it("is a labelled grid with seven named columns", () => {
+    openCalendar("fr");
+    const grid = screen.getByRole("grid");
+    expect(grid).toHaveAccessibleName("mars 2026");
+
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers).toHaveLength(7);
+    /* Algeria's week starts on Saturday in both locales — CLDR, not a guess. */
+    expect(headers[0]).toHaveTextContent("samedi");
+  });
+
+  it("labels the columns in Arabic in the Arabic panel", () => {
+    openCalendar("ar");
+    expect(screen.getAllByRole("columnheader")[0]).toHaveTextContent("السبت");
+  });
+
+  it("marks the selected day, and only it", () => {
+    openCalendar("fr");
+    const selected = screen
+      .getAllByRole("gridcell")
+      .filter((cell) => cell.getAttribute("aria-selected") === "true");
+    expect(selected).toHaveLength(1);
+    expect(selected[0].querySelector("button")).toHaveAttribute("data-day", "2026-03-14");
+  });
+
+  it("gives every day an accessible name in the reader's own language", () => {
+    openCalendar("fr");
+    expect(screen.getByRole("button", { name: "samedi 14 mars 2026" })).toBeInTheDocument();
+    cleanup();
+    openCalendar("ar");
+    expect(screen.getByRole("button", { name: "السبت، 14 مارس 2026" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The DOM focus, not merely the tab stop — and this one caught a real
+   * defect.** The first draft moved focus from a `useEffect` keyed on `open`
+   * holding a `useRef` to the grid; Radix's `Presence` mounts `Popover.Content`
+   * one commit *after* `open` becomes true, so the ref was still null, the cell
+   * was never found, and focus stayed on the trigger. Nothing errored and every
+   * `tabindex` assertion still passed — the calendar simply opened dead to the
+   * keyboard, which is the whole thing this branch had to not lose.
+   *
+   * So: assert `document.activeElement`. A test that only reads `tabindex` is a
+   * test that would have shipped it.
+   */
+  it("puts the DOM focus on the selected day when it opens", () => {
+    openCalendar("fr");
+    expect(document.activeElement).toHaveAttribute("data-day", "2026-03-14");
+  });
+
+  it("does the same in Arabic", () => {
+    openCalendar("ar");
+    expect(document.activeElement).toHaveAttribute("data-day", "2026-03-14");
+  });
+
+  it("lands on today when there is no date yet", () => {
+    dateField({ value: "" });
+    fireEvent.click(screen.getByRole("button", { name: fr.ui.date.open }));
+    expect(document.activeElement).toHaveAttribute("aria-current", "date");
+  });
+
+  it("carries the DOM focus with the arrow keys, not just the tab stop", () => {
+    openCalendar("fr");
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "ArrowDown" });
+    expect(document.activeElement).toHaveAttribute("data-day", "2026-03-21");
+  });
+
+  /**
+   * The month buttons are the deliberate exception: a person clicking "next
+   * month" three times must keep their focus on the button they are clicking.
+   * APG's date-picker dialog draws the same line.
+   */
+  it("leaves focus on the month button when the month button is used", () => {
+    openCalendar("fr");
+    const next = screen.getByRole("button", { name: fr.ui.date.nextMonth });
+    fireEvent.click(next);
+    expect(screen.getByText("avril 2026")).toBeInTheDocument();
+    expect(document.activeElement).not.toHaveAttribute("data-day");
+  });
+
+  /** One tab stop in 42 cells, so Tab leaves the calendar rather than walking it. */
+  it("keeps exactly one tab stop in the grid", () => {
+    openCalendar("fr");
+    const tabbable = screen
+      .getAllByRole("gridcell")
+      .map((cell) => cell.querySelector("button"))
+      .filter((button) => button?.getAttribute("tabindex") === "0");
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]).toHaveAttribute("data-day", "2026-03-14");
+  });
+
+  it("picks a day, emits Y-m-d, and closes", () => {
+    const { last } = openCalendar("fr");
+    fireEvent.click(screen.getByRole("button", { name: "dimanche 22 mars 2026" }));
+    expect(last()).toBe("2026-03-22");
+    expect(screen.queryByRole("grid")).toBeNull();
+    expect(screen.getByLabelText("Du")).toHaveValue("22/03/2026");
+  });
+
+  /**
+   * The RTL half, and it is the assertion the whole Arabic argument turns on.
+   * APG maps the arrow keys **visually**: in a grid whose columns run
+   * right-to-left, ArrowLeft is the *next* day and ArrowRight the previous one.
+   * A component that read the keys logically would move a French reader's
+   * selection the right way and an Arabic reader's the wrong way, and nothing
+   * would error.
+   */
+  it("mirrors the arrow keys in Arabic and does not in French", () => {
+    for (const [locale, forward] of [
+      ["fr", "ArrowRight"],
+      ["ar", "ArrowLeft"],
+    ] as const) {
+      openCalendar(locale);
+      fireEvent.keyDown(screen.getByRole("grid"), { key: forward });
+      expect(
+        screen.getByRole("grid").querySelector('button[tabindex="0"]'),
+        `${locale} ${forward}`,
+      ).toHaveAttribute("data-day", "2026-03-15");
+      cleanup();
+    }
+  });
+
+  it("walks a week with the vertical arrows and a month with the page keys", () => {
+    openCalendar("fr");
+    const grid = screen.getByRole("grid");
+    const focused = () => grid.querySelector('button[tabindex="0"]')?.getAttribute("data-day");
+
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(focused()).toBe("2026-03-21");
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(focused()).toBe("2026-03-14");
+    fireEvent.keyDown(grid, { key: "PageDown" });
+    expect(focused()).toBe("2026-04-14");
+    fireEvent.keyDown(grid, { key: "PageUp", shiftKey: true });
+    expect(focused()).toBe("2025-04-14");
+  });
+
+  /**
+   * Walking off the end of a month has to take the grid with it — the state
+   * where March is drawn and 1 April is focused is the bug the single `cursor`
+   * was chosen to make unrepresentable.
+   */
+  it("takes the drawn month with it when an arrow leaves one", () => {
+    openCalendar("fr");
+    const grid = screen.getByRole("grid");
+    /* Eighteen weeks on from 14 March 2026 is 18 July, four months later. */
+    for (let step = 0; step < 18; step += 1) fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.querySelector('button[tabindex="0"]')).toHaveAttribute("data-day", "2026-07-18");
+    expect(screen.getByText("juillet 2026")).toBeInTheDocument();
+  });
+
+  /** `min`/`max` refuse the grid. The keyboard is `Stepper`'s rule and is not refused. */
+  it("draws an out-of-range day refused, and still lets one be typed", () => {
+    const { input, last } = openCalendar("fr", { max: "2026-03-20" });
+    expect(screen.getByRole("button", { name: "dimanche 22 mars 2026" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "dimanche 22 mars 2026" }));
+    expect(last()).not.toBe("2026-03-22");
+
+    fireEvent.change(input, { target: { value: "22/03/2026" } });
+    expect(last()).toBe("2026-03-22");
+  });
+
+  it("marks today, wherever today is", () => {
+    dateField({ value: "" });
+    fireEvent.click(screen.getByRole("button", { name: fr.ui.date.open }));
+    const current = screen
+      .getAllByRole("gridcell")
+      .map((cell) => cell.querySelector("button"))
+      .filter((button) => button?.getAttribute("aria-current") === "date");
+    expect(current).toHaveLength(1);
   });
 });
 

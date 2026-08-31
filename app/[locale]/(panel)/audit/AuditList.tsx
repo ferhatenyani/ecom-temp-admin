@@ -13,7 +13,7 @@ import {
   isResourceType,
 } from "@/lib/audit";
 import { useOnline } from "@/lib/use-online";
-import { formatDay, formatWhen } from "@/lib/format/date";
+import { formatWhen } from "@/lib/format/date";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
   DataTable,
@@ -106,10 +106,12 @@ async function fetchAudit(query: AuditQuery) {
  *                  visible on rows and not filterable. §17's refinement again —
  *                  what the picker's job actually is here is keeping a typo
  *                  unreachable, which it does completely.
- *   date range     two `DateField`s with `echo`, which is the only defence
- *                  against Chromium rendering `mm/dd/yyyy` under an Arabic
- *                  label. Both ends are whole-day **UTC**, said once on the
- *                  control that means it.
+ *   date range     two `DateField`s, each bounding the other. They carried an
+ *                  `echo` readback until the drawn picker arrived, because the
+ *                  native control rendered `mm/dd/yyyy` under an Arabic label;
+ *                  the field now reads in the page's own order, so the second
+ *                  copy of the date is deleted. Both ends are whole-day **UTC**,
+ *                  said once on the control that means it.
  *
  * **No search box**: `?search=` is never declared in `indexArgs()`, so it is not
  * a parameter of this route at all. **Nothing sorts**: `AuditRepository.php:50`
@@ -418,17 +420,18 @@ export function AuditList({
                 express — it is a 200 with zero rows rather than a refusal, so
                 nothing on screen would explain it.
 
-                `echo` on both, and it is a measured defence rather than a nicety: a
-                native date input follows the *browser’s* locale and there is no way
-                to change it, so the Arabic panel renders `mm/dd/yyyy` — a US
-                ordering in a right-to-left screen for a shop in Algeria. The
-                readback underneath is the only place the applied bound is legible.
+                **`echo` is gone with the drawn picker, and that is the deletion
+                rather than an omission.** It printed the applied bound underneath
+                each field in the page's own language, because the native
+                `<input type="date">` above it printed the same bound in the
+                *browser's* — `mm/dd/yyyy` under an Arabic label. `DatePicker`
+                renders the field in the reader's own order, so keeping the
+                readback would put the date on the screen twice, six inches apart,
+                which is §11's footnote defect wearing a different hat.
 
-                `formatDay` and not `formatDate`: these are calendar days the server
-                draws in UTC, both ends inclusive of the whole day, not instants in
-                the shop’s clock. `Isolate` and never `Ltr` — it is `Intl`-formatted,
-                and forcing a direction over the marks ICU inserts renders an Arabic
-                date backwards.
+                Both ends are still whole calendar days in **UTC** — that is a
+                property of `/audit-logs`, not of the control, and `dayFromInput`
+                and the hint below are where it is said.
               */}
               <div className="w-full sm:w-48">
                 <DateField
@@ -442,11 +445,6 @@ export function AuditList({
                      under the second picker would be §11’s footnote defect at a
                      six-inch distance. */
                   hint={t("dateHint")}
-                  echo={
-                    query.dateFrom === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateFrom, locale)}</Isolate>
-                    )
-                  }
                 />
               </div>
 
@@ -456,11 +454,6 @@ export function AuditList({
                   value={query.dateTo}
                   min={query.dateFrom === "" ? undefined : query.dateFrom}
                   onChange={(next) => commitFilter({ ...query, dateTo: dayFromInput(next) })}
-                  echo={
-                    query.dateTo === "" ? undefined : (
-                      <Isolate>{formatDay(query.dateTo, locale)}</Isolate>
-                    )
-                  }
                 />
               </div>
 

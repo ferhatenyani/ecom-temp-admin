@@ -2831,6 +2831,16 @@
     "file": {
       "browse": "Parcourir",
       "none": "Aucun fichier choisi"
+    },
+    "date": {
+      "day": "jj",
+      "month": "mm",
+      "year": "aaaa",
+      "open": "Ouvrir le calendrier",
+      "calendar": "Calendrier",
+      "previousMonth": "Mois précédent",
+      "nextMonth": "Mois suivant",
+      "unreadable": "Date illisible."
     }
   }
 }

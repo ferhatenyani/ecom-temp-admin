@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Button } from "@/components/ui/Button";
+import { DatePicker } from "@/components/ui/DatePicker";
 import { Listbox, type ListboxOption } from "@/components/ui/Listbox";
+import { formatEntry, parseEntry } from "@/lib/calendar";
 import { useHydrated } from "@/lib/use-hydrated";
 
 /**
@@ -658,61 +660,60 @@ export function NumberField(props: {
 }
 
 /**
- * A calendar date, `Y-m-d` in and `Y-m-d` out. Ported from `Field.tsx`'s
- * `DateField`, which `components/patterns/RangeControl.tsx` uses for analytics
- * and the inventory ledger.
+ * A calendar date, `Y-m-d` in and `Y-m-d` out — `DatePicker` in this file's
+ * frame, exactly as `Select` below is `Listbox` in it.
  *
- * A native `<input type="date">`, so the platform picker appears — a phone's
- * wheel and a desktop's calendar are already localised, already keyboard
- * navigable, and better than anything drawn here.
+ * ## It was a native `<input type="date">` until this branch, and the case it
+ * ## made was a real one
  *
- * **The value format is the wire format, and that is why this is safe where a
- * coupon's expiry was not.** README's warning is about `date_expires`, which the
- * API writes as `Y-m-d` and reads back as full ISO: an input bound to *that*
- * response renders empty and the next save clears a date nobody touched.
- * Analytics has no such asymmetry — `date_from` and `date_to` are `Y-m-d` in both
- * directions.
+ * What this docblock used to say for the native control was that the platform
+ * picker is already localised, already keyboard navigable, that a phone renders
+ * it as a wheel, and that it is better than anything drawn here. The first three
+ * are still true and the fourth turned out to have a hole in it that no
+ * attribute could reach: **a date input renders its segments in the *browser's*
+ * locale**, so the Arabic panel printed `mm/dd/yyyy` — a US ordering, in a
+ * right-to-left screen, for a shop in Algeria — and neither of this panel's two
+ * languages ever got its own. `components/ui/DatePicker.tsx` carries the whole
+ * argument, the three things the reversal costs, and why a **file** input is a
+ * different case that this deliberately does not touch.
  *
- * `dir="ltr"`: a date input's own segments are ordered by the platform's locale
- * and must not be re-ordered by an Arabic paragraph around them.
+ * **The prop list is unchanged but for one deletion, and so is every call site.**
+ * `echo` is gone: it existed only to print the value a second time underneath,
+ * in the language the field itself could not use, and a field that now reads
+ * correctly in both languages would simply be printing the date twice. The six
+ * screens that passed it lost that line and nothing else.
  *
- * Blur rather than change for the validation latch, unlike `Select` below. A
- * date input reads as one commitment and mostly behaves like one, but a
- * half-entered date reports an **empty** value rather than a partial one — so
- * latching on change would let a "required" rule fire at the moment someone has
- * filled in the year and not yet the month.
+ * **The value format is still the wire format, and that is still why this is
+ * safe where a coupon's expiry was not.** README's warning is about
+ * `date_expires`, which the API writes as `Y-m-d` and reads back as full ISO: a
+ * control bound to *that* response renders empty and the next save clears a date
+ * nobody touched. `CouponForm`'s `expiryInputValue()` is what stands between the
+ * two and it is untouched here — this control takes and returns exactly what the
+ * native one did.
  *
- * ## `echo`, added on the coupons branch — and it is a measured defence
+ * ## The validation rule is a function of the **text**, not of the value
  *
- * **A native date input follows the *browser's* locale and there is no way to
- * change it.** The Arabic panel renders `mm/dd/yyyy`: a US ordering, in a
- * right-to-left screen, for a shop in Algeria. `lang` is the only hint the
- * platform offers and Chromium was measured on 2026-08-19 not to honour it; the
- * control's internals cannot be styled or relabelled either.
+ * `useField` is given `entry` rather than `value`, which looks wrong for one
+ * beat and is the only arrangement that works. There are now two ways this field
+ * can refuse: the caller's rule, which is about a date, and the layer's own —
+ * *"that is not a date"* — which is about a string that has no date in it to
+ * hand to the caller's rule. Feeding the latch the text lets both live in one
+ * predicate, keeps the caller's own `validate` receiving a `Y-m-d` as it always
+ * did, and makes the message update on every keystroke once it has latched,
+ * which is what §3.4 asks for.
  *
- * So the value is echoed underneath in the page's own language, and a person can
- * confirm the date they set without having to trust a format they do not
- * recognise. That readback is a second piece of text and this frame has one text
- * slot — `hint`, which the coupon expiry also needs ("valid through the whole of
- * the named day; leave empty for none"). One caller putting both through `hint`
- * would have concatenated two unrelated sentences; the alternative was a
- * hand-rolled `<input type="date">` beside the primitive, which is what the screen
- * this replaces did and is how it lost the hydration guard, `aria-describedby`
- * and the error frame.
- *
- * It sits directly under the control and above `hint`, because it is about the
- * value that is there rather than about what a valid one looks like. `Isolate`
- * rather than `Ltr` is the caller's job: this is `Intl`-formatted text, and
- * forcing a direction over the marks ICU inserts renders an Arabic date as
- * `17ص 12:03 .2026/08/`.
+ * Blur rather than change for the latch, unchanged and for a reason that
+ * survives the swap intact: a half-typed date is `14/0`, which is not a date, and
+ * a field that said so on the third keystroke of a five-keystroke value is
+ * exactly the "never on first keystroke" §3.4 forbids. A day chosen from the
+ * **grid** does latch on the spot, through `commit` — that is a complete act with
+ * no half-typed state, which is the same test `Select` applies.
  */
 export function DateField({
   id: givenId,
   label,
   value,
   onChange,
-  /** The value read back in the page's own language. See above. */
-  echo,
   hint,
   error,
   validate,
@@ -726,17 +727,79 @@ export function DateField({
   /** `Y-m-d`, or the empty string. */
   value: string;
   onChange: (next: string) => void;
-  echo?: ReactNode;
   hint?: string;
   error?: string;
   validate?: (value: string) => string | undefined;
-  /** `Y-m-d`. Bounds the pickers to each other so a reversed pair is hard to express. */
+  /** `Y-m-d`. Bounds the grid to the other end of a pair. See `DatePicker`. */
   min?: string;
   max?: string;
   disabled?: boolean;
   className?: string;
 }) {
-  const field = useField({ id: givenId, value, validate, error });
+  const t = useTranslations("ui.date");
+  const locale = useLocale();
+
+  /**
+   * What the field shows, which is not the same string as what the caller holds.
+   *
+   * Seeded from `value` and thereafter the person's own typing, because the two
+   * genuinely diverge: `14/0` is a state the text is allowed to be in and the
+   * `Y-m-d` contract is not.
+   */
+  const [entry, setEntry] = useState(() => formatEntry(value, locale));
+
+  /**
+   * The bridge back — how an *externally* changed `value` reaches the text
+   * without a change the person made themselves rewriting what they are typing.
+   *
+   * `seen` is React's documented "adjust state when a prop changes" pattern. The
+   * interesting half is the condition, and it is written as a question about
+   * **meaning** rather than about provenance: re-derive the text only when the
+   * text no longer means the value.
+   *
+   * That distinction matters because the two cases look identical from here. A
+   * reset button and a preset range must replace what is in the field; this
+   * field's own `onChange` coming back round must not, or the value the person
+   * is halfway through typing is rewritten under their caret.
+   *
+   * `parseEntry` answers three things and each is handled once:
+   *
+   *   a `Y-m-d`   the text is a date. If it is not *this* date, the value came
+   *               from outside and the text is replaced.
+   *   `""`        the text is empty, which is a real value here.
+   *   `null`      the text is mid-edit and unreadable — `14/0`. The field has
+   *               already reported `""` for it, so an incoming `""` is this
+   *               field's own echo and the text is left exactly alone. An
+   *               incoming *date* is somebody else's and does replace it.
+   *
+   * An earlier draft kept a `useRef` of the last emitted value and compared
+   * against that. It read a ref during render, which the lint rule refuses and
+   * is right to: the answer above needs no memory at all.
+   */
+  const [seen, setSeen] = useState(value);
+  if (value !== seen) {
+    setSeen(value);
+    const meaning = parseEntry(entry, locale);
+    if (meaning !== value && !(meaning === null && value === "")) {
+      setEntry(formatEntry(value, locale));
+    }
+  }
+
+  const field = useField({
+    id: givenId,
+    value: entry,
+    validate: (text) => {
+      const parsed = parseEntry(text, locale);
+      if (parsed === null) return t("unreadable");
+      return validate?.(parsed);
+    },
+    error,
+  });
+
+  /** Never fire `onChange` for a value the caller already holds. */
+  const emit = (next: string) => {
+    if (next !== value) onChange(next);
+  };
 
   return (
     <FieldFrame
@@ -748,24 +811,40 @@ export function DateField({
       errorId={field.errorId}
       className={className}
     >
-      <input
+      <DatePicker
         id={field.id}
-        type="date"
+        entry={entry}
+        onEntryChange={(next) => {
+          setEntry(next);
+          /*
+             Unreadable text reports the **empty** value, which is precisely what
+             the native control did with a half-entered date and is what the blur
+             latch above was written around. A caller therefore never holds a
+             date the field is not showing.
+          */
+          emit(parseEntry(next, locale) ?? "");
+        }}
+        onEntryBlur={() => {
+          /* Tidy `1/3/2026` into `01/03/2026` on the way out, and only then: a
+             field that reformatted while it was being typed moves the caret out
+             from under the person editing the middle of a value. */
+          const parsed = parseEntry(entry, locale);
+          if (parsed) setEntry(formatEntry(parsed, locale));
+          field.onBlur();
+        }}
         value={value}
+        onPick={(day) => {
+          setEntry(formatEntry(day, locale));
+          emit(day);
+          field.commit();
+        }}
+        describedBy={describedBy(hint, field.hintId, field.shown, field.errorId)}
+        invalid={Boolean(field.shown)}
+        disabled={disabled || !field.hydrated}
+        busy={!field.hydrated}
         min={min}
         max={max}
-        disabled={disabled || !field.hydrated}
-        aria-busy={!field.hydrated || undefined}
-        onChange={(event) => onChange(event.target.value)}
-        onBlur={field.onBlur}
-        aria-invalid={field.shown ? true : undefined}
-        aria-describedby={describedBy(hint, field.hintId, field.shown, field.errorId)}
-        dir="ltr"
-        data-numeric=""
-        style={{ unicodeBidi: "isolate" }}
-        className={`${CONTROL} ${borderFor(Boolean(field.shown))}`}
       />
-      {echo ? <p className="text-ui-label text-ui-fg">{echo}</p> : null}
     </FieldFrame>
   );
 }

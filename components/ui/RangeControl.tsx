@@ -193,20 +193,25 @@ export function RangeControl({
             difficult to express at all; the message covers the platform pickers
             that allow it anyway.
 
-            `echo` is the coupons branch's measured defence and it is required
-            here: a native date input follows the **browser's** locale, so the
-            Arabic panel renders `mm/dd/yyyy` — a US ordering, in a right-to-left
-            screen, for a shop in Algeria — and Chromium was measured not to
-            honour `lang`. The value is read back underneath in the page's own
-            language. `Isolate` and never `Ltr`, because `formatDay` is
-            `Intl`-formatted text carrying U+200F marks.
+            **`echo` is deleted here, and this modal is where its deletion is
+            most visible.** It was the coupons branch's measured defence — a
+            native date input follows the **browser's** locale, so the Arabic
+            panel rendered `mm/dd/yyyy`, and Chromium was measured not to honour
+            `lang` — so each field printed its value a second time underneath in
+            the page's own language. `DatePicker` renders the field itself in the
+            reader's field order, so the readback would now be the same date
+            twice, and this modal is 400px wide with two of them stacked.
+
+            The applied range is still read back in words, once, by the trigger
+            above (`formatDay` on `applied.from`/`applied.to`) — which is the
+            place a reader needs it, because that text is what the closed control
+            says the report is about.
           */}
           <DateField
             label={t("customFrom")}
             value={from}
             onChange={setFrom}
             max={to === "" ? undefined : to}
-            echo={from === "" ? undefined : <Isolate>{formatDay(from, locale)}</Isolate>}
             error={problem === "reversed" ? t("errorReversed") : undefined}
           />
           <DateField
@@ -214,7 +219,6 @@ export function RangeControl({
             value={to}
             onChange={setTo}
             min={from === "" ? undefined : from}
-            echo={to === "" ? undefined : <Isolate>{formatDay(to, locale)}</Isolate>}
             error={
               problem === "too-long" ? t("errorTooLong", { max: MAX_CUSTOM_DAYS }) : undefined
             }
