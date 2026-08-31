@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import type { Wilaya } from "@/lib/api/schemas/order";
 import { placeName } from "@/lib/geography";
@@ -15,7 +15,12 @@ import {
 } from "@/lib/campaigns";
 import { DateField, Select, TextField } from "@/components/ui/Form";
 import type { ListboxOption } from "@/components/ui/Listbox";
-import { useProductSearch, type EligibleProduct } from "./product-lookup";
+import { Icon } from "@/components/primitives/Icon";
+import {
+  productRefState,
+  useProductSearch,
+  type ProductLookup,
+} from "./product-lookup";
 
 /**
  * One segment criterion's **value**, drawn as the thing it actually is.
@@ -70,6 +75,43 @@ import { useProductSearch, type EligibleProduct } from "./product-lookup";
  * silently replaced. The API stores what it was given; a panel that dropped the
  * id because it could not name it would be editing a segment nobody asked to
  * edit.
+ *
+ * ## Item D10: the note became a warning, and the rendering did not change
+ *
+ * That paragraph predates decision 5 and already had the behaviour right — an
+ * unresolvable id kept its value, and the option said so. What it did not have
+ * is a **signal**. The wilaya's sentence lived in the `hint` slot, in
+ * `text-ui-muted`, competing for that one slot with *"the list did not load"*;
+ * the product's lived nowhere but inside an option label a shut listbox
+ * truncates. So the state a shopkeeper needs to notice — *this criterion names
+ * something the shop can no longer find* — was drawn in the colour the panel
+ * uses for advice.
+ *
+ * It is now `CriterionWarning`, the inline shape `inventory/SkuLookup.tsx` uses
+ * for the same class of fact: an alert glyph, `text-ui-warning-fg`, `role`
+ * `status`. Three properties are load-bearing and each is a decision:
+ *
+ *   **It never replaces the rendering.** The unknown wilaya is still prepended as
+ *   its own option and the unresolvable product is still labelled with its id.
+ *   That is not only decision 5's *"must not clear the value"* — it is also the
+ *   accessibility half of this warning, because the identity ends up in the
+ *   control's **accessible name**, which is announced on focus, where a live
+ *   region beside it is not. `Select` takes `hint` and `error` and wires exactly
+ *   those two into `aria-describedby`; widening `components/ui/Form.tsx` for one
+ *   screen was refused while three lanes are editing it, so the warning is not in
+ *   `aria-describedby` and that gap is named rather than hidden.
+ *
+ *   **It never fires on ignorance.** Every branch that says *this is wrong*
+ *   requires the lookup to have **succeeded** — `productRefState()` argues the
+ *   five states — and the wilaya half has the identical guard: an empty
+ *   `wilayas` is the list having failed, not Algeria having no wilayas, so the
+ *   unset case keeps the existing hint and shows no warning at all.
+ *
+ *   **It never blocks the save.** Nothing below returns a verdict into
+ *   `criterionError`, nothing joins `ErrorSummary`, and `SegmentModal.save` reads
+ *   `criteria` alone. §3.4's split holds: an *error* is a refusal of a value, and
+ *   these values are not refused by anything — `SegmentCriteria` validates an id
+ *   with `ctype_digit` and stores whatever passes.
  */
 export function CriterionField({
   criterion,
@@ -87,9 +129,16 @@ export function CriterionField({
    * that is the capability and not `ac_manage_products`.
    */
   canPickProducts,
-  /** Resolved by `useResolvedProducts`, hoisted so eleven rows share one fetch. */
-  resolved,
-  resolvePending,
+  /**
+   * `useResolvedProducts`' whole result, hoisted so eleven rows share one fetch.
+   *
+   * Passed whole rather than as `resolved` + `resolvePending`, which is what it
+   * used to be: the third field, `failed`, was returned by the hook and read by
+   * nobody, and it is exactly the field that separates *"the shop has no such
+   * product"* from *"the panel could not ask"*. A warning built on two of the
+   * three would have been the confident version of the wrong sentence.
+   */
+  lookup,
   disabled = false,
 }: {
   criterion: SegmentCriterion;
@@ -101,8 +150,7 @@ export function CriterionField({
   wilayas: readonly Wilaya[];
   locale: string;
   canPickProducts: boolean;
-  resolved: Map<number, EligibleProduct>;
-  resolvePending: boolean;
+  lookup: ProductLookup;
   disabled?: boolean;
 }) {
   const t = useTranslations("campaigns");
@@ -205,12 +253,47 @@ export function CriterionField({
           onChange={onChange}
           error={error}
           canPick={canPickProducts}
-          resolved={resolved}
-          resolvePending={resolvePending}
+          lookup={lookup}
           disabled={disabled}
         />
       );
   }
+}
+
+/* --------------------------------------------------------------- warning --- */
+
+/**
+ * One criterion's warning line: *this value is stored, and the shop cannot make
+ * sense of it.*
+ *
+ * The panel's existing inline shape for that fact, taken from
+ * `inventory/SkuLookup.tsx` rather than invented — an alert glyph so the colour
+ * is never the only signal (§3.5), `text-ui-label` so it reads as field-level
+ * rather than as a page-level `Notice`, and `role="status"` rather than `alert`
+ * because nothing is wrong *right now*: the form works, the value saves, and the
+ * person is being told something about the shop.
+ *
+ * **Deliberately not a `Notice`.** §3.1 gives a `Notice` a standing fact about
+ * the *record*; this is a fact about one field, and a segment can hold three of
+ * them at once — three toned boxes inside a 560px dialog holding eleven criteria
+ * is the layout the `md` size was argued down to fit, and at the 340px floor it
+ * would be most of the screen.
+ *
+ * `children` rather than a `message: string`, and the reason is the constraint
+ * rather than a preference: none of the three callers interpolates an
+ * identifier — that is a decision argued at each call site, because an id
+ * spliced into an Arabic sentence is the run the bidi algorithm reorders and
+ * `SkuLookup` pays for one with an `Ltr` wrapper. Taking nodes means the next
+ * caller that genuinely needs an id can wrap it the way that file does, instead
+ * of concatenating it into a string and re-introducing the defect.
+ */
+function CriterionWarning({ children }: { children: ReactNode }) {
+  return (
+    <p role="status" className="flex items-start gap-1.5 text-ui-label text-ui-warning-fg">
+      <Icon name="alert" className="mt-0.5 size-3.5 shrink-0" />
+      <span className="min-w-0">{children}</span>
+    </p>
+  );
 }
 
 /* ---------------------------------------------------------------- wilaya --- */
@@ -257,6 +340,24 @@ export function CriterionField({
  *                this shop cannot name. The value survives an open-and-save,
  *                which is the whole point — a panel that quietly dropped it
  *                would rewrite a segment nobody asked to edit.
+ *
+ * ## Item D10: the two states stopped sharing one slot
+ *
+ * They used to, and the docblock beside the `hint` said so — *"one hint slot and
+ * two things that could fill it"*, resolved by ranking the failed list above the
+ * unknown id. That ranking was right and the arrangement it was working around
+ * was not: the unknown id is **decision 5's warning** and the failed list is not
+ * a warning at all, so they were never two candidates for one slot. They are now
+ * two slots, and the ranking disappears rather than being re-argued.
+ *
+ * **The order of the tests is the load-bearing part.** `wilayas.length === 0`
+ * wins, and it wins by being tested first: with no list, *every* id is unknown to
+ * this component, so a warning computed without that guard would tell somebody
+ * their perfectly good wilaya 16 does not exist because a public, unpaginated,
+ * never-moving route dropped one request. The source of truth for this criterion
+ * is `/locations/wilayas` — `LocationController::searchArgs()`, 69 rows,
+ * `permission_callback => '__return_true'` — and a source of truth that did not
+ * answer has not said no.
  */
 function WilayaCriterion({
   id,
@@ -280,35 +381,46 @@ function WilayaCriterion({
   const t = useTranslations("campaigns");
   const tShipping = useTranslations("shipping");
 
+  const listed = wilayas.length > 0;
   const known = wilayas.some((w) => String(w.id) === value);
-  const unknown = value !== "" && !known;
+  /* Drawn whenever the component cannot name the value, so the id is never lost
+     from the control — including while the list is missing, when nothing is
+     *claimed* about it. The warning below is the narrower question. */
+  const unnamed = value !== "" && !known;
+  /* Claimed only against a list that arrived. See the docblock. */
+  const missing = unnamed && listed;
 
   const options: ListboxOption<string>[] = [
     { value: "", label: tShipping("notChosen") },
-    ...(unknown ? [{ value, label: t("segment.wilayaUnknown", { id: value }) }] : []),
+    ...(unnamed ? [{ value, label: t("segment.wilayaUnknown", { id: value }) }] : []),
     ...wilayas.map((w) => ({ value: String(w.id), label: placeName(w, locale) })),
   ];
 
   return (
-    <Select
-      id={id}
-      label={label}
-      value={value}
-      onChange={onChange}
-      options={options}
-      /* One hint slot and two things that could fill it. The list failing is the
-         more urgent — it is why the control looks broken — so it wins, and the
-         unknown id has already said its piece inside the option itself. */
-      hint={
-        wilayas.length === 0
-          ? t("segment.wilayasUnavailable")
-          : unknown
-            ? t("segment.wilayaUnknownWhy")
-            : undefined
-      }
-      error={error}
-      disabled={disabled}
-    />
+    <div className="flex flex-col gap-2">
+      <Select
+        id={id}
+        label={label}
+        value={value}
+        onChange={onChange}
+        options={options}
+        /* The hint is now only ever about the *list*. What is wrong with the
+           value moved to the warning below, where §3.5's tone can carry it. */
+        hint={listed ? undefined : t("segment.wilayasUnavailable")}
+        error={error}
+        disabled={disabled}
+      />
+
+      {/* Two sentences and the second is `refKept`, shared with the product
+          criterion: what is wrong, then what happens next. A warning that stops
+          after the first reads as a refusal, which is the one thing decision 5
+          says this must not be. */}
+      {missing ? (
+        <CriterionWarning>
+          {t("segment.wilayaMissing")} {t("segment.refKept")}
+        </CriterionWarning>
+      ) : null}
+    </div>
   );
 }
 
@@ -359,6 +471,37 @@ function WilayaCriterion({
  *
  * The fallback itself is `ProductPicker`'s exactly: an id field that says why,
  * with the API still validating the id.
+ *
+ * ## Item D10: two warnings, because the resolution has two ways of going wrong
+ *
+ * `productRefState()` in `product-lookup.ts` carries the argument for the five
+ * states and for the one that could not be verified from here. What this file
+ * decides is which of them get a sentence, and they are the two that are
+ * **evidence** rather than absence:
+ *
+ *   `missing`  the lookup succeeded and the id was not in the answer. The shop
+ *              cannot name it. The message says exactly that and deliberately
+ *              does **not** say *deleted*, because the panel cannot tell a
+ *              force-deleted product from one the route declines to return.
+ *   `trashed`  the lookup succeeded and answered `status: "trash"`. This is a
+ *              different fact and gets a different sentence: the product is still
+ *              there, the criterion still means what it meant, and the remedy is
+ *              the trash rather than this form. A shopkeeper who reads *"we
+ *              cannot find it"* about a product they trashed this morning learns
+ *              nothing and may well go and re-point the segment at something
+ *              else, which is precisely the silent rewrite decision 5 exists to
+ *              stop.
+ *
+ * `unresolvable` and `pending` say nothing at all. The first is the one that
+ * matters: `results.isError` below already draws the **search's** failure as the
+ * API's own sentence, and a resolution failure is the same class — the list did
+ * not arrive — so warning that a product does not exist because a request was
+ * dropped would be the panel asserting a deletion it has no grounds for.
+ *
+ * The chosen option is still labelled with `productUnknown` on `missing`, which
+ * is the rendering decision 5 says not to replace, and on `trashed` it is
+ * labelled with the product's real name — correct, and the reason the trash fact
+ * needs a line of its own to be visible anywhere.
  */
 function ProductCriterion({
   id,
@@ -367,8 +510,7 @@ function ProductCriterion({
   onChange,
   error,
   canPick,
-  resolved,
-  resolvePending,
+  lookup,
   disabled,
 }: {
   id: string;
@@ -377,8 +519,7 @@ function ProductCriterion({
   onChange: (next: string) => void;
   error?: string;
   canPick: boolean;
-  resolved: Map<number, EligibleProduct>;
-  resolvePending: boolean;
+  lookup: ProductLookup;
   disabled: boolean;
 }) {
   const t = useTranslations("campaigns");
@@ -407,7 +548,16 @@ function ProductCriterion({
   }
 
   const rows = results.data?.data ?? [];
-  const chosen = value === "" ? null : (resolved.get(Number(value)) ?? null);
+  const chosen = value === "" ? null : (lookup.names.get(Number(value)) ?? null);
+
+  /*
+   * The verdict, and it is asked **only of a value there is one to ask about**.
+   * `Number("")` is 0 and `productRefState(0, …)` would answer `missing` on an
+   * empty criterion — a warning that the product nobody has chosen cannot be
+   * found. `SegmentModal` filters the same way when it builds the id list, so an
+   * empty field asks nothing and is told nothing.
+   */
+  const state = value === "" ? "listed" : productRefState(Number(value), lookup);
 
   /*
    * The chosen product first, then the results — and the chosen one is included
@@ -425,7 +575,11 @@ function ProductCriterion({
             value,
             label: chosen
               ? chosen.name
-              : resolvePending
+              : /* `pending` **and** `unresolvable` both take the neutral
+                   "product #N" label rather than the "— introuvable" one: a
+                   lookup that failed has established nothing, and the label is
+                   the thing a shut listbox shows. */
+                state !== "missing"
                 ? tOrders("picker.manualName", { id: value })
                 : t("segment.productUnknown", { id: value }),
             secondary: chosen?.sku ?? undefined,
@@ -482,6 +636,29 @@ function ProductCriterion({
         error={error}
         disabled={disabled}
       />
+
+      {/*
+        Directly under the value and **above** the search, which is the same
+        argument the field order above makes: this is a fact about what the
+        criterion names, so it belongs against the control that names it rather
+        than at the bottom of a column whose last two rows are a search box and
+        the search's own failure.
+
+        Neither sentence carries the id or the name. The option label above
+        already carries both, in the accessible name, and an identifier
+        interpolated into an Arabic sentence is the run the bidi algorithm
+        reorders — `SkuLookup` pays for one with an `Ltr` wrapper because it has
+        to, and this does not have to.
+      */}
+      {state === "missing" ? (
+        <CriterionWarning>
+          {t("segment.productMissing")} {t("segment.refKept")}
+        </CriterionWarning>
+      ) : state === "trashed" ? (
+        <CriterionWarning>
+          {t("segment.productTrashed")} {t("segment.refKept")}
+        </CriterionWarning>
+      ) : null}
 
       {/*
         `TextField` with `onSubmit` rather than `FilterBar`'s `SearchField`, and
