@@ -44,6 +44,35 @@ export const NAV: NavGroup[] = [
     key: "catalog",
     items: [
       { key: "products", href: "/products", icon: "products", capability: "ac_manage_products" },
+      /*
+       * **Attributes get a nav entry and FAQ categories do not, and the two are
+       * the same shape.** `content/faqs/categories/page.tsx` states the rule this
+       * is an exception to — *"no nav entry for a screen you go **to** from
+       * somewhere"* — alongside `/inventory/movements` and `/shipping/rules`, and
+       * the exception is not "attributes are more important". It is that the
+       * antecedent is missing: those three are only ever wanted **while** you are
+       * on the screen above them, and attributes are the one vocabulary in this
+       * panel you set up *before* the thing that uses it exists. A shop's first
+       * session is create Colour, create Size, then create a product — with no
+       * product to have gone there from.
+       *
+       * The second half is that `ProductDetail` already **defers** to this
+       * screen, from a different route, in the sentence that explains why the
+       * product form refuses to edit `attributes` at all. A screen that another
+       * screen sends people to by name has to be findable afterwards, or the
+       * deferral is an instruction with no address.
+       *
+       * `ac_manage_products`, read from `AttributeController::registerRoutes()`:
+       * one `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` carries all
+       * four routes. Same capability as `products` directly above, so this
+       * appears and disappears with it and can never be the row that leads a
+       * reader to the forbidden screen — the defect this file's other two
+       * comments are both about.
+       *
+       * `landingPath()` is unaffected: `products` still precedes it in this
+       * group and the whole `commerce` group still precedes both.
+       */
+      { key: "attributes", href: "/attributes", icon: "tag", capability: "ac_manage_products" },
       { key: "inventory", href: "/inventory", icon: "box", capability: "ac_manage_inventory" },
       { key: "media", href: "/media", icon: "image", capability: "ac_manage_content" },
     ],

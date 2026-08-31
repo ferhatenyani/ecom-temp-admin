@@ -322,23 +322,28 @@ const counted = (rows) => ok(rows, { total: rows.length });
  * Shape 3: the full paging envelope on a route that is **not** paginated.
  *
  * **Every remaining caller of this is unmeasured**, and after the diff above that
- * is a claim rather than a default. These seven are what is left, all of them
+ * is a claim rather than a default. These six are what is left, all of them
  * routes the panel fetches with no params at all:
  *
  *   /orders/{id}/notes · /orders/{id}/timeline · /orders/{id}/shipments ·
- *   /orders/{id}/payments · /shipping/rates · /attributes ·
- *   /cms/faq-categories
+ *   /orders/{id}/payments · /shipping/rates · /cms/faq-categories
  *
  * `/cms/faq-categories` joined on the content branch and is the newest of them:
  * the FAQ screen fetches it with no parameters and reads `data` alone, so
  * `enumeration()`, `counted()` and this are indistinguishable from the panel's
  * side and nobody has diffed which the shop sends.
  *
- * Each is a candidate for `enumeration()` or `counted()` and none has been
- * diffed. They stay here deliberately: moving them to a *different* guess would
- * be churn rather than a correction, and this way the file has exactly one place
- * that emits an unverified envelope. Whoever runs the next request-for-request
- * diff should take these six first.
+ * **`/attributes` was the seventh and has left**, which is what this list is for.
+ * The attributes branch read `AttributeController::index()` rather than guessing
+ * from the caller: it answers `Response::success(…, ['total' => count(…)])`, the
+ * identical call `wilayas()` makes, and `rest_do_request()` confirms `{"total": 4}`
+ * alone. It is `counted()` now. One down, six to go, and the way to move the next
+ * one is to read the controller — no live request was needed for this.
+ *
+ * Each of the six is a candidate for `enumeration()` or `counted()` and none has
+ * been diffed. They stay here deliberately: moving them to a *different* guess
+ * would be churn rather than a correction, and this way the file has exactly one
+ * place that emits an unverified envelope.
  *
  * The unpaginated part is still right and still load-bearing: the panel sends no
  * params to any of them, so a default `per_page` of 10 would silently drop the
@@ -3074,7 +3079,22 @@ const VARIATIONS = [...VARIATION_COUNTS.keys()].flatMap((parentIndex) => {
  * contradicting each other, which is the quiet wrongness this file exists not to
  * produce.
  */
-const variationRows = () => VARIATIONS.map((row) => state.variations.get(row.id) ?? row);
+const variationRows = () => [
+  ...VARIATIONS.filter((row) => !state.variationsGone.has(row.id)).map(
+    (row) => state.variations.get(row.id) ?? row,
+  ),
+  /*
+   * **The rows this process created, last.** `VariationRepository::listFor()`
+   * walks `$parent->get_children()`, which is post order — so a variation
+   * created now appends rather than leading, the opposite of `catalogue()`
+   * above. That is not a style choice: the variations table renders in the order
+   * the API sends and a generate run that put its output at the top would
+   * scramble a table somebody was reading.
+   */
+  ...state.createdVariations
+    .filter((id) => !state.variationsGone.has(id))
+    .map((id) => state.variations.get(id)),
+];
 
 const variationsOf = (product) =>
   variationRows().filter((variation) => variation.parent_id === product.id);
@@ -8404,6 +8424,50 @@ const state = {
    */
   variations: new Map(),
   /**
+   * Ids created in this process, oldest first — see `variationRows()`.
+   *
+   * Separate from `state.variations`, which holds the *body* of both a seeded
+   * row a write has rewritten and a created one, exactly as `state.products`
+   * does for products. This is only the order and the membership.
+   */
+  createdVariations: [],
+  /**
+   * Deleted variation ids. **There is no trash here**, unlike `state.gone` for
+   * products: `VariationController::registerRoutes()` declares `'force' =>
+   * ['type' => 'boolean', 'default' => true]` on the DELETE, so the default is
+   * permanent and a variation never comes back reading `status: "trash"`.
+   */
+  variationsGone: new Set(),
+  nextVariationId: 0,
+  /**
+   * Attribute id → the whole row as it reads now, holding both the two seeded
+   * attributes a `PATCH` has rewritten **and** the ones `POST /attributes`
+   * created — the shape coupons, pages and campaigns already use, so one lookup
+   * answers for either.
+   */
+  attributes: new Map(),
+  /** Ids created in this process, newest last: `GET /attributes` is unsorted. */
+  createdAttributes: [],
+  attributesGone: new Set(),
+  nextAttributeId: 0,
+  /**
+   * Attribute **id** → its term rows, and the key is the id rather than the
+   * taxonomy on purpose.
+   *
+   * A slug change renames the taxonomy — `pa_matiere` becomes `pa_matiere-2` —
+   * and `wc_update_attribute()` migrates every `term_taxonomy` row with it
+   * (`AttributeRepository`'s own docblock is about exactly that). Keyed by
+   * taxonomy, this map would strand the terms at the old name and the screen
+   * would show an attribute that had just lost its whole vocabulary. Keyed by
+   * id, the rename is a field write and nothing else moves.
+   *
+   * Seeded for the two fixture attributes at reset rather than fallen back to,
+   * for the same reason: after a rename there is no taxonomy left to fall back
+   * through.
+   */
+  terms: new Map(),
+  nextTermId: 0,
+  /**
    * Inventory id → `{backorders?, low_stock_amount?}`.
    *
    * The two settings that live on **neither** a product body nor a variation
@@ -8627,7 +8691,26 @@ export function resetState() {
    */
   state.nextProductId = 4500;
   state.gone = new Set();
+  state.attributes = new Map();
+  state.createdAttributes = [];
+  state.attributesGone = new Set();
+  // Above the two seeded ids (1 and 2) and far enough from them to read as new,
+  // and the same figure in every process — the rule `nextCouponId` follows and
+  // for the same reason: a screenshot of a created attribute has to be stable.
+  state.nextAttributeId = 40;
+  // Copies, not the seed arrays: a create, a rename or a delete writes into
+  // these, and sharing them would leak into the baseline this call restores.
+  state.terms = new Map(ATTRIBUTES.map((row) => [row.id, [...(TERMS[row.taxonomy] ?? [])]]));
+  // Above the seeded term ids, which run 1000-1005 (Matière) and 1100-1159
+  // (Couleur). Fixed rather than derived, same reason as the id above.
+  state.nextTermId = 1300;
   state.variations = new Map();
+  state.createdVariations = [];
+  state.variationsGone = new Set();
+  // Above the 9000-range the two variable products' five rows occupy, and the
+  // same figure in every process — the rule `nextProductId` follows, and for the
+  // same reason: a screenshot of a generated variation has to be byte-stable.
+  state.nextVariationId = 9500;
   state.stockSettings = new Map();
   state.movements = [];
   // Above the 1154 seeded ids, and the same figure in every process, which is
@@ -13667,6 +13750,1155 @@ function deleteProduct(current, params) {
     state.products.set(current.id, { ...current, status: "trash" });
   }
   return ok({ id: current.id, deleted: true });
+}
+
+/**
+ * `POST /products/{id}/duplicate` — **201 with the whole product**, not a stub.
+ *
+ * `ProductController::duplicate()` is
+ * `Response::success(ProductPresenter::toArray($copy), 201)`, and
+ * `successPayload()` omits `meta` when none is passed. So the copy's id, name,
+ * status and children are all in `data` and nothing is in `meta` — a harness that
+ * answered `{id}` would let a screen ship that could not land on the copy.
+ *
+ * Everything below is `ProductRepository::duplicate()`, read from source:
+ *
+ *   name       the source's plus the literal `' (copy)'` — WooCommerce's
+ *              convention, never localised, because it is a stored value
+ *   status     `'draft'` — *"an accidental duplicate must never appear in the
+ *              storefront before someone has looked at it"*
+ *   sku        `''` — the backend's own suite asserts *"the copy did not inherit
+ *              the SKU"*, because SKUs are unique and the next save would 409
+ *   dropped    `id, slug, date_created, date_modified, permalink, price,
+ *              total_sales, rating_counts, average_rating, review_count,
+ *              children, variations, date_on_sale_from, date_on_sale_to`
+ *   kept       everything else, **the images included** — `image_id` and
+ *              `gallery_image_ids` are not in the unset list, so a copy carries
+ *              the original's pictures
+ *
+ * **`variations_copied` is deliberately absent from this body.** It exists, and
+ * only in the audit record `ProductService::duplicate()` writes — repo-wide it
+ * appears in no controller, no presenter and no test. A harness that put it in
+ * the response would let a screen read a number the wire never sends.
+ * `variations` — the copy's own child ids — is how the count is knowable, and it
+ * is what `DuplicateAction` reads.
+ *
+ * The children are copied the way the repository copies them: each keeps its
+ * attribute map and its price, loses its SKU, and is re-parented. A source whose
+ * type is not `variable` becomes a `WC_Product_Simple` and copies no children at
+ * all, which is why the loop is gated on the type rather than on the array.
+ */
+function duplicateProduct(source) {
+  const id = state.nextProductId++;
+
+  const copy = {
+    ...source,
+    id,
+    name: `${source.name} (copy)`,
+    status: "draft",
+    sku: "",
+    // A draft has no slug in this shop — `DRAFT_NO_SLUG_PRODUCT` is the measured
+    // fixture for it — and the permalink follows the id when there is none.
+    slug: "",
+    permalink: `https://boutique.example.test/produit/${id}`,
+    variations: [],
+    date_created: iso(0),
+    date_modified: iso(0),
+    seo: {
+      ...source.seo,
+      title: `${source.name} (copy)`,
+      robots: { index: false, follow: true, directive: "noindex, follow" },
+    },
+  };
+
+  if (source.type === "variable") {
+    for (const child of variationsOf(source)) {
+      const childId = state.nextVariationId++;
+      state.variations.set(childId, {
+        ...child,
+        id: childId,
+        parent_id: id,
+        sku: "",
+        date_created: iso(0),
+        date_modified: iso(0),
+      });
+      state.createdVariations = [...state.createdVariations, childId];
+      copy.variations = [...copy.variations, childId];
+    }
+  }
+
+  state.products.set(id, copy);
+  state.createdProducts = [id, ...state.createdProducts];
+
+  return created(copy);
+}
+
+/* ------------------------------------------------------- variation writes --- */
+
+/**
+ * `VariationInput`'s field table — the eleven keys it accepts and nothing else.
+ *
+ * Deliberately **not** `PRODUCT_FIELD_RULES` with keys removed. The two overlap
+ * on nine names and disagree on two that matter: a variation's `status` is
+ * `publish` or `private` only (`VariationInput::STATUSES` — a variation cannot be
+ * a draft, where a product can), and a variation has no `name`, no `slug`, no
+ * `type`, no `category_ids`, no `seo` and no `options`. A shared table with
+ * exclusions would answer *"Unknown field."* for the right keys today and drift
+ * the first time either class grows one.
+ */
+const VARIATION_STATUSES = ["publish", "private"];
+
+const VARIATION_FIELD_RULES = {
+  sku: mustBeText,
+  description: mustBeText,
+  regular_price: mustBeMoney,
+  sale_price: mustBeMoney,
+  manage_stock: mustBeFlag,
+  status: mustBeOneOf(VARIATION_STATUSES),
+  stock_quantity: mustBeQuantity,
+  stock_status: mustBeOneOf(STOCK_STATUSES),
+  weight: mustBeWeight,
+  image_id: mustBeAttachmentId,
+};
+
+/** Emitted on read and dropped on write, so a GET body PATCHes back. */
+const VARIATION_READ_ONLY = [
+  "id",
+  "parent_id",
+  "price",
+  "on_sale",
+  "image",
+  "date_created",
+  "date_modified",
+];
+
+/**
+ * `VariationInput::attributeMap()` — `{"taille": "M"}`.
+ *
+ * The **name** is lowercased and trimmed; the **value** is trimmed and left
+ * cased, because the case-fold on a value happens later in
+ * `VariationService::guardAttributes()`, which compares `strtolower($value)`
+ * against the parent's lowercased options. Reproducing that split matters: the
+ * value the row stores is what `VariationRepository::normalizeCombination()`
+ * lowercases on the way out, so a mock that folded here would agree with the
+ * wire by accident rather than by construction.
+ *
+ * An empty value is WooCommerce's *any* and is legal.
+ */
+const readVariationAttributes = (raw, fields) => {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    fields.attributes = "Must be an object of attribute name to option.";
+    return null;
+  }
+
+  const map = {};
+
+  for (const [name, option] of Object.entries(raw)) {
+    if (typeof name !== "string" || name.trim() === "") {
+      fields.attributes = "Attribute names must be non-empty strings.";
+      return null;
+    }
+    if (option !== "" && (option === null || typeof option === "object")) {
+      fields.attributes = "Attribute options must be strings.";
+      return null;
+    }
+    map[name.trim().toLowerCase()] = String(option).trim();
+  }
+
+  return map;
+};
+
+/**
+ * One variation body, read the way `VariationInput::normalize()` reads it — for
+ * both verbs, because it is one function on the API and only the
+ * *attributes-are-required* rule differs.
+ */
+function readVariationBody(body) {
+  const payload =
+    body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+
+  const fields = {};
+  const writes = {};
+  let attributes = null;
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (VARIATION_READ_ONLY.includes(key)) continue;
+
+    if (key === "attributes") {
+      attributes = readVariationAttributes(value, fields);
+      continue;
+    }
+
+    const rule = VARIATION_FIELD_RULES[key];
+    if (rule === undefined) {
+      fields[key] = "Unknown field.";
+      continue;
+    }
+
+    const refusal = rule(value);
+    if (refusal !== null) fields[key] = refusal;
+    else writes[key] = value;
+  }
+
+  /*
+   * The cross-field rule, and it only fires when **both** arrive in this body.
+   * `VariationInput::normalize()` compares `$clean['regular_price']` against
+   * `$clean['sale_price']`, which are the values in *this* payload — a sale price
+   * sent alone is checked against the stored regular price later, by
+   * `VariationService::guardSalePriceAgainstStored()`, and that one is the
+   * service's rather than the input's. Two rules, two places, and collapsing them
+   * would refuse a body the API accepts.
+   */
+  if (
+    typeof writes.regular_price === "string" &&
+    typeof writes.sale_price === "string" &&
+    writes.regular_price !== "" &&
+    writes.sale_price !== "" &&
+    Number(writes.sale_price) > Number(writes.regular_price)
+  ) {
+    fields.sale_price = "Cannot be higher than the regular price.";
+  }
+
+  return { fields, writes, attributes };
+}
+
+/**
+ * `VariationService::variationAttributes()` — the parent's *allowed* keys and
+ * their options, both lowercased.
+ *
+ * The key is `strtolower($attribute->get_name())`, which for a global attribute
+ * is the taxonomy (`pa_matiere`) and for a local one is the label (`taille`).
+ * The options are term **slugs** for a taxonomy attribute and the raw option
+ * strings for a local one. Only attributes with `variation: true` are in it,
+ * which is the whole reason a spec cannot be a variation axis.
+ */
+const parentVariationAttributes = (parent) =>
+  Object.fromEntries(
+    parent.attributes
+      .filter((attribute) => attribute.variation)
+      .map((attribute) => [
+        attribute.name.toLowerCase(),
+        attribute.options.map((option) => String(option).toLowerCase()),
+      ]),
+  );
+
+/** `VariationRepository::normalizeCombination()`: lowercase, strip, sort by key. */
+const normalizeCombination = (attributes) =>
+  Object.entries(attributes)
+    .map(([key, value]) => [
+      key.toLowerCase().replace(/^attribute_/, ""),
+      String(value).trim().toLowerCase(),
+    ])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&");
+
+/**
+ * `VariationService::guardAttributes()`, and it is **two different refusals**.
+ *
+ * A parent with no variation attributes at all is a **409** naming the parent —
+ * `ApiException::conflict('The parent product has no attributes marked for
+ * variations.')`, with no `details` at all, because `conflict()` was called with
+ * one argument. A parent that has them but was sent a key or a value outside them
+ * is a **400** keyed `attributes.{name}`.
+ *
+ * The difference is load-bearing for the panel: the 409 will refuse every
+ * combination in a generate run and the 400 refuses one, so `isParentRefusal()`
+ * on the panel side stops the run for the first and continues for the second. A
+ * harness that answered 400 for both would let a fifty-request fan-out grind
+ * through fifty identical failures with a green test suite.
+ */
+function guardVariationAttributes(parent, attributes) {
+  const allowed = parentVariationAttributes(parent);
+
+  if (Object.keys(allowed).length === 0) {
+    return conflict("The parent product has no attributes marked for variations.", {});
+  }
+
+  const fields = {};
+
+  for (const [name, value] of Object.entries(attributes)) {
+    if (!(name in allowed)) {
+      fields[`attributes.${name}`] =
+        `Not a variation attribute of this product. Allowed: ${Object.keys(allowed).join(", ")}.`;
+      continue;
+    }
+
+    // An empty value is "any", which WooCommerce supports — skipped before the
+    // membership test, exactly where the service skips it.
+    if (value === "") continue;
+
+    if (!allowed[name].includes(value.toLowerCase())) {
+      fields[`attributes.${name}`] =
+        `"${value}" is not an option of this attribute. Allowed: ${allowed[name].join(", ")}.`;
+    }
+  }
+
+  return Object.keys(fields).length === 0
+    ? null
+    : invalidBody("The variation data is invalid.", fields);
+}
+
+/**
+ * `VariationService::guardDuplicateCombination()` — a **409** carrying the id of
+ * the variation that already holds it.
+ *
+ * `details.variation_id` is the key the panel tells this apart by: it is the one
+ * 409 on this route that means *one cell was taken* rather than *this whole
+ * product is wrong*.
+ */
+function guardDuplicateCombination(parent, attributes, ignoreId = 0) {
+  const candidate = normalizeCombination(attributes);
+
+  for (const existing of variationsOf(parent)) {
+    if (existing.id !== ignoreId && normalizeCombination(existing.attributes) === candidate) {
+      return conflict("A variation with that attribute combination already exists.", {
+        variation_id: existing.id,
+      });
+    }
+  }
+
+  return null;
+}
+
+/**
+ * `VariationService::guardSku()` → `ProductRepository::skuExists()`, which is
+ * `wc_get_product_id_by_sku()`.
+ *
+ * **WooCommerce's SKU index covers variations as well as products**, so this
+ * checks both collections — a variation cannot take a SKU a product holds and
+ * cannot take one another variation holds. Reproducing only half of that would
+ * make the panel's own two-rows-one-SKU check look like belt and braces here and
+ * be the only thing catching it in production.
+ *
+ * The trashed-product sentence `productSkuConflict()` carries is deliberately
+ * *not* reused: that message is `ProductService`'s, and `VariationService` calls
+ * the plain `skuExists()` and answers the one sentence.
+ */
+function guardVariationSku(sku, ignoreId = 0) {
+  if (sku === "") return null;
+
+  const takenByProduct = catalogue().some((product) => product.sku === sku);
+  const takenByVariation = variationRows().some(
+    (variation) => variation.id !== ignoreId && variation.sku === sku,
+  );
+
+  return takenByProduct || takenByVariation
+    ? conflict("That SKU is already in use.", { sku })
+    : null;
+}
+
+/**
+ * `requireVariableParent()` — a **409**, not a 404 and not a 400.
+ *
+ * The payload is well formed and the *state* is what refuses it, which is the
+ * rule docs/API.md states and this API follows for a duplicate SKU too. The
+ * message names the fix, and the panel repeats it rather than inventing one:
+ * *"Set the product type to \"variable\" first."*
+ */
+const notVariable = (parent) =>
+  conflict('Only variable products have variations. Set the product type to "variable" first.', {
+    type: parent.type,
+  });
+
+/**
+ * The parent's `variations` array, kept in step with the rows.
+ *
+ * `ProductPresenter::toArray()` publishes `variations` as
+ * `array_map('intval', $product->get_children())`, so it is not an independent
+ * field — it *is* the children. A harness that created a variation and left the
+ * parent's array alone would answer a product whose `variations` disagreed with
+ * `GET /products/{id}/variations`, and `page.tsx` gates the variations fetch on
+ * exactly that array.
+ */
+function syncParentChildren(parent) {
+  const next = { ...parent, variations: variationsOf(parent).map((row) => row.id) };
+  state.products.set(parent.id, next);
+  return next;
+}
+
+/**
+ * `POST /products/{id}/variations` — **201**, and the order of the refusals is
+ * the service's order.
+ *
+ * `VariationService::create()` runs `requireVariableParent()` →
+ * `VariationInput::forCreate()` → `guardAttributes()` →
+ * `guardDuplicateCombination()` → `guardSku()`, and a mock that reordered them
+ * would answer a different sentence for a body that is wrong in two ways. The
+ * panel's generate run reads the *first* refusal and decides whether to keep
+ * going on it, so which one comes first is not cosmetic.
+ */
+function createVariation(parent, body) {
+  if (parent.type !== "variable") return notVariable(parent);
+
+  const { fields, writes, attributes } = readVariationBody(body);
+
+  /* `VariationInput::forCreate()` — the combination is required, and this is the
+     only rule that differs between the two verbs. */
+  if (attributes === null || Object.keys(attributes).length === 0) {
+    fields.attributes = "A variation must specify its attribute combination.";
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The variation data is invalid.", fields);
+  }
+
+  const refused = guardVariationAttributes(parent, attributes);
+  if (refused !== null) return refused;
+
+  const clash = guardDuplicateCombination(parent, attributes);
+  if (clash !== null) return clash;
+
+  const sku = typeof writes.sku === "string" ? writes.sku.trim() : "";
+  const taken = guardVariationSku(sku);
+  if (taken !== null) return taken;
+
+  const id = state.nextVariationId++;
+  const managed = writes.manage_stock === true;
+
+  const row = {
+    id,
+    parent_id: parent.id,
+    sku,
+    status: "publish",
+    description: "",
+    regular_price: "",
+    sale_price: "",
+    weight: "",
+    image_id: 0,
+    image: null,
+    ...writes,
+    sku,
+    attributes,
+    manage_stock: managed,
+    /* An unmanaged shelf carries no count — the catalogue's own invariant, kept
+       here for the same reason `createProduct` keeps it. */
+    stock_quantity:
+      managed && writes.stock_quantity !== undefined && writes.stock_quantity !== null
+        ? Math.trunc(Number(writes.stock_quantity))
+        : null,
+    stock_status: typeof writes.stock_status === "string" ? writes.stock_status : "instock",
+    date_created: iso(0),
+    date_modified: iso(0),
+  };
+
+  /* `price` is the effective figure the presenter publishes, resolved the way
+     `createProduct` resolves a simple product's: the sale price when there is
+     one. A generated variation has neither, so it is `""` — which is a real
+     value the table has to render. */
+  row.on_sale = row.sale_price !== "";
+  row.price = row.on_sale ? row.sale_price : row.regular_price;
+
+  state.variations.set(id, row);
+  state.createdVariations = [...state.createdVariations, id];
+  syncParentChildren(parent);
+
+  return created(row);
+}
+
+/**
+ * `PATCH /products/{id}/variations/{variation_id}`.
+ *
+ * The empty body is a **400 with no `details` at all** — `ApiException::invalidRequest`
+ * called with one argument — which is why the panel's `variationUpdateBody()`
+ * answers `null` and never sends one. `bareFail()` is the shape that carries no
+ * `details` key, and using `invalidBody()` here would hand the panel a `fields`
+ * object the wire does not send.
+ */
+function patchVariation(parent, current, body) {
+  const { fields, writes, attributes } = readVariationBody(body);
+
+  if (Object.keys(fields).length > 0) {
+    return invalidBody("The variation data is invalid.", fields);
+  }
+
+  if (Object.keys(writes).length === 0 && attributes === null) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  if (attributes !== null) {
+    const refused = guardVariationAttributes(parent, attributes);
+    if (refused !== null) return refused;
+
+    const clash = guardDuplicateCombination(parent, attributes, current.id);
+    if (clash !== null) return clash;
+  }
+
+  if (writes.sku !== undefined) {
+    const taken = guardVariationSku(String(writes.sku).trim(), current.id);
+    if (taken !== null) return taken;
+  }
+
+  /*
+   * `guardSalePriceAgainstStored()` — the *service's* rule, and it fires only
+   * when a sale price arrives **without** a regular price beside it. With both in
+   * the body `VariationInput` has already compared them; with neither there is
+   * nothing to compare. The stored regular price is the authority for the third
+   * case, which is the ordinary one: somebody putting a single variation on sale.
+   */
+  if (writes.sale_price !== undefined && writes.regular_price === undefined) {
+    const sale = String(writes.sale_price);
+    const regular = String(current.regular_price);
+    if (sale !== "" && regular !== "" && Number(sale) > Number(regular)) {
+      return invalidBody("The variation data is invalid.", {
+        sale_price: "Cannot be higher than the regular price.",
+      });
+    }
+  }
+
+  const next = { ...current, ...writes };
+  if (attributes !== null) next.attributes = attributes;
+  if (typeof next.sku === "string") next.sku = next.sku.trim();
+
+  if (!next.manage_stock) next.stock_quantity = null;
+  else if (writes.stock_quantity !== undefined && writes.stock_quantity !== null) {
+    next.stock_quantity = Math.trunc(Number(writes.stock_quantity));
+  }
+
+  next.on_sale = next.sale_price !== "";
+  next.price = next.on_sale ? next.sale_price : next.regular_price;
+  next.date_modified = iso(0);
+
+  state.variations.set(current.id, next);
+  /* Every write ends with a parent sync on the wire —
+     `VariationRepository::sync()` → `WC_Product_Variable::sync()` — which is what
+     recomputes the parent's price range. Here the parent's own `variations` array
+     is the only derived thing, and it is unchanged by a PATCH; the price span the
+     detail shows is computed from the rows by the panel. */
+  return ok(next);
+}
+
+/**
+ * `DELETE /products/{id}/variations/{variation_id}` — **permanent by default**.
+ *
+ * The route declares `'force' => ['type' => 'boolean', 'default' => true]`, so
+ * unlike a product there is no trash state to fall into and `?force=false` is the
+ * only way to ask for one. WooCommerce's own trash for a variation is not
+ * modelled here and nothing in the panel asks for it: the confirmation says
+ * "définitivement" and the request says `?force=true`.
+ *
+ * The body is `{id, deleted: true}` — `VariationController::destroy()` builds it
+ * from the path parameter, so it answers the id that was asked for.
+ *
+ * **`?force=false` removes the row here too**, and that is named rather than
+ * hidden. On the wire it would trash the variation post; modelling a trashed
+ * variation would mean inventing a read shape — a row that is gone from
+ * `/variations` but still holds its combination against
+ * `guardDuplicateCombination()` — that nothing in this panel can reach, because
+ * nothing sends `force=false`. A fixture for a state no screen produces is a
+ * fixture that can only ever be wrong.
+ */
+function deleteVariation(parent, current) {
+  state.variationsGone.add(current.id);
+  state.variations.delete(current.id);
+  syncParentChildren(parent);
+
+  return ok({ id: current.id, deleted: true });
+}
+
+/* --------------------------------------------- global attributes and terms --- */
+
+/**
+ * ── `sanitize_title()`, and why `slugify()` above is not it ──────────────────
+ *
+ * `slugify()` collapses every run of non-`[a-z0-9]` into a single hyphen. That
+ * is wrong twice over for a slug the *shop* derives, and this file already knew
+ * about one of the two: `MATIERE_TERMS` writes its slugs out by hand under a
+ * comment saying WordPress drops an apostrophe rather than turning it into a
+ * separator, so "Bois d'olivier" is `bois-dolivier` and not `bois-d-olivier`.
+ *
+ * The second is the one this branch found and it is larger. **An Arabic name
+ * does not slugify to the empty string, it percent-encodes.** Measured in
+ * process through `rest_do_request()` against the live plugin, 2026-08-30:
+ *
+ *     POST /attributes/{id}/terms {"name": "أحمر"}
+ *       → 201 {"slug": "%d8%a3%d8%ad%d9%85%d8%b1", …}
+ *
+ * `slugify()` would have produced `""` and this fixture would have quietly
+ * disagreed with the shop in the one locale where fewer of the people writing
+ * this can read the result. `sanitize_title()` is `remove_accents()` then
+ * `utf8_uri_encode()` then lowercase then a strip of everything outside
+ * `%a-z0-9 _-`, which is what this reproduces — including the apostrophe, which
+ * survives `encodeURIComponent` unchanged and is then removed by the strip.
+ *
+ * `slugify()` is left alone deliberately. It seeds sixty colour slugs, every
+ * category, every tag and every product slug in this file, and a "correction"
+ * there would move fixtures four branches were verified against for no gain: on
+ * ASCII input with no apostrophes the two agree exactly.
+ *
+ * **The `NFC` on the end is load-bearing and its absence was a bug in the first
+ * draft of this function.** `remove_accents()` is a fixed Latin-1 and
+ * Latin-Extended lookup table; it does not decompose Arabic. Decomposing to
+ * `NFD` splits U+0623 (أ) into U+0627 plus U+0654, which is an Arabic combining
+ * mark and therefore *outside* the `\u0300-\u036f` strip — so the escape came out
+ * `%d8%a7%d9%94%d8%ad…` where the shop answers `%d8%a3%d8%ad…`. Recomposing puts
+ * the hamza back and leaves the Latin case untouched, because the accent it was
+ * decomposed to strip is already gone by then.
+ */
+const sanitizeTitle = (value) =>
+  [...String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC")]
+    .map((char) => (/[A-Za-z0-9 _-]/.test(char) ? char : encodeURIComponent(char)))
+    .join("")
+    .toLowerCase()
+    .replace(/[^%a-z0-9 _-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+/**
+ * **`wc_sanitize_taxonomy_name()` is `sanitize_title()` with a `urldecode()`
+ * wrapped round it**, and that one call is the whole reason an attribute and a
+ * term derive *different* slugs from the same Arabic word. Read at WooCommerce
+ * 11.0.1, `includes/wc-formatting-functions.php:65`:
+ *
+ *     return apply_filters( 'sanitize_taxonomy_name',
+ *         urldecode( sanitize_title( urldecode( $taxonomy_name ?? '' ) ) ), … );
+ *
+ * so `wc_create_attribute()` un-encodes what `sanitize_title()` just encoded and
+ * an attribute keeps its Arabic letters, while `wp_insert_term()` calls
+ * `sanitize_title()` alone and a term keeps the percent-escapes. Both measured
+ * in the same process on the same day:
+ *
+ *     POST /attributes           {"name": "اللون"} → slug "اللون", taxonomy "pa_اللون"
+ *     POST /attributes/{id}/terms {"name": "أحمر"} → slug "%d8%a3%d8%ad%d9%85%d8%b1"
+ *
+ * A mock that used one derivation for both would hide the asymmetry, and the
+ * asymmetry is the thing a screen has to show a shopkeeper: one of those two is
+ * readable in the row and the other is not.
+ */
+const taxonomySlug = (value) => {
+  const sanitized = sanitizeTitle(value);
+  try {
+    return decodeURIComponent(sanitized);
+  } catch {
+    return sanitized;
+  }
+};
+
+/**
+ * `strlen()` counts bytes, and the whole point of this cap is that Arabic costs
+ * two per letter where French costs one.
+ *
+ * 29 because WordPress caps a taxonomy name at 32 and `pa_` takes three — and
+ * both ends check it: `GlobalAttributeInput::MAX_SLUG_BYTES` refuses a slug the
+ * *caller* sent, and `wc_create_attribute()` refuses the one it *derived*. The
+ * two answer differently and this file reproduces both; see `attributeRefusal`.
+ */
+const slugBytes = (value) => new TextEncoder().encode(value).length;
+
+const MAX_ATTRIBUTE_SLUG_BYTES = 29;
+
+/**
+ * WooCommerce's three own refusals, verbatim from
+ * `includes/wc-attribute-functions.php:536-550` and each one measured through
+ * `rest_do_request()`:
+ *
+ *     Slug "%s" is too long. Please use a shorter slug.
+ *     Slug "%s" is not allowed because it is a reserved term. Change it, please.
+ *     Slug "%s" is already in use. Change it, please.
+ *
+ * **They arrive under `details.fields.attribute`, which is not a field.**
+ * `AttributeRepository::fromWpError()` has no way to tell which key WooCommerce
+ * meant, so it files every non-conflict `WP_Error` under the literal string
+ * `attribute` — a name no control on any form is called. That is the single most
+ * important thing this fixture has to reproduce: a screen that binds
+ * `details.fields` to its inputs by key renders **nothing at all** for these
+ * three, and would look correct against a mock that filed them under `slug`.
+ *
+ * The duplicate is the odd one out and is a **409 with no `details` key at
+ * all** — `fromWpError()` matches `already_exists` in the code and drops to
+ * `ApiException::conflict($message)`, which takes no details. Measured:
+ *
+ *     409 {"code":"conflict","message":"Slug \"acprobesize\" is already in use. Change it, please."}
+ *
+ * The reserved list is short and is only the collisions a shop can plausibly
+ * reach: `wc_check_if_attribute_name_is_reserved()` walks `$wp_rewrite`'s
+ * rewrite codes plus WordPress's reserved terms, which is dozens of names nobody
+ * would call an attribute. `type` is on it and is measured, and it is exactly
+ * the one a real shop reaches — "Type" is a plausible attribute label.
+ */
+const RESERVED_ATTRIBUTE_SLUGS = ["type", "category", "name", "tag", "author", "post_type"];
+
+function attributeRefusal(slug, ignoreId = 0) {
+  if (slugBytes(slug) > MAX_ATTRIBUTE_SLUG_BYTES) {
+    return invalidBody("The attribute data is invalid.", {
+      attribute: `Slug "${slug}" is too long. Please use a shorter slug.`,
+    });
+  }
+
+  if (RESERVED_ATTRIBUTE_SLUGS.includes(slug)) {
+    return invalidBody("The attribute data is invalid.", {
+      attribute: `Slug "${slug}" is not allowed because it is a reserved term. Change it, please.`,
+    });
+  }
+
+  const clash = attributeRows().find((row) => row.slug === slug && row.id !== ignoreId);
+
+  if (clash !== undefined) {
+    // No details. `ApiException::conflict($message)` is called with one
+    // argument, so the key is absent rather than empty — see `fail()`.
+    return conflict(`Slug "${slug}" is already in use. Change it, please.`);
+  }
+
+  return null;
+}
+
+const attributeRows = () =>
+  [
+    ...ATTRIBUTES.map((row) => state.attributes.get(row.id) ?? row),
+    ...state.createdAttributes.map((id) => state.attributes.get(id)),
+  ].filter((row) => !state.attributesGone.has(row.id));
+
+const attributeNotFound = () => fail(404, "not_found", "No attribute with that id.");
+
+const termsOf = (attribute) => state.terms.get(attribute.id) ?? [];
+
+/**
+ * **The two counts answer different questions and they can disagree**, which is
+ * why they are computed separately here rather than from one predicate.
+ *
+ * `product_count` is `AttributeRepository::productUsage()`, whose `wc_get_products`
+ * call passes `status => ['publish','draft','pending','private']` — so a draft
+ * product on the attribute counts. A term's own `count` is WordPress's, kept by
+ * `_update_post_term_count`, which counts **published** posts only. So an
+ * attribute can report a product nothing on its term list has counted, and a
+ * screen that derived one from the other would be wrong in the direction that
+ * under-reports what a delete is about to detach.
+ *
+ * `usage()` above is the published-only one and is what seeded `TERMS`; this is
+ * the wider one and matches the endpoint it serves.
+ */
+const attributeProductUsage = (attribute) => {
+  /* `listed()` and not `CATALOGUE`, so a `PATCH /products/{id}` that added or
+     removed the attribute moves this number. Its "everything readable except
+     the trash" is the closest thing this file has to the endpoint's own
+     `['publish','draft','pending','private']`. */
+  const ids = listed()
+    .filter((product) => product.attributes.some((carried) => carried.name === attribute.taxonomy))
+    .map((product) => product.id);
+
+  // Five, which is `AttributeService::SAMPLE` — "enough to investigate, not a
+  // dump", and the count is reported in full beside it.
+  return { total: ids.length, ids: ids.slice(0, 5) };
+};
+
+const attributeDetail = (attribute) => ({
+  ...attribute,
+  term_count: termsOf(attribute).length,
+  product_count: attributeProductUsage(attribute).total,
+});
+
+/**
+ * `has_archives` is the only boolean and `type` is refused against a vocabulary
+ * the panel cannot enumerate — see `createAttribute` for both.
+ */
+const ATTRIBUTE_ORDER_BY = ["menu_order", "name", "name_num", "id"];
+
+const ATTRIBUTE_FIELD_RULES = {
+  name: (value) => {
+    if (typeof value !== "string") return "Must be a non-empty string.";
+    if (value.trim() === "") return "Must be a non-empty string.";
+    return value.trim().length > 200 ? "Must be at most 200 characters." : null;
+  },
+  slug: (value) => {
+    if (typeof value !== "string") return "Must be a non-empty string, or omitted to derive it from the name.";
+    const stripped = value.trim().toLowerCase().replace(/^pa_/, "");
+    if (stripped === "") {
+      return "Must be a non-empty string, or omitted to derive it from the name.";
+    }
+    /* The caller's slug is checked in **bytes** and refused under `slug`, which
+       is a real control. The one WooCommerce derives is refused under
+       `attribute`, which is not. Two refusals, two keys, both measured. */
+    return slugBytes(stripped) > MAX_ATTRIBUTE_SLUG_BYTES
+      ? 'Must be at most 29 bytes once the "pa_" prefix is added — WordPress caps a taxonomy name at 32.'
+      : null;
+  },
+  type: (value) =>
+    typeof value !== "string" || value.trim() === "" ? "Must be a non-empty string." : null,
+  order_by: (value) =>
+    ATTRIBUTE_ORDER_BY.includes(value)
+      ? null
+      : `Must be one of: ${ATTRIBUTE_ORDER_BY.join(", ")}.`,
+  has_archives: (value) => (typeof value === "boolean" ? null : "Must be a boolean."),
+};
+
+/**
+ * `GlobalAttributeInput::READ_ONLY` — dropped silently so a `GET` body PATCHes
+ * back, which `tests/Api/attributes.php` asserts for terms and which holds here
+ * for the same reason.
+ */
+const ATTRIBUTE_READ_ONLY = ["id", "taxonomy", "term_count", "product_count"];
+
+/** `GlobalAttributeInput::REFUSED`, verbatim. */
+const ATTRIBUTE_NAMED_REFUSALS = {
+  terms:
+    "Terms are managed at /attributes/{id}/terms, one at a time, because deleting one detaches every product using it.",
+  attribute_id: "The id is in the URL.",
+  attribute_name: 'Use "slug" for the identifier and "name" for the label.',
+};
+
+/**
+ * **`type` is validated against a list of exactly one**, and that is a
+ * measurement rather than a simplification.
+ *
+ * `AttributeService::guardType()` checks `wc_get_attribute_types()`, a filtered
+ * list a plugin can extend, and answers a 400 naming what is available.
+ * Provoked in process on this shop, 2026-08-30:
+ *
+ *     PATCH /attributes/100 {"type": "hologram"}
+ *       → 400 {"fields": {"type": "Must be one of: select."},
+ *              "available_types": ["select"]}
+ *
+ * So this shop offers `select` and nothing else. The refusal is reproduced with
+ * `available_types` intact — it is the only way a client learns the vocabulary,
+ * and a fixture that dropped it would let a screen ship a hard-coded list.
+ */
+const AVAILABLE_ATTRIBUTE_TYPES = ["select"];
+
+const typeRefusal = (writes) =>
+  "type" in writes && !AVAILABLE_ATTRIBUTE_TYPES.includes(writes.type)
+    ? fail(400, "invalid_request", "The attribute data is invalid.", {
+        fields: { type: `Must be one of: ${AVAILABLE_ATTRIBUTE_TYPES.join(", ")}.` },
+        available_types: AVAILABLE_ATTRIBUTE_TYPES,
+      })
+    : null;
+
+function createAttribute(body) {
+  const parsed = readContentBody(body, {
+    rules: ATTRIBUTE_FIELD_RULES,
+    readOnly: ATTRIBUTE_READ_ONLY,
+    named: ATTRIBUTE_NAMED_REFUSALS,
+    message: "The attribute data is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  if (!("name" in parsed.writes)) {
+    return invalidBody("The attribute data is invalid.", {
+      name: 'Required. This is the label a shopper sees — "Taille", not "pa_taille".',
+    });
+  }
+
+  const badType = typeRefusal(parsed.writes);
+  if (badType) return badType;
+
+  const name = parsed.writes.name.trim();
+  /* `pa_` is **stripped rather than refused**, because `GET /attributes`
+     publishes the taxonomy as `pa_matiere` and §82's filters take either form —
+     refusing the shape the API itself emits would break the round trip. */
+  const slug =
+    "slug" in parsed.writes
+      ? parsed.writes.slug.trim().toLowerCase().replace(/^pa_/, "")
+      : taxonomySlug(name);
+
+  const refusal = attributeRefusal(slug);
+  if (refusal) return refusal;
+
+  const id = state.nextAttributeId++;
+  const attribute = {
+    id,
+    name,
+    slug,
+    taxonomy: `pa_${slug}`,
+    type: parsed.writes.type ?? "select",
+    order_by: parsed.writes.order_by ?? "menu_order",
+    has_archives: parsed.writes.has_archives ?? false,
+  };
+
+  state.attributes.set(id, attribute);
+  state.createdAttributes = [...state.createdAttributes, id];
+  state.terms.set(id, []);
+
+  /*
+   * **201 with a `meta` the panel actually reads**, and both keys are the
+   * §88 build's answer to the trap ADMIN_PANEL.md describes at length: an
+   * attribute created in the same process used to be invisible to the facet
+   * counter, and `registerForRequest()` closed that. `filterable` says the
+   * closing worked; the note says the remaining honest caveat — a facet counts
+   * published products, so a new attribute counts zero until one is tagged.
+   *
+   * `created()` cannot carry meta, so the envelope is built here. That is
+   * deliberate rather than a helper worth adding: this is the only 201 in the
+   * file with anything in its `meta`.
+   */
+  return {
+    status: 201,
+    body: {
+      success: true,
+      data: { ...attribute, term_count: 0, product_count: 0 },
+      meta: {
+        filterable: true,
+        note:
+          "Add terms at POST /attributes/{id}/terms, then tag products with them. " +
+          "Facet counts cover published products, so this attribute counts zero until one is tagged and published.",
+      },
+    },
+  };
+}
+
+/**
+ * **A rename carries the catalogue with it, and a mock that skipped this would
+ * make the panel's scariest write look free.**
+ *
+ * `wc_update_attribute()` delegates to `wc_create_attribute()` with an
+ * `old_slug`, which migrates the `term_taxonomy` rows, every product's
+ * `_product_attributes` meta and every variation's `attribute_pa_*` key —
+ * `AttributeRepository`'s docblock is about exactly that, and
+ * `tests/Api/attributes.php` asserts it in process: *"the product survived the
+ * rename"*, `has_term('m', 'pa_acattrrenamed', $rugId)` still true.
+ *
+ * Without this the fixture's own `product_count` fell to **0** the instant a
+ * slug changed — the seeded products still carried `pa_matiere` while the
+ * attribute had become `pa_matiere-2` — so renaming an attribute and then
+ * deleting it would have been silent here and a 409 on the wire. That is the
+ * mock being *more forgiving* on the one act this whole screen exists to warn
+ * about.
+ *
+ * The seeded rows are copied into `state.products` on the way, which is where
+ * `catalogue()` already looks first.
+ */
+function migrateTaxonomy(from, to) {
+  if (from === to) return;
+
+  for (const product of listed()) {
+    if (!product.attributes.some((carried) => carried.name === from)) continue;
+
+    state.products.set(product.id, {
+      ...product,
+      attributes: product.attributes.map((carried) =>
+        carried.name === from ? { ...carried, name: to } : carried,
+      ),
+    });
+  }
+}
+
+function patchAttribute(current, body) {
+  const parsed = readContentBody(body, {
+    rules: ATTRIBUTE_FIELD_RULES,
+    readOnly: ATTRIBUTE_READ_ONLY,
+    named: ATTRIBUTE_NAMED_REFUSALS,
+    message: "The attribute data is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  /* `AttributeService::update()` refuses an empty write **with no `details` key
+     at all** — measured, and `bareFail` exists for exactly this shape. The panel
+     must never send one, which is why `attributeUpdateBody()` answers null. */
+  if (Object.keys(parsed.writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const badType = typeRefusal(parsed.writes);
+  if (badType) return badType;
+
+  const next = { ...current };
+
+  if ("name" in parsed.writes) next.name = parsed.writes.name.trim();
+  if ("type" in parsed.writes) next.type = parsed.writes.type;
+  if ("order_by" in parsed.writes) next.order_by = parsed.writes.order_by;
+  if ("has_archives" in parsed.writes) next.has_archives = parsed.writes.has_archives;
+
+  if ("slug" in parsed.writes) {
+    const slug = parsed.writes.slug.trim().toLowerCase().replace(/^pa_/, "");
+    const refusal = attributeRefusal(slug, current.id);
+    if (refusal) return refusal;
+    next.slug = slug;
+    // The taxonomy follows the slug, which is the whole reason a rename is
+    // reported: every saved filter and every storefront link is built on it.
+    next.taxonomy = `pa_${slug}`;
+    migrateTaxonomy(current.taxonomy, next.taxonomy);
+  }
+
+  /* One map for both kinds: a created row is already in `createdAttributes` and
+     a seeded one now has an override `attributeRows()` prefers. The shape
+     coupons and pages use, so one lookup answers for either. */
+  state.attributes.set(current.id, next);
+
+  const slugChanged = next.slug !== current.slug;
+
+  /*
+   * `meta.slug_changed` is reported **only when it changed**, and an ordinary
+   * write carries no `meta` at all — `tests/Api/attributes.php` asserts both
+   * halves separately, because a flag that is always present is a flag nothing
+   * can branch on.
+   */
+  return slugChanged
+    ? ok(attributeDetail(next), { slug_changed: true })
+    : ok(attributeDetail(next));
+}
+
+/**
+ * **Deleting an attribute a product uses is a 409 that names the products**, and
+ * `?force=true` deletes it anyway — taking every term with it and leaving those
+ * products pointing at an attribute that no longer exists.
+ *
+ * Measured verbatim:
+ *
+ *     409 conflict "1 product(s) use this attribute. Deleting it removes every
+ *         term and leaves those products referencing an attribute that no longer
+ *         exists. Repeat with ?force=true to delete anyway."
+ *         details {products: 1, product_ids: [7565], taxonomy: "pa_acprobesize"}
+ *
+ * `product_ids` is capped at five by `AttributeService::SAMPLE` while `products`
+ * is the full count, so the two disagree on a widely-used attribute and a screen
+ * reading `product_ids.length` as the count would under-report it.
+ */
+function deleteAttribute(current, params) {
+  const force = BOOLEANS.get(params.get("force") ?? "") === true;
+  const usage = attributeProductUsage(current);
+
+  if (!force && usage.total > 0) {
+    return conflict(
+      `${usage.total} product(s) use this attribute. Deleting it removes every term and ` +
+        "leaves those products referencing an attribute that no longer exists. " +
+        "Repeat with ?force=true to delete anyway.",
+      { products: usage.total, product_ids: usage.ids, taxonomy: current.taxonomy },
+    );
+  }
+
+  state.attributes.delete(current.id);
+  state.createdAttributes = state.createdAttributes.filter((id) => id !== current.id);
+  state.attributesGone.add(current.id);
+  // `wc_delete_attribute()` removes the row **and every term on it**. Dropping
+  // the terms here is not tidiness — it is what makes the warning true.
+  state.terms.delete(current.id);
+
+  return ok({ id: current.id, deleted: true, products_detached: usage.total });
+}
+
+const TERM_FIELD_RULES = {
+  name: (value) => {
+    if (typeof value !== "string" || value.trim() === "") return "Must be a non-empty string.";
+    return value.trim().length > 200 ? "Must be at most 200 characters." : null;
+  },
+  slug: (value) => {
+    if (typeof value !== "string" || value.trim() === "") return "Must be a non-empty string.";
+    return value.trim().length > 200 ? "Must be at most 200 characters." : null;
+  },
+  description: (value) => {
+    if (value === null) return null;
+    if (typeof value !== "string") return "Must be a string.";
+    return value.trim().length > 2000 ? "Must be at most 2000 characters." : null;
+  },
+  menu_order: (value) => (typeof value === "number" ? null : "Must be an integer."),
+};
+
+/** `AttributeTermInput::READ_ONLY`, so a row from the list PATCHes back. */
+const TERM_READ_ONLY = ["id", "count", "taxonomy", "attribute_id"];
+
+/** `AttributeTermInput::REFUSED`, verbatim. */
+const TERM_NAMED_REFUSALS = {
+  term_id: "The id is in the URL.",
+  parent:
+    "An attribute taxonomy is flat. WooCommerce registers it with hierarchical => false, so a parent would be stored and never read.",
+  products: "A term is attached to a product by writing the product, not by writing the term.",
+};
+
+const termSlugClash = (attribute, slug, ignoreId = 0) =>
+  termsOf(attribute).some((term) => term.slug === slug && term.id !== ignoreId)
+    ? conflict("That slug is already used by another term of this attribute.", { slug })
+    : null;
+
+function createTerm(attribute, body) {
+  const parsed = readContentBody(body, {
+    rules: TERM_FIELD_RULES,
+    readOnly: TERM_READ_ONLY,
+    named: TERM_NAMED_REFUSALS,
+    message: "The term data is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  if (!("name" in parsed.writes)) {
+    return invalidBody("The term data is invalid.", { name: "Required." });
+  }
+
+  const name = parsed.writes.name.trim();
+  /* `sanitizeTitle`, not `taxonomySlug`: `wp_insert_term()` has no `urldecode()`
+     round it, so an Arabic term keeps its percent-escapes where an Arabic
+     attribute does not. The asymmetry is measured; see `taxonomySlug`. */
+  const slug = "slug" in parsed.writes ? parsed.writes.slug.trim() : sanitizeTitle(name);
+
+  const clash = termSlugClash(attribute, slug);
+  if (clash) return clash;
+
+  const term = {
+    id: state.nextTermId++,
+    name,
+    slug,
+    description: parsed.writes.description ?? "",
+    menu_order: parsed.writes.menu_order ?? 0,
+    // A new term is on nothing. The count is WordPress's and only a product
+    // write moves it, which is why the screen can promise a fresh term deletes
+    // silently and an old one may not.
+    count: 0,
+  };
+
+  state.terms.set(attribute.id, [...termsOf(attribute), term]);
+  return created(term);
+}
+
+function patchTerm(attribute, current, body) {
+  const parsed = readContentBody(body, {
+    rules: TERM_FIELD_RULES,
+    readOnly: TERM_READ_ONLY,
+    named: TERM_NAMED_REFUSALS,
+    message: "The term data is invalid.",
+  });
+  if (parsed.error) return parsed.error;
+
+  if (Object.keys(parsed.writes).length === 0) {
+    return bareFail(400, "invalid_request", "No supported fields were provided.");
+  }
+
+  const next = { ...current };
+  if ("name" in parsed.writes) next.name = parsed.writes.name.trim();
+  if ("description" in parsed.writes) next.description = parsed.writes.description ?? "";
+  if ("menu_order" in parsed.writes) next.menu_order = parsed.writes.menu_order;
+
+  if ("slug" in parsed.writes) {
+    const slug = parsed.writes.slug.trim();
+    const clash = termSlugClash(attribute, slug, current.id);
+    if (clash) return clash;
+    next.slug = slug;
+  }
+
+  state.terms.set(
+    attribute.id,
+    termsOf(attribute).map((term) => (term.id === current.id ? next : term)),
+  );
+
+  return next.slug !== current.slug ? ok(next, { slug_changed: true }) : ok(next);
+}
+
+/**
+ * **The attribute guard one level down, and the likelier of the two to be hit.**
+ *
+ *     409 conflict "1 product(s) use this term. Deleting it detaches them and
+ *         breaks any variation that resolved through it. Re-tag them first, or
+ *         repeat with ?force=true."
+ *         details {products: 1, term_id: 729}
+ *
+ * Note the details differ from the attribute's: `term_id` rather than
+ * `product_ids` and `taxonomy`, so there is **no way to name the products** at
+ * term grain. A screen offering to list them would be inventing them.
+ */
+function deleteTerm(attribute, current, params) {
+  const force = BOOLEANS.get(params.get("force") ?? "") === true;
+
+  if (!force && current.count > 0) {
+    return conflict(
+      `${current.count} product(s) use this term. Deleting it detaches them and breaks ` +
+        "any variation that resolved through it. Re-tag them first, or repeat with ?force=true.",
+      { products: current.count, term_id: current.id },
+    );
+  }
+
+  state.terms.set(
+    attribute.id,
+    termsOf(attribute).filter((term) => term.id !== current.id),
+  );
+
+  return ok({ id: current.id, deleted: true, products_detached: current.count });
 }
 
 /* -------------------------------------------------------- customer queries --- */
@@ -21024,6 +22256,21 @@ export function respond(
     "shipments",
     "payments",
     "products",
+    /*
+     * **The shop's own vocabulary, and the newest collection to start writing.**
+     * All four of §88's routes are here — the collection, one attribute, its
+     * terms and one term — and the `case` below still refuses a verb the API
+     * does not register: there is no `GET` on a single term (measured
+     * `rest_no_route`) and no `POST` on one either. This list decides which
+     * collections may write, never which verbs they take.
+     *
+     * `/product-categories` is deliberately **not** here and is not an
+     * oversight: `GET /product-categories` is the only method that exists, the
+     * write surface §88 built is on `/attributes`, and a `POST` to the
+     * categories collection falls to the 404 rather than being opened by
+     * proximity.
+     */
+    "attributes",
     "inventory",
     "coupons",
     // `/shipping/rules` is the only writable thing under this collection —
@@ -21577,7 +22824,13 @@ export function respond(
        * served the *product* for `/products/{id}/anything` — a 200 for a route
        * nobody wrote, which is the quiet wrong answer this file must not give.
        */
-      if (segments.length > 3) return notFound();
+      /*
+       * **Four now, not three.** `/products/{id}/variations/{variation_id}` is
+       * the deepest route this collection has, and the guard is raised by
+       * exactly one level rather than removed — `/products/12/variations/9001/x`
+       * is still nobody's route and still answers the routing 404.
+       */
+      if (segments.length > 4) return notFound();
 
       if (second === undefined) {
         /*
@@ -21588,9 +22841,8 @@ export function respond(
          * the allowlist entry landed with it, and this is the fixture it needs.
          *
          * The rule that kept it out is intact and is what still keeps `POST
-         * /products/bulk` and `POST /products/{id}/duplicate` off both lists:
-         * the depth guard above answers `notFound()` for the second, and `bulk`
-         * falls through `productById` to the same place.
+         * /products/bulk` off both lists: `bulk` is not an id, so it falls
+         * through `productById` to the 404 below.
          */
         if (method === "GET") return productsListing(searchParams);
         return method === "POST" ? createProduct(body) : notFound();
@@ -21602,12 +22854,79 @@ export function respond(
       if (row === undefined) return notFound();
 
       if (segments.length === 3) {
-        // The only sub-resource a product has. Paginated, because the detail
-        // asks it for `per_page=100`, and **200 with `[]` on a simple
-        // product** — measured, so the request is waste rather than an error.
-        if (method !== "GET" || segments[2] !== "variations") return notFound();
-        const page = paginate(variationsOf(row), searchParams);
-        return page.error ?? ok(page.rows, page.meta);
+        /*
+         * **`duplicate` is served now**, beside the two variation verbs. The
+         * comment on the depth guard used to name it as one of the two routes
+         * kept unreachable *"the depth guard above answers notFound() for"* —
+         * the panel had no screen for it, so a fixture that answered would have
+         * been an invitation to build one. `DuplicateAction` is that screen and
+         * the allowlist entry landed with it.
+         */
+        if (segments[2] === "duplicate") {
+          return method === "POST" ? duplicateProduct(row) : notFound();
+        }
+
+        if (segments[2] !== "variations") return notFound();
+
+        if (method === "POST") return createVariation(row, body);
+        if (method !== "GET") return notFound();
+
+        /*
+         * **`enumeration()`, and it used to be `paginate()`.** Corrected with
+         * the variations editor, read from source rather than inferred:
+         * `VariationController::registerRoutes()` declares `'args' =>
+         * $this->idArg()` on the `GET` — no pagination parameters at all — and
+         * `index()` answers `Response::success(ProductPresenter::variationList($variations))`
+         * with one argument, so `successPayload()` omits `meta` entirely. The
+         * route is **unpaginated and carries no `total`**.
+         *
+         * The line this replaces said "Paginated, because the detail asks it for
+         * `per_page=100`", which is this file inferring a contract from its own
+         * caller — the same mistake `/locations/wilayas/{id}/communes` made and
+         * the envelope docblock names as the failure the three-shape split
+         * exists to stop. `page.tsx` has dropped the parameter to match.
+         *
+         * It matters now rather than being cosmetic: the generate button adds up
+         * to fifty rows in one press, and a harness with a default page size
+         * would have shown the first twenty of what the API always sends whole.
+         *
+         * Still **200 with `[]` on a simple product** — measured, so the request
+         * is waste rather than an error.
+         */
+        return enumeration(variationsOf(row));
+      }
+
+      if (segments.length === 4) {
+        if (segments[2] !== "variations") return notFound();
+
+        const variation = variationsOf(row).find(
+          (candidate) => candidate.id === numericId(segments[3]),
+        );
+
+        /*
+         * `requireVariation()` guards an IDOR — a variation reached through the
+         * wrong parent — and answers its own sentence rather than the routing
+         * 404, because "no such variation *for this product*" is a different
+         * fact from a URL nobody wrote.
+         */
+        if (variation === undefined) {
+          return method === "PATCH" || method === "DELETE"
+            ? fail(404, "not_found", "No variation with that id for this product.")
+            : notFound();
+        }
+
+        /*
+         * **`GET` on a single variation is a 404 here, and the route exists.**
+         * That is deliberate and it is `/product-categories/{id}`'s precedent,
+         * one collection over: `lib/api/allowlist.ts` allows `PATCH` and
+         * `DELETE` on this path and refuses `GET`, because nothing reads one
+         * variation — the list fills the table, `POST` answers 201 with the
+         * created row and `PATCH` answers 200 with the updated one. A fixture
+         * that answered would let a screen be built on a read that renders green
+         * here and 404s at the panel's own proxy in production.
+         */
+        if (method === "PATCH") return patchVariation(row, variation, body);
+        return method === "DELETE" ? deleteVariation(row, variation) : notFound();
       }
 
       switch (method) {
@@ -21641,10 +22960,51 @@ export function respond(
        */
       return segments.length === 1 ? collectionOf(CATEGORIES, {}) : notFound();
 
+    /*
+     * ── Global attributes, and the panel writes them now ────────────────────
+     *
+     * `ac_manage_products` on all four routes: `AttributeController::registerRoutes()`
+     * builds one `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` and hangs
+     * every method on it, and every `AttributeService` method asserts the same
+     * capability again inside. It is **not gated here**, and that is the file's
+     * existing position rather than a new one: `/products`, `/product-categories`
+     * and this route share the capability and none of the three checks it, so
+     * gating one of them would make `MOCK_IDENTITY=no_products` refuse an
+     * attribute list beside a product list it still served. Whoever gates the
+     * products collection should take all four at once.
+     *
+     * Depth is stated here, as `/products` and `/orders` state theirs.
+     */
     case "attributes": {
-      const attributeOf = () => ATTRIBUTES.find((a) => a.id === numericId(second));
+      if (segments.length > 4) return notFound();
 
-      if (segments.length === 3) {
+      if (second === undefined) {
+        if (method === "POST") return createAttribute(body);
+        if (method !== "GET") return notFound();
+
+        /*
+         * **`counted()`, and it used to be `list()`.** Corrected 2026-08-30, and
+         * it is read from source rather than inferred: `AttributeController::index()`
+         * answers
+         *
+         *     Response::success(…, 200, ['total' => count($attributes)])
+         *
+         * — one key, exactly the call `LocationController::wilayas()` makes and
+         * the one whose live envelope produced `counted()` in the first place.
+         * Confirmed in process through `rest_do_request()`: `{"total": 4}` and
+         * nothing else. `list()`'s docblock named this route as one of its
+         * unmeasured borrowers; it is measured now and it has moved.
+         *
+         * The unpaginated part was right and stays right: the panel fetches this
+         * with no params, so a default `per_page` of 10 would silently drop the
+         * shop's later attributes and every facet group keyed on them.
+         */
+        return counted(attributeRows());
+      }
+
+      const attribute = attributeRows().find((row) => row.id === numericId(second));
+
+      if (segments.length === 3 || segments.length === 4) {
         /*
          * The only sub-resource in this API, and the reason the depth guard
          * above had to be relaxed properly rather than special-cased.
@@ -21654,44 +23014,62 @@ export function respond(
          * from `/products` at any price — without this route the filter sheet
          * can only ever offer the values that already match, and picking one
          * deletes its siblings.
+         *
+         * The attribute is resolved **before** the sub-resource is served and
+         * answers its own sentence, not the routing 404: measured, `POST
+         * /attributes/9999901/terms` is `not_found` / *"No attribute with that
+         * id."*, which is a different fact from a URL nobody wrote and the only
+         * one a screen can put in front of a person.
          */
         if (segments[2] !== "terms") return notFound();
-        const attribute = attributeOf();
-        if (attribute === undefined) return notFound();
-        const page = paginate(TERMS[attribute.taxonomy], searchParams);
-        return page.error ?? ok(page.rows, page.meta);
+        if (attribute === undefined) return attributeNotFound();
+
+        if (segments.length === 3) {
+          if (method === "POST") return createTerm(attribute, body);
+          if (method !== "GET") return notFound();
+          const page = paginate(termsOf(attribute), searchParams);
+          return page.error ?? ok(page.rows, page.meta);
+        }
+
+        /*
+         * **There is no `GET` on a single term and this is where that is
+         * enforced.** `AttributeController::registerRoutes()` registers `PATCH`
+         * and `DELETE` on this route and nothing else; measured, a `GET` is
+         * `rest_no_route`. lib/api/allowlist.ts refuses the method for the same
+         * reason, so the two agree and a screen cannot be built on a read that
+         * does not exist.
+         */
+        const term = termsOf(attribute).find((row) => row.id === numericId(segments[3]));
+        if (term === undefined) {
+          return method === "PATCH" || method === "DELETE"
+            ? fail(404, "not_found", "No term with that id on this attribute.")
+            : notFound();
+        }
+
+        if (method === "PATCH") return patchTerm(attribute, term, body);
+        return method === "DELETE" ? deleteTerm(attribute, term, searchParams) : notFound();
       }
 
       /*
-       * **`/attributes/{id}` is a 404, and only `/attributes/{id}/terms` is
-       * served.** lib/api/allowlist.ts:64-65 carries `/attributes` and
-       * `/attributes/\d+/terms` and nothing between them, so a single attribute
-       * is refused by the panel's own proxy — `{allowed: false, reason: "path"}`.
+       * **`/attributes/{id}` is served now, and the comment it replaces is why
+       * it was not.** That one read: *"a single attribute is refused by the
+       * panel's own proxy … a screen built on it would render here and fail at
+       * the proxy."* True at the time and no longer: `lib/api/allowlist.ts`
+       * carries `GET|PATCH|DELETE /attributes/\d+` with the attributes screen,
+       * and this is the fixture that screen needs.
        *
-       * The route may well exist at the API; the allowlist is a statement about
-       * what this panel may reach, not about what the shop has. Either way a
-       * screen built on it would render here and fail at the proxy, which is the
-       * same reason `POST /payments` is unreachable in this file even though it
-       * is the one write the payments API really offers.
-       *
-       * The list above carries `slug` and `taxonomy` on every row, so nothing
-       * needs to resolve one attribute by id to tell the two apart.
+       * It is also the **only** place the two counts exist.
+       * `AttributeController` splits them deliberately — *"The single read
+       * carries usage; the list does not — two queries per row"* — so the list
+       * above must keep omitting them, and `tests/mock-api.test.ts` asserts that
+       * it does. A fixture that put `product_count` on a list row would let a
+       * screen warn about a delete using a number the shop never sends.
        */
-      if (second !== undefined) return notFound();
+      if (attribute === undefined) return attributeNotFound();
 
-      /*
-       * Unpaginated, like `/locations/wilayas`: the panel fetches this with no
-       * params at all, and a default `per_page` of 10 would silently drop the
-       * shop's later attributes — and every facet group keyed on them with
-       * nothing reporting an error.
-       *
-       * **Its envelope is the unmeasured one, unlike wilayas'.** This used to
-       * hand-roll the same four-key `meta` inline; it goes through `list()` now
-       * so that the file has exactly one place emitting an unverified envelope
-       * and this route is named in that helper's list. Whether the shop sends
-       * `{total}` here, or nothing, is a request nobody has made.
-       */
-      return list(ATTRIBUTES);
+      if (method === "GET") return ok(attributeDetail(attribute));
+      if (method === "PATCH") return patchAttribute(attribute, body);
+      return method === "DELETE" ? deleteAttribute(attribute, searchParams) : notFound();
     }
 
     case "customers": {

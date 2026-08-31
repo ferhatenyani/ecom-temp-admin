@@ -20,6 +20,7 @@ import { ForbiddenState } from "@/components/ui/States";
 import { Isolate } from "@/components/primitives/Ltr";
 import { ProductDetail } from "./ProductDetail";
 import { DeleteAction } from "./DeleteAction";
+import { DuplicateAction } from "./DuplicateAction";
 
 /** Shared by the "no global attribute" and the "could not load" branches. */
 const EMPTY_VOCABULARY: {
@@ -105,21 +106,32 @@ export default async function ProductDetailPage({
     throw error;
   }
 
-  /**
-   * True when a term list would actually be read. A local attribute (`id: 0`)
-   * carries free strings rather than slugs and has no shared vocabulary at all,
-   * so the 26 simple products *and* the two variable ones need none of this.
-   */
-  const needsVocabulary = product.attributes.some((attribute) => attribute.id !== 0);
-
   const [variations, categories, vocabulary] = await Promise.all([
     /*
-     * Only for a variable product: measured, `GET /products/{id}/variations` on a
-     * simple product answers 200 with `[]`, so the request would work and simply
-     * be waste on 26 of 28 products.
+     * **No `per_page`, and dropping it is a correction rather than a tidy-up.**
+     * This read used to ask for `?per_page=100`. Read from source,
+     * `VariationController::registerRoutes()` declares `'args' => $this->idArg()`
+     * on the `GET` and nothing else, and `index()` answers
+     * `Response::success(ProductPresenter::variationList($variations))` — one
+     * argument, so `successPayload()` omits `meta` entirely. The route is
+     * **unpaginated and carries no `total`**: `per_page` is a parameter WordPress
+     * never registered and therefore silently ignores, and sending it was the
+     * panel inferring a contract from its own request. The same mistake the
+     * harness made on `/locations/wilayas/{id}/communes` and corrected there.
+     *
+     * That matters now rather than being cosmetic: the generate button can add
+     * fifty rows in one press, and a screen that believed in a page size would
+     * have shown the first hundred of what the API always sends whole.
+     *
+     * Still only for a product that has variations — measured, `GET
+     * /products/{id}/variations` on a simple product answers 200 with `[]`, so
+     * the request would work and simply be waste on 26 of 28 products. A product
+     * that has *just* been made variable has none yet and `ProductVariations`
+     * renders its generate control against an empty list, which is correct: the
+     * refresh after the attribute save re-runs this and finds them.
      */
     product.variations.length > 0
-      ? acFetch(variationList, session, `/products/${numericId}/variations?per_page=100`)
+      ? acFetch(variationList, session, `/products/${numericId}/variations`)
           .then((r) => r.data)
           .catch(() => null)
       : Promise.resolve([] as Variation[]),
@@ -144,26 +156,47 @@ export default async function ProductDetailPage({
      * A failure here degrades to printing the stored value — `pa_matiere`, and a
      * term slug — which is information rather than an absence, so this is `[]`/`{}`
      * and not a `null` the section would have to render as a hole.
+     *
+     * ## `/attributes` is now fetched for every product, and the terms are not
+     *
+     * The definitions list used to be skipped entirely unless the product already
+     * carried a global attribute (`needsVocabulary`), which was right while the
+     * attributes card was read-only: nothing to resolve meant nothing to fetch.
+     * The card **attaches** attributes now, so the list of what the shop defines
+     * is what the control offers, and a product carrying none is precisely the
+     * product whose editor needs it most. It is one unpaginated request that
+     * `AttributeController::index()` answers with `{total}` and no per-row usage,
+     * which is the cheapest read in this panel.
+     *
+     * The **term lists** keep the old scope and that is the half worth
+     * preserving. They are fetched only for the taxonomies this product already
+     * carries — the products branch removed a four-request wave that ran on all
+     * 26 simple products to resolve labels none of them had, and restoring it to
+     * pre-fill checkboxes nobody has opened would be the same waste wearing a
+     * different reason. `ProductAttributes` fetches a newly attached attribute's
+     * terms through `/api/ac` at the moment it is attached: one request when the
+     * act happens, rather than four on every page view.
      */
-    needsVocabulary
-      ? acFetch(globalAttributesSchema, session, "/attributes")
-          .then(async (r) => {
-            const attributes = r.data;
-            const termLists = await Promise.all(
-              attributes.map((attribute) =>
-                acFetch(
-                  attributeTermsSchema,
-                  session,
-                  `/attributes/${attribute.id}/terms?per_page=100`,
-                )
-                  .then((terms) => [attribute.taxonomy, terms.data] as const)
-                  .catch(() => [attribute.taxonomy, [] as AttributeTerm[]] as const),
-              ),
-            );
-            return { attributes, terms: Object.fromEntries(termLists) };
-          })
-          .catch(() => EMPTY_VOCABULARY)
-      : Promise.resolve(EMPTY_VOCABULARY),
+    acFetch(globalAttributesSchema, session, "/attributes")
+      .then(async (r) => {
+        const attributes = r.data;
+        const carried = new Set(product.attributes.map((attribute) => attribute.name));
+        const termLists = await Promise.all(
+          attributes
+            .filter((attribute) => carried.has(attribute.taxonomy))
+            .map((attribute) =>
+              acFetch(
+                attributeTermsSchema,
+                session,
+                `/attributes/${attribute.id}/terms?per_page=100`,
+              )
+                .then((terms) => [attribute.taxonomy, terms.data] as const)
+                .catch(() => [attribute.taxonomy, [] as AttributeTerm[]] as const),
+            ),
+        );
+        return { attributes, terms: Object.fromEntries(termLists) };
+      })
+      .catch(() => EMPTY_VOCABULARY),
   ]);
 
   /**
@@ -200,8 +233,18 @@ export default async function ProductDetailPage({
          * appears only when the form is dirty, and the header rule is about a
          * control acting on the record's *state*, which a save is not.
          */
+        /*
+         * **Duplicate is beside the menu, not inside it.** `DeleteAction`'s menu
+         * is destructive top to bottom — `Menu` colours, separates and sinks
+         * destructive items — and a control that *creates* a product sitting
+         * above two deletes in that list is a control somebody misreads once.
+         * `DuplicateAction` carries the rest of the argument.
+         */
         actions={
-          <DeleteAction productId={product.id} locale={locale} name={product.name} />
+          <>
+            <DuplicateAction productId={product.id} locale={locale} />
+            <DeleteAction productId={product.id} locale={locale} name={product.name} />
+          </>
         }
       />
 

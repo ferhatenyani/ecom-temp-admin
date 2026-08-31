@@ -71,14 +71,18 @@ import {
 import { PAYMENT_STATUSES } from "@/lib/payment-status";
 import { byStatusSumsToTotal, codByStatus, codFigures, ratePercent, RATE_KEYS } from "@/lib/cod";
 import {
+  attributeTerm as attributeTermSchema,
   attributeTerms,
   deleteResult,
   facets as facetsSchema,
+  globalAttribute as globalAttributeSchema,
+  globalAttributeDetail,
   globalAttributes,
   product,
   productCategories,
   productList,
   productListMeta,
+  variation,
   variationList,
 } from "@/lib/api/schemas/product";
 import {
@@ -5955,24 +5959,49 @@ describe("GET /products", () => {
 });
 
 /**
- * The one sub-resource a product has, and the reason the depth guard on
- * `/products` had to be relaxed properly rather than special-cased.
+ * A product's sub-resources, and the reason the depth guard on `/products` had
+ * to be relaxed properly rather than special-cased.
  *
- * Its shape disagrees with the parent's on purpose: `attributes` is an **object**
- * here where the parent's is an array, and the values are lowercased slugs of the
- * parent's options. A renderer that does not know which it is holding prints a
- * lowercase `s` at a shopkeeper, which is what `variationLabel()` repairs — so it
- * is the panel's own resolver, not a copy, that this asserts with.
+ * A variation's shape disagrees with its parent's on purpose: `attributes` is an
+ * **object** here where the parent's is an array, and the values are lowercased
+ * slugs of the parent's options. A renderer that does not know which it is
+ * holding prints a lowercase `s` at a shopkeeper, which is what `variationLabel()`
+ * repairs — so it is the panel's own resolver, not a copy, that this asserts
+ * with.
  */
 describe("GET /products/{id}/variations", () => {
-  it("parses the five bodies, including the two that carry an absence", () => {
-    const three = parseList(variationList, get("/products/104/variations", "per_page=100"));
-    const two = parseList(variationList, get("/products/120/variations", "per_page=100"));
-    expect(three.data).toHaveLength(3);
-    expect(two.data).toHaveLength(2);
-    expect(three.meta.total).toBe(3);
+  /**
+   * **This route carries no `meta` at all, and that is a correction.**
+   *
+   * These cases used `parseList`, which asserts a list endpoint has one. Read
+   * from source, `VariationController::index()` answers
+   * `Response::success(ProductPresenter::variationList($variations))` — one
+   * argument — and `Response::successPayload()` adds the key only when
+   * `$meta !== []`. The route registers no pagination arguments either:
+   * `registerRoutes()` declares `'args' => $this->idArg()` on the `GET` and
+   * nothing more.
+   *
+   * So the harness was answering a `{total, page, per_page, total_pages}` block
+   * the wire never sends, because the panel had asked it for `per_page=100` —
+   * the file inferring a contract from its own caller, which is the
+   * `/locations/wilayas/{id}/communes` mistake exactly. Both sides are corrected
+   * on this branch: the mock answers `enumeration()` and `page.tsx` sends no
+   * parameter.
+   */
+  const variations = (path: string, query = "") => {
+    const response = get(path, query);
+    const { data, meta } = parse(variationList, response);
+    expect(meta, "this route carries no meta — see above").toBeNull();
+    return data;
+  };
 
-    const all = [...three.data, ...two.data];
+  it("parses the five bodies, including the two that carry an absence", () => {
+    const three = variations("/products/104/variations");
+    const two = variations("/products/120/variations");
+    expect(three).toHaveLength(3);
+    expect(two).toHaveLength(2);
+
+    const all = [...three, ...two];
     expect(all.every((row) => row.parent_id === 104 || row.parent_id === 120)).toBe(true);
 
     // `""` means it inherits the parent's, and the API reports what is stored —
@@ -5986,11 +6015,21 @@ describe("GET /products/{id}/variations", () => {
     expect(inherited[0].manage_stock).toBe(false);
   });
 
+  /**
+   * The whole list, whatever is asked for. `per_page` is a parameter WordPress
+   * never registered on this route, so it is silently ignored — and a harness
+   * that honoured it would let the generate button appear to work while showing
+   * the first page of what it made.
+   */
+  it("ignores per_page, because the route registers none", () => {
+    expect(variations("/products/104/variations", "per_page=1")).toHaveLength(3);
+    expect(variations("/products/104/variations", "page=99")).toHaveLength(3);
+  });
+
   it("keys attributes by the parent's own vocabulary, lowercased", () => {
     const parent = parse(product, get("/products/104")).data;
-    const variations = parseList(variationList, get("/products/104/variations")).data;
 
-    for (const row of variations) {
+    for (const row of variations("/products/104/variations")) {
       // An object, not an array — the asymmetry the schema is explicit about.
       expect(Array.isArray(row.attributes)).toBe(false);
       expect(Object.keys(row.attributes)).toEqual(["taille"]);
@@ -6011,8 +6050,7 @@ describe("GET /products/{id}/variations", () => {
    * range unreachable and uncapturable.
    */
   it("prices them apart, so the detail's range has something to render", () => {
-    const variations = parseList(variationList, get("/products/104/variations")).data;
-    const span = priceSpan(variations.map((row) => row.price));
+    const span = priceSpan(variations("/products/104/variations").map((row) => row.price));
     expect(span).not.toBeNull();
 
     const parent = parse(product, get("/products/104")).data;
@@ -6024,17 +6062,314 @@ describe("GET /products/{id}/variations", () => {
   it("answers a simple product with 200 and an empty list, not a 404", () => {
     // Measured. The detail skips the request on 26 of 28 products because it
     // would work and simply be waste — which is only true if it is not an error.
-    const { data, meta } = parseList(variationList, get("/products/101/variations"));
-    expect(data).toEqual([]);
-    expect(meta.total).toBe(0);
+    expect(variations("/products/101/variations")).toEqual([]);
   });
 
   it("serves nothing deeper, and nothing under another name", () => {
-    expect(get("/products/101/variations/9030").status).toBe(404);
     expect(get("/products/101/nonsense").status).toBe(404);
     expect(get("/products/999999/variations").status).toBe(404);
-    // The one variation route the panel never calls stays unreachable too.
+    expect(get("/products/104/variations/9030/extra").status).toBe(404);
+    // A collection takes no PATCH, and a single variation takes no POST.
     expect(write("PATCH", "/products/104/variations", { sku: "x" }).status).toBe(404);
+    expect(write("POST", "/products/104/variations/9030", { sku: "x" }).status).toBe(404);
+  });
+
+  /**
+   * **`GET` on a single variation is a 404 here and the route exists on the
+   * wire.** `/product-categories/{id}`'s precedent, one collection over:
+   * `lib/api/allowlist.ts` allows `PATCH` and `DELETE` on this path and refuses
+   * `GET`, because nothing in the panel reads one variation. A fixture that
+   * answered would let a screen be built on a read that renders green against
+   * this harness and 404s at the panel's own proxy in production.
+   */
+  it("refuses the single read the panel's own allowlist refuses", () => {
+    expect(get("/products/104/variations/9030").status).toBe(404);
+    // …and the two verbs beside it are served, so the refusal above is about the
+    // method rather than about the path never resolving.
+    expect(write("PATCH", "/products/104/variations/9030", { weight: "1" }).status).toBe(200);
+  });
+});
+
+/**
+ * **The variation writes**, and the refusals are the point of them.
+ *
+ * Every sentence below is read from `VariationService` or `VariationInput` and
+ * quoted rather than paraphrased: the panel's generate run branches on *which*
+ * refusal it got — a 409 with `variation_id` is one taken cell and a 409 without
+ * it is the whole product being wrong — so a harness that invented its own
+ * wording would let `isParentRefusal()` ship untested.
+ */
+describe("the variation writes", () => {
+  /**
+   * The parent's one variation attribute, so a legal combination can be built.
+   *
+   * **Product 120, not 104**, wherever a *free* cell is needed: the seed gives
+   * 104 three variations across all three of its options and 120 only two, so
+   * 120 is the one product in this shop with a combination nothing holds — which
+   * is the state the generate button exists for and the only state a create can
+   * succeed from.
+   */
+  const axis = (id = 104) => {
+    const parent = parse(product, get(`/products/${id}`)).data;
+    const attribute = parent.attributes.find((row) => row.variation)!;
+    return { key: attribute.name.toLowerCase(), options: attribute.options };
+  };
+
+  it("creates a variation for a combination nothing holds yet", () => {
+    const { key, options } = axis(120);
+    const response = write("POST", "/products/120/variations", {
+      attributes: { [key]: options[2] },
+      regular_price: "19000",
+    });
+
+    expect(response.status).toBe(201);
+    const row = parse(variation, response).data;
+    expect(row.parent_id).toBe(120);
+    expect(row.regular_price).toBe("19000");
+    // The effective figure the presenter resolves, not a second opinion.
+    expect(row.price).toBe("19000");
+    // No SKU is the ordinary state: the panel generates none, because one it
+    // invented would 409 the moment it collided.
+    expect(row.sku).toBe("");
+
+    // The parent's `variations` array *is* its children — `ProductPresenter`
+    // publishes `get_children()` — so a create that left it alone would answer a
+    // product disagreeing with its own sub-resource.
+    expect(parse(product, get("/products/120")).data.variations).toContain(row.id);
+  });
+
+  it("refuses a combination that already exists, naming the row that holds it", () => {
+    const { key, options } = axis();
+    const error = apiError(
+      write("POST", "/products/104/variations", { attributes: { [key]: options[0] } }),
+    );
+
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("conflict");
+    expect(error.apiMessage).toBe("A variation with that attribute combination already exists.");
+    // The key the panel tells a row-level 409 from a parent-level one by.
+    expect(typeof error.conflict?.variation_id).toBe("number");
+  });
+
+  it("refuses an attribute the parent does not offer, and says which it does", () => {
+    const error = apiError(
+      write("POST", "/products/104/variations", { attributes: { pa_matiere: "laine" } }),
+    );
+
+    expect(error.status).toBe(400);
+    expect(error.fields?.["attributes.pa_matiere"]).toBe(
+      "Not a variation attribute of this product. Allowed: taille.",
+    );
+  });
+
+  it("refuses a value the attribute does not have, and lists the ones it does", () => {
+    const { key, options } = axis();
+    const error = apiError(
+      write("POST", "/products/104/variations", { attributes: { [key]: "XXL" } }),
+    );
+
+    expect(error.status).toBe(400);
+    expect(error.fields?.[`attributes.${key}`]).toBe(
+      `"XXL" is not an option of this attribute. Allowed: ${options
+        .map((option) => option.toLowerCase())
+        .join(", ")}.`,
+    );
+  });
+
+  it("refuses a SKU another product or variation already holds", () => {
+    const { key, options } = axis(120);
+    const taken = parse(product, get("/products/101")).data.sku;
+    const error = apiError(
+      write("POST", "/products/120/variations", {
+        attributes: { [key]: options[2] },
+        sku: taken,
+      }),
+    );
+
+    expect(error.status).toBe(409);
+    expect(error.apiMessage).toBe("That SKU is already in use.");
+    expect(error.conflict).toEqual({ sku: taken });
+
+    // And against another **variation**, which is the half a mock built only on
+    // the product catalogue would miss: WooCommerce's SKU index covers both. The
+    // sibling is on a *different* parent, so nothing but the shared index could
+    // refuse it.
+    const sibling = parse(variationList, get("/products/104/variations")).data.find(
+      (row) => row.sku !== "",
+    )!;
+    expect(
+      write("POST", "/products/120/variations", {
+        attributes: { [key]: options[2] },
+        sku: sibling.sku,
+      }).status,
+    ).toBe(409);
+  });
+
+  it("refuses a create with no combination at all", () => {
+    const error = apiError(write("POST", "/products/104/variations", { regular_price: "10" }));
+    expect(error.status).toBe(400);
+    expect(error.fields?.attributes).toBe(
+      "A variation must specify its attribute combination.",
+    );
+  });
+
+  /**
+   * **The two parent-level 409s**, which are the ones the panel stops a generate
+   * run on. Neither carries `variation_id`, and that absence is the whole test
+   * `isParentRefusal()` applies.
+   */
+  it("refuses variations on a simple product, naming the fix", () => {
+    const error = apiError(
+      write("POST", "/products/101/variations", { attributes: { taille: "s" } }),
+    );
+
+    expect(error.status).toBe(409);
+    expect(error.apiMessage).toBe(
+      'Only variable products have variations. Set the product type to "variable" first.',
+    );
+    expect(error.conflict?.variation_id).toBeUndefined();
+  });
+
+  it("refuses when the parent marks nothing for variations", () => {
+    // Turn the axis into a spec, which is exactly what the attributes card's own
+    // confirmation warns about — and then the route has nothing to build on.
+    const parent = parse(product, get("/products/104")).data;
+    write("PATCH", "/products/104", {
+      attributes: parent.attributes.map((row) => ({ ...row, variation: false })),
+    });
+
+    const error = apiError(
+      write("POST", "/products/104/variations", { attributes: { taille: "s" } }),
+    );
+    expect(error.status).toBe(409);
+    expect(error.apiMessage).toBe("The parent product has no attributes marked for variations.");
+    expect(error.conflict?.variation_id).toBeUndefined();
+  });
+
+  it("patches one row and answers the row, not an envelope of ids", () => {
+    const row = parse(variation, write("PATCH", "/products/104/variations/9030", {
+      regular_price: "21000",
+      sku: "AC-CAT-0104-NEW",
+    })).data;
+
+    expect(row.id).toBe(9030);
+    expect(row.regular_price).toBe("21000");
+    expect(row.sku).toBe("AC-CAT-0104-NEW");
+    expect(row.price).toBe("21000");
+  });
+
+  /**
+   * The empty PATCH, and it is a **400 with no `details` key at all** — which is
+   * why `variationUpdateBody()` answers `null` and the panel never sends one. A
+   * screen reading `details.fields` here gets `undefined` and renders nothing.
+   */
+  it("refuses an empty patch with no details to bind", () => {
+    const error = apiError(write("PATCH", "/products/104/variations/9030", {}));
+    expect(error.status).toBe(400);
+    expect(error.apiMessage).toBe("No supported fields were provided.");
+    expect(error.fields).toBeNull();
+  });
+
+  it("refuses a sale price above the stored regular price", () => {
+    const stored = parse(variationList, get("/products/104/variations")).data[0];
+    const error = apiError(
+      write("PATCH", `/products/104/variations/${stored.id}`, {
+        sale_price: String(Number(stored.regular_price) + 1),
+      }),
+    );
+
+    expect(error.status).toBe(400);
+    expect(error.fields?.sale_price).toBe("Cannot be higher than the regular price.");
+  });
+
+  it("refuses a field the input does not accept", () => {
+    const error = apiError(write("PATCH", "/products/104/variations/9030", { name: "x" }));
+    expect(error.status).toBe(400);
+    expect(error.fields?.name).toBe("Unknown field.");
+  });
+
+  /** An IDOR guard: a real variation reached through the wrong parent. */
+  it("refuses a variation belonging to another product", () => {
+    const error = apiError(write("PATCH", "/products/120/variations/9030", { weight: "1" }));
+    expect(error.status).toBe(404);
+    expect(error.apiMessage).toBe("No variation with that id for this product.");
+  });
+
+  it("deletes a row permanently and takes it off the parent", () => {
+    const before = parse(variationList, get("/products/120/variations")).data;
+    const target = before[before.length - 1];
+
+    const response = write("DELETE", `/products/120/variations/${target.id}`, undefined, "force=true");
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ data: { id: target.id, deleted: true } });
+
+    const after = parse(variationList, get("/products/120/variations")).data;
+    expect(after.map((row) => row.id)).not.toContain(target.id);
+    expect(parse(product, get("/products/120")).data.variations).not.toContain(target.id);
+    // Permanent: there is no trash for a variation and it does not come back.
+    expect(write("PATCH", `/products/120/variations/${target.id}`, { weight: "1" }).status).toBe(404);
+  });
+});
+
+/**
+ * **`POST /products/{id}/duplicate`** — 201 with the whole product, which is what
+ * lets the panel land on the copy without a second request.
+ */
+describe("POST /products/{id}/duplicate", () => {
+  it("answers the whole copy, as a draft with no SKU", () => {
+    const source = parse(product, get("/products/101")).data;
+    const response = write("POST", "/products/101/duplicate", {});
+
+    expect(response.status).toBe(201);
+    const copy = parse(product, response).data;
+
+    expect(copy.id).not.toBe(source.id);
+    // WooCommerce's own convention, and a stored value — never localised.
+    expect(copy.name).toBe(`${source.name} (copy)`);
+    // *"An accidental duplicate must never appear in the storefront before
+    // someone has looked at it."*
+    expect(copy.status).toBe("draft");
+    // The backend's own suite asserts this one: SKUs are unique and the next
+    // save would 409 if the copy carried the original's.
+    expect(copy.sku).toBe("");
+    expect(copy.regular_price).toBe(source.regular_price);
+
+    // It is in the catalogue immediately, which is what `router.refresh()` on
+    // the list is refreshing.
+    expect(parse(product, get(`/products/${copy.id}`)).data.name).toBe(copy.name);
+  });
+
+  /**
+   * **`variations_copied` is audit-only and must not be in this body.** It is
+   * written by `ProductService::duplicate()` to the trail and appears in no
+   * controller, presenter or test on the wire — so the count the panel reports
+   * has to come from `variations`, the copy's own child ids.
+   */
+  it("copies the children and reports them as ids, never as variations_copied", () => {
+    const source = parse(product, get("/products/104")).data;
+    const copy = parse(product, write("POST", "/products/104/duplicate", {})).data;
+
+    expect(copy.variations).toHaveLength(source.variations.length);
+    expect(copy.variations).not.toEqual(source.variations);
+    expect((copy as Record<string, unknown>).variations_copied).toBeUndefined();
+
+    const children = parse(variationList, get(`/products/${copy.id}/variations`)).data;
+    expect(children.map((row) => row.id).sort()).toEqual([...copy.variations].sort());
+    // Each child keeps its combination and loses its SKU, for the parent's
+    // reason: a SKU is unique across the shop.
+    expect(children.every((row) => row.sku === "")).toBe(true);
+    expect(children.every((row) => Object.keys(row.attributes).length > 0)).toBe(true);
+  });
+
+  it("copies no children from a simple product", () => {
+    const copy = parse(product, write("POST", "/products/101/duplicate", {})).data;
+    expect(copy.variations).toEqual([]);
+  });
+
+  it("is a POST on an existing product and nothing else", () => {
+    expect(get("/products/101/duplicate").status).toBe(404);
+    expect(write("PATCH", "/products/101/duplicate", {}).status).toBe(404);
+    expect(write("POST", "/products/999999/duplicate", {}).status).toBe(404);
   });
 });
 
@@ -6663,7 +6998,15 @@ describe("the product refusals, by fixture id", () => {
      * guard.
      */
     expect(write("POST", "/products/bulk", { ids: [101] }).status).toBe(404);
-    expect(write("POST", "/products/104/duplicate", {}).status).toBe(404);
+    /*
+     * `duplicate` stood beside `bulk` on that line and has moved: the screen is
+     * `DuplicateAction`, the allowlist entry landed with it, and the fixture
+     * answers 201. **It answers 404 for a product that does not exist**, which is
+     * the assertion this case is actually named for and which the backend's own
+     * suite pins (*"duplicate a missing product"* → 404).
+     */
+    expect(write("POST", "/products/999999/duplicate", {}).status).toBe(404);
+    expect(write("POST", "/products/104/duplicate", {}).status).toBe(201);
   });
 });
 
@@ -7102,18 +7445,75 @@ describe("the catalogue vocabularies", () => {
    * the taxonomy is what `?attributes[…]` matches and what keys a facet group.
    */
   it("serves /attributes with slug and taxonomy as different things", () => {
-    const { data } = parseList(globalAttributes, get("/attributes"));
+    const { data } = parse(globalAttributes, get("/attributes"));
     expect(data.length).toBeGreaterThan(0);
     expect(data.every((row) => row.taxonomy !== row.slug)).toBe(true);
     expect(data.every((row) => row.taxonomy === `pa_${row.slug}`)).toBe(true);
   });
 
+  /**
+   * **`{total}` alone, and it used to be the full paging envelope.** Corrected
+   * on the attributes branch and **read from source** rather than diffed:
+   * `AttributeController::index()` answers
+   *
+   *     Response::success(…, 200, ['total' => count($attributes)])
+   *
+   * which is the identical call `LocationController::wilayas()` makes — and
+   * wilayas' live envelope, `{"total":69}`, is the measurement that produced
+   * `counted()` in the first place. Confirmed in process through
+   * `rest_do_request()`: `{"total": 4}` and nothing else.
+   *
+   * This is the fifth route pinned per shape rather than per name, and the first
+   * to *leave* `list()`'s list of unmeasured borrowers. Six remain.
+   */
+  it("serves /attributes with a bare {total}, not a paging envelope", () => {
+    const meta = (get("/attributes").body as { meta?: unknown }).meta;
+    expect(meta).toEqual({ total: 2 });
+    // The three keys the paging envelope has and this one must not, named so a
+    // regression back to `list()` fails on the fact rather than on a snapshot.
+    expect(meta).not.toHaveProperty("page");
+    expect(meta).not.toHaveProperty("per_page");
+    expect(meta).not.toHaveProperty("total_pages");
+  });
+
   it("serves /attributes unpaginated, the way /locations/wilayas is", () => {
-    const all = parseList(globalAttributes, get("/attributes")).data;
+    const all = parse(globalAttributes, get("/attributes")).data;
     // No `per_page`, and still every row: a default of 10 would silently drop a
-    // shop's later attributes and every facet group keyed on them with it.
-    expect(parseList(globalAttributes, get("/attributes", "per_page=1")).data)
+    // shop's later attributes and every facet group keyed on them with it. The
+    // parameter is not registered on this route at all, so it is ignored rather
+    // than refused — which is why this asks for one row and gets two.
+    expect(parse(globalAttributes, get("/attributes", "per_page=1")).data)
       .toHaveLength(all.length);
+  });
+
+  /**
+   * **The two counts are on the single read and on nothing else**, and the split
+   * is `AttributeController`'s own: *"The single read carries usage; the list
+   * does not — two queries per row."*
+   *
+   * It matters because `product_count` is the number the delete confirmation is
+   * written from. A fixture that put it on a list row would let a screen warn
+   * about a delete using a figure the shop never sends, and the screen would
+   * look right here and be wrong in production.
+   */
+  it("carries usage on /attributes/{id} and never on a list row", () => {
+    const detail = parse(globalAttributeDetail, get("/attributes/1")).data;
+    expect(detail.term_count).toBe(6);
+    // Seven products carry `pa_matiere`, and the count is the endpoint's own
+    // rule — `productUsage()` passes publish, draft, pending and private, so it
+    // is wider than the published-only count a term row carries.
+    expect(detail.product_count).toBe(7);
+
+    for (const row of parse(globalAttributes, get("/attributes")).data) {
+      expect(row).not.toHaveProperty("term_count");
+      expect(row).not.toHaveProperty("product_count");
+    }
+
+    expect(get("/attributes/99999").status).toBe(404);
+    // Its **own** sentence, not the routing 404: an id that names nothing is a
+    // different fact from a URL nobody wrote, and only the first is something a
+    // screen can put in front of a person.
+    expect(apiError(get("/attributes/99999")).apiMessage).toBe("No attribute with that id.");
   });
 
   /**
@@ -7129,8 +7529,13 @@ describe("the catalogue vocabularies", () => {
   });
 
   it("404s a sub-resource nobody wrote, at every collection", () => {
-    expect(get("/attributes/9/terms").status).toBe(404);
+    /* `/attributes/9/terms` used to be on this list and has changed meaning
+       rather than moved: it is still a 404 and is now the *collection's* own —
+       `not_found`, "No attribute with that id." — because the attribute is
+       resolved before the sub-resource is served. A path nobody wrote under a
+       real attribute is the routing 404 and takes its place here. */
     expect(get("/attributes/1/nonsense").status).toBe(404);
+    expect(get("/attributes/1/terms/1000/deeper").status).toBe(404);
     // The depth guard is per collection, not a blanket `> 4`: a third or fourth
     // segment on a collection that has no such sub-resource must not be answered
     // by the row above it. `/orders/{id}/notes` used to be on this list and is a
@@ -7150,6 +7555,422 @@ describe("the catalogue vocabularies", () => {
     expect(get("/inventory/low-stock/anything").status).toBe(404);
     expect(get("/locations/wilayas/16/communes/1").status).toBe(404);
     expect(get("/locations/communes").status).toBe(404);
+  });
+});
+
+/**
+ * ── §88's writes, and the four refusals a form has to be built around ────────
+ *
+ * Every expectation below is one of three things and the case says which:
+ *
+ *  - a shape **read from source** in the plugin, cited by `file:symbol`;
+ *  - a body **measured in process through `rest_do_request()`** on 2026-08-30,
+ *    either by the plugin's own suite (`tests/Api/attributes.php`, 59 passed,
+ *    0 failed) or by a probe against the same install;
+ *  - a rule the panel decided, named as the panel's.
+ *
+ * Nothing was measured over live HTTP; `BLOCKED.md` records the 401.
+ *
+ * The four that matter more than the CRUD:
+ *
+ *  1. an empty `PATCH` is a 400 with **no `details` key at all**;
+ *  2. WooCommerce's own refusals arrive under `details.fields.attribute`, which
+ *     is **not a field any form has**;
+ *  3. a duplicate slug is a **409 with no details**, not a 400 naming the field;
+ *  4. a slug change is reported in **`meta`**, and an ordinary write carries no
+ *     `meta` at all — so a flag that is always present is a flag nothing can
+ *     branch on.
+ */
+describe("the attribute and term writes", () => {
+  const attributesNow = () => parse(globalAttributes, get("/attributes")).data;
+
+  it("creates an attribute, deriving the slug and the taxonomy from the name", () => {
+    const created = write("POST", "/attributes", { name: "Contenance" });
+    expect(created.status).toBe(201);
+
+    const { data, meta } = parse(globalAttributeDetail, created);
+    expect(data.slug).toBe("contenance");
+    expect(data.taxonomy).toBe("pa_contenance");
+    // A fresh attribute has no terms and no products, and both keys are present
+    // rather than absent: `store()` passes `['products' => 0, 'terms' => 0]`.
+    expect(data.term_count).toBe(0);
+    expect(data.product_count).toBe(0);
+
+    /*
+     * **`meta.filterable` is the answer to the trap ADMIN_PANEL.md §88 spends a
+     * section on.** `wc_create_attribute()` leaves the taxonomy unregistered for
+     * the rest of the request, so WooCommerce's own controller cannot take a
+     * term on an attribute it just made; the plugin registers it in the same
+     * request and says whether that worked. The note beside it is the honest
+     * remaining caveat and is quoted verbatim from `AttributeController::store()`.
+     */
+    expect(meta).not.toBeNull();
+    expect((meta as Record<string, unknown>).filterable).toBe(true);
+    expect(String((meta as Record<string, unknown>).note)).toContain(
+      "counts zero until one is tagged and published",
+    );
+
+    expect(attributesNow().some((row) => row.id === data.id)).toBe(true);
+  });
+
+  /**
+   * **An Arabic label does not slugify to the empty string, it survives whole.**
+   *
+   * `wc_sanitize_taxonomy_name()` is `urldecode( sanitize_title( urldecode( … ) ) )`
+   * — read at WooCommerce 11.0.1, `includes/wc-formatting-functions.php:65` — so
+   * the percent-escapes `sanitize_title()` produces are undone again and the
+   * taxonomy keeps its Arabic letters. Measured: `{"name": "اللون"}` answers
+   * `slug: "اللون"`, `taxonomy: "pa_اللون"`.
+   *
+   * The mock's own `slugify()` would have produced `""` here, which is why this
+   * branch added a second derivation rather than reusing it.
+   */
+  it("derives an Arabic attribute slug without percent-encoding it", () => {
+    const { data } = parse(globalAttributeDetail, write("POST", "/attributes", { name: "اللون" }));
+    expect(data.slug).toBe("اللون");
+    expect(data.taxonomy).toBe("pa_اللون");
+  });
+
+  /**
+   * **And a term does the opposite, from the same input.** `wp_insert_term()`
+   * calls `sanitize_title()` with no `urldecode()` around it, so the escapes
+   * stay. Measured on the same install in the same process:
+   *
+   *     POST /attributes/{id}/terms {"name": "أحمر"}
+   *       → 201 {"slug": "%d8%a3%d8%ad%d9%85%d8%b1"}
+   *
+   * That string is what a filter URL carries and what a shopkeeper has to
+   * recognise in a row, which is why the terms list draws the slug rather than
+   * only the name.
+   */
+  it("percent-encodes an Arabic term slug, unlike an attribute's", () => {
+    const { data } = parse(attributeTermSchema, write("POST", "/attributes/1/terms", { name: "أحمر" }));
+    expect(data.slug).toBe("%d8%a3%d8%ad%d9%85%d8%b1");
+    expect(data.name).toBe("أحمر");
+    // A new term is on nothing, which is what lets the screen promise that
+    // deleting one just created is silent.
+    expect(data.count).toBe(0);
+  });
+
+  /**
+   * **The apostrophe is dropped, not turned into a separator**, which the
+   * fixture already knew: `MATIERE_TERMS` writes `bois-dolivier` by hand under a
+   * comment saying so. This asserts the derivation now agrees with the seed, so
+   * a term created through the API and one seeded from the shop cannot disagree.
+   */
+  it("drops an apostrophe from a derived slug rather than splitting on it", () => {
+    const { data } = parse(
+      attributeTermSchema,
+      write("POST", "/attributes/1/terms", { name: "Bois d'ébène" }),
+    );
+    expect(data.slug).toBe("bois-debene");
+  });
+
+  it("refuses a create with no name, naming what a name is for", () => {
+    const failure = apiError(write("POST", "/attributes", {}));
+    expect(failure.status).toBe(400);
+    // `GlobalAttributeInput::forCreate()`, verbatim — the message explains the
+    // distinction the endpoint exists to prevent confusing.
+    expect(failure.fields?.name).toContain("This is the label a shopper sees");
+  });
+
+  /**
+   * **WooCommerce's three refusals arrive under a key no control is called**,
+   * and this is the assertion the screen's error handling is built on.
+   * `AttributeRepository::fromWpError()` cannot tell which field WooCommerce
+   * meant, so it files every non-conflict `WP_Error` under the literal string
+   * `attribute`. A form binding `details.fields` to its inputs by key shows
+   * **nothing** for these, which is why the screens split them out and render
+   * them above the form.
+   */
+  it("files WooCommerce's own refusals under `attribute`, which is not a field", () => {
+    const reserved = apiError(write("POST", "/attributes", { name: "Type", slug: "type" }));
+    expect(reserved.status).toBe(400);
+    expect(reserved.fields?.attribute).toBe(
+      'Slug "type" is not allowed because it is a reserved term. Change it, please.',
+    );
+    expect(reserved.fields?.slug).toBeUndefined();
+  });
+
+  /**
+   * **Two different refusals for one budget, under two different keys**, and the
+   * difference is who derived the slug.
+   *
+   * A slug the *caller* sent is checked by `GlobalAttributeInput` and refused
+   * under `slug`, a real control. A slug WooCommerce *derived* is checked inside
+   * `wc_create_attribute()` and refused under `attribute`. Both measured, and
+   * the boundary is exact: 29 bytes is 201 and 30 is 400.
+   *
+   * It is **bytes**, which is the whole reason it matters here rather than being
+   * a detail: an Arabic letter costs two and a Latin letter one, so a
+   * seventeen-character Arabic label is already over while a twenty-nine
+   * character French one is not.
+   */
+  it("refuses a slug over the 29-byte budget, in bytes and not characters", () => {
+    expect(write("POST", "/attributes", { name: "Long", slug: "a".repeat(29) }).status).toBe(201);
+
+    const typed = apiError(write("POST", "/attributes", { name: "Long", slug: "b".repeat(30) }));
+    expect(typed.status).toBe(400);
+    expect(typed.fields?.slug).toContain("29 bytes");
+
+    /* Seventeen Arabic characters, thirty-three bytes, and no slug was sent —
+       so the refusal is WooCommerce's and lands under `attribute`. Measured:
+       `Slug "المقاس-بالسنتيمتر" is too long. Please use a shorter slug.` */
+    const derived = apiError(write("POST", "/attributes", { name: "المقاس بالسنتيمتر" }));
+    expect(derived.status).toBe(400);
+    expect(derived.fields?.attribute).toContain("is too long");
+    expect(derived.fields?.slug).toBeUndefined();
+  });
+
+  /**
+   * **A duplicate slug is a 409 with no `details` whatsoever.**
+   * `fromWpError()` matches `already_exists` in the code and drops to
+   * `ApiException::conflict($message)`, which takes one argument — so the only
+   * thing a screen has is WooCommerce's sentence, and the sentence already names
+   * the slug. Measured verbatim.
+   */
+  it("answers a duplicate attribute slug with a 409 carrying only a sentence", () => {
+    const failure = apiError(write("POST", "/attributes", { name: "Autre", slug: "matiere" }));
+    expect(failure.status).toBe(409);
+    expect(failure.apiMessage).toBe('Slug "matiere" is already in use. Change it, please.');
+    expect(failure.fields).toBeNull();
+  });
+
+  it("refuses `terms` by name rather than generically", () => {
+    const failure = apiError(write("POST", "/attributes", { name: "X", terms: ["a"] }));
+    // `GlobalAttributeInput::REFUSED` — a generic "Unknown field." would tell a
+    // client `terms` is wrong and not where terms are managed instead.
+    expect(failure.fields?.terms).toContain("/attributes/{id}/terms");
+    expect(failure.fields?.terms).not.toBe("Unknown field.");
+  });
+
+  /**
+   * **`type` is refused against a vocabulary of exactly one, and the refusal is
+   * the only way a client learns it.** `wc_get_attribute_types()` is a filtered
+   * PHP list a plugin can extend and no route publishes it; provoked in process,
+   * this shop answers `available_types: ["select"]`.
+   *
+   * That measurement is why neither screen draws a type control: a choice of one
+   * is noise, and a hard-coded list of several would be inventing a vocabulary
+   * the panel cannot check.
+   */
+  it("names the available types when refusing one, and there is only one", () => {
+    const failure = apiError(write("PATCH", "/attributes/1", { type: "hologram" }));
+    expect(failure.status).toBe(400);
+    expect(failure.fields?.type).toBe("Must be one of: select.");
+    expect(failure.details.available_types).toEqual(["select"]);
+  });
+
+  /**
+   * **An empty PATCH is a 400 with no `details` key**, which is the shape
+   * `bareFail` exists for and the reason `attributeUpdateBody()` answers `null`:
+   * a screen reading `details.fields` here gets `undefined` and renders nothing,
+   * so the panel must never send the request at all.
+   */
+  it("refuses an empty patch, on both grains, with no details to read", () => {
+    for (const path of ["/attributes/1", "/attributes/1/terms/1000"]) {
+      const failure = apiError(write("PATCH", path, {}));
+      expect(failure.status, path).toBe(400);
+      expect(failure.apiMessage, path).toBe("No supported fields were provided.");
+      expect(failure.fields, path).toBeNull();
+    }
+
+    // A body of nothing but read-only keys is the same refusal, because they are
+    // dropped before the emptiness is judged — which is what makes a GET body
+    // PATCH back only when something in it actually changed.
+    const readOnly = apiError(write("PATCH", "/attributes/1", { id: 1, taxonomy: "pa_x" }));
+    expect(readOnly.apiMessage).toBe("No supported fields were provided.");
+  });
+
+  /**
+   * **`meta.slug_changed` only when it changed**, and no `meta` at all
+   * otherwise. `tests/Api/attributes.php` asserts both halves separately for the
+   * same reason this does: a flag that is always present is a flag nothing can
+   * branch on, and the screens branch on it to choose which toast to show.
+   */
+  it("reports a slug change in meta and stays silent on an ordinary write", () => {
+    const renamed = write("PATCH", "/attributes/1", { name: "Matériau" });
+    expect(parse(globalAttributeDetail, renamed).meta).toBeNull();
+
+    const moved = write("PATCH", "/attributes/1", { slug: "matiere-2" });
+    const { data, meta } = parse(globalAttributeDetail, moved);
+    expect(meta).toEqual({ slug_changed: true });
+    // The taxonomy follows the slug, which is the reason the change is worth
+    // reporting: every saved filter and every storefront link is built on it.
+    expect(data.taxonomy).toBe("pa_matiere-2");
+  });
+
+  /**
+   * **A rename carries the catalogue with it.** `wc_update_attribute()`
+   * delegates to `wc_create_attribute()` with an `old_slug`, migrating the
+   * `term_taxonomy` rows, every product's `_product_attributes` and every
+   * variation's `attribute_pa_*` key — `tests/Api/attributes.php` asserts it in
+   * process (*"the product survived the rename"*).
+   *
+   * This is here because the mock got it wrong first: without the migration the
+   * fixture's `product_count` fell to **0** the instant a slug changed, so
+   * renaming an attribute and then deleting it was silent here and a 409 on the
+   * wire. That is the harness being *more forgiving* on the one act this whole
+   * screen exists to warn about.
+   */
+  it("keeps the products on an attribute when its slug moves", () => {
+    const before = parse(globalAttributeDetail, get("/attributes/1")).data.product_count;
+    expect(before).toBeGreaterThan(0);
+
+    write("PATCH", "/attributes/1", { slug: "matiere-2" });
+
+    expect(parse(globalAttributeDetail, get("/attributes/1")).data.product_count).toBe(before);
+
+    /* And the catalogue really moved rather than the count being memoised: the
+       product row itself now carries the new taxonomy. Read through the product
+       rather than through `?attributes[…]=`, because the filter validates the
+       taxonomy against the facetable list this fixture builds once at module
+       load — a limitation of the harness, not of the shop, and asserting through
+       it would be asserting the limitation. */
+    const carried = parse(product, get("/products/201")).data.attributes.map((a) => a.name);
+    expect(carried).toContain("pa_matiere-2");
+    expect(carried).not.toContain("pa_matiere");
+  });
+
+  /**
+   * ── The delete guards, which are the reason this screen exists ─────────────
+   *
+   * Both are 409s naming the count, and `?force=true` overrides. Measured
+   * verbatim, and the details differ between the two grains: the attribute names
+   * the products and the term cannot.
+   */
+  it("refuses to delete an attribute in use, naming the products", () => {
+    const failure = apiError(write("DELETE", "/attributes/1"));
+    expect(failure.status).toBe(409);
+    expect(failure.apiMessage).toContain("use this attribute");
+    expect(failure.apiMessage).toContain("?force=true");
+    expect(failure.details.products).toBe(7);
+    expect(failure.details.taxonomy).toBe("pa_matiere");
+
+    /*
+     * **`product_ids` is capped at five and `products` is the full count**, by
+     * `AttributeService::SAMPLE` — "enough to investigate, not a dump". So the
+     * two disagree on a widely-used attribute, and a screen reading
+     * `product_ids.length` as the number would under-report what it is about to
+     * detach. Seven products, five ids.
+     */
+    expect((failure.details.product_ids as number[]).length).toBe(5);
+  });
+
+  it("refuses to delete a term in use, and cannot name the products", () => {
+    // `laine` is on published products; `cuir` is on none, which is the control.
+    const laine = parse(attributeTerms, get("/attributes/1/terms", "per_page=100")).data.find(
+      (term) => term.slug === "laine",
+    );
+    expect(laine?.count).toBeGreaterThan(0);
+
+    const failure = apiError(write("DELETE", `/attributes/1/terms/${laine?.id}`));
+    expect(failure.status).toBe(409);
+    expect(failure.apiMessage).toContain("breaks any variation that resolved through it");
+    expect(failure.details.products).toBe(laine?.count);
+    // The term refusal carries `term_id` and no ids at all, so a screen offering
+    // to list the products at this grain would be inventing them.
+    expect(failure.details.term_id).toBe(laine?.id);
+    expect(failure.details.product_ids).toBeUndefined();
+  });
+
+  /**
+   * The positive controls. Without these, both 409s could be a guard that fires
+   * for everything — which `tests/Api/attributes.php` says in as many words.
+   */
+  it("deletes an unused attribute and an unused term without a refusal", () => {
+    const fresh = parse(globalAttributeDetail, write("POST", "/attributes", { name: "Jetable" })).data;
+    const gone = parse(deleteResult, write("DELETE", `/attributes/${fresh.id}`));
+    expect(gone.data.deleted).toBe(true);
+    expect(get(`/attributes/${fresh.id}`).status).toBe(404);
+
+    // "Cuir" is on no product at all — the measurement lib/products.ts is built
+    // on, and the one term in this fixture that deletes silently.
+    const cuir = parse(attributeTerms, get("/attributes/1/terms", "per_page=100")).data.find(
+      (term) => term.slug === "cuir",
+    );
+    expect(cuir?.count).toBe(0);
+    expect(write("DELETE", `/attributes/1/terms/${cuir?.id}`).status).toBe(200);
+    expect(
+      parse(attributeTerms, get("/attributes/1/terms", "per_page=100")).data.some(
+        (term) => term.slug === "cuir",
+      ),
+    ).toBe(false);
+  });
+
+  it("forces a delete through, reporting what it detached", () => {
+    const forced = write("DELETE", "/attributes/1", undefined, "force=true");
+    expect(forced.status).toBe(200);
+    expect((forced.body as { data: { products_detached: number } }).data.products_detached).toBe(7);
+
+    // `wc_delete_attribute()` removes the row **and every term on it**, which is
+    // what makes the warning true rather than dramatic.
+    expect(get("/attributes/1/terms").status).toBe(404);
+    expect(attributesNow().some((row) => row.id === 1)).toBe(false);
+  });
+
+  it("refuses a duplicate term slug on create and on rename", () => {
+    const clash = apiError(write("POST", "/attributes/1/terms", { name: "Autre", slug: "laine" }));
+    expect(clash.status).toBe(409);
+    expect(clash.apiMessage).toBe("That slug is already used by another term of this attribute.");
+    expect(clash.details.slug).toBe("laine");
+
+    const coton = parse(attributeTerms, get("/attributes/1/terms", "per_page=100")).data.find(
+      (term) => term.slug === "coton",
+    );
+    expect(write("PATCH", `/attributes/1/terms/${coton?.id}`, { slug: "laine" }).status).toBe(409);
+    // …and renaming a term onto **its own** slug is not a clash, or nothing
+    // could ever be edited without also renaming it.
+    expect(write("PATCH", `/attributes/1/terms/${coton?.id}`, { slug: "coton", name: "Coton bio" }).status)
+      .toBe(200);
+  });
+
+  it("refuses `parent` on a term by name, because the taxonomy is flat", () => {
+    const failure = apiError(write("POST", "/attributes/1/terms", { name: "Nested", parent: 1 }));
+    expect(failure.fields?.parent).toContain("flat");
+    expect(failure.fields?.parent).not.toBe("Unknown field.");
+  });
+
+  /**
+   * **There is no `GET` on a single term**, measured `rest_no_route`:
+   * `registerRoutes()` puts `PATCH` and `DELETE` on that route and nothing else.
+   * The allowlist refuses the method for the same reason, so the two agree and
+   * no screen can be built on a read that does not exist.
+   */
+  it("has no read on a single term, and its own 404 for one that is missing", () => {
+    const anyTerm = parse(attributeTerms, get("/attributes/1/terms")).data[0];
+    expect(get(`/attributes/1/terms/${anyTerm.id}`).status).toBe(404);
+    expect(apiError(get(`/attributes/1/terms/${anyTerm.id}`)).code).toBe("rest_no_route");
+
+    // A `PATCH` to an id that does not exist is the *collection's* 404 with a
+    // sentence, not the routing one — a different fact, and the only one a
+    // screen can explain.
+    const missing = apiError(write("PATCH", "/attributes/1/terms/999999", { name: "x" }));
+    expect(missing.apiMessage).toBe("No term with that id on this attribute.");
+  });
+
+  it("answers the attribute's own 404 for a term write under an unknown attribute", () => {
+    // Measured: `POST /attributes/9999901/terms` is `not_found` / "No attribute
+    // with that id.", resolved before the sub-resource is served.
+    const failure = apiError(write("POST", "/attributes/999999/terms", { name: "x" }));
+    expect(failure.status).toBe(404);
+    expect(failure.apiMessage).toBe("No attribute with that id.");
+  });
+
+  it("keeps a term list and its attribute's counts in step after a write", () => {
+    const before = parse(globalAttributeDetail, get("/attributes/2")).data.term_count;
+
+    write("POST", "/attributes/2/terms", { name: "Bleu canard" });
+
+    expect(parse(globalAttributeDetail, get("/attributes/2")).data.term_count).toBe(before + 1);
+    expect(parseList(attributeTerms, get("/attributes/2/terms", "per_page=100")).meta.total)
+      .toBe(before + 1);
+  });
+
+  it("leaves a created attribute reachable by its own id and in the list", () => {
+    const { data } = parse(globalAttributeSchema, write("POST", "/attributes", { name: "Finition" }));
+    expect(parse(globalAttributeDetail, get(`/attributes/${data.id}`)).data.name).toBe("Finition");
+    expect(attributesNow().map((row) => row.name)).toContain("Finition");
   });
 });
 

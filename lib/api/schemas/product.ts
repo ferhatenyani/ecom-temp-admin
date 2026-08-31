@@ -234,6 +234,31 @@ export type GlobalAttribute = z.infer<typeof globalAttribute>;
 export const globalAttributes = z.array(globalAttribute);
 
 /**
+ * `GET /attributes/{id}` — the same row **plus the two counts**, and the counts
+ * are the whole reason the single read is worth a request.
+ *
+ * `AttributeController` splits them on purpose: *"The single read carries usage;
+ * the list does not — two queries per row."* So a list row cannot say how many
+ * products would be detached by deleting it, and the detail can. Measured
+ * in-process through `rest_do_request()` (`tests/Api/attributes.php`, 59/59):
+ * the list has no `term_count` key at all — asserted there by *"the list
+ * computes usage per row"* — and the single read answers `term_count: 2`,
+ * `product_count: 0` on a fresh attribute and `product_count: 1` once a product
+ * carries it.
+ *
+ * Both are **required** here rather than optional, unlike `faqCategory.count`:
+ * `AttributePresenter::toArray()` writes them whenever `$usage` is passed, and
+ * `show()`, `store()` and `update()` all pass one. There is no shape of this
+ * route that omits them, so making them optional would only let a screen forget
+ * to handle the number it exists to show.
+ */
+export const globalAttributeDetail = globalAttribute.extend({
+  term_count: z.number(),
+  product_count: z.number(),
+});
+export type GlobalAttributeDetail = z.infer<typeof globalAttributeDetail>;
+
+/**
  * A term. **`count` is here and it can be 0** — which is the whole reason the
  * panel reads this route at all: a facet group omits its zero-count values
  * entirely, so this is the only place the full vocabulary exists.

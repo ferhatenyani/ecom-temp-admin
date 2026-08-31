@@ -89,18 +89,136 @@ const RULES: readonly Rule[] = [
    * export already require, so this widens no credential; it widens what the
    * panel can ask for with one it already holds.
    *
-   * **`POST /products/bulk` and `POST /products/{id}/duplicate` stay off**, and
-   * they are the test of whether the rule survived being satisfied once. Both
-   * are registered on the same guard — read from source, same method — and
-   * neither has a screen. A create form is not a licence to reach the two routes
-   * beside the one it needed.
+   * **`POST /products/bulk` stays off**, and it is what is left of the test of
+   * whether the rule survived being satisfied once. It is registered on the same
+   * guard — read from source, same method — and it has no screen. A create form
+   * was not a licence to reach the routes beside the one it needed, and neither
+   * is a duplicate button.
+   *
+   * `POST /products/{id}/duplicate` stood beside it in that sentence for two
+   * branches and has moved, **with its screen**, to the block below.
    */
   rule("/products", "GET", "POST"),
   rule("/products/\\d+", "GET", "PATCH", "DELETE"),
-  rule("/products/\\d+/variations", "GET"),
   rule("/product-categories", "GET"),
-  rule("/attributes", "GET"),
-  rule("/attributes/\\d+/terms", "GET"),
+
+  /*
+   * ── The variable product: variations, and the copy ──────────────────────
+   *
+   * These four rules are the flip the block below this one spent a branch
+   * arguing *against*, and they arrive under the condition that comment set:
+   * **in the same change as the screens, with the screens named here so a reader
+   * can check the claim rather than trust it.**
+   *
+   * `GET /products/{id}/variations` — the read, and the only one of the four
+   * that was already here. `ProductDetail` has rendered the list read-only since
+   * the products branch.
+   *
+   * `POST /products/{id}/variations` — `ProductVariations.tsx`, twice over: the
+   * table's own "add a row" and the generate-combinations button, which fans out
+   * one `POST` per missing cell. There is **no bulk route** for it — searched,
+   * `VariationController::registerRoutes()` registers exactly the two paths
+   * below and nothing batched — so the fan-out is the API's shape, not the
+   * panel's choice, and the panel caps it at 50 because nothing on the wire
+   * does.
+   *
+   * `PATCH` and `DELETE /products/{id}/variations/{variation_id}` — the same
+   * table. Every row is its own request to its own URL, which is what makes a
+   * failed row cost nothing to the row beneath it.
+   *
+   * **`GET` on a single variation is deliberately absent**, and it is the one
+   * line of the step's own list that did not land. The route exists —
+   * `VariationController::show()`, same guard — so this is not the attributes
+   * block's *"an entry for a route that does not exist"*; it is the plainer
+   * half of the same rule. Nothing reads one variation: the list read fills the
+   * table, `POST` answers 201 with the created row, `PATCH` answers 200 with the
+   * updated one, and `DELETE` answers `{id, deleted}`. A method with no caller
+   * is a method a guessed URL can reach and no screen can, which is the position
+   * `POST /products/bulk` is in four rules up. `tests/boundary.test.ts` asserts
+   * this one absence beside the three arrivals.
+   *
+   * `POST /products/{id}/duplicate` — `DuplicateAction.tsx`, in the products
+   * list's row menu and in the detail's header menu. Read from source, it
+   * answers **201 with the whole product body** (`ProductController::duplicate()`
+   * → `Response::success(ProductPresenter::toArray($copy), 201)`), which is what
+   * lets the panel land on the copy's detail without a second request.
+   *
+   * All four are `ac_manage_products`: `VariationController::registerRoutes()`
+   * builds one `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` and hangs
+   * every method on it, `ProductController` does the same for `duplicate`, and
+   * `VariationService` and `ProductService` each assert the capability again
+   * inside. That is the capability the products list, the detail, the export and
+   * `POST /products` already require, so this widens no credential — it widens
+   * what the panel can ask for with one it already holds.
+   *
+   * Ordering is not load-bearing: `\d+` cannot match `duplicate` or
+   * `variations`.
+   */
+  rule("/products/\\d+/duplicate", "POST"),
+  rule("/products/\\d+/variations", "GET", "POST"),
+  rule("/products/\\d+/variations/\\d+", "PATCH", "DELETE"),
+
+  /*
+   * Global attributes — the shop's own vocabulary, and the block where the
+   * panel stops only reading.
+   *
+   * The four rules below are the whole §88 surface, verified line by line
+   * against `Products\AttributeController::registerRoutes()`: `GET|POST
+   * /attributes`, `GET|PATCH|DELETE /attributes/{id}`, `GET|POST
+   * /attributes/{id}/terms`, `PATCH|DELETE /attributes/{id}/terms/{term_id}`.
+   * **There is no `GET` on a single term and none is allowed here** — the
+   * controller registers exactly two methods on that route, so a `GET` would be
+   * an allowlist entry for a route that does not exist, which is the one kind of
+   * over-permission this file cannot be talked out of. The term editor reads the
+   * row out of the list it is already holding.
+   *
+   * Every one is `ac_manage_products`: `registerRoutes()` builds a single
+   * `Permissions::callback(Capabilities::MANAGE_PRODUCTS)` and hangs all four
+   * routes on it, and every method of `AttributeService` asserts the same
+   * capability again inside. That is the capability the products list, the
+   * detail, the export and `POST /products` already require, so this widens no
+   * credential — it widens what the panel can ask for with one it already holds.
+   *
+   * `GET /attributes/{id}` is **not** in the step's own list of writes to allow
+   * and it is here anyway, because the screen cannot be honest without it.
+   * `AttributeController::index()` omits usage per row on purpose — *"The single
+   * read carries usage; the list does not — two queries per row"* — so
+   * `term_count` and `product_count` exist only on the single read, and
+   * `product_count` is precisely the number that decides whether a delete is
+   * silent or detaches somebody's catalogue. Allowing the `DELETE` and refusing
+   * the read that explains it would ship the irreversible half without the
+   * sentence, which is the trade `DELETE /media/{id}` spent eleven branches
+   * refusing to make.
+   *
+   * ── The variation and duplicate entries, and where they went ──────────────
+   *
+   * This block used to carry a long argument for why `POST
+   * /products/{id}/variations`, `GET|PATCH|DELETE
+   * /products/{id}/variations/{variation_id}` and `POST
+   * /products/{id}/duplicate` were **not** on this list, though step 4's own
+   * sub-task 1 lists them beside the attribute writes. It said: the rule this
+   * file follows is that a route is allowed *when a screen reaches it*, the
+   * products block names `duplicate` outright as *the test of whether the rule
+   * survived being satisfied once*, and adding the very entry the neighbouring
+   * comment holds up as its control — for screens not in the tree — would retire
+   * the rule rather than widen the list. It ended: *"the flip is forced to
+   * happen next to them."*
+   *
+   * **It happened next to them.** The rules are in the products block above,
+   * `app/[locale]/(panel)/products/[id]/ProductVariations.tsx` and
+   * `DuplicateAction.tsx` are in this change, and the comment beside the rules
+   * names each screen so a reader can check the claim rather than trust it. The
+   * old argument is kept here in summary rather than deleted, because the thing
+   * worth keeping is not the refusal — it is the shape of it: the entry lands in
+   * the same commit as the screen, or it does not land.
+   *
+   * One line of the three did not flip. `GET` on a single variation has no
+   * caller and stays refused; the products block argues it where the rules are.
+   */
+  rule("/attributes", "GET", "POST"),
+  rule("/attributes/\\d+", "GET", "PATCH", "DELETE"),
+  rule("/attributes/\\d+/terms", "GET", "POST"),
+  rule("/attributes/\\d+/terms/\\d+", "PATCH", "DELETE"),
 
   /*
    * Inventory. The literal segments are listed before `/inventory/\d+` for
