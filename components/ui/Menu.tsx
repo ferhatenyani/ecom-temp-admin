@@ -28,7 +28,22 @@ export type MenuAction = {
   /** Destructive items sit last, behind a separator, and are never the default. */
   destructive?: boolean;
   disabled?: boolean;
-  /** Shown inline-end — a keyboard shortcut, or a count. */
+  /**
+   * Shown inline-end — a keyboard shortcut, a count, or **why this item is
+   * disabled**.
+   *
+   * That third use is what gives it a width bound. §3.3 says a disabled control
+   * that does not say why is a dead end, and a menu is the one place in the panel
+   * where a disabled control has nowhere else to put the sentence: there is no
+   * footnote under a `DropdownMenu.Item` the way there is under a `Card`. So a
+   * reason goes here, and `max-w-48` is what stops a 60-character one from
+   * dragging the menu past a 340px viewport — it wraps to two or three lines
+   * instead, which costs height a menu has and width it does not.
+   *
+   * `shrink-0` is kept beside it: the label is the element that gives way
+   * (`min-w-0 truncate`), because a truncated action name is still recognisable
+   * and half a reason is not.
+   */
   hint?: string;
 };
 
@@ -43,7 +58,9 @@ function ItemInner({ action }: { action: MenuAction }) {
       ) : null}
       <span className="min-w-0 flex-1 truncate">{action.label}</span>
       {action.hint ? (
-        <span className="shrink-0 text-ui-caption text-ui-subtle">{action.hint}</span>
+        <span className="max-w-48 shrink-0 text-ui-caption text-ui-subtle">
+          {action.hint}
+        </span>
       ) : null}
     </>
   );

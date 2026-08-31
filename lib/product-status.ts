@@ -59,6 +59,52 @@ export const STOCK_TONE: Record<StockStatus, "success" | "danger" | "warning"> =
 export const PRODUCT_TYPES = ["simple", "variable"] as const;
 export type ProductType = (typeof PRODUCT_TYPES)[number];
 
+/**
+ * **Whether `POST /products/{id}/duplicate` can honestly copy this product.**
+ *
+ * The two lists are one list on purpose, and the reason is a defect in the API
+ * rather than a preference here.
+ *
+ * `Products/ProductRepository.php::duplicate()` chooses the copy's class with a
+ * single ternary, read from source:
+ *
+ *     $class = $product->get_type() === 'variable'
+ *         ? WC_Product_Variable::class
+ *         : WC_Product_Simple::class;
+ *
+ * — so **`simple` is the fallback for every type that is not `variable`**, not a
+ * branch anybody wrote for a third kind. The child loop underneath it is gated on
+ * `$child instanceof WC_Product_Variation`, so a product whose children are
+ * ordinary products contributes none of them, and the `sync()` at the end runs
+ * only when the copy came out `variable`. A product of any other type is therefore
+ * copied as *a simple product with the same name, description and price and
+ * nothing of what made it that type* — and the 201 says so nowhere: the response
+ * is the copy, so `data.type` reads `simple` and looks like an answer rather than
+ * a loss.
+ *
+ * **This function is an allowlist, not a list of the two broken cases**, and that
+ * is deliberate. WooCommerce's own `grouped` and `external` are the types this
+ * shop would meet first, but the plugin's source names neither anywhere — it
+ * names only the two it writes (`Products/ProductInput.php::TYPES`) — so hard-coding
+ * a pair of slugs the backend never mentions would be the panel inventing a
+ * contract. `product_type` is a WordPress taxonomy and any plugin may register a
+ * term in it; the honest question is not *is this one of the two bad ones* but
+ * *is this one of the two `duplicate()` was written for*.
+ *
+ * ## Why the panel refuses rather than the backend
+ *
+ * The state is unreachable on this shop today — `ProductRepository::paginate()`
+ * passes `'type' => ['simple', 'variable']` to `wc_get_products()`, so
+ * `GET /products` cannot return one at all, and the create drawer offers exactly
+ * `PRODUCT_TYPES` — so a product of a third type can only arrive through wp-admin
+ * or another plugin. Refusing here is a guard against that day and costs one
+ * boolean; fixing `duplicate()` is a backend change on a path nothing can reach,
+ * with a copy semantics for grouped children that nobody has specified.
+ */
+export function isDuplicable(type: string): boolean {
+  return (PRODUCT_TYPES as readonly string[]).includes(type);
+}
+
 export const CATALOG_VISIBILITIES = ["visible", "catalog", "search", "hidden"] as const;
 
 /**

@@ -15,6 +15,7 @@ import type {
 import {
   DEFAULT_SORT_KEY,
   PRODUCT_STATUSES,
+  isDuplicable,
   sortFromKey,
   sortKey,
 } from "@/lib/product-status";
@@ -691,11 +692,31 @@ export function ProductsList({
                    * row undoes it. §3.1 keeps the confirm dialog for acts that
                    * take something away.
                    */
+                  /*
+                   * **The type guard, and it is dead code on this screen by
+                   * construction.** `ProductRepository::paginate()` passes
+                   * `'type' => ['simple', 'variable']` to `wc_get_products()`,
+                   * so `GET /products` cannot return a product of a third type
+                   * and this row cannot be drawn for one — read from source, and
+                   * `scripts/mock-api.mjs`'s `listed()` reproduces the filter so
+                   * the exclusion happens here for the same reason it happens
+                   * there. The detail route has no such filter and is where the
+                   * refusal is reachable.
+                   *
+                   * Guarded anyway, because "unreachable" is a property of one
+                   * function in one release: the day `paginate()` widens its
+                   * list, this row would be the first place a grouped product
+                   * could be silently flattened, and the guard is one boolean.
+                   * `isDuplicable()` carries why.
+                   */
                   {
                     key: "duplicate",
                     label: tDuplicate("action"),
                     icon: "plus",
-                    disabled: duplicate.isPending,
+                    disabled: duplicate.isPending || !isDuplicable(product.type),
+                    hint: isDuplicable(product.type)
+                      ? undefined
+                      : tDuplicate("typeRefused", { type: product.type }),
                     onSelect: () => duplicate.mutate(product.id),
                   },
                   {

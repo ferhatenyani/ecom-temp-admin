@@ -242,7 +242,12 @@ export default async function ProductDetailPage({
          */
         actions={
           <>
-            <DuplicateAction productId={product.id} locale={locale} />
+            {/* `type` as stored, not as the panel would like it: the control
+                refuses a type `ProductRepository::duplicate()` would silently
+                convert to simple, and this route is the only one that can serve
+                such a product — `paginate()` filters the listing to
+                `['simple', 'variable']`, the detail read does not. */}
+            <DuplicateAction productId={product.id} type={product.type} locale={locale} />
             <DeleteAction productId={product.id} locale={locale} name={product.name} />
           </>
         }
