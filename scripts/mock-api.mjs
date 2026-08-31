@@ -2272,7 +2272,9 @@ const ORDER_NAMES = [
  * `wc_maybe_reduce_stock_levels()` is hooked to `woocommerce_order_status_processing`,
  * `_completed` **and** `_on-hold`, so an on-hold order is holding stock while
  * still being `is_editable` — the one window where the two rules disagree, and
- * the window `OrderService::guardManualPricesWritable()` was written for.
+ * the window `OrderService::guardManualPricesWritable()` was written for, until
+ * the fix round's decision 1 removed that guard. The window is still the
+ * interesting one: it is where the panel draws its warning.
  *
  * This file used to derive `stock_reduced` from the same flag it derives
  * `date_paid` from — completed, processing and refunded — which is *payment*,
@@ -9751,8 +9753,9 @@ function statedAmount(value, field, fields) {
  * its reason is in `fields`, which is what the 400 above the guards renders. The
  * caller must not read the list when `fields` is non-empty — `OrderInput::normalize()`
  * throws in exactly that case, which is why the service guards can assume the
- * parsed list is one-for-one with what was sent, and why
- * `guardManualPricesWritable()`'s `lines` indices are the payload's own.
+ * parsed list is one-for-one with what was sent. (That property was what let the
+ * removed `guardManualPricesWritable()` report payload indices in `lines`; it
+ * still holds, and nothing left on this route needs it.)
  */
 function readLineItems(payload, fields) {
   if (!Array.isArray(payload)) {
@@ -9874,8 +9877,9 @@ function readLineItems(payload, fields) {
  *   2. every remaining field validated at once, one 400 naming all of them
  *   3. nothing left to write → 400, **no details at all**
  *   4. `guardTransition()`      → 409, and it runs before every other guard
- *   5. `guardLineItemsWritable()` → 409, then `guardManualPricesWritable()` →
- *      409, then `guardShippingAmountWritable()` → 409, in that order
+ *   5. `guardLineItemsWritable()` → 409, then `guardShippingAmountWritable()` →
+ *      409, in that order. `guardManualPricesWritable()` sat between them until
+ *      the fix round's decision 1 removed it
  *   6. the repository — `resolveLines()` before `applyProps()`, so an unknown
  *      product is reported ahead of an unknown customer
  *   7. WooCommerce's own setters, where the `details`-less billing-email 400 is
@@ -10076,44 +10080,29 @@ function patchOrder(order, body) {
   }
 
   /*
-   * `guardManualPricesWritable()` — **after the editability gate, never
-   * before**, and it is a narrower rule rather than a second condition on it.
+   * **`guardManualPricesWritable()` stood here, and the fix round removed it.**
    *
-   * `is_editable` gates whether the lines may be rewritten at all; this gates
-   * whether *this particular write* may also restate what the goods cost. A
-   * quantity correction on a stock-holding `on-hold` order still goes through —
-   * the repository returns the units, replaces the lines and takes them again —
-   * and only an amount somebody stated is refused. Running it first would answer
-   * the narrow question on an order where the broad one had already said no.
+   * Backend step 6 refused a *stated* price on an order already holding stock —
+   * after the editability gate, never before — answering a 409 with `status`,
+   * `stock_reduced` and `lines`, the zero-based indices of the submitted lines
+   * that named an amount, and deliberately with no `fields`, since the payload
+   * was well formed and no value the operator retyped would have been accepted.
    *
-   * **`stock_reduced` and never a list of status names.** `on-hold` reduces
-   * stock *and* is editable, which is exactly the window this guard exists for;
-   * and an order can sit in `on-hold` holding nothing at all, having arrived
-   * there from `cancelled`. `OrderRepository::stockReduced()` reads
-   * WooCommerce's own flag and this reads the row's, which `withStatus()`
-   * derives the same way.
+   * Decision 1 replaced it with **warn, allow, record**, and the asymmetry that
+   * forced the change belongs in this file because this file is where somebody
+   * checks what the API does. The guard never covered the *quantity* or the
+   * *delivery fee*, and both move the same total: four kettles becoming forty
+   * went through in silence while a 1 DZD reprice on the same order was refused.
+   * The three writes now agree — all land, the panel warns beforehand from
+   * `stock_reduced`, and `OrderService::snapshot()` writes `manual_prices` and
+   * `stock_reduced` into the audit so the change is attributable.
    *
-   * A 409 with **no `fields`**: the payload is well formed, `1200.50` is a good
-   * amount and the parser already accepted it. What refuses it is the state of
-   * the order, and no value the operator retypes would be accepted — so binding
-   * a control to `fields` would tell them their number is wrong. `lines` is the
-   * concession to the mistake being per-line even though the reason is not: the
-   * zero-based indices of the submitted lines that stated a price, so a form
-   * bound per line can still point at the boxes to clear.
+   * `stock_reduced` stays on the row and stays derived from WooCommerce's own
+   * flag rather than from a list of status names — `on-hold` reduces stock *and*
+   * is editable, and an order can sit in `on-hold` holding nothing at all,
+   * having arrived there from `cancelled`. `OrderLinesDrawer` reads it to draw
+   * the warning, so it is still load-bearing; it just refuses nothing now.
    */
-  if (clean.line_items !== undefined && row.stock_reduced) {
-    const priced = clean.line_items.flatMap((line, index) =>
-      line.price === null ? [] : [index],
-    );
-
-    if (priced.length > 0) {
-      return conflict("A manual price cannot be set on an order that is already holding stock.", {
-        status: row.status,
-        stock_reduced: true,
-        lines: priced,
-      });
-    }
-  }
 
   if (clean.shipping_amount !== undefined && !row.is_editable) {
     return conflict("The shipping amount of an order in this status cannot be changed.", {
@@ -10609,11 +10598,12 @@ const CREATABLE_ORDER_STATUSES = ["pending", "processing", "on-hold", "completed
  * `applyShippingAmount()`, before the single `calculate_totals()`.
  *
  * **What is *not* here, and must not be.** `OrderService::create()` calls
- * neither `guardManualPricesWritable()` nor `guardShippingAmountWritable()` —
- * read from source. There is no order yet, so nothing is holding stock and
- * nothing is un-editable; the two 409s `patchOrder` answers have no counterpart
- * on this route, and a mock that invented one would make the create drawer bind
- * an error path the API cannot produce.
+ * `guardShippingAmountWritable()` no more than it called the since-removed
+ * `guardManualPricesWritable()` — read from source. There is no order yet, so
+ * nothing is holding stock and nothing is un-editable; the editability 409
+ * `patchOrder` answers has no counterpart on this route, and a mock that
+ * invented one would make the create drawer bind an error path the API cannot
+ * produce.
  *
  * **The line parsing is `readLineItems()` now**, the same function `patchOrder`
  * uses, rather than the hand-rolled loop that stood here. That loop had drifted

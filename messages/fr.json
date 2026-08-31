@@ -266,7 +266,6 @@
       "saved": "Articles mis à jour — total {total}",
       "failed": "Les articles n’ont pas pu être modifiés.",
       "nothingToSave": "Aucune modification à enregistrer.",
-      "stockHeldLine": "Prix refusé : la commande retient déjà du stock.",
       "problem": {
         "noLines": "Une commande doit contenir au moins un article.",
         "quantity": "La quantité doit être un nombre entier supérieur à zéro."
@@ -274,7 +273,8 @@
       "items": {
         "title": "Articles",
         "description": "Laissez le prix vide pour appliquer celui du catalogue. 0 est un article offert.",
-        "stockHeld": "Cette commande retient déjà du stock : un prix saisi sera refusé. Videz le champ pour revenir au prix du catalogue.",
+        "stockHeld": "{units, plural, one {Cette commande retient déjà 1 unité en stock.} other {Cette commande retient déjà # unités en stock.}}",
+        "stockHeldRecorded": "Vous pouvez modifier les quantités, les prix et les frais de livraison : la modification est enregistrée dans le journal de la commande.",
         "none": "Aucun article pour le moment.",
         "noSku": "Sans référence",
         "quantity": "Quantité",
