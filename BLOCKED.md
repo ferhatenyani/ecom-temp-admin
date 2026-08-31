@@ -4,14 +4,21 @@ Two steps in `changes.md` reach past what this environment can do. Neither is fa
 docblock in the work that follows claims a measurement that was not taken. Each entry says what
 is needed, what was assumed instead, and what to re-check once the block clears.
 
-Item 1 has since narrowed: its field-level contract turned out to be measurable in-process and
-has been measured, so what is left there is the transport alone. The entry says which is which,
-and says **measured in-process via `rest_do_request()`** wherever it means that — never
-"measured against the live API", which remains untrue of every finding in this file.
+**Item 1 is now largely cleared and item 2 is not.** Courier credentials are still issued by a
+courier to an account holder and no amount of local work produces them.
+
+Item 1 has narrowed twice and is now mostly closed. Its field-level contract turned out to be
+measurable in-process and was measured; its **authentication and capability behaviour has since
+been measured over real HTTP** (2026-08-31), which is the first time anything in this build was.
+What remains is CORS, cookies and a reverse proxy.
+
+The entry says which is which, and says **measured in-process via `rest_do_request()`** wherever
+it means that. That phrase and **measured over HTTP** are not interchangeable and neither is a
+synonym for "measured against the live API" — read each claim for the one it makes.
 
 ---
 
-## Item 1, backend step 1 — measure `PATCH /orders/{id}`
+## Item 1, backend step 1 — measure `PATCH /orders/{id}` — **mostly cleared**
 
 **What the step asks.** Measure the route's real behaviour for `billing`, `shipping`,
 `line_items`, `payment_method` and `customer_note`. Everything previously written about this
@@ -131,40 +138,74 @@ across a write. A PATCH that omits `line_items` leaves the ids alone.
 - Every field-level refusal in a body arrives at once, across all three key depths, so the form
   can render the lot in one pass.
 
-### What is still blocked on a human, and only this
+### The authentication half is CLEARED — measured over HTTP on 2026-08-31
 
-The transport. A WordPress Application Password for a user holding `ac_manage_orders` — the
-panel gets one from a person at the login screen, and none is stored in either repo:
+**This is the first thing in this build measured over real HTTP, and the phrase is now
+available.** An Application Password is accepted on these routes and the capability split
+holds against a real `Authorization` header:
 
 ```
-$ curl -o /dev/null -w '%{http_code}' http://localhost:8090/wp-json/algerian-commerce/v1/orders
-401
+super_admin    /auth/me 200 · /orders 200 · /products 200 · /campaigns 200 · /settings 200
+support_agent  /auth/me 200 · /orders 403 · /products 403 · /campaigns 403 · /settings 403
 ```
 
-`.env.local` carries `AC_API_BASE` and `SESSION_SECRET` and no credential. With one, these
-remain unanswered:
+And the negative controls, which the entry listed as open:
 
-- **Authentication.** Whether an Application Password is accepted on this route at all, and what
-  a bad one returns over the wire.
-- **Capability enforcement over HTTP.** The 401/403 split is measured in-process against
-  `wp_set_current_user()`. It is not measured against a real `Authorization` header.
-- **Everything between the client and PHP.** CORS preflight, cookie and nonce handling, rate
-  limiting (the in-process runs disable it outright with `AC_RATE_LIMIT_DISABLED=1`), and
-  whatever a reverse proxy does to a `PATCH` body or a 409.
-- **Whether any of the shapes above survive the wire unchanged.** They are what the handler
-  returns; they are not yet what a browser receives.
+| Request | Status | `error.code` | message |
+| --- | --- | --- | --- |
+| no `Authorization` header | 401 | `unauthenticated` | "Authentication is required." |
+| a wrong application password | 401 | `incorrect_password` | "The provided password is an invalid application password." |
+| an 11th attempt after ten failures | 429 | `too_many_requests` | "Too many failed authentication attempts. Please retry later." |
+
+So three of this entry's four open questions are answered: **authentication**, **capability
+enforcement against a real header** — the 401/403 split is no longer an inference from
+`wp_set_current_user()` — and **what a bad credential returns over the wire**.
+
+### Two things to know before re-measuring, because both cost an hour here
+
+**The credentials in `ecom-temp/.env` do not authenticate.** `c4fcbe2` recorded the block as
+cleared and named `AC_TEST_ADMIN_USER`/`AC_TEST_ADMIN_PASS` and
+`AC_TEST_SUPPORT_USER`/`AC_TEST_SUPPORT_PASS` as verified. They are not: both users exist
+(`wp user list` shows `ac_panel_super_admin` and `ac_panel_support_agent`) and each holds
+exactly one Application Password named `panel-e2e`, but the plaintext stored in `.env` is
+rejected with `incorrect_password`. A password's plaintext is shown once and the hash is what
+is kept, so a regenerated credential leaves exactly this state. **The conclusion `c4fcbe2`
+drew is right and its evidence is stale** — the table above was reproduced with credentials
+minted fresh by `scripts/mint-credential.sh`, which is what `scripts/test.sh e2e` already
+does and is the reliable path.
+
+**A spent rate-limit bucket is indistinguishable from a bad credential.** The failed-login
+limiter is ten failures per fifteen minutes per IP, and once spent it refuses a *correct*
+credential too — `e2e/rate-limit.ts` says so and it is why that file exists. Two measurement
+attempts here returned 401 for credentials that were merely untested and then 429 for
+credentials that were valid. Run `scripts/reset-rate-limit.sh` immediately before measuring,
+and read a 429 as "the bucket, not the password".
+
+### What is still blocked, and it is now only the middle of the wire
+
+- **CORS preflight.** No `OPTIONS` has been measured against these routes.
+- **Cookie and nonce handling.** The panel authenticates per user with an Application Password
+  and never with a cookie, so this is unexercised rather than unimportant.
+- **Whatever a reverse proxy does to a `PATCH` body or a 409.** There is no reverse proxy in
+  front of this stack; the measurements above are against the container directly, so they say
+  nothing about a deployment that has one.
 
 ### What a reader should still not assume
 
-- That any refusal above has been seen coming back over HTTP. None has.
-- That the 401/403 behaviour is confirmed for a real credential. It is confirmed for an
-  in-process current-user switch, which is a different mechanism.
+- That the **field-level** refusals in the table above the fold have been seen over HTTP. They
+  have not — those remain measured in-process via `rest_do_request()`, and only the
+  authentication and capability behaviour in this section is an HTTP measurement.
 - That "not refused" means "validated". `ZZ` is stored, `not_a_gateway` is stored, and a
   quantity has no ceiling — a large one produced a total of `99999900.00` without complaint.
 - That the mock is now correct by construction. `scripts/mock-api.mjs` was written from
   source-derived shapes; the corrections above (the country rule, the dropped `total`, the
   `details`-less billing-email refusal, the 409 on a whole-body PATCH) are exactly where it is
   most likely to be wrong, and it has not been re-checked against this run.
+- That the *only* limiter is the login one. `Security/RateLimitGuard::guard()` counts every
+  non-`GET` in the namespace against `DEFAULT_WRITES = 120` in a fixed 60-second window, per
+  user **and** per IP (read from source). That is a ceiling on write *rate* where this file
+  and `changes.md` have both said there is "no ceiling in the API", which is true only of
+  cardinality — and item 6 raising the variation cap to 200 now sits above it.
 
 ---
 
