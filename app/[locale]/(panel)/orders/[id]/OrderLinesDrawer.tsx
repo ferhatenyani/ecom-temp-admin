@@ -24,11 +24,11 @@ import { ProductPicker, type PickedProduct } from "../ProductPicker";
 import { useOrderScreen } from "./OrderScreen";
 import {
   MAX_AMOUNT,
+  addPickedLine,
   buildEditPayload,
   draftOf,
   isEditDirty,
   lineProblems,
-  nextLineKey,
   type LineDraft,
   type OrderEditDraft,
 } from "./order-edit";
@@ -110,6 +110,27 @@ import {
  * touched the box. The way out is visible — clear the box, and the line goes
  * back to the catalogue — and the catalogue price beside it is what tells the
  * person what that costs.
+ *
+ * ## The merge rule that never matched, now fixed and moved
+ *
+ * `addLine` used to merge a second press into *the first row for that product
+ * carrying no manual price*, and the reasoning written beside it was sound: an
+ * empty price box means the catalogue prices that line, and merging into a
+ * hand-priced row would give the extra unit away at somebody's discount.
+ *
+ * **The rule was right and it never fired.** Every row the picker adds is seeded
+ * from the catalogue in the same function, so `price.trim() === ""` is true only
+ * of rows that arrived on the order from the API with no override. Press *add*
+ * twice on a product the order did not already contain and two rows open where
+ * the second press plainly meant quantity 2 — the ordinary case, broken, on the
+ * one form that draws a line editor.
+ *
+ * It is now `order-edit.ts`'s `addPickedLine`, tested there as the pure list
+ * arithmetic it is, and stated as one condition rather than two: **a row absorbs
+ * the press when it is already charging, per unit, what the new row would
+ * charge.** The old rule survives inside that as the case where a row's price is
+ * `""` and the seed is what the catalogue asks — the same number, said two ways —
+ * so nothing the old argument protected was traded away.
  *
  * ## No money is computed here, and that is item 1 sub-task 5
  *
@@ -252,78 +273,25 @@ export function OrderLinesDrawer({
     setRefusal(null);
   }
 
+  /**
+   * Put a product on the order, and forget every refusal keyed to a position in
+   * the old set.
+   *
+   * **The rule itself is `addPickedLine` in `order-edit.ts`** and its docblock
+   * carries the argument, including what was wrong with the rule that used to be
+   * written out here: it merged on `price.trim() === ""`, which a picker-added
+   * row never holds, so pressing *add* twice on a product opened two rows where
+   * the second press meant quantity 2. It moved because it is arithmetic over a
+   * list, and arithmetic over a list belongs where `tests/order-edit.test.ts` can
+   * assert it directly rather than through a picker's `fireEvent`s.
+   *
+   * What stays here is what is genuinely the component's: the set changed, so
+   * every `line_items.{n}.*` refusal now names positions that describe a set
+   * which no longer exists. `changeSet` above says the same thing at more length
+   * and this is the same clearing for the same reason.
+   */
   function addLine(product: PickedProduct) {
-    setDraft((current) => {
-      /*
-       * A second press on a product already on the order raises its quantity
-       * rather than adding a duplicate row — `NewOrderDrawer`'s rule, and two
-       * rows for one product is never what pressing "add" twice meant.
-       *
-       * **It matches the first row carrying no manual price**, which the create
-       * drawer has no reason to think about. A hand-priced line and a
-       * catalogue-priced line for the same product are two different agreements
-       * — the shop really might sell four at 1 500 and one damaged copy at 700 —
-       * so raising the quantity of the hand-priced row would silently apply the
-       * discount to the extra unit. When every row for that product is priced,
-       * a new row is added and the operator prices it themselves.
-       */
-      const at = current.lines.findIndex(
-        (line) => line.productId === product.id && line.price.trim() === "",
-      );
-
-      if (at !== -1) {
-        const lines = [...current.lines];
-        const quantity = Number.parseInt(lines[at].quantity, 10);
-        lines[at] = {
-          ...lines[at],
-          quantity: String(Number.isFinite(quantity) ? quantity + 1 : 1),
-        };
-        return { ...current, lines };
-      }
-
-      return {
-        ...current,
-        lines: [
-          ...current.lines,
-          {
-            key: nextLineKey(current.lines),
-            productId: product.id,
-            /* The picker only ever offers a simple product's id; a variable
-               product is refused by the API by name, which is a better sentence
-               than one invented here. A line that arrived on the order keeps
-               whatever variation it has. */
-            variationId: 0,
-            name: product.name,
-            sku: product.sku,
-            /*
-             * **Prefilled from the catalogue and editable**, which is what
-             * sub-task 3 asks for and what `EL/el-admin-app`'s
-             * `CreateOrderModal.jsx` does with `unitPrice` seeded from
-             * `selectedBook.price`.
-             *
-             * The consequence is worth stating rather than discovering: a
-             * prefilled amount is a *stated* one, so the line is recorded as
-             * hand-priced even when the number equals the catalogue's. That is
-             * the backend's deliberate reading —
-             * `OrderPresenter::manualPrice()` keeps "no override" and
-             * "overridden to 1 500 when the catalogue also says 1 500"
-             * distinguishable, because the meta records the decision rather
-             * than the difference — and it is the right one here: somebody
-             * adding a line to an existing order has seen the number and
-             * accepted it. Clearing the box hands the line back to the
-             * catalogue, and the price beside it says what that means.
-             *
-             * The fallback path leaves it empty: without `ac_manage_products`
-             * the picker knows no price, and seeding `0` would put a free line
-             * in front of somebody who thought they were adding a product.
-             */
-            price: product.price,
-            cataloguePrice: product.price === "" ? null : product.price,
-            quantity: "1",
-          },
-        ],
-      };
-    });
+    setDraft((current) => ({ ...current, lines: addPickedLine(current.lines, product) }));
 
     setFields((current) =>
       Object.fromEntries(
