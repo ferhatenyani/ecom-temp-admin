@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { choose } from "./listbox";
 
 /**
  * Shipping, payments and cash on delivery.
@@ -109,22 +110,29 @@ test.describe("the shipping tariff", () => {
      * for the same destination when it was measured.
      */
     const wilaya = page.getByLabel("Wilaya", { exact: true });
-    await expect(wilaya).toBeEnabled();
-    await wilaya.selectOption({ label: "Algiers" });
+    await choose(page, wilaya, "Algiers");
 
     const commune = page.getByLabel("Commune", { exact: true });
     await expect(commune).toBeEnabled({ timeout: 15000 });
-    await commune.selectOption({ label: "Alger Centre" });
+    await choose(page, commune, "Alger Centre");
 
-    // The price comes from `GET /shipping/rates`, not from this page.
-    await expect(page.getByText("Prix retenu")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(/350,00/)).toBeVisible({ timeout: 15000 });
-
-    // And the rules it beat are shown, because "why is this 350 DA" is answered
-    // by the ones that lost.
+    /*
+     * The price comes from `GET /shipping/rates`, not from this page — and the
+     * assertion is **scoped to the resolver**, for the reason the two below it
+     * already gave: the commune rule's 350,00 is also a row in the tariff table
+     * above, so an unscoped locator matches twice and fails on strict mode
+     * rather than on the price. It read as a resolver failure while the resolver
+     * was answering correctly.
+     */
     const resolver = page
       .locator("section")
       .filter({ hasText: "Simuler une destination" });
+
+    await expect(resolver.getByText("Prix retenu")).toBeVisible({ timeout: 15000 });
+    await expect(resolver.getByText(/350,00/)).toBeVisible({ timeout: 15000 });
+
+    // And the rules it beat are shown, because "why is this 350 DA" is answered
+    // by the ones that lost.
     await expect(resolver.getByText("Règles battues")).toBeVisible();
     // Scoped to the resolver: both figures are also in the tariff table above,
     // and an unscoped match would pass while proving nothing about resolution.
@@ -138,17 +146,18 @@ test.describe("the shipping tariff", () => {
     await signIn(page, "fr");
     await page.goto("/fr/shipping/rules");
 
-    await page.getByLabel("Wilaya", { exact: true }).selectOption({ label: "Algiers" });
+    await choose(page, page.getByLabel("Wilaya", { exact: true }), "Algiers");
     const commune = page.getByLabel("Commune", { exact: true });
     await expect(commune).toBeEnabled({ timeout: 15000 });
     // Ain Taya is in wilaya 16 and has no commune rule of its own.
-    await commune.selectOption({ label: "Ain Taya" });
+    await choose(page, commune, "Ain Taya");
 
-    await expect(page.getByText(/500,00/)).toBeVisible({ timeout: 15000 });
-    // The positive control: the commune rule's price is *not* what resolved.
+    // Scoped for the same reason as the test above: 500,00 is also a tariff row.
     const resolved = page
       .locator("section")
       .filter({ hasText: "Simuler une destination" });
+    await expect(resolved.getByText(/500,00/)).toBeVisible({ timeout: 15000 });
+    // The positive control: the commune rule's price is *not* what resolved.
     await expect(resolved.getByText(/350,00/)).toHaveCount(0);
   });
 

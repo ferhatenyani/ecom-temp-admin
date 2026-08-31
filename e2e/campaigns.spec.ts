@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { choose } from "./listbox";
 
 /**
  * Marketing: the composer, segments and templates — deliberately small.
@@ -154,13 +155,20 @@ const DRAFT_NAME = "Soldes d'août — brouillon";
 /**
  * Put the composer's audience step on `ids` without saving anything.
  *
- * The `Select` is a real `<select>` and its `onChange` moves the *draft* only —
- * nothing is PATCHed until "Continuer" — so a test can reach the control the
- * picker lives on and leave the campaign exactly as it found it. That property is
- * why these three tests can run against the shop's own drafts at all.
+ * Its `onChange` moves the *draft* only — nothing is PATCHed until "Continuer" —
+ * so a test can reach the control the picker lives on and leave the campaign
+ * exactly as it found it. That property is why these three tests can run against
+ * the shop's own drafts at all.
+ *
+ * **It is no longer "a real `<select>`", which is what this comment used to say
+ * and what `selectOption` here depended on.** `Form.tsx`'s `Select` wraps
+ * `Listbox`, the drawn control, so the option is a portalled `role="option"` and
+ * not an `<option>`; `e2e/listbox.ts` argues the difference. The label on the
+ * wire is still `ids`, but the label on screen is the translated one, which is
+ * what a person clicks.
  */
 async function chooseIdsAudience(page: Page) {
-  await page.getByLabel("Audience", { exact: true }).selectOption("ids");
+  await choose(page, page.getByLabel("Audience", { exact: true }), /Des clients choisis|عملاء محدَّدون/);
 }
 
 /** A `FilterTabs` chip is a real `<button>`; the retired `Segmented` was not. */
