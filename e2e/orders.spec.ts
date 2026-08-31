@@ -425,7 +425,16 @@ test.describe("the forbidden state", () => {
     await page.fill("#username", limitedUser!);
     await page.fill("#password", limitedPass!);
     await page.click('button[type="submit"]');
-    await page.waitForURL("**/fr/orders");
+    /*
+     * Signed in lands wherever `landingPath()` sends this reader, which for a
+     * role without `ac_manage_orders` is deliberately **not** `/orders` — that
+     * is the defect `components/ui/nav-tree.ts` was written to remove, and
+     * waiting for `/fr/orders` here asserted it. The 403 this test is about is
+     * reached by asking for the screen, which is what a person typing the URL or
+     * following a stale link does.
+     */
+    await page.waitForURL((url) => !url.pathname.endsWith("/login"));
+    await page.goto("/fr/orders");
 
     // The forbidden state names the capability, and the session survives.
     await expect(page.getByText(/Cette section demande la permission/)).toBeVisible();

@@ -23,6 +23,25 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
@@ -34,7 +53,9 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
    * test after it navigated before the session cookie existed — eighteen
    * failures that all read as "the products list does not render".
    */
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 async function openProducts(page: Page, locale: string, query = "") {
@@ -552,13 +573,26 @@ test.describe("the fifth state", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
 
-    // The control: nothing claims staleness while the connection is up.
-    await expect(page.getByRole("status")).toHaveCount(0);
+    /*
+     * The control: nothing claims staleness while the connection is up.
+     *
+     * **Scoped to the banner's own text**, because a bare `getByRole("status")`
+     * can never be absent: `components/primitives/Toast.tsx` keeps an empty
+     * `role="status"` live region in the DOM at all times, on purpose — a live
+     * region announces only what appears *inside* an already-present container,
+     * so one mounted with the toast would announce nothing. Counting every
+     * status on the page therefore counted the toast viewport and could not have
+     * passed on any screen; it went unnoticed because this suite had never run.
+     */
+    await expect(page.getByRole("status").filter({ hasText: /hors ligne/i })).toHaveCount(0);
 
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event("offline")));
 
-    const banner = page.getByRole("status");
+    /* Same scoping as the control above: the toast's permanent live region is
+       also a `status`, so an unfiltered locator resolves to two and trips strict
+       mode rather than finding the banner. */
+    const banner = page.getByRole("status").filter({ hasText: /hors ligne/i });
     await expect(banner).toBeVisible();
     // The age of the data, not just the fact of being offline.
     await expect(banner).toContainText(/hors ligne/i);
@@ -580,7 +614,7 @@ test.describe("the fifth state", () => {
 
     await context.setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: /hors ligne/i })).toHaveCount(0);
   });
 });
 
