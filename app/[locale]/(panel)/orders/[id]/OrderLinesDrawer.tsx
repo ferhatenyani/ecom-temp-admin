@@ -17,7 +17,7 @@ import {
   Stepper,
   type FormFailure,
 } from "@/components/ui/Form";
-import { EmptyState } from "@/components/ui/States";
+import { EmptyState, Notice } from "@/components/ui/States";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
 import { ProductPicker, type PickedProduct } from "../ProductPicker";
@@ -50,10 +50,12 @@ import {
  * controls with a sentence explaining them.
  *
  * They also fail differently. A refusal here is a **409 about the order** — its
- * status, or the stock it is holding — where the edit drawer's refusals are 400s
- * about values. §3.4's error summary is the same component either way; what
- * differs is that no amount the person retypes will make a 409 go away, and a
- * form that mixed the two kinds would have to say so per control.
+ * status — where the edit drawer's refusals are 400s about values. §3.4's error
+ * summary is the same component either way; what differs is that no amount the
+ * person retypes will make a 409 go away, and a form that mixed the two kinds
+ * would have to say so per control. (Until the fix round the stock it is holding
+ * was a second such 409; decision 1 removed it, and the section below says what
+ * took its place.)
  *
  * `order-edit.ts` holds the payload for both, deliberately. One route deserves
  * one answer to "which keys reach the wire", and the rule that used to be
@@ -76,11 +78,13 @@ import {
  * the sentence explaining it are the same six inches of screen, and they cannot
  * drift because both read `orders.detail.editableNo`.
  *
- * ## The three refusals this binds, and the one it only warns about
+ * ## The two refusals this binds, and the state it now warns about instead
  *
  * Read from source, and measured in-process via `rest_do_request()` where the
- * suite covers it (`ecom-temp`'s `tests/Api/orders.php`). Never over HTTP —
- * `BLOCKED.md` says why that phrase is unavailable on this route.
+ * suite covers it (`ecom-temp`'s `tests/Api/orders.php`). The transport is
+ * measured over HTTP as of the fix round — see `BLOCKED.md`, which no longer
+ * refuses that phrase for authentication — but these particular field shapes
+ * are not, and the distinction is the point of saying it.
  *
  *  1. **Per-field 400s.** `line_items.{n}.quantity`, `line_items.{n}.price`,
  *     `line_items.{n}.product_id` and `shipping_amount`, each bound to the
@@ -92,24 +96,29 @@ import {
  *     disabled when the order is not editable, but the page is server-rendered
  *     and somebody else can move the status between the render and the save. It
  *     has no field, so it goes to the summary as an orphan line.
- *  3. **The stock 409**, and this is the one worth building for.
- *     `guardManualPricesWritable()` refuses a *stated* price on an order that is
- *     already holding stock — `on-hold` reduces stock and is still editable, so
- *     this is a live state and not a corner — and it carries **`lines`**, the
- *     zero-based indices of the submitted lines that stated a price. Those are
- *     bound to the price boxes on exactly those rows. The message says what is
- *     true (the order refused this, not the number), and the reddened boxes say
- *     where the operator can act.
  *
- * The one it only warns about is the same rule, before the save:
- * `order.stock_reduced` is on the read shape, so the section says up front that
- * a price cannot be changed while the order is holding stock. A warning rather
- * than a disabled field, because **a disabled field would be a lie about the
- * cause**: the request is refused for lines whose price is merely *echoed*, and
- * a set with a hand-priced line in it states that price whether or not anybody
- * touched the box. The way out is visible — clear the box, and the line goes
- * back to the catalogue — and the catalogue price beside it is what tells the
- * person what that costs.
+ * **There was a third, and the fix round's decision 1 removed it.** Backend step
+ * 6's `guardManualPricesWritable()` answered a 409 for a *stated* price on an
+ * order already holding stock, carrying `details.lines`, and this form bound
+ * both halves — an orphan sentence and a note on each named price box. That
+ * argument is kept where it can still be read, in `onError` and in the backend's
+ * own `OrderService::snapshot()`.
+ *
+ * What replaced it is the reason this section is worth reading twice: **warn,
+ * allow, record.** The quantity and the delivery fee were never gated by that
+ * guard, so four kettles becoming forty moved the total by 54 000 DZD in
+ * silence while a 1 DZD reprice on the same order was refused. Three writes that
+ * move the same total now behave the same way — the edit lands, the warning
+ * below names what is reserved before anybody types, and
+ * `OrderService::snapshot()` records `manual_prices` and `stock_reduced` so the
+ * change is attributable afterwards. An order paused awaiting confirmation is
+ * exactly when an amendment happens, and refusing one there cost the operator
+ * the case the route exists for.
+ *
+ * The warning stays a warning and never a disabled field, which was already the
+ * right shape for the old rule and is more clearly right for this one: nothing
+ * here is forbidden, so a dead control would say something false. It reads from
+ * `order.stock_reduced` — WooCommerce's own flag, never a set of status names.
  *
  * ## The merge rule that never matched, now fixed and moved
  *
@@ -169,23 +178,6 @@ export function OrderLinesDrawer({
   const [fields, setFields] = useState<Record<string, string>>({});
   /** A refusal with no field to bind to — both 409s arrive this way. */
   const [refusal, setRefusal] = useState<string | null>(null);
-  /**
-   * The lines the stock 409 named, marked on their price boxes and **kept out
-   * of the error summary**.
-   *
-   * A separate state rather than more keys in `fields`, and the reason is a
-   * defect `bindRefusals()` already found once on the create drawer: the summary
-   * counts its entries, so folding these in reported *"2 champs empêchent
-   * l'enregistrement"* for one refusal about one box — the API's sentence plus
-   * the mark that restates it. They are one refusal expressed in two places, and
-   * only one of those places is a list of failures.
-   *
-   * So the sentence goes to the summary once, as an orphan line, and this
-   * reddens the boxes the person can act on. Kept separate from `fields` for a
-   * second reason too: `fields` is the API's validation channel, and the whole
-   * point of this 409 is that no value in those boxes is wrong.
-   */
-  const [stockLines, setStockLines] = useState<readonly number[]>([]);
 
   /* The order is a Server Component's data, so a save is followed by
      `router.refresh()` through a transition — the button holds its spinner for
@@ -269,7 +261,6 @@ export function OrderLinesDrawer({
         Object.entries(current).filter(([key]) => !key.startsWith("line_items")),
       ),
     );
-    setStockLines([]);
     setRefusal(null);
   }
 
@@ -298,7 +289,6 @@ export function OrderLinesDrawer({
         Object.entries(current).filter(([key]) => !key.startsWith("line_items")),
       ),
     );
-    setStockLines([]);
     setRefusal(null);
   }
 
@@ -327,31 +317,28 @@ export function OrderLinesDrawer({
       }
 
       /*
-       * The stock 409, first, because it is the only refusal on this route that
-       * is *both* an orphan sentence and a per-line one.
+       * **The stock 409 used to be handled first, and there is no longer one to
+       * handle.** Its branch is gone with the guard that produced it, and the
+       * shape of what it did is worth keeping on the record for one release.
        *
-       * `details.lines` is the zero-based indices of the submitted lines that
-       * stated a price — the backend put it there so "a form bound per line can
-       * still point at the boxes to clear" — while the message and
-       * `stock_reduced` say the thing that is actually true, which is that the
-       * order refused this and no amount would be accepted. So both halves are
-       * rendered: the sentence as an orphan line at the top, and a short note on
-       * each named price box. There is no `fields` key on this response and
-       * there must not be one; `fields` is the API's validation channel and
-       * binding a control to it would tell the person their number is wrong.
+       * `guardManualPricesWritable()` refused a *stated* price on an order
+       * already holding stock, and answered a 409 carrying `details.lines` — the
+       * zero-based indices of the submitted lines that named an amount — so this
+       * form rendered the sentence as an orphan line and a short note on each
+       * named price box, deliberately without a `fields` key, because `fields`
+       * is the API's validation channel and no value in those boxes was wrong.
+       *
+       * The fix round's decision 1 replaced refusing with **warn, allow,
+       * record**: the price lands, the panel warns before the save from
+       * `stock_reduced`, and `OrderService::snapshot()` writes `manual_prices`
+       * and `stock_reduced` into the audit so the change is attributable.
+       * `Array.isArray(details.lines)` now matches nothing on this route, and a
+       * branch that can never be taken is a claim about the API that has stopped
+       * being true.
        */
-      const lines = error.details.lines;
-      if (error.status === 409 && Array.isArray(lines)) {
-        setFields({});
-        setStockLines(lines.filter((index): index is number => typeof index === "number"));
-        setRefusal(error.message);
-        return;
-      }
-
       const refused = error.fields;
       if (refused !== null && Object.keys(refused).length > 0) {
         setFields(refused);
-        setStockLines([]);
         setRefusal(null);
         return;
       }
@@ -374,8 +361,7 @@ export function OrderLinesDrawer({
        * than as a link that goes nowhere, and here that is the true shape.
        */
       setFields({});
-      setStockLines([]);
-      setRefusal(error.message);
+        setRefusal(error.message);
     },
   });
 
@@ -386,7 +372,6 @@ export function OrderLinesDrawer({
     });
 
     setRefusal(null);
-    setStockLines([]);
 
     if (Object.keys(local).length > 0) {
       setFields(local);
@@ -460,6 +445,17 @@ export function OrderLinesDrawer({
    */
   const holdingStock = order.stock_reduced;
 
+  /**
+   * How many units this order is holding, for the warning's own sentence.
+   *
+   * Summed from the **order** and never from the draft, for the reason the
+   * warning states: the shelf moved when the status did, so the stored
+   * quantities are what is reserved. A draft that has just doubled a line is a
+   * proposal, and reporting it here would tell the operator the shop had already
+   * committed stock nobody has taken yet.
+   */
+  const reservedUnits = order.line_items.reduce((total, line) => total + line.quantity, 0);
+
   return (
     <>
       <Button
@@ -529,18 +525,33 @@ export function OrderLinesDrawer({
             <div className="flex flex-col gap-3">
               {holdingStock ? (
                 /*
-                 * Said before the save, because the refusal that follows is a
-                 * 409 about the order rather than about a value, and a person
-                 * who has just typed a price deserves to know it will not land
-                 * before they type it.
+                 * **Warn, allow, record** — decision 1, and the half of it this
+                 * form owes the operator.
                  *
-                 * Not a disabled field: the request is refused for a price that
-                 * is merely echoed too — a set carrying a hand-priced line
-                 * states that price whether or not anybody touched the box — so
-                 * disabling the control would name the wrong cause and hide the
-                 * only way out, which is to clear it.
+                 * Said before the save rather than after, because there is no
+                 * refusal coming: the edit will land. What the person needs to
+                 * know is that these units are already off the shelf and that
+                 * what they change here is written into the order's audit —
+                 * which is a reason to look twice, not a reason to stop.
+                 *
+                 * **It names the quantity, and the quantity is the order's and
+                 * not the draft's.** What stock holds is what was reserved when
+                 * the status moved, so it is summed from `order.line_items`;
+                 * summing the draft would report what the operator is proposing
+                 * as though the shelf had already moved. There is no per-line
+                 * reserved count on the read shape and none was invented — the
+                 * order's own quantities are exactly what `wc_reduce_stock_levels()`
+                 * took.
+                 *
+                 * `warning` and not `danger`: nothing is wrong, and nothing is
+                 * refused. §3.3 keeps `danger` for a destructive act.
                  */
-                <p className="text-ui-label text-ui-muted">{t("items.stockHeld")}</p>
+                <Notice
+                  tone="warning"
+                  title={t("items.stockHeld", { units: reservedUnits })}
+                >
+                  <p className="text-ui-label">{t("items.stockHeldRecorded")}</p>
+                </Notice>
               ) : null}
 
               {draft.lines.length === 0 ? (
@@ -618,15 +629,11 @@ export function OrderLinesDrawer({
                               label={t("items.price")}
                               value={line.price}
                               onChange={(next) => patchLine(line.key, { price: next })}
-                              /* A 400 about this value wins over the 409 mark:
-                                 the two cannot both be true, and a value the API
-                                 refused by name is the more specific thing to
-                                 say. See `stockLines` for why the mark is not a
-                                 `fields` entry. */
-                              error={
-                                fields[`line_items.${index}.price`] ??
-                                (stockLines.includes(index) ? t("stockHeldLine") : undefined)
-                              }
+                              /* Only the 400 now. The stock 409's per-line mark
+                                 used to sit behind this `??` and is gone with
+                                 the guard — see `onError`, which keeps the
+                                 shape of what it did. */
+                              error={fields[`line_items.${index}.price`]}
                               disabled={save.isPending}
                             />
                             {overridden ? (

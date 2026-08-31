@@ -5183,49 +5183,41 @@ describe("the writes", () => {
     });
 
     /**
-     * **`guardManualPricesWritable()`, and the state it needs to exist at all.**
+     * **The price, the quantity and the fee now agree, and for one branch they
+     * did not.**
      *
      * `on-hold` reduces stock *and* is editable, so it is the one status where
-     * the lines may be rewritten and a stated price may not. The refusal is a
-     * 409 with **no `fields`** — the payload is well formed and no amount would
-     * be accepted — carrying `lines`, the zero-based indices of the submitted
-     * lines that stated a price, so a per-line form can still redden the right
-     * boxes.
+     * the lines may be rewritten while the units are already off the shelf.
+     * Backend step 6's `guardManualPricesWritable()` refused a *stated price*
+     * there — a 409 with no `fields`, carrying the zero-based `lines` that named
+     * an amount — and refused nothing else, so a quantity going from four to
+     * forty moved the same total in silence.
+     *
+     * The fix round's decision 1 replaced that with **warn, allow, record**.
+     * These two assertions are the pair that would have caught the asymmetry if
+     * they had been written together in the first place, which is why they are
+     * kept side by side rather than collapsed into one.
      */
-    it("409s a stated price on an order holding stock, naming the lines that stated one", () => {
+    it("takes a stated price on an order holding stock, where it used to 409", () => {
       const id = editableId();
       parse(order, write("PATCH", `/orders/${id}`, { status: "on-hold" }));
       expect(parse(order, get(`/orders/${id}`)).data.stock_reduced).toBe(true);
 
-      const error = refusedWith(
+      const after = parse(
+        order,
         write("PATCH", `/orders/${id}`, {
           line_items: [
             { product_id: 101, quantity: 1 },
             { product_id: 101, quantity: 2, price: "500" },
-            { product_id: 101, quantity: 1 },
-            { product_id: 101, quantity: 1, price: "0" },
           ],
         }),
-        409,
-        "conflict",
-      );
+      ).data;
 
-      expect(error.apiMessage).toBe(
-        "A manual price cannot be set on an order that is already holding stock.",
-      );
-      expect(error.details).toEqual({ status: "on-hold", stock_reduced: true, lines: [1, 3] });
-      // `fields` is the validation channel and this is not a validation error.
-      expect(error.fields).toBeNull();
+      expect(after.line_items[1].price).toBe("500.00");
+      expect(after.stock_reduced).toBe(true);
     });
 
-    it("still lets a quantity through on that same order, which is the narrower gate working", () => {
-      /*
-       * The gate is on the *price*, not on the money.
-       * `guardLineItemsWritable()` is unchanged and the repository returns the
-       * units, replaces the lines and takes them again — so four kettles become
-       * forty here and the order's total moves with no manual price anywhere
-       * near it. That asymmetry is deliberate and is named in both guards.
-       */
+    it("takes a quantity on that same order, as it always did", () => {
       const id = editableId();
       parse(order, write("PATCH", `/orders/${id}`, { status: "on-hold" }));
 
