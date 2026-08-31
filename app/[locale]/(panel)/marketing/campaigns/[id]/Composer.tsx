@@ -36,7 +36,6 @@ import {
   FIELD_IDS,
   StepAudience,
   StepContent,
-  StepPreview,
   StepSend,
   StepTest,
   usePreview,
@@ -46,13 +45,13 @@ import { buildEmail, directionFor, type EmailImage, type EmailValues } from "./e
 import { readValues, seededValues, writeValues } from "./body-fields";
 
 /**
- * The composer: audience → content → preview → test → send.
+ * The composer: audience → content → test → send.
  *
  * ## A stepped form, which is the panel's *other* long-form shape
  *
- * DESIGN.md §3.4 as amended on this branch: **a form built as steps saves per
- * step and ships no `SaveBar` at all.** The rule the amendment carves out of was
- * written about a coupon and a page — one screen of independent fields, saved
+ * DESIGN.md §3.4 as amended on the campaigns branch: **a form built as steps saves
+ * per step and ships no `SaveBar` at all.** The rule the amendment carves out of
+ * was written about a coupon and a page — one screen of independent fields, saved
  * once at the end, every save reversible by saving again. This is none of those,
  * and the two properties that make it different are measured rather than
  * stylistic:
@@ -60,21 +59,34 @@ import { readValues, seededValues, writeValues } from "./body-fields";
  *   **The last step is irreversible.** `send` freezes an audience as one row per
  *   recipient and mail leaves the building. Nothing un-sends it.
  *
- *   **The third step is a render of the *server's* copy.** `GET
- *   /campaigns/{id}/preview` resolves the tokens against what is stored, which
- *   only exists because the second step already PATCHed. One long form with a
- *   sticky bar would preview the client's draft against that irreversible act —
- *   and the whole reason the preview is a step is that an unknown token renders
- *   *empty*, which is invisible in a body that has a name in it from another
- *   token.
+ *   **The render is of the *server's* copy.** `GET /campaigns/{id}/preview`
+ *   resolves the tokens against what is stored, which only exists because a save
+ *   already happened. One long form with a sticky bar would preview the client's
+ *   draft against that irreversible act — and the reason the render is worth
+ *   having at all is that an unknown token renders *empty*, which is invisible in
+ *   a body that has a name in it from another token.
  *
  * Three properties keep it from being the usual wizard annoyance. **Backwards is
  * always free** — any step already reached is one press away, at the keyboard as
- * well as the pointer, so fixing a subject seen wrong in the preview costs
+ * well as the pointer, so fixing a subject seen wrong in the render costs
  * nothing. **The draft is saved, not held**, so a closed tab loses nothing. And
  * **it is only a wizard while it is a draft**: a sent campaign is a record and
- * `SentCampaign` renders it read-only, because walking five steps through
+ * `SentCampaign` renders it read-only, because walking four steps through
  * something nobody can change would be a costume.
+ *
+ * ## Four steps, and the third used to be the preview
+ *
+ * Item 8 folds it into `content`. `usePreview` is unchanged and is still fetched
+ * from the **first** step, because `audience_count` lives on that response and no
+ * other route answers "how many people is this?" for an `all` or an `ids`
+ * audience; what changed is that the same response now also draws a frame on the
+ * compose step instead of a page of its own. `MailPreview.tsx` argues the fold and
+ * keeps the retired step's reasoning intact.
+ *
+ * The one new obligation it creates is `contentChanged` below: a render of the
+ * saved campaign now sits under a live form, so the panel owes an honest word
+ * about which of the two the frame is showing, and a control that closes the gap
+ * without leaving the step.
  *
  * ## The stale marker, and every write carrying its reason
  *
@@ -284,6 +296,25 @@ export function Composer({
     draft.audience.type !== campaign.audience.type ||
     draft.audience.segment_id !== campaign.audience.segment_id ||
     draft.audience.customer_ids.join(",") !== campaign.audience.customer_ids.join(",");
+
+  /*
+   * The same claim `audienceChanged` makes, about the three fields the **render**
+   * is built from.
+   *
+   * `name` is deliberately not among them: it is the shop's label for the campaign
+   * and reaches no part of the message, so a renamed draft is not a stale preview.
+   * The subject is, because `TemplateRenderer::render()` substitutes it alongside
+   * both bodies and the frame shows the resolved result.
+   *
+   * Compared against `campaign` — the row the preview was rendered from — and not
+   * against a snapshot taken at the last save. `MailPreviewState.stale` argues the
+   * difference; the short version is that this answers *does the frame show what
+   * the form says*, which is the question somebody looking at the frame is asking.
+   */
+  const contentChanged =
+    draft.subject !== campaign.subject ||
+    draft.body_html !== campaign.body_html ||
+    draft.body_text !== campaign.body_text;
 
   /* The fifth state's second half: when the browser is certain it is offline the
      draft on screen is as old as the last fetch, and every write control says so
@@ -526,9 +557,29 @@ export function Composer({
               disabled={saving}
               fieldErrors={fieldErrors}
               seed={seed}
+              preview={{
+                preview: preview.data ?? null,
+                loading: preview.isPending,
+                stale: contentChanged,
+                refreshing: saving,
+                blocked,
+                /*
+                 * **Refresh is `save()` and nothing else**, which is the whole
+                 * reason this is honest rather than a second write path: the
+                 * render is of what the server holds, so the only way to move it
+                 * is to store what is on screen. `save()` already PATCHes,
+                 * refetches the campaign and invalidates the preview query — the
+                 * exact three things a forward move does, minus the move.
+                 *
+                 * A control that saves without advancing is not the `SaveBar`
+                 * §3.4 refuses this form: that rule is about a *sticky* bar
+                 * reporting accumulated dirty state across a whole screen, and
+                 * this is one card's action with one visible effect, in the card
+                 * whose contents it changes.
+                 */
+                onRefresh: () => void save(),
+              }}
             />
-          ) : step === "preview" ? (
-            <StepPreview preview={preview.data ?? null} loading={preview.isPending} />
           ) : step === "test" ? (
             <StepTest campaignId={campaign.id} blocked={blocked} />
           ) : (

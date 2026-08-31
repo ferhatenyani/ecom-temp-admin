@@ -390,7 +390,46 @@ cd "$(dirname "$0")/.." || exit 2
 # second time. `COLOUR_EXEMPT` is unchanged at two files.
 #
 # Raised by the same margin of 2 the history above keeps.
-FLOOR=343
+#
+# 346 at the preview-inline branch, floor 344. **One file, and the branch it
+# arrived on deleted a wizard step** — so the count was expected to fall and rose
+# instead, which is worth stating rather than leaving as a surprise in a diff. The
+# step that went was `StepPreview`, a function inside `Steps.tsx` and never a file
+# of its own; what replaced it is:
+#
+#   app/…/marketing/campaigns/[id]/MailPreview.tsx   the rendered mail
+#
+# It is a file on the same test the last dozen entries apply — *a block that is
+# only markup stays in its screen; a block that owns decisions gets a file so the
+# decisions have somewhere to be argued* — and it owns four that a component
+# reviewer would otherwise have to reconstruct from an attribute. The exact
+# `sandbox` value, which is the empty string, with every token that is **not**
+# granted argued one by one and the consequence for a link click spelled out. The
+# document wrapper a `srcdoc` frame needs, which exists only because `buildEmail()`
+# deliberately emits no `<html>`/`<head>`/`<body>` — the sanitiser strips those
+# tags and keeps their text — so something in the panel has to put a document round
+# the fragment, and it must do so without rewriting a byte of it. The **height**,
+# which cannot be measured because the sandbox withholds `allow-same-origin` and
+# the frame is therefore opaque-origin, and the two permissions that would buy the
+# measurement are each worth more than it. And what "stale" means once a render of
+# the *saved* campaign sits under a live form.
+#
+# Two of those are testable without a browser and are tested:
+# `tests/mail-preview.test.ts` asserts the wrapper carries the fragment byte for
+# byte, that it contains no script and no stylesheet beyond a two-property reset,
+# and that `PREVIEW_SANDBOX` is still the empty string — a change-detector on
+# purpose, because the only way that constant changes is somebody granting a
+# permission, and that is exactly the edit that should have to explain itself.
+#
+# **No new colour exemption**, and the frame is where one would have been asked
+# for: the wrapper paints its letterbox in the message's own ground colour so the
+# frame reads as part of the mail. The value is imported from
+# `lib/email-palette.ts` — the file that already holds the six — rather than
+# written down a second time, so `COLOUR_EXEMPT` is unchanged at two files and
+# `MailPreview.tsx` is scanned like everything else.
+#
+# Raised by the same margin of 2 the history above keeps.
+FLOOR=344
 failures=0
 checks=0
 

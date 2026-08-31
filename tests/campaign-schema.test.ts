@@ -717,6 +717,27 @@ describe("the composer's own rules", () => {
     expect(nextStep("audience")).toBe("content");
   });
 
+  it("is four steps, and content is followed by the test send", () => {
+    /*
+     * **The fold, pinned.** §85 writes five — audience → content → preview → test
+     * → send — and item 8 deletes the third, moving the render and the token
+     * warning onto the compose step. Asserted as a whole list rather than as a
+     * length, because the interesting half is the *order*: `content` now hands
+     * straight to `test`, which is the step that answers "what will Gmail do?"
+     * with a real message rather than with a browser's drawing.
+     *
+     * `furthestStep()` is the guard and never named `preview`, so the deletion
+     * changed no gate — which is the property this pairs with. A draft complete
+     * enough for the content step still reaches `send`, and an incomplete one
+     * still stops at `content`.
+     */
+    expect([...COMPOSER_STEPS]).toEqual(["audience", "content", "test", "send"]);
+    expect((COMPOSER_STEPS as readonly string[]).includes("preview")).toBe(false);
+    expect(nextStep("content")).toBe("test");
+    expect(furthestStep(draft())).toBe("send");
+    expect(furthestStep(draft({ body_html: "" }))).toBe("content");
+  });
+
   it("shows the consent gap only when there is one to show", () => {
     /*
      * The number the composer exists to make legible: "1 000 sélectionnés → 412

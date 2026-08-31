@@ -678,12 +678,25 @@ const DEFAULT_ROUTES = [
    * one with a segment audience and a clean body, so the wizard opens on a
    * complete audience step rather than on a refusal.
    *
-   * 319 is the other draft and is worth its own capture when the preview step
-   * changes: its body says `{{firstname}}`, the preview renders `<p>Bonjour ,</p>`
-   * and `unknown_tokens` names the typo — the state §85 asks the composer to
-   * make impossible to miss.
+   * 319 is the other draft and its body says `{{firstname}}`, so the preview
+   * renders `<p>Bonjour ,</p>` and `unknown_tokens` names the typo — the state
+   * §85 asks the composer to make impossible to miss.
    *
    *     node scripts/capture.mjs /marketing/campaigns/319
+   *
+   * **Neither capture reaches that state, and item 8 did not change that.** This
+   * script visits a route and photographs what it renders; the composer opens on
+   * the **audience** step and there is no interaction hook here, so what lands on
+   * disk is step one in both cases. That was equally true when the preview was a
+   * page of its own — the note above used to say 319 was "worth its own capture
+   * when the preview step changes", which was never something this harness could
+   * do. The render is now on the compose step, which is one press further in, not
+   * one press less.
+   *
+   * So the composer's later steps are verified by driving a browser rather than
+   * by capturing a URL, and the campaign screens' place here is what it always
+   * was: the audience step at three widths, two themes and two locales, with the
+   * eligible count and the consent note on it.
    */
   "/marketing/campaigns/318",
   /*
