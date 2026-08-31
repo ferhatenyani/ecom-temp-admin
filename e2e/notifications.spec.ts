@@ -201,7 +201,16 @@ test.describe("the frozen message", () => {
      * treatment exists for.
      */
     await signIn(page, "fr");
-    await openQueue(page, "fr");
+    /*
+     * **Filtered to the state this test is about.** `rowWithState()` searches the
+     * rows on screen, and the queue is one page of twenty out of ninety-four —
+     * `seed-notifications.mjs` re-drains on every run and the table grows, so the
+     * three `sent` and three `failed` rows stopped being on the first page. The
+     * filter is the screen's own, asserted a few tests above, and it makes the
+     * row this test needs deterministic rather than a function of how many times
+     * the seed has run.
+     */
+    await openQueue(page, "fr", "?status=sent");
     await rowWithState(page, "Transmise").click();
 
     const quote = page.getByTestId("message");
@@ -225,7 +234,16 @@ test.describe("the frozen message", () => {
      * that is only painted there.
      */
     await signIn(page, "fr");
-    await openQueue(page, "fr");
+    /*
+     * **Filtered to the state this test is about.** `rowWithState()` searches the
+     * rows on screen, and the queue is one page of twenty out of ninety-four —
+     * `seed-notifications.mjs` re-drains on every run and the table grows, so the
+     * three `sent` and three `failed` rows stopped being on the first page. The
+     * filter is the screen's own, asserted a few tests above, and it makes the
+     * row this test needs deterministic rather than a function of how many times
+     * the seed has run.
+     */
+    await openQueue(page, "fr", "?status=failed");
     await rows(page).filter({ hasText: "Colis livré" }).first().click();
 
     await expect(page.getByText(/contenu enregistré est illisible/)).toBeVisible();
@@ -254,7 +272,16 @@ test.describe("retry", () => {
      * whole reason those testids exist.
      */
     await signIn(page, "fr");
-    await openQueue(page, "fr");
+    /*
+     * **Filtered to the state this test is about.** `rowWithState()` searches the
+     * rows on screen, and the queue is one page of twenty out of ninety-four —
+     * `seed-notifications.mjs` re-drains on every run and the table grows, so the
+     * three `sent` and three `failed` rows stopped being on the first page. The
+     * filter is the screen's own, asserted a few tests above, and it makes the
+     * row this test needs deterministic rather than a function of how many times
+     * the seed has run.
+     */
+    await openQueue(page, "fr", "?status=failed");
     await rowWithState(page, "Échec").click();
 
     await page.getByTestId("retry").click();
@@ -313,14 +340,25 @@ test.describe("one customer's own queue", () => {
     await signIn(page, "fr");
     await page.goto("/fr/customers/5");
 
-    const rows = page.locator('a[href*="/notifications/"]');
-    await expect(rows.first()).toBeVisible();
+    /*
+     * **The row, not the anchor.** `NotificationsSection` puts the `<Link>`
+     * around the event label alone and renders `notification.recipient` in a
+     * sibling below it — deliberately, since the label repeats by construction
+     * (one row per event per order) and the anchor carries an `aria-label` with
+     * the date to tell them apart. So an assertion that the *anchor* contains the
+     * address can never pass; it read "Commande confirmée", which is exactly what
+     * the anchor is supposed to say.
+     */
+    const links = page.locator('a[href*="/notifications/"]');
+    await expect(links.first()).toBeVisible();
     await expect(page.getByText(/Les messages adressés à ce client/)).toBeVisible();
 
     // Every row is this person's. The section filters on `recipient`, so the
     // shop's own alert about their order is correctly absent — which is what the
     // scope note exists to say.
+    const rows = page.locator("li").filter({ has: links });
     const count = await rows.count();
+    expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i += 1) {
       await expect(rows.nth(i)).toContainText("karim.mansouri@example.test");
     }
