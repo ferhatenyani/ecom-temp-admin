@@ -4,6 +4,7 @@ import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { acRead } from "@/lib/api/browser";
 import type { Wilaya } from "@/lib/api/schemas/order";
+import { placeName } from "@/lib/geography";
 import { Select } from "@/components/ui/Form";
 
 /**
@@ -129,14 +130,6 @@ export type Destination = {
   wilaya: Wilaya | null;
   commune: Commune | null;
 };
-
-/** Arabic where there is an Arabic name, and the Latin one where there is not. */
-export function placeName(
-  place: { name: string; name_ar: string },
-  locale: string,
-): string {
-  return locale === "ar" && place.name_ar !== "" ? place.name_ar : place.name;
-}
 
 export function DestinationFields({
   /** The form's own id namespace, as `AddressFields` takes one and for the same

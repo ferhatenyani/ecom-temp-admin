@@ -2169,8 +2169,8 @@
       "registered_after": "Inscrit après le",
       "registered_before": "Inscrit avant le",
       "wilaya_id": "Wilaya de livraison",
-      "bought_product_id": "A acheté le produit n°",
-      "not_bought_product_id": "N’a pas acheté le produit n°"
+      "bought_product_id": "A acheté le produit",
+      "not_bought_product_id": "N’a pas acheté le produit"
     },
     "recipient": {
       "pending": "En attente",
@@ -2330,7 +2330,21 @@
         "money": "Un montant décimal, par exemple 5000.00.",
         "count": "Un nombre entier.",
         "id": "Un numéro entier.",
-        "date": "Une date au format AAAA-MM-JJ."
+        "date": "Une date au format AAAA-MM-JJ.",
+        "tooLargeMoney": "Au plus {max}.",
+        "tooLargeCount": "Au plus {max}."
+      },
+      "wilayaUnknown": "Wilaya n° {id}",
+      "wilayaUnknownWhy": "Cet identifiant ne correspond à aucune wilaya connue. Il est conservé tel quel.",
+      "wilayasUnavailable": "La liste des wilayas n’a pas pu être chargée. La valeur enregistrée est conservée.",
+      "productNone": "Aucun produit",
+      "productSearchFirst": "Cherchez un produit pour le choisir.",
+      "productUnknown": "Produit n° {id} — introuvable",
+      "productIdWhy": "Votre compte ne peut pas lire le catalogue, la recherche n’est donc pas disponible. L’API refuse un identifiant inconnu.",
+      "unknownCriterionKept": "Ce critère n’est pas connu de ce panneau. Sa valeur est conservée telle quelle.",
+      "conflict": {
+        "order": "Doit être au moins égal à « {name} ».",
+        "sameProduct": "Ne peut pas désigner le même produit que « {name} »."
       }
     },
     "template": {

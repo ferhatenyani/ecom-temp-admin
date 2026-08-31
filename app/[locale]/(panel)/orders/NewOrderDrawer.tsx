@@ -8,6 +8,7 @@ import type { Customer } from "@/lib/api/schemas/customer";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
 import type { ShippingProvider } from "@/lib/api/schemas/shipping";
 import { SHOP_CURRENCY, formatMoney } from "@/lib/format/money";
+import { placeName } from "@/lib/geography";
 import { Drawer } from "@/components/ui/Overlay";
 import { Button, IconButton } from "@/components/ui/Button";
 import {
@@ -27,11 +28,7 @@ import { useToast } from "@/components/primitives/Toast";
 import { ADDRESS_KEYS, AddressFields, addressFieldId } from "./AddressFields";
 import { CarrierFields, useShippingQuotes } from "./CarrierFields";
 import { CustomerPicker } from "./CustomerPicker";
-import {
-  DestinationFields,
-  placeName,
-  type Destination,
-} from "./DestinationFields";
+import { DestinationFields, type Destination } from "./DestinationFields";
 import { ProductPicker, type PickedProduct } from "./ProductPicker";
 /* One number, imported rather than re-declared. `MAX_AMOUNT`'s own docblock is
    the argument: `LineItemInput::MAX_PRICE` and `OrderInput::MAX_SHIPPING_AMOUNT`

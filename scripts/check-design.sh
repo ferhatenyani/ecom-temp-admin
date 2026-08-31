@@ -285,7 +285,50 @@ cd "$(dirname "$0")/.." || exit 2
 # use.
 #
 # Raised by the same margin of 2 the history above keeps.
-FLOOR=336
+#
+# 341 at the segment-pickers branch, floor 339. **Three files**, and each one
+# passes the test the last nine entries apply: a block that is only markup stays
+# in its screen; a block that owns decisions gets a file so the decisions have
+# somewhere to be argued.
+#
+#   marketing/segments/CriterionField.tsx   the five controls, and the map that
+#                                           picks between them
+#   marketing/segments/product-lookup.ts    the route, the batch resolution and
+#                                           the capability
+#   lib/geography.ts                        `placeName`, out of an orders screen
+#
+# `product-lookup.ts` is the one that had to exist, because it owns a decision
+# that **contradicts the item text** and the argument needs somewhere to live.
+# The item says to use `/coupons/eligible-products` *when `/products` is
+# forbidden*; this screen uses it always and never reads `/products` at all, on
+# three source-read facts: every role holding `ac_manage_marketing` also holds
+# `ac_manage_coupons` (`Permissions/Capabilities.php:69-145`), so there is no
+# reader for whom the catalogue works and the picker route does not; the picker
+# route discloses strictly less (id, name, SKU, status); and it is the **only**
+# route in the plugin that resolves a list of product ids in one request —
+# `CouponController::pickerArgs()` declares `include`, `ProductController::
+# indexArgs()` declares nothing of the kind. "Show the name, store the id" on a
+# reopened segment is not buildable on `/products` without one request per id.
+#
+# `CriterionField.tsx` is a file for the security-shaped half of the item.
+# `CRITERION_CONTROL` is a `Record<SegmentCriterion, …>` and the switch over its
+# values is exhaustive, so the eight refused-by-name criteria have no control to
+# be drawn with and adding one would not compile — a property, rather than a list
+# somebody has to remember not to extend. A block of five branches inside
+# `SegmentModal.tsx` would have put that claim in a file already past 400 lines
+# and given the wilaya and product sub-controls, which own four drawn states
+# each, nowhere to be argued.
+#
+# `lib/geography.ts` is the smallest and is the `DuplicateAction.tsx` test on a
+# function instead of a component: `placeName` was exported from
+# `orders/DestinationFields.tsx`, and a **marketing** screen reaching into
+# `(panel)/orders/` for a six-line pure function is how a section boundary stops
+# meaning anything. Three other screens already declare a private `wilayaName` of
+# their own; this gives the fifth caller somewhere correct to import from instead
+# of adding a sixth copy.
+#
+# Raised by the same margin of 2 the history above keeps.
+FLOOR=339
 failures=0
 checks=0
 
