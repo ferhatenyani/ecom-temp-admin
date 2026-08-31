@@ -338,6 +338,72 @@ describe("the combination grid", () => {
     expect(axesOf(PARENT_ATTRIBUTES).map((axis) => axis.key)).toEqual(["pa_couleur"]);
   });
 
+  /**
+   * **The cartesian product itself, asserted as the set and as the order.**
+   *
+   * The order matters and is not decoration. `plan.missing` is the order the
+   * `POST`s go out in and the order the picker lists, so it is what a person sees
+   * a 200-row run work through — `combinationsOf()` folds left over the axes, so
+   * the **last** axis varies fastest and the grid reads the way the two axes are
+   * named on the screen above it. A `flatMap` in the other direction would produce
+   * the same set in an order nobody could predict from the controls.
+   */
+  it("produces every cell exactly once, last axis varying fastest", () => {
+    const axes = axesOf([
+      attributeRow({ options: ["rouge", "bleu"] }),
+      attributeRow({ id: 3, name: "pa_taille", options: ["s", "m", "l"], variation: true, position: 1 }),
+    ]);
+    const grid = combinationsOf(axes);
+
+    expect(grid).toHaveLength(6);
+    expect(new Set(grid.map(combinationKey)).size).toBe(6);
+    expect(grid).toEqual([
+      { pa_couleur: "rouge", pa_taille: "s" },
+      { pa_couleur: "rouge", pa_taille: "m" },
+      { pa_couleur: "rouge", pa_taille: "l" },
+      { pa_couleur: "bleu", pa_taille: "s" },
+      { pa_couleur: "bleu", pa_taille: "m" },
+      { pa_couleur: "bleu", pa_taille: "l" },
+    ]);
+  });
+
+  /**
+   * No axes is an empty grid, and **one axis of one term is one cell, not zero**
+   * — the fold seeds on `[{}]` rather than on `[]`, which is the difference
+   * between "generate the single combination this product has" and "there is
+   * nothing to generate" on the narrowest real product there is.
+   */
+  it("is empty with no axes and one cell with a single-term axis", () => {
+    expect(combinationsOf([])).toEqual([]);
+    expect(combinationsOf(axesOf([attributeRow({ options: ["rouge"] })]))).toEqual([
+      { pa_couleur: "rouge" },
+    ]);
+  });
+
+  /**
+   * Scale, checked as arithmetic rather than as a screenshot: three axes of ten
+   * is a thousand cells, and the generator neither drops one nor repeats one at a
+   * size well past anything the cap will let through. The cap is the panel's
+   * refusal; this is the function under it staying correct regardless.
+   */
+  it("stays exact at a thousand cells", () => {
+    const axes = axesOf(
+      Array.from({ length: 3 }, (_, i) =>
+        attributeRow({
+          id: i + 20,
+          name: `pa_axe${i}`,
+          options: Array.from({ length: 10 }, (_, j) => `v${j}`),
+          variation: true,
+          position: i,
+        }),
+      ),
+    );
+    const grid = combinationsOf(axes);
+
+    expect(grid).toHaveLength(1000);
+    expect(new Set(grid.map(combinationKey)).size).toBe(1000);
+  });
+
   it("counts the whole grid and only the missing cells", () => {
     const twoAxes = [
       attributeRow({ options: ["rouge", "bleu"] }),
@@ -376,22 +442,34 @@ describe("the combination grid", () => {
   });
 
   /**
-   * **The cap.** There is no ceiling anywhere in the API — `VariationController`
-   * registers no count guard, `VariationService::create()` enforces only a
-   * duplicate combination and a duplicate SKU, and the list read is unpaginated —
-   * so the panel is the only thing between a shopkeeper and `OptionSet`'s 7,776.
-   * 50 is `OptionSet::MAX_CHOICES`, borrowed rather than invented.
+   * **The cap.** There is no *cardinality* ceiling anywhere in the API —
+   * `VariationController` registers no count guard, `VariationService::create()`
+   * enforces only a duplicate combination and a duplicate SKU, and the list read
+   * is unpaginated — so the panel is the only thing between a shopkeeper and
+   * `OptionSet`'s 7,776.
+   *
+   * **200, and it was 50.** The old number was `OptionSet::MAX_CHOICES`, borrowed
+   * rather than invented — a good instinct that turned out to borrow a constant
+   * about a different quantity: `MAX_CHOICES` bounds the choices in *one* option
+   * group, one dimension, while this bounds the *product* of every axis. Two axes
+   * at 6 × 9 are two ordinary variation axes and a grid of 54, and 50 refused it.
+   * `COMBINATION_CAP`'s own docblock carries the whole argument, the rate ceiling
+   * it now sits above, and what still stops 7,776.
+   *
+   * The literal is asserted rather than derived. A test that read the constant on
+   * both sides would pass at any value, and this number is a decision with an
+   * argument attached — moving it should fail here and be re-argued there.
    */
-  it("caps a single press at OptionSet's own choice limit", () => {
-    expect(COMBINATION_CAP).toBe(50);
+  it("caps a single press at two hundred", () => {
+    expect(COMBINATION_CAP).toBe(200);
 
     const wide = [
-      attributeRow({ options: Array.from({ length: 51 }, (_, i) => `c${i}`) }),
+      attributeRow({ options: Array.from({ length: 201 }, (_, i) => `c${i}`) }),
     ];
     const plan = planGeneration(wide, []);
 
-    expect(plan.total).toBe(51);
-    expect(plan.missing).toHaveLength(51);
+    expect(plan.total).toBe(201);
+    expect(plan.missing).toHaveLength(201);
     expect(plan.refusal).toBe("over-cap");
   });
 
@@ -401,6 +479,77 @@ describe("the combination grid", () => {
       attributeRow({ options: Array.from({ length: COMBINATION_CAP }, (_, i) => `c${i}`) }),
     ];
     expect(planGeneration(atCap, []).refusal).toBeNull();
+  });
+
+  /**
+   * **The grids the old number refused and this one does not**, written as the
+   * shapes rather than as arithmetic — this is the whole practical content of the
+   * change and it should read as such when it is next questioned.
+   *
+   * Each is a real catalogue shape: sizes against colours, sizes against colours
+   * against a finish. All three were `over-cap` at 50.
+   */
+  it("admits the ordinary multi-axis grids that 50 refused", () => {
+    const axis = (name: string, count: number) =>
+      attributeRow({
+        id: name.length,
+        name,
+        options: Array.from({ length: count }, (_, i) => `${name}-${i}`),
+        variation: true,
+        position: name.length,
+      });
+
+    for (const [shape, expected] of [
+      [[axis("pa_taille", 6), axis("pa_couleur", 9)], 54],
+      [[axis("pa_taille", 12), axis("pa_couleur", 14)], 168],
+      [[axis("pa_taille", 6), axis("pa_couleur", 6), axis("pa_finition", 5)], 180],
+    ] as const) {
+      const plan = planGeneration(shape, []);
+      expect(plan.total, String(expected)).toBe(expected);
+      expect(plan.refusal, String(expected)).toBeNull();
+    }
+  });
+
+  /**
+   * **And still refuses the shape `OptionSet.php` is arguing about** — *"Five
+   * attributes of six options each is 7,776 variations"* — by a factor of
+   * thirty-nine. A cap that admitted this would be a cap that had stopped meaning
+   * anything, which is the failure mode of every number raised once.
+   */
+  it("still refuses OptionSet's own 7,776", () => {
+    const five = Array.from({ length: 5 }, (_, i) =>
+      attributeRow({
+        id: i + 10,
+        name: `pa_axe${i}`,
+        options: ["a", "b", "c", "d", "e", "f"],
+        variation: true,
+        position: i,
+      }),
+    );
+    const plan = planGeneration(five, []);
+
+    expect(plan.total).toBe(7776);
+    expect(plan.refusal).toBe("over-cap");
+  });
+
+  /**
+   * **The count is stated before anything is sent, and it is a property of the
+   * plan rather than of the cap.** `ProductVariations` prints `plan.total` and
+   * `plan.missing.length` beside the button on every render, refused or not — so
+   * the sentence a person reads before pressing survives a change to the number,
+   * and this asserts that the plan still carries both figures on the refused side
+   * where the refusal is the only thing that could have replaced them.
+   */
+  it("still counts the whole grid on a plan it refuses", () => {
+    const wide = [
+      attributeRow({ options: Array.from({ length: 300 }, (_, i) => `c${i}`) }),
+    ];
+    const plan = planGeneration(wide, []);
+
+    expect(plan.refusal).toBe("over-cap");
+    expect(plan.total).toBe(300);
+    expect(plan.missing).toHaveLength(300);
+    expect(plan.axes).toHaveLength(1);
   });
 
   /**
@@ -436,8 +585,8 @@ describe("the combination grid", () => {
    * *"Only variable products have variations"* carries `details.type` and *"The
    * parent product has no attributes marked for variations"* carries no details
    * at all — while the two row-level ones name what they collided with. Firing
-   * the remaining forty-nine on a parent-level refusal is forty-nine identical
-   * failures behind a progress bar.
+   * the rest of the run on a parent-level refusal is that many identical failures
+   * behind a progress bar, and the run is now up to two hundred long.
    */
   it("tells a parent-level refusal from a row-level one", () => {
     expect(isParentRefusal(409, {})).toBe(true);
@@ -446,6 +595,27 @@ describe("the combination grid", () => {
     expect(isParentRefusal(409, { sku: "AC-1" })).toBe(false);
     // A 400 is always about the one body that was sent.
     expect(isParentRefusal(400, {})).toBe(false);
+  });
+
+  /**
+   * **The 429 is not a parent refusal, and this pins that it is not — because the
+   * raised cap is what makes it reachable.**
+   *
+   * `RateLimiter::DEFAULT_WRITES` is 120 per fixed 60-second window, per user
+   * *and* per IP (`RateLimitGuard::guard()`, read from source), so a 200-cell run
+   * can cross the API's write allowance where a 50-cell one never could. A 429
+   * carries neither `variation_id` nor `sku`, so a test written by shape alone
+   * would say "parent refusal" — it is the **status** that separates them, and
+   * `isParentRefusal()` checks `status === 409` first for exactly this reason.
+   *
+   * The consequence is recorded rather than repaired on this branch: the run
+   * continues and every remaining combination collects the same *"Too many
+   * requests"* sentence. `COMBINATION_CAP`'s docblock argues why that repair is a
+   * decision about abandoning a run and not a side effect of a number.
+   */
+  it("does not mistake a rate-limit 429 for a parent refusal", () => {
+    expect(isParentRefusal(429, {})).toBe(false);
+    expect(isParentRefusal(429, { retry_after: 37 })).toBe(false);
   });
 });
 

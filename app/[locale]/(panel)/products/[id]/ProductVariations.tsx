@@ -251,9 +251,19 @@ export function ProductVariations({
    * **Except for the two refusals that would refuse everything.** A 409 with
    * neither `variation_id` nor `sku` in its details is parent-level — the product
    * is not `variable`, or it has no attribute marked as a variant — and firing
-   * the remaining forty-nine would be forty-nine identical failures behind a
-   * progress bar. `isParentRefusal()` is the test; the run stops and the reason
-   * is the one thing reported.
+   * the rest of the run would be that many identical failures behind a progress
+   * bar. `isParentRefusal()` is the test; the run stops and the reason is the one
+   * thing reported.
+   *
+   * **A 429 is the third such refusal and is deliberately not treated as one
+   * yet.** `COMBINATION_CAP` is 200 and `RateLimiter::DEFAULT_WRITES` is 120 per
+   * fixed 60-second window per user *and* per IP, so a full run can cross the
+   * API's write allowance where the old cap of 50 never could — and a 429 carries
+   * neither `variation_id` nor `sku` but is not a 409, so it falls through to the
+   * per-combination list and the loop keeps going. `variable-product.ts`'s
+   * `COMBINATION_CAP` docblock carries the reading and the argument; the repair is
+   * a change to when a run abandons and what it then tells the person, which is
+   * not a side effect of raising a number.
    */
   const generate = useMutation({
     mutationFn: async () => {
@@ -421,7 +431,7 @@ export function ProductVariations({
             {/*
               What was actually made, never what was asked for. `created` is the
               count of 201s this run received — not `plan.missing.length` — so a
-              run that stopped at the twentieth of fifty says twenty.
+              run that stopped at the twentieth of two hundred says twenty.
             */}
             {outcome !== null ? (
               <Notice
@@ -604,10 +614,22 @@ export function ProductVariations({
                 hint={t("addRowHint")}
                 options={[
                   { value: "", label: t("addRowPlaceholder") },
-                  /* Only the combinations that do not exist yet, so the picker
-                     cannot produce the 409 `guardDuplicateCombination()` raises.
-                     Capped at the same 50, because a select with 7,776 options is
-                     the explosion in a different control. */
+                  /*
+                   * Only the combinations that do not exist yet, so the picker
+                   * cannot produce the 409 `guardDuplicateCombination()` raises.
+                   *
+                   * Capped at the same `COMBINATION_CAP`, because a select with
+                   * 7,776 options is the explosion in a different control — and
+                   * **the two caps stay one number on purpose**, now that the
+                   * number is 200 rather than 50. They answer the same question
+                   * from either end: this list is what a person falls back to when
+                   * the grid is too big to generate, so a picker that stopped at
+                   * 50 while the button fired at 200 would leave 150 combinations
+                   * reachable by neither control. `Float` gives the list
+                   * `max-h-100` and `overflow-y-auto`, so 200 rows scroll inside a
+                   * bounded popover rather than growing it — the cost of the
+                   * longer list is scrolling, which the control already did at 50.
+                   */
                   ...plan.missing.slice(0, COMBINATION_CAP).map((combination) => ({
                     value: combinationKey(combination),
                     label: labelOf(combination),

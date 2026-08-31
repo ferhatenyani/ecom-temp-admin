@@ -483,36 +483,127 @@ export function combinationsOf(axes: readonly Axis[]): Combination[] {
 /**
  * **The cap, and it is the panel's alone.**
  *
- * There is no ceiling anywhere in the API — searched: `VariationController`
- * registers no count guard, `VariationService::create()` enforces exactly two
- * state rules (a duplicate combination and a duplicate SKU) and neither is a
- * cardinality one, and `GET /products/{id}/variations` is **unpaginated**:
- * `Response::success(ProductPresenter::variationList($variations))` with no
- * `$meta`, so every row a product has lands in one response on every render of
- * this page. The API will accept all 7,776 of `OptionSet`'s example and serve
- * them back in a single body forever after.
+ * There is no *cardinality* ceiling anywhere in the API — searched:
+ * `VariationController` registers no count guard, `VariationService::create()`
+ * enforces exactly two state rules (a duplicate combination and a duplicate SKU)
+ * and neither is a cardinality one, and `GET /products/{id}/variations` is
+ * **unpaginated**: `Response::success(ProductPresenter::variationList($variations))`
+ * with no `$meta`, so every row a product has lands in one response on every
+ * render of this page. The API will accept all 7,776 of `OptionSet`'s example and
+ * serve them back in a single body forever after.
  *
  * So the panel is the only thing between a shopkeeper and that, and the number
- * had to be chosen rather than read. **50, because it is `OptionSet::MAX_CHOICES`
- * — the one cardinality this codebase has already argued about.** That constant
- * caps the choices in one option group under the heading *"Caps, each because an
- * unbounded one turns a product read into an unbounded response"*, which is
- * exactly the sentence that applies here, one level up. Borrowing it means the
- * panel and the API agree about how many of one enumerated thing a person may
- * make in one go, instead of the panel inventing a second opinion.
+ * had to be chosen rather than read.
  *
- * The cap is on **what one press creates**, not on how many variations a product
- * may have. A product with sixty rows and three gaps fills the three: the cost
- * this is guarding against is sixty sequential writes started by one click, not
- * the sixtieth row.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ## It was 50, and that argument is kept because it was not wrong
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * `OptionSet.php` names the other half — *"A variation is a thing with a SKU and
- * stock. An option is a modifier with neither … Five attributes of six options
- * each is 7,776 variations"* — and the refusal below says so, because a person
- * who has just built a 7,776-cell grid needs to be told they wanted an option
- * set, not that a button is disabled.
+ * > **50, because it is `OptionSet::MAX_CHOICES` — the one cardinality this
+ * > codebase has already argued about.** That constant caps the choices in one
+ * > option group under the heading *"Caps, each because an unbounded one turns a
+ * > product read into an unbounded response"*, which is exactly the sentence that
+ * > applies here, one level up. Borrowing it means the panel and the API agree
+ * > about how many of one enumerated thing a person may make in one go, instead
+ * > of the panel inventing a second opinion.
+ *
+ * Every clause of that is still true, and the borrowing was still the right
+ * instinct — a number invented on this screen would have had nothing behind it at
+ * all. What has changed is that the constant borrowed from turns out to be
+ * *about something else*, and the difference shows up on ordinary products
+ * rather than on pathological ones.
+ *
+ * `MAX_CHOICES` bounds **the choices inside one option group** — one list, one
+ * dimension, and the thing it protects is the size of a single product's stored
+ * option document. This cap bounds **the product of every variation axis**, which
+ * is a different quantity that happens to be measured in the same units. A
+ * clothing product with 6 sizes and 9 colours has two axes well inside
+ * `MAX_CHOICES` on each and a grid of 54, and the screen refused it — while a
+ * single 50-value axis, which is the shape `MAX_CHOICES` actually describes,
+ * passed. The cap was refusing the case it was written for and admitting the case
+ * it was not.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ## 200, and what it is measured against
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * **200 clears every grid a shop of this kind actually builds and still refuses
+ * the shape `OptionSet.php` is arguing about.** Two axes at 12 × 14, or three at
+ * 6 × 6 × 5, are variations: each cell is a thing with its own SKU, its own shelf
+ * and its own line in an export. Five axes of six options — `OptionSet`'s own
+ * example, 7,776 — is not, and 200 refuses it by a factor of thirty-nine. The
+ * number is a round one at the top of the range of grids that are still a
+ * catalogue rather than a configurator, and it is not derived from a backend
+ * constant, because — as above — the backend constant it used to borrow was
+ * measuring a different thing. It is the panel's own, and this paragraph is the
+ * whole of its provenance.
+ *
+ * `OptionSet.php` still names the other half — *"A variation is a thing with a
+ * SKU and stock. An option is a modifier with neither … Five attributes of six
+ * options each is 7,776 variations"* — and `products.variants.capWhy` still says
+ * so, because a person who has just built a 7,776-cell grid needs to be told they
+ * wanted an option set, not that a button is disabled.
+ *
+ * ### What still stops 7,776, now that this number does not
+ *
+ * Four things, and only the first is this constant:
+ *
+ * 1. **This cap.** `planGeneration()` refuses `over-cap` before anything is sent,
+ *    and `ProductVariations` prints the grid's real size and the cap in the same
+ *    sentence — *"say the number before firing"* is a property of the plan, not of
+ *    the cap's value, so it survives the change untouched.
+ * 2. **The cap is on what one press creates, not on what a product may hold.** A
+ *    product with sixty rows and three gaps fills the three. Nothing here bounds
+ *    the sixtieth row, and nothing should: the cost being guarded is a fan-out
+ *    started by one click.
+ * 3. **The API's write rate limit**, which is new to this docblock and is the
+ *    reason the sentence at the top now says *cardinality*. See below.
+ * 4. **Nothing else.** A caller that is not this panel still creates unbounded
+ *    variations one at a time, which `changes.md` has recorded since step 4 and
+ *    which this change does not alter.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ## The ceiling this number newly sits above, stated rather than discovered
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * **There is no cardinality ceiling in the API. There is a *rate* one, and 200 is
+ * on the far side of it where 50 was not.** Every line below is **read from
+ * source** and none of it is measured, in process or over the wire — said
+ * explicitly because it is now a choice rather than a block: `changes.md` records
+ * that real Application Passwords exist and that HTTP measurement is possible for
+ * the first time in this build. Firing 121 writes at a shop to watch the 121st
+ * fail would also spend that shop's write window, so what this docblock claims is
+ * what the four files say, and a measurement is left to whoever wants the
+ * `Retry-After` figure rather than the rule:
+ *
+ * - `Security/RateLimitGuard.php::guard()` runs on `rest_pre_dispatch` for
+ *   `algerian-commerce/v1` only, classifies anything that is not `GET`, `HEAD` or
+ *   `OPTIONS` as a write, and enforces the write limit against **both** a
+ *   `user:{id}` counter and an `ip:{addr}` counter.
+ * - `Security/RateLimiter.php` — `DEFAULT_WRITES = 120`, `WINDOW = 60`.
+ * - `Security/RateLimit.php` — a **fixed** window, stated in its own docblock:
+ *   *"the counter resets on a boundary … it bounds sustained abuse … it is not a
+ *   traffic shaper"*. `isExceeded($used)` is `$used > $limit`.
+ * - Over the limit is `429 too_many_requests`, *"Too many requests. Please retry
+ *   shortly."*, carrying `details.retry_after` — seconds to the next boundary.
+ *
+ * So a full 200-cell run **cannot complete inside one window**, and the shop's
+ * whole write allowance is shared with every other thing the operator does that
+ * minute. Where the run lands depends on where the minute boundary falls, which
+ * is the property a fixed window has and a shaper does not.
+ *
+ * **What the panel does with that today is the honest gap, and it is named here
+ * rather than repaired here.** `isParentRefusal()` stops the run only on a 409
+ * with neither `variation_id` nor `sku` in its details. A 429 is not that, so it
+ * is recorded against its own combination and the loop continues — and the run
+ * would produce a list of identical *"Too many requests"* rows, which is exactly
+ * the shape `ProductVariations`' own docblock refuses for the parent-level 409:
+ * *"firing the remaining forty-nine would be forty-nine identical failures behind
+ * a progress bar"*. Raising the cap is what makes that reachable; closing it is a
+ * change to when a run abandons and what it tells the person to do next, with its
+ * own argument, and it is not a side effect of changing a number.
  */
-export const COMBINATION_CAP = 50;
+export const COMBINATION_CAP = 200;
 
 export type GenerationPlan = {
   axes: Axis[];
