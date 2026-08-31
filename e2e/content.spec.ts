@@ -347,7 +347,11 @@ test.describe("the homepage document", () => {
     await bar.getByRole("button", { name: "Enregistrer", exact: true }).click();
 
     await expect(
-      page.getByText(/Enregistrer et supprimer les sections illisibles/),
+      /* The heading, not the text. `ConfirmDialog` gives Radix an accessible
+         description carrying the same sentence in an `sr-only` paragraph, so a
+         bare text match resolves to two and fails on strict mode rather than on
+         the dialog being absent. */
+      page.getByRole("heading", { name: /Enregistrer et supprimer les sections illisibles/ }),
     ).toBeVisible();
 
     /*
@@ -408,7 +412,10 @@ test.describe("banners and FAQs", () => {
     await expect(
       page.getByRole("button", { name: /^Quel est le délai de livraison/ }),
     ).toBeVisible();
-    await expect(page.getByText("livraison").first()).toBeVisible();
+    /* Filtered to what is on screen: `DataTable` keeps both presentations in the
+       DOM and hides one per breakpoint, so `.first()` alone picks the table's
+       copy at a phone width and asserts a hidden element is visible. */
+    await expect(page.getByText("livraison").filter({ visible: true }).first()).toBeVisible();
   });
 });
 

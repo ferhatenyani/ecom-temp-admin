@@ -108,6 +108,26 @@ function rowFor(page: Page, login: string): Locator {
   return rows(page).filter({ hasText: login }).first();
 }
 
+/**
+ * Open one account's detail from the list.
+ *
+ * **Clicking the row, not a link inside it**, because only one of the two
+ * presentations has a link. `DataTable` renders a real `<table>` at `md` and up,
+ * where `columns.tsx` makes the name cell an anchor for the keyboard and the
+ * middle click; below that it renders a stacked record list whose `primary` is
+ * `userRecord()`'s plain `<span>`. Navigation there is `UsersList`'s
+ * `onRowClick`, so `getByRole("link")` resolves to nothing and the click times
+ * out — which is what three tests here did at all three phone widths.
+ *
+ * The row click is the one gesture that works in both, and it is also the one a
+ * person makes. The anchor keeps its own coverage through the keyboard path.
+ */
+async function openAccount(page: Page, row: Locator) {
+  await expect(row).toBeVisible();
+  await row.click();
+  await page.waitForURL(/\/users\/\d+/);
+}
+
 test.describe("settings", () => {
   test("renders the writable blocks, the refused ones with their reason, and saves", async ({
     page,
@@ -210,7 +230,7 @@ test.describe("staff", () => {
     const row = rowFor(page, SUSPENDED);
     await expect(row).toBeVisible();
     await expect(row).toContainText("Suspendu");
-    await row.getByRole("link").first().click();
+    await openAccount(page, row);
 
     // Reactivate. The tone flips with the outcome, so this one is the primary.
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeEnabled();
@@ -263,7 +283,7 @@ test.describe("staff", () => {
 
     const mine = rows(page).filter({ hasText: "Vous" }).first();
     await expect(mine).toBeVisible();
-    await mine.getByRole("link").first().click();
+    await openAccount(page, mine);
 
     // The role picker is replaced by a value and a reason. Not disabled: absent.
     await expect(page.getByText(/Vous ne pouvez pas changer votre propre rôle/)).toBeVisible();
@@ -299,7 +319,7 @@ test.describe("staff", () => {
      * and the record list in the DOM at once, so that selector would also match
      * every row twice.
      */
-    await rowFor(page, SUSPENDED).getByRole("link").first().click();
+    await openAccount(page, rowFor(page, SUSPENDED));
 
     /*
      * A suspended account refuses a credential with its own 409 — the panel

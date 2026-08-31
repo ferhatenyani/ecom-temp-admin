@@ -264,8 +264,24 @@ test.describe("the composer", () => {
     await expect(page.getByTestId("preview-frame")).toBeVisible();
     await expect(page.getByTestId("preview-stale")).toHaveCount(0);
 
+    /*
+     * **Unique per run, because this test saves what it types.**
+     *
+     * It filled a fixed string, pressed `refresh-preview` — which PATCHes — and
+     * asserted the stale marker on the way. That works exactly once: the second
+     * run opens a campaign whose stored subject is already that string, so the
+     * fill changes nothing, `contentChanged` stays false and the marker never
+     * appears. It read as the staleness feature being broken, on a shop where
+     * the feature was working and the fixture had simply caught up with the
+     * test. A suite that mutates the shop has to leave it in a state it can run
+     * against again.
+     *
+     * The stamp goes inside the sentence rather than replacing it, so the
+     * resolved-token assertion below still has its literal to match on.
+     */
+    const stamp = Date.now().toString().slice(-6);
     const subject = page.getByLabel("Objet");
-    await subject.fill("{{shop_name}} — test du composeur, {{first_name}}");
+    await subject.fill(`{{shop_name}} — test du composeur ${stamp}, {{first_name}}`);
 
     // The frame is now a render of something else, and says so.
     await expect(page.getByTestId("preview-stale")).toBeVisible();
