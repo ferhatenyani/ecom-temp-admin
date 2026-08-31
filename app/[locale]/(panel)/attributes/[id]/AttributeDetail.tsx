@@ -239,7 +239,12 @@ export function AttributeDetail({
         setTermAddFields(bound);
         /* The duplicate-slug 409 carries `details.slug` and a sentence, and no
            `fields` — so it lands here rather than under the box, which is where
-           the sentence is actually about what to do next. */
+           the sentence is actually about what to do next. Since the fix round's
+           item 8 the *duplicate name* answers the same way, with `details.term_id`
+           instead of `details.slug`: `AttributeRepository::fromWpError()` reads
+           the colliding id out of WordPress's `term_exists` error rather than
+           dropping it. Nothing here reads that id yet; offering "open the term
+           you already have" is a screen this branch did not build. */
         if (loose.length > 0) setTermAddError(loose.join(" "));
         else if (Object.keys(bound).length === 0) setTermAddError(caught.message);
         return;

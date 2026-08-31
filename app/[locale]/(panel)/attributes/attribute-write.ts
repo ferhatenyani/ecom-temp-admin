@@ -32,24 +32,36 @@ import type { AttributeTerm, GlobalAttributeDetail } from "@/lib/api/schemas/pro
  *    `null` when nothing changed, and the save control is off. **The panel never
  *    sends that request.**
  *
- * 2. **WooCommerce's own refusals arrive under `details.fields.attribute`, and
- *    there is no field called `attribute`.** `AttributeRepository::fromWpError()`
- *    cannot tell which key WooCommerce meant, so it files every non-conflict
- *    `WP_Error` under that literal string. Measured, all three of them:
+ * 2. **WooCommerce's own refusals now arrive under the field that failed, and
+ *    this item used to say they did not.** `AttributeRepository::fromWpError()`
+ *    filed every non-conflict `WP_Error` under `details.fields.attribute` — one
+ *    literal string, and no control on any form is called `attribute` — so a
+ *    screen binding `details.fields` by key showed **nothing** for the two
+ *    refusals a real shop meets. The fix round's item 8 fixed it at the source
+ *    rather than in this file. Measured again after the change:
  *
- *      Slug "…" is too long. Please use a shorter slug.
- *      Slug "type" is not allowed because it is a reserved term. Change it, please.
- *      Slug "…" is already in use. Change it, please.  (409, and see 3)
+ *      400 {"fields":{"slug":"Slug \"type\" is not allowed because it is a reserved term. Change it, please."}}
+ *      400 {"fields":{"name":"Slug \"longueurlongueur…\" is too long. Please use a shorter slug."}}
  *
- *    A form that binds `details.fields` to its inputs by key shows **nothing**
- *    for these. `fieldErrors()` below splits them out so the screen can put the
- *    sentence somewhere a person will see it.
+ *    **Which key depends on the payload, not on the refusal.**
+ *    `wc_create_attribute()` derives the slug from the *name* when none is
+ *    stated and then refuses the string it derived, so a person who typed a long
+ *    label and left the slug box empty is told about a slug they never wrote —
+ *    and the control that can fix it is the name. The backend decides that from
+ *    the same fact this file does: whether the body carried a `slug` key.
+ *    `attributeCreateBody()` below omits a blank one, which is what makes the
+ *    two agree.
  *
- * 3. **A duplicate slug is a 409 with no `details` at all**, not a 400 naming
- *    the field: `fromWpError()` matches `already_exists` in the code and drops
- *    to `ApiException::conflict($message)`, which takes one argument. So the
- *    only thing a screen has is the message, and the message is WooCommerce's
- *    and already names the slug.
+ * 3. **A duplicate slug is a 409, and it now carries `details.slug`** — the
+ *    value that clashed, at the top of `details` and deliberately not under
+ *    `fields`. `fields` is this API's 400 validation channel and no conflict in
+ *    the plugin writes to it; what a 409 carries is the offending value, the
+ *    shape `ProductService` uses for a duplicate SKU. The message is still
+ *    WooCommerce's and still names the slug, so a banner remains the right place
+ *    for it — the added key is for a screen that wants to say *which* slug
+ *    without parsing a sentence. **A 409 on a derived slug carries no `slug`
+ *    key**, because the backend does not know the derived string either; the
+ *    message does.
  *
  * 4. **A slug change is reported in `meta`, not in the resource.**
  *    `AttributeController::update()` returns `['slug_changed' => true]` only
@@ -326,12 +338,36 @@ export function blankRequired(value: string): boolean {
  * Splits a 400's `details.fields` into the part a control can wear and the part
  * that has nowhere to go.
  *
- * `attribute` is WooCommerce's catch-all key and is not a field (see the file
- * docblock). Anything else the API names that this form does not draw —
- * `terms`, `attribute_id`, `attribute_name`, `parent`, `products` — is in the
- * same position: the panel never sends those keys, so a message about one is
- * either a bug in this screen or an API change, and either way it belongs on
- * screen rather than dropped.
+ * ## It was written for `attribute`, and it outlived it
+ *
+ * This function exists because `AttributeRepository::fromWpError()` filed every
+ * WooCommerce refusal under `details.fields.attribute`, a key no control has, and
+ * a form binding by key rendered nothing. **The fix round's item 8 fixed that at
+ * the source**, so `attribute` is no longer a key this API emits and the case
+ * this was written for cannot occur. The honest question was then whether to
+ * delete it. It is kept, and the reasons are not sentiment:
+ *
+ *  - **`ProductAttributes.tsx` calls it with `["attributes"]` against keys that
+ *    can never match.** `AttributeInput::listFromPayload()` reports per entry —
+ *    `attributes[0]`, `attributes[0].options`, `attributes[0].id` — so `loose`
+ *    is structurally load-bearing there and always was. That screen has nothing
+ *    to do with `fromWpError()` and was never affected by it.
+ *  - **The forms here draw fewer controls than the API names.** The create form
+ *    on `AttributesScreen` has `name` and `slug`; `GlobalAttributeInput` can
+ *    name `type`, `order_by` and `has_archives` in the same envelope, and
+ *    refuses `terms`, `attribute_id` and `attribute_name` **by name** with a
+ *    sentence written to be read. The term forms are the same shape against
+ *    `AttributeTermInput`'s `menu_order`. Those are real keys on real 400s with
+ *    no box to wear them.
+ *  - **Its `null` branch is the shape of every 409 and of the `details`-less
+ *    400.** Callers hand it `caught.fields` without checking, and the empty
+ *    split is what lets one `onError` cover three response shapes.
+ *
+ * What changed is only which messages end up in `loose`: WooCommerce's own slug
+ * refusals used to be the common case and are now bound to `name` or `slug` like
+ * any other validation error. `loose` is back to what its name says — a key this
+ * screen does not draw, meaning either a bug here or an API change, and both are
+ * worth a person seeing rather than dropping.
  *
  * `known` is the set of keys the caller actually has a control for.
  */

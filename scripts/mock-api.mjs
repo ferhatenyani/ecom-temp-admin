@@ -14438,19 +14438,31 @@ const MAX_ATTRIBUTE_SLUG_BYTES = 29;
  *     Slug "%s" is not allowed because it is a reserved term. Change it, please.
  *     Slug "%s" is already in use. Change it, please.
  *
- * **They arrive under `details.fields.attribute`, which is not a field.**
- * `AttributeRepository::fromWpError()` has no way to tell which key WooCommerce
- * meant, so it files every non-conflict `WP_Error` under the literal string
- * `attribute` — a name no control on any form is called. That is the single most
- * important thing this fixture has to reproduce: a screen that binds
- * `details.fields` to its inputs by key renders **nothing at all** for these
- * three, and would look correct against a mock that filed them under `slug`.
+ * **The key they arrive under changed, and this fixture changed with it.** Until
+ * the fix round's item 8 they were filed under `details.fields.attribute` — one
+ * literal string for all three, a name no control on any form is called — so a
+ * screen binding `details.fields` by key rendered nothing at all, and the
+ * duplicate beside them was a 409 with no `details` whatsoever.
+ * `AttributeRepository::fromWpError()` now maps the code to the field that
+ * actually failed, and this reproduces that:
  *
- * The duplicate is the odd one out and is a **409 with no `details` key at
- * all** — `fromWpError()` matches `already_exists` in the code and drops to
- * `ApiException::conflict($message)`, which takes no details. Measured:
+ *     400 {"fields":{"slug":"Slug \"type\" is not allowed …"}}    slug stated
+ *     400 {"fields":{"name":"Slug \"type\" is not allowed …"}}    slug derived
+ *     409 {"details":{"slug":"acprobesize"}}                      duplicate
  *
- *     409 {"code":"conflict","message":"Slug \"acprobesize\" is already in use. Change it, please."}
+ * **Which of `slug` and `name` is decided by the payload, not by the code**, and
+ * that is the part worth keeping straight here. `wc_create_attribute()` derives
+ * the slug from the *name* when none is stated (`wc_sanitize_taxonomy_name(
+ * $args['name'] )`) and then refuses the string it derived — so a shop that
+ * types a long label and leaves the slug box empty is told about a slug it never
+ * wrote, and the control that can fix it is the name. `$field` is threaded in
+ * from the caller for exactly that reason; a mock that hard-coded `slug` would
+ * make the panel's empty-box case look correct when it is not.
+ *
+ * The 409 carries the offending value at the top of `details` and no `fields`
+ * key, which is this API's rule everywhere: `fields` is the 400 validation
+ * channel and no conflict writes to it. Same shape the term-level duplicate
+ * already had from `AttributeService::createTerm()`.
  *
  * The reserved list is short and is only the collisions a shop can plausibly
  * reach: `wc_check_if_attribute_name_is_reserved()` walks `$wp_rewrite`'s
@@ -14460,25 +14472,38 @@ const MAX_ATTRIBUTE_SLUG_BYTES = 29;
  */
 const RESERVED_ATTRIBUTE_SLUGS = ["type", "category", "name", "tag", "author", "post_type"];
 
-function attributeRefusal(slug, ignoreId = 0) {
+/**
+ * @param {string} slug the slug as WooCommerce would see it, stated or derived
+ * @param {number} ignoreId the row a rename is allowed to collide with, itself
+ * @param {"slug" | "name"} field the control the caller used — `name` when the
+ *   slug was derived from it, which is what `fromWpError()`'s `slugField()`
+ *   decides from the same fact
+ */
+function attributeRefusal(slug, ignoreId = 0, field = "slug") {
   if (slugBytes(slug) > MAX_ATTRIBUTE_SLUG_BYTES) {
     return invalidBody("The attribute data is invalid.", {
-      attribute: `Slug "${slug}" is too long. Please use a shorter slug.`,
+      [field]: `Slug "${slug}" is too long. Please use a shorter slug.`,
     });
   }
 
   if (RESERVED_ATTRIBUTE_SLUGS.includes(slug)) {
     return invalidBody("The attribute data is invalid.", {
-      attribute: `Slug "${slug}" is not allowed because it is a reserved term. Change it, please.`,
+      [field]: `Slug "${slug}" is not allowed because it is a reserved term. Change it, please.`,
     });
   }
 
   const clash = attributeRows().find((row) => row.slug === slug && row.id !== ignoreId);
 
   if (clash !== undefined) {
-    // No details. `ApiException::conflict($message)` is called with one
-    // argument, so the key is absent rather than empty — see `fail()`.
-    return conflict(`Slug "${slug}" is already in use. Change it, please.`);
+    /* The value, not a `fields` entry. A duplicate is the order's — the shop's —
+       state rather than a bad value, and every 409 in the plugin keeps out of
+       `fields`; what it carries instead is the thing that clashed, so a screen
+       can say which slug without parsing the sentence. Omitted when the slug was
+       derived, because the backend does not know the derived string either. */
+    return conflict(
+      `Slug "${slug}" is already in use. Change it, please.`,
+      field === "slug" ? { slug } : {},
+    );
   }
 
   return null;
@@ -14626,12 +14651,15 @@ function createAttribute(body) {
   /* `pa_` is **stripped rather than refused**, because `GET /attributes`
      publishes the taxonomy as `pa_matiere` and §82's filters take either form —
      refusing the shape the API itself emits would break the round trip. */
-  const slug =
-    "slug" in parsed.writes
-      ? parsed.writes.slug.trim().toLowerCase().replace(/^pa_/, "")
-      : taxonomySlug(name);
+  const stated = "slug" in parsed.writes;
+  const slug = stated
+    ? parsed.writes.slug.trim().toLowerCase().replace(/^pa_/, "")
+    : taxonomySlug(name);
 
-  const refusal = attributeRefusal(slug);
+  /* The third argument is the whole of the fix round's item 8 on this route: a
+     slug the caller stated is refused under `slug`, and one derived from the
+     label is refused under `name`, because that is the box a person can fix. */
+  const refusal = attributeRefusal(slug, 0, stated ? "slug" : "name");
   if (refusal) return refusal;
 
   const id = state.nextAttributeId++;
@@ -14740,6 +14768,10 @@ function patchAttribute(current, body) {
 
   if ("slug" in parsed.writes) {
     const slug = parsed.writes.slug.trim().toLowerCase().replace(/^pa_/, "");
+    /* No field argument: this branch runs only when the payload stated a slug,
+       and `wc_update_attribute()` back-fills an omitted one from the stored
+       attribute — which by definition already passed. So an update's slug
+       refusal is always about a slug somebody typed. */
     const refusal = attributeRefusal(slug, current.id);
     if (refusal) return refusal;
     next.slug = slug;
