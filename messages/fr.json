@@ -184,8 +184,21 @@
         "title": "Livraison",
         "same": "Identique à la facturation",
         "sameWhy": "L’e-mail n’est pas repris : une adresse de livraison n’en porte pas.",
+        "destinationWhy": "Le transporteur a besoin d’une destination explicite : elle n’est pas déduite de l’adresse. La choisir ici remplit la wilaya et la ville de l’adresse lorsqu’elles sont vides.",
+        "wilayaMismatch": "L’adresse indique {name}.",
         "amount": "Frais de livraison",
-        "amountHint": "Laissez vide si la livraison n’est pas facturée. {max} au maximum."
+        "amountHint": "Laissez vide si la livraison n’est pas facturée. {max} au maximum.",
+        "carrier": "Transporteur",
+        "carrierNone": "Non décidé",
+        "carrierNoPrice": "Aucun tarif ici",
+        "carrierNoAccess": "Votre compte ne peut pas lire la liste des transporteurs, le choix n’est donc pas disponible. Saisissez le nom du transporteur ; l’API refuse un nom inconnu et indique ceux qui existent.",
+        "deliveryTypeHint": "Change le tarif calculé. Le trajet n’est pas enregistré sur la commande : il est redemandé à la création du colis.",
+        "quotePrompt": "Choisissez une wilaya et une commune pour obtenir un tarif.",
+        "quoting": "Calcul du tarif…",
+        "quoted": "Tarif obtenu : {source}.",
+        "quoteNone": "{name} n’a pas de tarif pour cette destination.",
+        "quotedAmount": "Tarif de livraison calculé :",
+        "quoteFailed": "Le tarif n’a pas pu être calculé : {message} Saisissez les frais à la main."
       },
       "payment": {
         "title": "Paiement",
@@ -223,6 +236,13 @@
         "title": "Livraison",
         "same": "Identique à la facturation",
         "sameWhy": "L’e-mail n’est pas repris : une adresse de livraison n’en porte pas."
+      },
+      "destination": {
+        "title": "Destination",
+        "description": "La wilaya et la commune du référentiel, celles sur lesquelles un transporteur achemine. Distinctes de l’adresse au-dessus, qui est du texte libre.",
+        "deliveryType": "Type de livraison",
+        "deliveryTypeUnset": "Non précisé",
+        "hint": "Modifiable à tout statut : c’est ainsi qu’on corrige une commande qu’un transporteur a refusée. Vider les listes n’efface pas la destination enregistrée — une valeur vide ne dit rien."
       },
       "payment": {
         "title": "Paiement",
@@ -1053,6 +1073,9 @@
     "pickWilaya": "Wilaya",
     "pickCommune": "Commune",
     "pickCommuneFirst": "Choisissez d’abord une wilaya",
+    "communesLoading": "Chargement des communes…",
+    "noCommunes": "Aucune commune n’est chargée pour cette wilaya.",
+    "notChosen": "Non renseignée",
     "resolved": "Prix retenu",
     "resolvedBy": "Règle appliquée",
     "resolvedNone": "Aucune règle ne couvre cette destination.",
@@ -1141,7 +1164,17 @@
     "resolverPrompt": "Choisissez une wilaya et une commune pour connaître le prix.",
     "resolverFailed": "Le prix n’a pas pu être calculé.",
     "communesFailed": "La liste des communes n’a pas pu être chargée.",
-    "disagreeTitle": "L’API et cette page ne s’accordent pas"
+    "disagreeTitle": "L’API et cette page ne s’accordent pas",
+    "failure": {
+      "title": "Aucun colis n’a été créé à la confirmation",
+      "undated": "date non enregistrée",
+      "answered": "Échec précédent chez {courier}, résolu par le colis ci-dessous",
+      "createByHand": "Créer le colis à la main",
+      "fixDestination": "Corriger la destination",
+      "alsoFixDestination": "Renseignez aussi la wilaya et la commune sur la commande, sinon la prochaine confirmation échouera de la même façon.",
+      "alsoCreateByHand": "Une commande déjà confirmée ne relance rien toute seule : après correction, créez le colis à la main ci-dessous."
+    },
+    "manualNote": "Le colis est créé tout seul à la confirmation de la commande. Passez par ici quand ce n’est pas possible : un transporteur a refusé l’adresse, la commande n’a pas de destination, elle est expédiée sans changer de statut, il faut la réexpédier après un échec de livraison, ou le colis demande ce que la commande ne dit pas — retrait au bureau, autre destinataire, autre téléphone."
   },
   "payments": {
     "title": "Paiements",

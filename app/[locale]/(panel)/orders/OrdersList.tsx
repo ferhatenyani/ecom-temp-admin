@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { acRead } from "@/lib/api/browser";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
+import type { ShippingProvider } from "@/lib/api/schemas/shipping";
 import { orderStatuses } from "@/lib/order-status";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
 import {
@@ -70,8 +71,10 @@ export function OrdersList({
   initialOrders,
   initialTotal,
   wilayas,
+  providers,
   canPickProducts,
   canPickCustomers,
+  canQuoteShipping,
 }: {
   locale: string;
   initialQuery: OrdersQuery;
@@ -79,13 +82,23 @@ export function OrdersList({
   initialTotal: number | null;
   wilayas: Wilaya[];
   /**
-   * `ac_manage_products` and `ac_manage_customers`, for the create drawer's two
-   * pickers. Resolved on the server from `/auth/me` and passed down rather than
-   * re-read here: this component has no session, and the drawer degrades rather
-   * than 403s — see `NewOrderDrawer`'s docblock for the role that needs it.
+   * `GET /shipping/providers`, for the create drawer's carrier picker. Empty
+   * without `ac_manage_shipping`, and empty again when the read failed — the
+   * drawer tells the two apart by `canQuoteShipping` rather than by the length,
+   * because "you may not see this list" and "this list would not load" are
+   * different sentences to show an operator.
+   */
+  providers: ShippingProvider[];
+  /**
+   * `ac_manage_products`, `ac_manage_customers` and `ac_manage_shipping`, for
+   * the create drawer's three pickers. Resolved on the server from `/auth/me`
+   * and passed down rather than re-read here: this component has no session,
+   * and the drawer degrades rather than 403s — see `NewOrderDrawer`'s docblock
+   * for the role that needs the first, and `CarrierFields`' for the third.
    */
   canPickProducts: boolean;
   canPickCustomers: boolean;
+  canQuoteShipping: boolean;
 }) {
   const t = useTranslations("orders");
   const tStatus = useTranslations("status");
@@ -474,9 +487,11 @@ export function OrdersList({
         open={creating}
         onOpenChange={setCreating}
         wilayas={wilayas}
+        providers={providers}
         locale={locale}
         canPickProducts={canPickProducts}
         canPickCustomers={canPickCustomers}
+        canQuoteShipping={canQuoteShipping}
         returnFocusTo={CREATE_BUTTON_ID}
         /*
          * The new order is opened in the peek rather than navigated to.

@@ -37,6 +37,26 @@ import { StaleBanner } from "@/components/ui/States";
  * control disabled with that same reason. There are eight write controls on this
  * screen in four files; the reason has to come from one place or seven of them
  * will say something slightly different.
+ *
+ * ## And why the edit drawer's *open* state lives here too
+ *
+ * It did not, until this branch. `OrderEditDrawer` owned a local `open` and the
+ * only thing that could set it was its own trigger in the header — which was
+ * correct while the drawer had exactly one way in.
+ *
+ * The parcels card in the main column now has a second. When confirmation could
+ * not create a parcel because a courier refused the address, the fix is the
+ * order's `wilaya_id` and `commune_id` — `OrderService::guardDestinationResolves()`
+ * has no `is_editable` gate for precisely that reason — and those two controls
+ * are inside that drawer. A remedy that named the drawer without opening it
+ * would be an instruction to go and find a button, on a screen where that button
+ * is 360px away at `lg`+ and above a variable-length item list below it. That is
+ * the same geometry the refusal region above exists for, so it is the same
+ * context that answers it.
+ *
+ * The drawer still renders its own trigger and still owns everything else about
+ * itself — the draft, the refusals, the mutation. What moved is one boolean and
+ * the setter for it, which is the smallest thing that makes the remedy real.
  */
 
 type OrderScreenValue = {
@@ -44,11 +64,17 @@ type OrderScreenValue = {
   refuse: (body: ReactNode | null) => void;
   /** `null` when writes are permitted, otherwise the reason they are not. */
   writesBlocked: string | null;
+  /** Whether `OrderEditDrawer` is open. */
+  editing: boolean;
+  /** Open or close it — from its own trigger, or from a remedy elsewhere. */
+  setEditing: (open: boolean) => void;
 };
 
 const OrderScreenContext = createContext<OrderScreenValue>({
   refuse: () => {},
   writesBlocked: null,
+  editing: false,
+  setEditing: () => {},
 });
 
 export function useOrderScreen(): OrderScreenValue {
@@ -87,6 +113,7 @@ export function OrderScreen({
 }) {
   const t = useTranslations("states");
   const [refusal, setRefusal] = useState<ReactNode | null>(null);
+  const [editing, setEditing] = useState(false);
 
   /*
    * `navigator.onLine` is trusted in one direction only, which is the direction
@@ -102,6 +129,8 @@ export function OrderScreen({
       value={{
         refuse: setRefusal,
         writesBlocked: online ? null : t("offlineWrites"),
+        editing,
+        setEditing,
       }}
     >
       <NoticeContext.Provider

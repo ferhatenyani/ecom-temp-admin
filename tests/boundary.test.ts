@@ -767,6 +767,50 @@ describe("the proxy allowlist", () => {
     expect(checkAllowed(["locations", "wilayas", "16", "communes"], "GET").allowed).toBe(true);
     expect(checkAllowed(["locations", "communes", "484"], "GET").allowed).toBe(false);
     expect(checkAllowed(["locations", "coverage"], "GET").allowed).toBe(false);
+
+    /*
+     * **The storefront's rate route is refused, and it is refused on purpose.**
+     *
+     * The create drawer's carrier block quotes a delivery fee, and
+     * `GET /checkout/shipping-rates` was the other candidate for it — tempting
+     * because its `permission_callback` is `__return_true`, so it needs no
+     * capability at all where `/shipping/rates` needs `ac_manage_shipping`.
+     *
+     * It prices **a cart**. `Cart\CheckoutService::shippingRates()` reads the
+     * subtotal off the cart session and never off the request, and its args are
+     * a destination plus `cart_token` — read from source. A back-office order is
+     * not a cart and the panel has no cart route to open one with, so a screen
+     * reaching this would be inventing a shopper in order to learn a price.
+     *
+     * It also answers a different question: one row per courier, already picked
+     * by `ShopperRates::forProvider()`, where `/shipping/rates` returns every
+     * row and lets its caller choose — which is what the picker needs in order
+     * to say what each courier charges. `CarrierFields.tsx` carries the full
+     * argument; this is the line that stops the choice being quietly reversed.
+     *
+     * Nothing under `/checkout` or `/cart` is reachable through the proxy, and
+     * that is the whole storefront surface: it belongs to a shopper's session,
+     * not to a staff credential.
+     */
+    expect(checkAllowed(["checkout", "shipping-rates"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["checkout"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["cart"], "GET").allowed).toBe(false);
+    expect(checkAllowed(["cart", "coupons"], "POST").allowed).toBe(false);
+
+    /*
+     * And the two the carrier block *does* call are both already here — put
+     * there by the shipping rules editor, so this branch widened the proxy by
+     * nothing. `/shipping/providers` sources the picker and `/shipping/rates`
+     * prices it, and both sit behind `ac_manage_shipping` while the drawer's own
+     * `POST /orders` sits behind `ac_manage_orders`. The panel resolves the two
+     * separately and the drawer degrades to a plain courier field when it holds
+     * only the second.
+     */
+    expect(checkAllowed(["shipping", "providers"], "GET").allowed).toBe(true);
+    expect(checkAllowed(["shipping", "rates"], "GET").allowed).toBe(true);
+    // A read, and only a read: nothing quotes by POST.
+    expect(checkAllowed(["shipping", "rates"], "POST").allowed).toBe(false);
+    expect(checkAllowed(["shipping", "providers"], "POST").allowed).toBe(false);
   });
 
   it("permits reading and verifying a payment, and never starting one", () => {
@@ -966,6 +1010,17 @@ describe("order domain rules", () => {
        keys, so this fixture states both rather than leaning on a default. */
     shipping_amount: null,
     shipping_total: "0.00",
+    /* The five keys the carrier branch added to the read shape. All null here,
+       which is what an order nobody has addressed or assigned reads as — and
+       `null` rather than `0` on the two ids is the presenter's own choice, so
+       that a whole-body PATCH of such an order does not 400 on keys the client
+       never touched. */
+    shipping_source: null,
+    shipping_provider: null,
+    shipping_provider_error: null,
+    wilaya_id: null,
+    commune_id: null,
+    delivery_type: null,
     total_tax: "0.00",
     subtotal: "0.00",
     total: "0.00",

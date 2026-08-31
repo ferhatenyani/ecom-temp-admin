@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   LABEL_METADATA_KEYS,
+  OWN_FAILURE_CODES,
   applicableRules,
   byNarrowestFirst,
   createShipmentGate,
+  failureRemedy,
+  manualParcelOffered,
   providerLabel,
   providerStatus,
+  readFailure,
   ruleScope,
   shipmentCodAmount,
   shipmentWilayaId,
@@ -300,6 +304,193 @@ describe("the one-live-shipment rule", () => {
 
     expect(createShipmentGate(dead).allowed).toBe(true);
     expect(createShipmentGate([]).allowed).toBe(true);
+  });
+
+  /**
+   * The same test under the name step 2 gave it.
+   *
+   * `manualParcelOffered` is `createShipmentGate` and the expression did not
+   * change; what changed is what the branch *means*. Confirmation creates the
+   * parcel now, so this no longer answers "may a parcel be created" on a screen
+   * where by hand was the only way — it answers "is the fallback needed". Both
+   * names are asserted against each other here so a future edit to one is a
+   * failure rather than a divergence.
+   */
+  it("offers the manual route on exactly the orders the gate allows", () => {
+    for (const list of [
+      [],
+      [stripLabelUrls(manualShipment)],
+      [stripLabelUrls({ ...manualShipment, id: 214, status: "delivered" })],
+      [stripLabelUrls({ ...manualShipment, id: 220, is_live: true, status: "created" })],
+    ]) {
+      expect(manualParcelOffered(list)).toBe(createShipmentGate(list).allowed);
+    }
+  });
+});
+
+/**
+ * `shipping_provider_error` — why confirmation created no parcel, and how old
+ * that answer is.
+ *
+ * The shape is `Shipping\ShipmentFailure::toArray()`'s and every rule asserted
+ * here is read from source in `ecom-temp`'s `feat/carrier-choice` tree:
+ * `ShipmentSubscriber` for when the value is written and cleared,
+ * `ShipmentFailure` for the codes and the nullability, `ShippingService::create()`
+ * for what a refusal leaves behind.
+ *
+ * Nothing here was measured over HTTP and nothing claims to have been —
+ * `BLOCKED.md` records the 401 that stops it.
+ */
+describe("why no parcel appeared", () => {
+  const failureAt = (at: string | null, code = "yalidine_parcel_refused") => ({
+    provider: "yalidine",
+    code,
+    message: "Yalidine would not create this parcel.",
+    provider_message: "commune introuvable: Ouled Fayet",
+    at,
+  });
+
+  const parcelAt = (created: string, overrides: Partial<Shipment> = {}) =>
+    stripLabelUrls({
+      ...manualShipment,
+      id: 300,
+      created_at: created,
+      updated_at: created,
+      ...overrides,
+    });
+
+  it("reads nothing at all when the order carries no failure", () => {
+    expect(readFailure(null, []).state).toBe("none");
+    expect(readFailure(undefined, []).state).toBe("none");
+  });
+
+  /**
+   * The branch step 2's sub-task 4 asks for, and the set is open on one side.
+   *
+   * `OWN_FAILURE_CODES` is the five this system mints for itself; **anything
+   * else is a courier's**, because each adapter names its own and a courier
+   * configured next year brings more. Testing membership of the closed list and
+   * treating the complement as a refusal is what stops a code nobody thought of
+   * being mis-handled.
+   */
+  it("sends our own codes to the parcel route and a courier's to the address", () => {
+    for (const code of OWN_FAILURE_CODES) {
+      expect(failureRemedy(code), code).toBe("parcel");
+    }
+
+    for (const code of [
+      "yalidine_parcel_refused",
+      "yalidine_destination_unmapped",
+      "yalidine_no_stopdesk",
+      "zrexpress_destination_unmapped",
+      "zrexpress_no_pickup_point",
+      "a_courier_nobody_has_written_yet",
+    ]) {
+      expect(failureRemedy(code), code).toBe("destination");
+    }
+  });
+
+  /**
+   * The missing destination gets the *parcel* remedy, which reads backwards
+   * until the retry is followed.
+   *
+   * Adding the destination is the durable fix and it produces no parcel: the
+   * order recording this is already `processing`, `ShipmentSubscriber` runs on a
+   * *transition* into `processing`, and WooCommerce fires nothing when a status
+   * is re-saved as itself. `ShippingService::create()`'s first reason is the
+   * sentence for it — *"Confirming again is one way back and it needs the order
+   * to leave `processing` first; this route is the way back that does not."*
+   */
+  it("answers a missing destination with the route that works from processing", () => {
+    expect(failureRemedy("order_destination_missing")).toBe("parcel");
+  });
+
+  it("offers a remedy when nothing has been sent since", () => {
+    const reading = readFailure(failureAt("2026-08-20T09:00:00+00:00"), []);
+
+    expect(reading.state).toBe("open");
+    if (reading.state === "open") {
+      expect(reading.remedy).toBe("destination");
+      expect(reading.dated).toBe(true);
+    }
+  });
+
+  /**
+   * A live parcel answers it outright, and it is the only test available for an
+   * undated failure.
+   */
+  it("treats a live parcel as the answer, dated or not", () => {
+    const live = parcelAt("2026-08-19T01:10:25+00:00", {
+      id: 220,
+      is_live: true,
+      status: "created",
+    });
+
+    expect(readFailure(failureAt("2026-08-20T09:00:00+00:00"), [live]).state).toBe("answered");
+    expect(readFailure(failureAt(null), [live]).state).toBe("answered");
+  });
+
+  /**
+   * **A terminal parcel created after the failure answers it too**, and this is
+   * the arm that makes `at` load-bearing.
+   *
+   * Refused on the 20th, sent by hand on the 21st, delivered. Without this the
+   * order would read on the 25th as though nothing had been done — the same
+   * staleness the backend flagged, wearing a different hat. `clearFailure()`
+   * would not have run, because it only fires on a transition that finds a
+   * *live* shipment, so the API is still serving the failure and the panel is
+   * the only thing that can see both facts at once.
+   */
+  it("treats a finished parcel sent after the failure as the answer", () => {
+    const after = parcelAt("2026-08-21T08:00:00+00:00", { status: "delivered" });
+
+    expect(readFailure(failureAt("2026-08-20T09:00:00+00:00"), [after]).state).toBe("answered");
+  });
+
+  /**
+   * And a parcel sent *before* it proves nothing — that is a later confirmation
+   * failing, which is the state the screen most needs to show. Order 1023 in
+   * `scripts/mock-api.mjs` is exactly this shape and is the capture route.
+   */
+  it("keeps the failure open when the only parcel predates it", () => {
+    const before = parcelAt("2026-08-18T08:00:00+00:00", { status: "delivered" });
+    const reading = readFailure(failureAt("2026-08-20T09:00:00+00:00"), [before]);
+
+    expect(reading.state).toBe("open");
+    if (reading.state === "open") expect(reading.remedy).toBe("destination");
+  });
+
+  /**
+   * An undated failure with no parcel is **open and flagged**, which is the
+   * literal case the backend handed over: *"the value persists, so an undated
+   * error reads as current when it is a week old."*
+   *
+   * `at` is genuinely nullable rather than defensively typed —
+   * `ShipmentFailure::iso()` answers null for a stored value it cannot parse and
+   * `fromMeta()` builds a failure out of anything carrying a `code`, because
+   * order meta is a public store another plugin can write into. `dated: false`
+   * is what makes the screen say the time was not recorded instead of rendering
+   * a blank, and a blank is what reads as *now*.
+   */
+  it("flags a failure with no usable time rather than rendering it silently", () => {
+    for (const at of [null, "", "not a date"]) {
+      const reading = readFailure(failureAt(at), []);
+      expect(reading.state, String(at)).toBe("open");
+      if (reading.state === "open") expect(reading.dated, String(at)).toBe(false);
+    }
+  });
+
+  /** `provider_message` is `null` and never `""` when the courier said nothing
+      of its own — `ShipmentFailure::toArray()`'s stated convention, so a client
+      tests one thing to decide whether to draw the second line. */
+  it("carries a null provider message rather than an empty one", () => {
+    const reading = readFailure(
+      { ...failureAt("2026-08-20T09:00:00+00:00"), provider_message: null },
+      [],
+    );
+
+    expect(reading.state).toBe("open");
+    if (reading.state !== "none") expect(reading.failure.provider_message).toBeNull();
   });
 });
 

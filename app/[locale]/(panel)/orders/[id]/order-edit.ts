@@ -201,6 +201,58 @@ export type OrderEditDraft = {
   lines: LineDraft[];
   /** The stated delivery fee, as typed. `""` states nothing — see the docblock. */
   shippingAmount: string;
+  /**
+   * Where the order is going, as geography row ids held as strings.
+   *
+   * ## Why this form has them at all, which was not true a branch ago
+   *
+   * `OrderInput::allowedFields()` names `wilaya_id`, `commune_id` and
+   * `delivery_type` as of the carrier branch, on both verbs, and
+   * `OrderService::guardDestinationResolves()` deliberately carries **no
+   * `is_editable` gate**. That absence is the whole reason these are here rather
+   * than beside the lines in `OrderLinesDrawer`: the guard's own docblock says a
+   * gate *"would freeze it at the exact moment it starts to matter"*, because
+   * both ways an order earns a `shipping_provider_error` are recorded at
+   * `processing`, which is not editable. So the destination belongs to the form
+   * whose every field is writable in every status, and that is this one.
+   *
+   * It is the retry path in `ShipmentSubscriber`'s sense, and it is the reason
+   * the parcels card's *"correct the destination"* remedy has somewhere to go.
+   *
+   * ## Strings, and the pair is cleared together
+   *
+   * Strings like every other field in the form layer, and `""` is *not stated*.
+   * `communeId` is emptied whenever `wilayaId` moves, because a commune belongs
+   * to exactly one wilaya and a half-changed pair names a place that does not
+   * exist — `DestinationFields` enforces that in its own handler and
+   * `new-order.ts` says the same thing about the create draft.
+   *
+   * ## Emptying does not clear the order's destination, and that is the API
+   *
+   * `OrderInput::normalize()` drops `null` and `''` for these two before the
+   * payload is assembled, exactly as it does for `shipping_amount` and
+   * `shipping_provider` — so an emptied picker states nothing and the stored
+   * destination stays where it is. There is no way to un-address an order over
+   * this route, and `0` is not the escape hatch a zero fee is: `OrderInput`
+   * refuses it outright, on the argument that *there is no commune 0* while
+   * there very much is a delivery charge of nothing. The form's hint says so,
+   * because no picker can imply it.
+   */
+  wilayaId: string;
+  communeId: string;
+  /**
+   * `home`, `desk`, or `""` when the order does not say — which is a third
+   * value and not a synonym for `home`.
+   *
+   * `OrderInput` refuses to default this and argues why:
+   * `ShipmentSubscriber::destinationOf()` already falls back to
+   * `Destination::HOME` for a missing value and *"a second default here would
+   * give one fact two owners that can drift, and would make a back-office order
+   * **claim** a journey nobody chose"*. The create draft can honestly open on
+   * `home` because it is stating a new fact; this one is reporting an existing
+   * one, so an order that says nothing opens on nothing.
+   */
+  deliveryType: string;
 };
 
 /**
@@ -305,6 +357,26 @@ export function draftOf(order: Order): OrderEditDraft {
      * `shipping_total`*.
      */
     shippingAmount: order.shipping_amount ?? "",
+    /*
+     * `null` on all three is *the order does not say*, and it is the honest
+     * seed for a screen that reports rather than proposes.
+     * `OrderPresenter::destinationId()` emits `null` rather than `0` precisely
+     * so a client can round-trip an unaddressed order without 400ing on two
+     * keys it never touched, and an empty picker on such an order is showing
+     * the truth — its own docblock says so.
+     *
+     * Seeding the wilaya from `billing.state` was considered and is wrong. That
+     * field is free text a shopper typed, `AddressInput` validates its shape
+     * and nothing more, and it is empty on ~92 % of orders — so it would fill
+     * the picker with a guess on one order in twelve and leave the rest blank,
+     * and the one in twelve would be a *routing* decision derived from an
+     * address. `Shipping\Destination`'s docblock refuses that derivation by
+     * name and `DestinationFields` restates it: a destination is asked for, it
+     * is never inferred from an address.
+     */
+    wilayaId: order.wilaya_id === null ? "" : String(order.wilaya_id),
+    communeId: order.commune_id === null ? "" : String(order.commune_id),
+    deliveryType: order.delivery_type ?? "",
   };
 }
 
@@ -531,6 +603,69 @@ export function buildEditPayload(
     payload.shipping_amount = shippingAmount;
   }
 
+  /*
+   * ── the destination, and it travels as a pair or not at all ─────────────
+   *
+   * **Both ids or neither.** The API would in fact accept one:
+   * `guardDestinationResolves()` reads the order's stored half for whichever
+   * key the payload did not state, and then resolves the pair. That is a
+   * courtesy to a client sending a partial body and it is a bad shape for a
+   * form to rely on — the operator who moved the wilaya and has not yet chosen
+   * a commune would send `wilaya_id` alone, the guard would pair it with the
+   * *old* commune, and the refusal that comes back is *"That commune belongs to
+   * a different wilaya"* about a commune no longer on screen. So the pair is
+   * sent whole and the form does not send a half.
+   *
+   * That is also free rather than enforced: the pickers clear `communeId`
+   * whenever `wilayaId` moves, so a half pair is never a *changed* pair — it is
+   * a pair mid-edit, and `whole` below is what keeps it off the wire until the
+   * operator finishes.
+   *
+   * **Ints, not the strings the form holds.** `OrderInput::destinationId()`
+   * runs `is_numeric()` before the cast and would accept `"16"` — it is
+   * `!is_numeric($value) || (float)$value !== floor((float)$value) || (int)$value < 1`
+   * and nothing more — but the presenter emits integers and a body that
+   * round-trips should send back what it read. `Number()` on a picker value is
+   * exact here: these are row ids the form put in the option `value` itself.
+   *
+   * **Emptied is not cleared.** `null` and `''` are dropped by `normalize()`
+   * before the payload is assembled, so clearing the pickers and saving would
+   * send two keys the API discards. The condition therefore tests `whole`
+   * rather than `changed` alone — an operator who empties the pair changes the
+   * draft and sends nothing, which is exactly what the API would have done with
+   * it, and the field's hint says so on screen.
+   */
+  const wilayaId = Number(draft.wilayaId);
+  const communeId = Number(draft.communeId);
+  const whole =
+    draft.wilayaId !== "" &&
+    draft.communeId !== "" &&
+    Number.isInteger(wilayaId) &&
+    Number.isInteger(communeId);
+
+  if (whole && (wilayaId !== order.wilaya_id || communeId !== order.commune_id)) {
+    payload.wilaya_id = wilayaId;
+    payload.commune_id = communeId;
+  }
+
+  /*
+   * The journey is independent of the pair, and the API agrees:
+   * `guardDestinationResolves()` returns early unless one of the two *ids* is
+   * stated, and its comment says why — `delivery_type` *"is a journey rather
+   * than a place, it needs no pair and no lookup"*, so an order that states
+   * only a desk collection has said something harmless and true about an
+   * address it may not have yet. It is therefore diffed on its own.
+   *
+   * `""` is dropped for the ids' reason, and it is the value an order that has
+   * never said reads back as — so opening this drawer on such an order and
+   * saving something else sends no `delivery_type`, which is right: the order
+   * still has no opinion and `destinationOf()` still ships it home.
+   */
+  const deliveryType = draft.deliveryType.trim();
+  if (deliveryType !== "" && deliveryType !== (order.delivery_type ?? "")) {
+    payload.delivery_type = deliveryType;
+  }
+
   return payload;
 }
 
@@ -606,6 +741,22 @@ export function lineProblems(
  * carries a wilaya code on its address at best (empty on ~92 % of them, measured)
  * and never a commune id. Turning an address into those two ids is the resolver
  * step 2 is for.
+ *
+ * ### Half of that paragraph has since been overturned, and it is quoted rather
+ * ### than rewritten so a reader who remembers it knows why
+ *
+ * **"an order … never [carries] a commune id" is no longer true.** The carrier
+ * branch made `wilaya_id`, `commune_id` and `delivery_type` writable on both
+ * `POST /orders` and `PATCH /orders/{id}` and readable on the order, and this
+ * form now edits all three — `OrderEditDraft` above, and `buildEditPayload`'s
+ * destination block. So the "resolver" this paragraph was waiting for turned out
+ * to be unnecessary for the *ids*: they are stated, not derived, which is the
+ * outcome `Shipping\Destination`'s docblock always argued for.
+ *
+ * **What is still open is exactly the rate lookup**, and the paragraph is right
+ * about it. Nothing on this screen calls `GET /shipping/rates`, and the pieces
+ * below are still the whole of what a later branch has to add. The reasoning the
+ * old text gave is the reasoning that paid off, which is why it is kept.
  *
  * So the field is built **editable and overwritable with no prefill**, which is
  * the honest state: `draftOf()` seeds it from `order.shipping_amount`, which is

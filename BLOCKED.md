@@ -170,4 +170,81 @@ remain unanswered:
 
 ## Item 2, backend step 1 — courier credentials and `sync-destinations`
 
-*Not yet reached. This entry is filled in when item 2 starts.*
+**What the step asks.** Put credentials and `ENABLE_YALIDINE` / `ENABLE_ZR_EXPRESS` in the
+environment, then run `wp algerian-commerce sync-destinations` so wilaya/commune ids map to each
+courier's own ids — `YalidineProvider::getShippingRates()` returns `[]` for any destination it has
+not mapped, and a checkout would silently fall back to the tariff forever.
+
+**Why it is blocked, precisely.** Measured on the running stack:
+
+```
+$ docker compose exec wordpress printenv | grep -E 'YALIDINE|ZR_EXPRESS'
+ENABLE_YALIDINE=            YALIDINE_API_ID=          YALIDINE_API_TOKEN=
+YALIDINE_WEBHOOK_SECRET=    ENABLE_ZR_EXPRESS=        ZR_EXPRESS_TENANT_ID=
+ZR_EXPRESS_API_KEY=         ZR_EXPRESS_WEBHOOK_SECRET=
+                                                    — all eight present and all eight empty
+
+$ wp algerian-commerce shipping-check
+Geography: 69 wilayas, 1541 communes.
+provider   credentials   destinations   notes
+manual     n/a           0              ready
+Success: Every configured courier is ready.
+```
+
+Read that last line carefully: it says every *configured* courier is ready, and none is
+configured. `manual` is the only provider `GET /shipping/providers` reports.
+
+Both couriers are fully implemented — `integrations/Yalidine/YalidineProvider.php` and
+`integrations/ZRExpress/` have `getShippingRates()`, `createShipment()`, `cancelShipment()`,
+status polling, webhooks and destination sync. Nothing is missing but the credentials, and no
+amount of local work produces them: they are issued by Yalidine and by ZR Express to an account
+holder. `sync-destinations` is not a local computation either — it calls each courier's live API
+to fetch its own wilaya/commune ids.
+
+**The geography side is already populated** — 69 wilayas and 1541 communes are loaded. What is
+missing is only the *mapping* from those ids to each courier's ids, which is exactly what
+`sync-destinations` writes and what `getShippingRates()` needs.
+
+**What is needed.**
+
+1. A Yalidine API id and token, and a ZR Express tenant id and API key.
+2. `ENABLE_YALIDINE=1` and/or `ENABLE_ZR_EXPRESS=1` in `ecom-temp/.env`.
+3. A webhook secret each, if courier status callbacks are wanted.
+4. Then, per enabled provider:
+   `wp algerian-commerce sync-destinations --provider=yalidine --dry-run` first — the command
+   supports it — and then the same without `--dry-run`.
+5. Re-run `wp algerian-commerce shipping-check`; the `destinations` column must stop reading `0`.
+
+Worth knowing before choosing: a courier's sandbox, if either offers one, is enough for
+everything except the real shipment. `createShipment()` against a live account **creates a real
+parcel** that a courier may attempt to collect, so a throwaway or sandbox account is the right
+target, not the shop's production one.
+
+**What was assumed instead.** The work proceeds against the **provider interfaces as read from
+source** — `ProviderRegistry`, `ShippingProviderInterface`, `YalidineProvider::getShippingRates()`
+and `createShipment()`, `ShippingService::rates()` — and is verified with `manual` plus a test
+double standing in for a courier, never against a live courier API. Every docblock resting on
+courier behaviour says it is read from source and not measured. The panel's mock carries the
+per-provider quote shape so the screens are testable here.
+
+**Where that shape lives, as of the carrier branch: `MOCK_COURIERS=on`.** The create drawer's
+carrier picker and its rate lookup need a shop with more than one courier, and this install cannot
+be one. `scripts/mock-api.mjs` therefore reproduces `Core\Plugin::shippingProviders()`'s *gate*
+rather than one side of it — the two couriers are registered only under that variable, `manual` is
+appended last and unconditionally, and the default arm stays byte-identical to the install measured
+above. So `GET /shipping/providers` still answers `manual` alone by default, which is what five
+other screen decisions in this panel rest on.
+
+The prices those couriers quote are **invented**, and are derived from the destination ids by a
+formula rather than written as a table so that no reader mistakes them for measurements. Nothing in
+either repository has seen a real courier quote. What the fixture reproduces from source is the
+*shape*: Yalidine returns all four of its services whatever journey was asked about, ZR Express
+returns the one it filtered to, `manual` returns none at all, and wilaya 1 returns nothing from
+either — standing in for the unmapped-destination arm both adapters take, which is the state every
+destination is in until `sync-destinations` runs.
+
+**What to re-check when the block clears.** Whether `getShippingRates()` returns what the quote
+shape assumes for a real destination; whether a courier that serves a wilaya but not a commune
+returns `[]` or an error; and the retry path — an order rejected by the courier for a bad commune
+is supposed to create its parcel on the next confirm, which cannot be exercised without a courier
+that can reject.

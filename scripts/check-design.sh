@@ -68,7 +68,63 @@ cd "$(dirname "$0")/.." || exit 2
 # controls drift by the third branch". `NewOrderDrawer` still holds the original
 # and adopts this on its next touch, so the count is +2 rather than the +1 a
 # finished extraction would have been. Same margin of 2.
-FLOOR=316
+#
+# 319 at the carrier-choice branch, floor 317. One file:
+# `orders/DestinationFields.tsx`, the wilaya-and-commune pair the create drawer
+# needs before a delivery fee can be quoted for anywhere — step 2's admin
+# sub-task 2. It is a new file rather than two more controls inside
+# `NewOrderDrawer.tsx` for the reason the two lines above both record: the
+# dependent commune fetch already exists in `orders/[id]/CreateParcelDrawer.tsx`,
+# a second hand-maintained copy of it drifts, and the drawer it would otherwise
+# be inlined into is being edited on two further sub-tasks of this same step.
+# `CreateParcelDrawer` is the obvious second caller and is deliberately not
+# converted here for that same concurrency reason, so this is +1 rather than the
+# +1-and-a-deletion a finished extraction would have been. Same margin of 2.
+#
+# 320 at the carrier-choice branch's second half, floor 318. One file:
+# `orders/CarrierFields.tsx`, the courier and delivery-type pickers and the
+# debounced `GET /shipping/rates` lookup that fills the delivery fee — step 2's
+# admin sub-tasks 1 and 3, and the pair the destination fields on the line above
+# were built to feed.
+#
+# It is a new file rather than two more controls inside `NewOrderDrawer.tsx` for
+# the reason the three lines above all record, plus one of its own. The shared
+# reason: that drawer is already the panel's longest form and is being edited on
+# two further sub-tasks of this same step. The new one: this file is not only
+# markup — it owns a debounced query, the `RateQuote::coversDeliveryType()`
+# filtering rule and the `ac_manage_shipping` fallback, and every one of those is
+# a decision that needed its own argument written next to it rather than a third
+# section of a docblock that is already the longest in the repository.
+#
+# `CreateParcelDrawer` is *again* the obvious second caller — it draws a provider
+# picker and a delivery-type picker against `POST /orders/{id}/shipments` — and
+# is *again* deliberately not converted, for the same concurrency reason: it
+# lives in `orders/[id]/`, which another agent is editing on sub-tasks 4 and 5 of
+# this step. So +1 rather than the +1-and-a-deletion. Same margin of 2.
+#
+# 321 at the carrier-choice branch's third half, floor 319. One file:
+# `orders/[id]/ParcelFailure.tsx`, the block that says why confirmation created
+# no parcel — step 2's admin sub-task 4, and the half `ParcelsSection`'s list
+# structurally cannot show, because a refused parcel leaves no shipment row at
+# all.
+#
+# It is a new file rather than a section of `ParcelsSection.tsx` for the reason
+# `CarrierFields.tsx` two paragraphs above gives, and it is the same reason: this
+# is not only markup. It owns the branch on `error.code` — our five codes to the
+# manual parcel route, a courier's own to the destination — and the reading of a
+# stored failure that may be a week old, and each of those needed its argument
+# written beside it rather than folded into a card whose docblock is already
+# about three other things. The pure half of both lives in `lib/shipping.ts`
+# (`readFailure`, `failureRemedy`, `manualParcelOffered`) and is unit-tested
+# there, which is what keeps this file to the drawing.
+#
+# **The three obvious second callers stayed uncalled and are still +0.**
+# `CreateParcelDrawer` is *again* not converted to `DestinationFields` — the
+# third branch running to say so — but `orders/[id]/OrderEditDrawer.tsx` now is
+# its first outside caller, which closes the "one hand-maintained copy" risk the
+# previous two entries were worrying about without moving a file. So this is +1
+# for the new block alone. Same margin of 2.
+FLOOR=319
 failures=0
 checks=0
 
