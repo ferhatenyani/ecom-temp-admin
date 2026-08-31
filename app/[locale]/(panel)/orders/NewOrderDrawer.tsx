@@ -6,6 +6,7 @@ import { useMutation } from "@tanstack/react-query";
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import type { Customer } from "@/lib/api/schemas/customer";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
+import type { ShippingProvider } from "@/lib/api/schemas/shipping";
 import { SHOP_CURRENCY, formatMoney } from "@/lib/format/money";
 import { Drawer } from "@/components/ui/Overlay";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -24,7 +25,13 @@ import { EmptyState } from "@/components/ui/States";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { useToast } from "@/components/primitives/Toast";
 import { ADDRESS_KEYS, AddressFields, addressFieldId } from "./AddressFields";
+import { CarrierFields, useShippingQuotes } from "./CarrierFields";
 import { CustomerPicker } from "./CustomerPicker";
+import {
+  DestinationFields,
+  placeName,
+  type Destination,
+} from "./DestinationFields";
 import { ProductPicker, type PickedProduct } from "./ProductPicker";
 /* One number, imported rather than re-declared. `MAX_AMOUNT`'s own docblock is
    the argument: `LineItemInput::MAX_PRICE` and `OrderInput::MAX_SHIPPING_AMOUNT`
@@ -37,10 +44,13 @@ import {
   CREATABLE,
   bindRefusals,
   buildPayload,
+  destinationSeed,
   draftProblems,
   emptyDraft,
   isAddressEmpty,
   nextLineKey,
+  quoteFill,
+  quoteFor,
   type AddressDraft,
   type OrderDraft,
 } from "./new-order";
@@ -143,27 +153,117 @@ import {
  * is in the box, so an override reads as an override. A catalogue figure printed
  * next to a box holding the same number is a thing a person has to read before
  * discovering it says nothing.
+ *
+ * ## It says where the parcel is going now, and that is not an address field
+ *
+ * `DestinationFields.tsx` — step 2's admin sub-task 2 — adds a wilaya and a
+ * commune to the delivery section. They are **geography row ids**, the pair
+ * `GET /shipping/rates` and `POST /orders/{id}/shipments` both take.
+ *
+ * **They go on the order body now, and this paragraph said the opposite.** It
+ * read *"they go nowhere near the order body: `Orders\OrderInput::allowedFields()`
+ * has no key for either … so `buildPayload` sends neither and this drawer would
+ * earn a 400 if it tried."* `allowedFields()` names `wilaya_id`, `commune_id`
+ * and `delivery_type` as of the backend's carrier branch and this drawer sends
+ * all three. The old text is quoted rather than replaced because the half of it
+ * that is still true is the half a reader will trip over:
+ * `Commerce\AddressInput::FIELDS` does still refuse an extra key **inside an
+ * address**, and the destination is a *top-level* fact. `OrderInput`'s docblock
+ * gives the tell — `_id` means a row, and a row is what gets routed.
+ *
+ * Sending them is the whole point of the item rather than a convenience: an
+ * order created without a destination confirms straight into
+ * `order_destination_missing` and never gets a parcel, because
+ * `ShipmentSubscriber::destinationOf()` reads ids from meta and refuses to guess
+ * them out of an address.
+ *
+ * They also feed the fee below them, which the carrier block quotes from them,
+ * and they still seed the address: `destinationSeed` copies the chosen wilaya's
+ * **code** into the delivery address's empty `state` and the chosen commune's
+ * name into its empty `city`. Only into empty fields, only in that direction,
+ * never back — `chooseDestination` carries the argument, and `chooseCustomer`
+ * beside it is the rule it borrows.
+ *
+ * ## It names a courier now, and the fee arrives by itself
+ *
+ * Step 2's admin sub-tasks 1 and 3, both in `CarrierFields.tsx` and both in the
+ * delivery section between the destination and the fee — where the previous
+ * branch predicted they would land. That control carries the full argument for
+ * the route, the coverage question and the capability; three things belong here
+ * because they are this file's rather than that one's.
+ *
+ * **Four new keys on the wire, not one.** This read *"`shipping_provider` is the
+ * only new key on the wire; the destination and the delivery type stay off it"*,
+ * and the backend closed that gap while this drawer was being built.
+ * `shipping_provider`, `wilaya_id`, `commune_id` and `delivery_type` are all in
+ * `allowedFields()` on both verbs. The courier is validated against
+ * *registration* and never against the destination —
+ * `guardShippingProviderKnown()`, whose refusal message *is* the legal set — and
+ * the destination is validated as a pair by `guardDestinationResolves()`.
+ * `new-order.ts`'s field docblocks carry both and the `shipping_source`
+ * collision that goes with the first.
+ *
+ * **`details.commune_wilaya_id` is bound as a message and not as an offer**, and
+ * that is a decision rather than an omission. When a commune belongs to another
+ * wilaya the API refuses under `fields.wilaya_id` and puts the wilaya the
+ * commune *does* belong to beside it, so that a client can offer to move the
+ * selection instead of clearing it. This form cannot produce that refusal:
+ * `DestinationFields` lists communes by fetching
+ * `/locations/wilayas/{id}/communes` for the wilaya that is currently chosen and
+ * clears the commune whenever the wilaya moves, so every pair it can submit is a
+ * pair the geography table itself paired. Building the affordance would be
+ * building a repair for a state the control makes unreachable — and it would go
+ * stale unwatched, which is the worse half. The refusal is bound to the wilaya
+ * select like any other so that a shop whose geography changed under a long-open
+ * drawer still reads a sentence that names the problem.
+ *
+ * **The quote fills the fee and never fights the operator for it.**
+ * `applyQuote` below is the whole of that behaviour and `quoteFill` is its rule:
+ * a quote may replace an empty box or its own previous answer, and never a
+ * number a person typed. That is `chooseCustomer`'s rule with exactly one
+ * clause added, because a suggestion that can only ever be made once is not a
+ * live cost.
+ *
+ * **Nothing about the lookup can stop a save.** The submit button's `disabled`
+ * is still `lines.length === 0` and nothing else; a rate request in flight is a
+ * `useQuery` beside the mutation rather than in front of it. What a save *does*
+ * do is stop the quote: `applyQuote` declines to write once the mutation is
+ * pending, so an answer that lands during the round trip cannot change a form
+ * that is already on the wire, and the order carries the number that was in the
+ * box when the operator pressed the button. A courier API being slow or down
+ * must never be the reason an order taken by phone cannot be written down —
+ * which is the rule `EL/el-user-app/src/pages/CartCheckoutPage.jsx` keeps by
+ * falling back to a fixed fee, and which this form keeps by leaving the field
+ * exactly as the operator left it and saying what happened.
  */
 
 export function NewOrderDrawer({
   open,
   onOpenChange,
   wilayas,
+  providers,
   locale,
   canPickProducts,
   canPickCustomers,
+  canQuoteShipping,
   onCreated,
   returnFocusTo,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   wilayas: Wilaya[];
+  /** `GET /shipping/providers`, or `[]` when the reader cannot see it. */
+  providers: ShippingProvider[];
   locale: string;
   /** `ac_manage_products` — see the docblock. */
   canPickProducts: boolean;
   /** `ac_manage_customers`. Every role holding `ac_manage_orders` also holds
       this one today, so the fallback is a guard rather than a live path. */
   canPickCustomers: boolean;
+  /** `ac_manage_shipping`, which both `/shipping/providers` and
+      `/shipping/rates` sit behind. The same kind of guard as `canPickCustomers`
+      — no role reaches it — and `CarrierFields` argues why it is built anyway. */
+  canQuoteShipping: boolean;
   onCreated: (order: Order) => void;
   returnFocusTo?: string;
 }) {
@@ -189,6 +289,17 @@ export function NewOrderDrawer({
   /** A refusal with no field to bind to — a 409 on the status, typically. */
   const [refusal, setRefusal] = useState<string | null>(null);
 
+  /**
+   * The last amount a quote wrote into the fee box, or `null` for none.
+   *
+   * This is the provenance `quoteFill` needs: it is what tells a value the form
+   * suggested from a value a person typed, and there is no other way to know —
+   * a controlled input reports a string and not who put it there. Reset with
+   * the draft when the drawer opens, because a suggestion made for the previous
+   * order must not license overwriting a number typed into this one.
+   */
+  const [lastQuote, setLastQuote] = useState<string | null>(null);
+
   /*
    * Re-seeded when the drawer opens rather than by a `key` on the parent, which
    * is what `RestrictionPicker` does — the same trick, and the same reason: an
@@ -202,9 +313,24 @@ export function NewOrderDrawer({
   if (open !== seededFor) {
     setSeededFor(open);
     if (open) {
-      setDraft(emptyDraft());
+      /*
+       * The courier is the one field `emptyDraft()` cannot default, because its
+       * honest default is the registry's own and that module imports nothing.
+       * `providers.find(is_default)` is `CreateParcelDrawer`'s expression for
+       * the same choice, character for character — `ProviderRegistry` marks the
+       * first registered adapter as default and the panel has one rule for
+       * reading it.
+       *
+       * Seeding rather than leaving it empty is a decision: a back-office order
+       * that names no courier is legal and reads back as `null`, but a shop with
+       * one registered provider naming it on every order is both true and what
+       * the create screen exists to record. The picker's first option clears it
+       * for the operator who genuinely does not know yet.
+       */
+      setDraft({ ...emptyDraft(), shippingProvider: defaultProvider(providers) });
       setFields({});
       setRefusal(null);
+      setLastQuote(null);
     }
   }
 
@@ -213,6 +339,22 @@ export function NewOrderDrawer({
 
   const patchAddress = (which: "billing" | "shipping", next: Partial<AddressDraft>) =>
     setDraft((current) => ({ ...current, [which]: { ...current[which], ...next } }));
+
+  /*
+   * The debounced `GET /shipping/rates` lookup — sub-task 3's fetch half, in
+   * `CarrierFields.tsx` beside the control it feeds. It is called here because
+   * the fee field is this component's, and a hook that returned the answer to
+   * its own sibling would need an effect between the two.
+   *
+   * `enabled: open` for `ProductPicker`'s reason: no rate is fetched for a form
+   * nobody is looking at.
+   */
+  const quotes = useShippingQuotes({
+    wilayaId: draft.wilayaId,
+    communeId: draft.communeId,
+    deliveryType: draft.deliveryType,
+    enabled: open && canQuoteShipping,
+  });
 
   const create = useMutation({
     mutationFn: () => acWrite<Order>("POST", "/orders", buildPayload(draft)),
@@ -263,6 +405,63 @@ export function NewOrderDrawer({
       setRefusal(error instanceof Error ? error.message : t("failed"));
     },
   });
+
+  /**
+   * The chosen courier's price for the chosen journey, or `null` for *there is
+   * nothing to suggest*.
+   *
+   * `null` while a lookup is in flight or queued, which is the difference
+   * between a live cost and a flickering one: without that term the box would
+   * hold the previous destination's price for 600 ms while the picker under it
+   * had already stopped claiming that courier serves this place.
+   */
+  const chosenQuote = quotes.loading
+    ? null
+    : quoteFor(quotes.rows, draft.shippingProvider, draft.deliveryType);
+  const quoteAmount = chosenQuote?.amount ?? null;
+
+  /**
+   * Write a quote into the fee, under `quoteFill`'s rule and never against the
+   * operator.
+   *
+   * ## Adjusted during render, not in an effect
+   *
+   * This is the pattern the `seededFor` block at the top of this component
+   * already uses, and React documents it for exactly this shape: state that has
+   * to follow something outside it. An effect was the obvious first draft and is
+   * the wrong tool twice over —
+   * `react-hooks/set-state-in-effect` refuses it outright, and it would have had
+   * to choose between two bad dependency lists. With `draft.shippingAmount` in
+   * the list it would run on every keystroke in the fee box, and the moment
+   * somebody selected the field's contents and began retyping it would see an
+   * empty string, decide the box was free, and put the old suggestion back in
+   * front of the character they had just typed. Without it, the value would be
+   * read stale.
+   *
+   * The guard is `quoteAmount !== lastQuote`, so this runs when the **quote**
+   * changes and at no other time — which is the only event that has anything new
+   * to say. It settles in one further render, because `setLastQuote` makes the
+   * two equal.
+   *
+   * ## And what it refuses to do while a save is in flight
+   *
+   * `create.isPending` is a guard and not a disable. The submit button never
+   * waits for this lookup — its `disabled` is `lines.length === 0` and nothing
+   * else — so a save fired mid-lookup sends whatever is in the box at that
+   * instant, which is exactly what the operator was looking at when they pressed
+   * it. What must not happen is the answer landing *afterwards* and changing a
+   * form that is already on the wire: the field would then disagree with the
+   * order the API is creating, and if the request failed the operator would
+   * retry against a number they never chose. So the quote is dropped — and the
+   * picker above still shows it, because the suggestion stays visible, it simply
+   * stops writing.
+   */
+  if (quoteAmount !== null && quoteAmount !== lastQuote && !create.isPending) {
+    setLastQuote(quoteAmount);
+
+    const next = quoteFill(draft.shippingAmount, quoteAmount, lastQuote);
+    if (next !== null) setDraft((current) => ({ ...current, shippingAmount: next }));
+  }
 
   function submit() {
     const local = draftProblems(draft, {
@@ -403,6 +602,62 @@ export function NewOrderDrawer({
   }
 
   /**
+   * Record where the parcel is going, and let the address inherit what that
+   * choice knows.
+   *
+   * ## Two writes, and the second one is the interesting half
+   *
+   * The pair of ids goes on the draft and **never on the wire**:
+   * `OrderInput::allowedFields()` has no key for either and answers
+   * `'Unknown field.'` to one, so `buildPayload` sends neither. They exist to be
+   * quoted against — sub-task 3's `GET /shipping/rates` call, the seam at the
+   * foot of `new-order.ts` — and to seed the address here.
+   *
+   * The seed is `destinationSeed`'s, and it writes into **the block that will
+   * become the shipping address**: `billing` while the switch is on, `shipping`
+   * while it is off. That is the same expression `buildPayload` uses to decide
+   * which block ships, borrowed rather than restated, because a seed that landed
+   * in `shipping` while the switch was on would fill a block the payload
+   * discards and would be invisible on screen while it did it.
+   *
+   * Only empty fields are filled. It is `chooseCustomer`'s rule three functions
+   * up and the same argument: overwriting a half-filled address is how a person
+   * loses the correction they were making, and here they may well have typed the
+   * commune's name themselves off a phone call before reaching this control.
+   *
+   * ## What it does *not* do
+   *
+   * It does not read the address back. Nothing derives `wilayaId` from
+   * `billing.state`, and that is deliberate rather than unfinished: `state` is
+   * free text the API never validates — `Commerce\AddressInput` does no wilaya
+   * checking at all — and it arrives on this form from `chooseCustomer`, which
+   * copies whatever a stored customer record happens to hold. Turning that into
+   * a geography id would be the panel guessing a destination and then quoting a
+   * delivery fee against its guess. `wilayaMismatch` below says so out loud
+   * instead.
+   */
+  function chooseDestination(next: Destination) {
+    setDraft((current) => {
+      const which = current.shippingSameAsBilling ? "billing" : "shipping";
+      const seed = destinationSeed(current[which], {
+        wilayaCode: next.wilaya?.code,
+        /* Localised here rather than in the draft layer: which of the two names
+           an address carries is a rendering decision, and `new-order.ts`
+           imports nothing. */
+        communeName:
+          next.commune === null ? undefined : placeName(next.commune, locale),
+      });
+
+      return {
+        ...current,
+        wilayaId: next.wilayaId,
+        communeId: next.communeId,
+        [which]: { ...current[which], ...seed },
+      };
+    });
+  }
+
+  /**
    * Drop a line, and every refusal that was keyed to a position in the old set.
    *
    * `addLine` above carries the argument: the API names a bad line by its index,
@@ -456,6 +711,28 @@ export function NewOrderDrawer({
   function fieldId(key: string): string | undefined {
     if (key in FIELD_IDS) return FIELD_IDS[key];
     if (key === "shipping_amount") return `${ID_PREFIX}-shipping-amount`;
+    /* The carrier block's own two controls, minted by `CarrierFields` off this
+       prefix. `shipping_provider` is here rather than in `FIELD_IDS` beside it
+       because the fallback path draws a `TextField` under the same id, so the
+       link resolves whether or not the reader holds `ac_manage_shipping`.
+
+       **`delivery_type` joined it on this branch.** This comment said it was
+       *"not a field on this route at all"*, which was true and is not:
+       `OrderInput::allowedFields()` names it, and it refuses an unknown journey
+       with `Must be one of: home, desk.` So there is a refusal to bind and a
+       control to bind it to. */
+    if (key === "shipping_provider") return `${ID_PREFIX}-provider`;
+    if (key === "delivery_type") return `${ID_PREFIX}-delivery-type`;
+
+    /* The destination pair, drawn by `DestinationFields` off the same prefix.
+       Both are refusable now — `Must be a positive id.` from `OrderInput`, and
+       `guardDestinationResolves()`'s three sentences about a half pair, a
+       commune that does not exist and a commune in another wilaya. The last of
+       those keys `wilaya_id` while naming the *commune*, which is deliberate on
+       the API's side and is why the link goes to the wilaya select: that is the
+       control the operator is being asked to reconsider. */
+    if (key === "wilaya_id") return `${ID_PREFIX}-wilaya`;
+    if (key === "commune_id") return `${ID_PREFIX}-commune`;
 
     const line = /^line_items\.(\d+)\.(quantity|price|product_id|variation_id)$/.exec(key);
     if (line === null) return undefined;
@@ -484,6 +761,37 @@ export function NewOrderDrawer({
   ];
 
   const ready = draft.lines.length > 0;
+
+  /**
+   * The wilaya the *address* names, when it names one this panel recognises.
+   *
+   * Matched on `code` rather than parsed: a wilaya's `id` is its code as an
+   * integer and its `code` is that integer zero-padded, which
+   * `Geography\GeoDataset::wilayas()` guarantees by writing both from one
+   * validated number — but `state` is free text the API never checks, so
+   * `Number("Alger")` is the failure this lookup exists to not have.
+   */
+  const deliveryAddress = draft.shippingSameAsBilling ? draft.billing : draft.shipping;
+  const addressWilaya = wilayas.find(
+    (w) => w.code === deliveryAddress.state.trim(),
+  );
+
+  /**
+   * Said under the destination's wilaya picker when the address disagrees with
+   * it, and only then.
+   *
+   * Not an error and not a block. The two fields are allowed to differ — an
+   * order billed to one wilaya and delivered to another is ordinary — but the
+   * destination is what a delivery fee will shortly be quoted against, and a
+   * quote for somewhere the address does not mention is the one way this pair
+   * can be wrong without anything on screen saying so.
+   */
+  const wilayaNote =
+    draft.wilayaId !== "" &&
+    addressWilaya !== undefined &&
+    String(addressWilaya.id) !== draft.wilayaId
+      ? t("shipping.wilayaMismatch", { name: placeName(addressWilaya, locale) })
+      : undefined;
 
   return (
     <Drawer
@@ -713,24 +1021,88 @@ export function NewOrderDrawer({
             )}
 
             {/*
-              The delivery fee — sub-task 4 — inside the section that already
-              says where the parcel goes, rather than in a section of its own.
-              Two sections both called "Livraison" in a seven-section drawer is
-              a worse answer than one, and this is where step 2's wilaya and
-              commune pickers land: the thing that will eventually fill this box
-              belongs beside the thing that decides its value.
+              ── The destination — step 2's admin sub-task 2 ──────────────────
 
-              It sits after the address and after the switch on purpose. The
-              switch hides a block, and a control that appeared and disappeared
-              above the fee would move it up and down the drawer as somebody
-              toggled it.
+              Where the parcel is actually going, as the two geography ids the
+              rate resolver and the courier both take. It lands *here*, in the
+              section that already carries the delivery address and the fee,
+              because the previous branch predicted it would: "this is where
+              step 2's wilaya and commune pickers land — the thing that will
+              eventually fill this box belongs beside the thing that decides its
+              value."
 
-              **Not prefilled, because there is nothing to prefill it from.**
-              Sub-task 4 asks for the rate lookup's answer and step 2 has not
-              been built — nor have the destination fields it would need. The
-              seam at the foot of `new-order.ts` says exactly what step 2 has to
-              do here, and no docblock in this branch claims a rate call was
-              made.
+              After the switch, before the fee. The switch hides a block, so a
+              control above it would move up and down the drawer as somebody
+              toggled it; and the fee reads as the consequence of the
+              destination when it sits under it.
+
+              **Two wilaya controls are on screen at once and that is not a
+              mistake.** The one inside the address block writes
+              `billing.state`, free text the API stores as given; this one names
+              a row the rate resolver can look up. `DestinationFields`' docblock
+              carries the full argument, and `destinationSeed` is what stops
+              them being one question asked twice — choosing here fills an empty
+              `state` and `city`, never a filled one, and `wilayaNote` says so
+              when they end up disagreeing anyway.
+            */}
+            <p className="text-ui-caption text-ui-subtle">
+              {t("shipping.destinationWhy")}
+            </p>
+            <DestinationFields
+              idPrefix={ID_PREFIX}
+              wilayas={wilayas}
+              wilayaId={draft.wilayaId}
+              communeId={draft.communeId}
+              onChange={chooseDestination}
+              locale={locale}
+              enabled={open}
+              wilayaNote={wilayaNote}
+              disabled={create.isPending}
+            />
+
+            {/*
+              ── The carrier — step 2's admin sub-tasks 1 and 3 ───────────────
+
+              Between the destination and the fee, which is where the previous
+              branch said it would go: "the carrier controls' natural home is
+              between the destination and the fee". The order on screen is now
+              the order of the reasoning — where it goes, who takes it, how it
+              travels, what that costs — and each control is above the one whose
+              value it changes.
+
+              `CarrierFields` carries the whole argument: which of the two rate
+              routes this calls and why, what the picker shows in each of its
+              four states, why nothing is filtered out of it, and what happens
+              to a reader who holds `ac_manage_orders` and not
+              `ac_manage_shipping`. The lookup it feeds is `useShippingQuotes`
+              above; the answer lands in the box below through `applyQuote`.
+            */}
+            <CarrierFields
+              idPrefix={ID_PREFIX}
+              providers={providers}
+              canQuote={canQuoteShipping}
+              provider={draft.shippingProvider}
+              deliveryType={draft.deliveryType}
+              onProviderChange={(next) => patch({ shippingProvider: next })}
+              onDeliveryTypeChange={(next) => patch({ deliveryType: next })}
+              quotes={quotes}
+              locale={locale}
+              error={fields.shipping_provider}
+              disabled={create.isPending}
+            />
+
+            {/*
+              The delivery fee — item 1's sub-task 4 — under the destination and
+              the carrier it is now quoted from.
+
+              **Prefilled, and still overwritable, and the second half is the
+              point.** The effect above writes a quote in only where the box is
+              empty or still holds this form's own last suggestion; a number the
+              operator typed outranks every quote that follows it, which is
+              `chooseCustomer`'s rule and the third time this drawer keeps it.
+              Nothing here waits for the lookup — the submit button's `disabled`
+              has not changed — so a courier API that is slow, refusing or
+              switched off leaves an order that can still be written down.
             */}
             <NumberField
               id={`${ID_PREFIX}-shipping-amount`}
@@ -844,6 +1216,21 @@ const FIELD_IDS: Record<string, string | undefined> = {
     ),
   ),
 };
+
+/**
+ * The courier a blank draft should name, off the registry.
+ *
+ * `ProviderRegistry::describe()` marks the first registered adapter as
+ * `is_default` — `Plugin::shippingProviders()` appends `manual` last, so on a
+ * shop with couriers switched on the default is a courier and on this one it is
+ * in-house delivery. The `?? providers[0]` arm is `CreateParcelDrawer`'s and
+ * covers a list that names no default at all; the final `""` is a list that is
+ * empty, which is what a 403 or a failed read leaves behind, and is the same
+ * value as "the operator has not decided".
+ */
+function defaultProvider(providers: readonly ShippingProvider[]): string {
+  return providers.find((entry) => entry.is_default)?.name ?? providers[0]?.name ?? "";
+}
 
 /** A customer's billing block, as the draft's shape. */
 function pickAddress(customer: Customer): Partial<AddressDraft> {

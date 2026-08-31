@@ -3,6 +3,10 @@ import { requireSession } from "@/lib/session/read";
 import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { orderList, wilayas as wilayasSchema, type Wilaya } from "@/lib/api/schemas/order";
+import {
+  shippingProviders as providersSchema,
+  type ShippingProvider,
+} from "@/lib/api/schemas/shipping";
 import { canManageOrders, has } from "@/lib/capabilities";
 import { ForbiddenState } from "@/components/ui/States";
 import { PageHeader, PageBody } from "@/components/ui/PageHeader";
@@ -52,9 +56,21 @@ export default async function OrdersPage({
     perPage: PER_PAGE,
   };
 
+  /*
+   * `ac_manage_shipping`, resolved once here because this is where the session
+   * is. It gates the create drawer's carrier picker, and it is a **different
+   * capability from this screen's own**: `Shipping\ShippingController` builds
+   * one `Permissions::callback(Capabilities::MANAGE_SHIPPING)` and hangs
+   * `/shipping/providers` and `/shipping/rates` on it, while `/orders` is
+   * `ac_manage_orders`. No role holds one without the other today, so this is
+   * the same kind of guard as `canPickCustomers` below rather than a live path
+   * — `CarrierFields` argues why it is built anyway and what it degrades to.
+   */
+  const canQuoteShipping = has(me, "ac_manage_shipping");
+
   // The wilaya table is reference data — 69 rows, both scripts on each — and is
   // what turns a `state` of "16" into `Alger` or `الجزائر`.
-  const [initial, geography] = await Promise.all([
+  const [initial, geography, registry] = await Promise.all([
     acFetch(orderList, session, "/orders", {
       query: { per_page: query.perPage, page: 1, status: query.status, search: query.search },
     }).catch((error: unknown) => {
@@ -64,6 +80,19 @@ export default async function OrdersPage({
       throw error;
     }),
     acFetch(wilayasSchema, session, "/locations/wilayas").catch(() => null),
+    /*
+     * The courier list, and it is chrome in exactly the sense the order
+     * detail's copy of this call is: `[]` leaves the picker with nothing to
+     * offer and the drawer still opens, still saves, and still says why. Not
+     * requested at all without the capability — a 403 is a slower way of
+     * reaching the same empty array, and the drawer draws its fallback off
+     * `canQuoteShipping` rather than off the emptiness.
+     */
+    canQuoteShipping
+      ? acFetch(providersSchema, session, "/shipping/providers")
+          .then((r) => r.data)
+          .catch(() => [] as ShippingProvider[])
+      : Promise.resolve([] as ShippingProvider[]),
   ]);
 
   const wilayaList: Wilaya[] = geography?.data ?? [];
@@ -75,15 +104,19 @@ export default async function OrdersPage({
       initialOrders={initial?.data ?? null}
       initialTotal={typeof initial?.meta?.total === "number" ? initial.meta.total : null}
       wilayas={wilayaList}
+      providers={registry}
       /*
-       * The create drawer's two pickers, resolved here because this is where the
-       * session is. Neither is `ac_manage_orders`: a product picker reads
-       * `/products` and a customer picker reads `/customers`, and **`Order
-       * Manager` holds the second and not the first**. The drawer degrades to a
-       * product-id field rather than showing that role a 403 — see its docblock.
+       * The create drawer's three pickers, resolved here because this is where
+       * the session is. None is `ac_manage_orders`: a product picker reads
+       * `/products`, a customer picker reads `/customers`, a carrier picker
+       * reads `/shipping/providers`, and **`Order Manager` holds the second and
+       * third and not the first**. The drawer degrades to a plain field rather
+       * than showing any of them a 403 — see its docblock and
+       * `CarrierFields`'.
        */
       canPickProducts={has(me, "ac_manage_products")}
       canPickCustomers={has(me, "ac_manage_customers")}
+      canQuoteShipping={canQuoteShipping}
     />
   );
 }

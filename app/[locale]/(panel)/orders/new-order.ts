@@ -1,4 +1,5 @@
 import { CREATABLE_STATUSES, type OrderStatus } from "@/lib/order-status";
+import type { DeliveryType } from "@/lib/shipment-status";
 
 /**
  * The draft behind `NewOrderDrawer`, and the one function that turns it into a
@@ -209,6 +210,153 @@ export type OrderDraft = {
   paymentMethodTitle: string;
   customerNote: string;
   /**
+   * Where the parcel is going, as a **row id in the geography table** — not an
+   * address field, and not anything `POST /orders` has ever been sent.
+   *
+   * ## Why these are on the draft and not in `AddressDraft`
+   *
+   * `Commerce\AddressInput::FIELDS` is a closed list of ten (`first_name`,
+   * `last_name`, `company`, `address_1`, `address_2`, `city`, `state`,
+   * `postcode`, `country`, `phone`) plus `email` on billing only, and
+   * `AddressInput::parse()` walks `array_diff(array_keys($payload), $allowed)`
+   * writing **`'Unknown field.'`** against every key left over — keyed
+   * `billing.wilaya_id`, which is a 400 with the field named. Read from source.
+   * So a `wilaya_id` inside the address block is not a field the API ignores; it
+   * is a refusal, and the whole address goes down with it.
+   *
+   * `Orders\OrderInput::allowedFields()` was the same story one level up, and
+   * **that half is overturned.** This block read *"`payment_method`,
+   * `payment_method_title`, `customer_note`, `status`, `customer_id`, `billing`,
+   * `shipping`, `line_items`, `shipping_amount`, and an unknown key is `'Unknown
+   * field.'` there too. There is no top-level home for a destination on this
+   * route either."* There is now: `allowedFields()` names `wilaya_id`,
+   * `commune_id` and `delivery_type`, read from source in the backend's
+   * `feat/carrier-choice` tree, and `buildPayload` sends all three.
+   *
+   * The paragraph above it still stands and is a different rule: an **address**
+   * still has no `wilaya_id` inside it — `Commerce\AddressInput` refuses an
+   * unknown key by name — and the destination is a top-level fact, not an
+   * address field. `OrderInput`'s own docblock draws the same line and gives the
+   * tell: *`_id` means a row, and a row is what gets routed*; anything without
+   * the suffix, inside an address object, is text for a human.
+   *
+   * ## So what are they for
+   *
+   * Three things now, and the third is the one this branch added.
+   *
+   *  1. **The rate lookup** — step 2's sub-task 3, the seam at the foot of this
+   *     file. `GET /shipping/rates` takes `wilaya_id` and `commune_id`; it is
+   *     the only pair it takes, and an address cannot be substituted for it.
+   *  2. **Seeding the address**, once, into fields nobody has typed in — see
+   *     `destinationSeed`. It is no longer the *only* trace a destination leaves
+   *     on a created order, and it is still worth doing for its own reason: a
+   *     wilaya *code* on the address is a real field the shop can report on, and
+   *     `lib/api/schemas/order.ts` records that it is empty on ~92 % of orders.
+   *  3. **The order body itself** — `wilaya_id` and `commune_id` as integers,
+   *     written to order meta by `OrderRepository::applyProps()` and read back
+   *     on confirmation by `Shipping\ShipmentSubscriber::destinationOf()`. This
+   *     is what makes a back-office order get a parcel at all: without it every
+   *     one of them confirms into `order_destination_missing`.
+   *
+   * ## They are ids, and `state` is a code, and the two are not the same string
+   *
+   * A wilaya row carries both: `id` is the integer and `code` is that integer
+   * zero-padded to two characters. They are one number by construction rather
+   * than by coincidence — `Geography\GeoDataset::wilayas()` writes
+   * `'id' => $code` and `'code' => str_pad((string) $code, 2, '0', STR_PAD_LEFT)`
+   * from the same validated integer, so `Number(w.code) === w.id` holds for every
+   * row the importer can produce. Read from source.
+   *
+   * Nothing here relies on that arithmetic anyway — the picker hands back the
+   * whole row and each consumer takes the field it needs — but it is why one
+   * control can honestly serve both a geography id and an address code, and it
+   * is worth writing down before somebody re-derives it wrongly from `"16"`.
+   *
+   * Strings, like every other field in the form layer. A commune id is `""`
+   * until a wilaya has been chosen and again the moment it changes, because a
+   * commune belongs to exactly one wilaya and a stale pair would quote a fee for
+   * somewhere else.
+   */
+  wilayaId: string;
+  communeId: string;
+  /**
+   * Which courier carries the parcel — **the one thing in this block that
+   * *does* go on the wire.**
+   *
+   * `Orders\OrderInput::allowedFields()` names `shipping_provider` as of the
+   * carrier branch, so unlike the destination above and the delivery type
+   * below, this is a real key on `POST /orders`. Read from source, in the
+   * backend's uncommitted `feat/carrier-choice` tree.
+   *
+   * ## What it is validated against, and what it is not
+   *
+   * **Registration, never the destination.** `OrderInput::provider()` does
+   * shape alone — `strtolower(trim())`, `Must be a string.` for a non-scalar
+   * and `Is implausibly long.` over 40 characters — and
+   * `OrderService::guardShippingProviderKnown()` does membership against
+   * `ProviderRegistry::has()`. Neither asks whether that courier serves the
+   * wilaya, and the guard's own docblock says why: *"a back-office order has no
+   * cart and no structured destination to quote against"*. The refusal is a
+   * 400 keyed `fields.shipping_provider` whose whole message is the legal set —
+   * `"Available: manual."` — which is why the capability fallback in
+   * `CarrierFields` is a usable control rather than a dead end.
+   *
+   * There is one exemption and it is not reachable from this form: a PATCH may
+   * always restate the courier an order already names, even a de-registered
+   * one. A create has no order to restate.
+   *
+   * ## `""` cannot un-choose a courier, and that is the API's shape not ours
+   *
+   * `null` and `""` are dropped rather than stored — the same rule
+   * `shipping_amount` has, and `OrderInput`'s docblock names the cost out loud:
+   * a fee has `0` for "no charge" and a courier has no such third value, so a
+   * named courier can be replaced and never cleared. On *this* form that costs
+   * nothing, because nothing is named until the drawer opens and seeds the
+   * registry's default; `""` here is simply "the operator has not said", and
+   * `buildPayload` omits the key exactly as it omits an empty fee.
+   *
+   * ## Not to be confused with `shipping_source`, which this form never sends
+   *
+   * The order carries both and they answer different questions.
+   * `shipping_source` is `rules | provider | null` and is **read-only** — it
+   * records whether the *price* came from the shop's tariff or a courier's own
+   * quote. `shipping_provider` records who carries the box.
+   * `{"shipping_source": "rules", "shipping_provider": "yalidine"}` is the
+   * ordinary reading on an install with no courier credentials, not a
+   * contradiction: §14's tariff priced the journey because Yalidine has nothing
+   * mapped to quote from, and Yalidine carries it regardless.
+   */
+  shippingProvider: string;
+  /**
+   * `home` or `desk`, and it is **two things at once** — which is why it is one
+   * control and not two.
+   *
+   * It is a *quote parameter*: `GET /shipping/rates` declares it with
+   * `'default' => Destination::HOME` and `'enum' => Destination::DELIVERY_TYPES`
+   * (`Shipping\ShippingController::rateArgs()`), and it changes the answer twice
+   * over — `ShippingRule::matches()` tests a rule's own delivery type against
+   * it, and a courier prices a doorstep and a desk differently by definition.
+   *
+   * It is *also* a field on the order now. **This block used to end here with
+   * the opposite claim** — *"like the destination and unlike the courier, it
+   * never reaches the order body; `allowedFields()` has no `delivery_type` and
+   * answers `'Unknown field.'` to one"* — and that is overturned rather than
+   * deleted, on `ShipmentSubscriber::destinationOf()`'s stated principle about
+   * its own retired text. `allowedFields()` names it,
+   * `OrderRepository::applyProps()` writes it to `DELIVERY_TYPE_META`, and
+   * `ShipmentSubscriber` reads that key back on confirmation. So the one answer
+   * both prices the journey and records it.
+   *
+   * `POST /orders/{id}/shipments` still asks for it a third time — that route
+   * takes its own destination and does not read the order's — and
+   * `CreateParcelDrawer` draws this same control against it.
+   *
+   * Typed rather than a bare string, and off `lib/shipment-status.ts`'s
+   * `DELIVERY_TYPES` — one list, already the rule form's and the parcel
+   * drawer's, so a third spelling cannot appear here.
+   */
+  deliveryType: DeliveryType;
+  /**
    * The stated delivery fee, as typed. `""` states nothing.
    *
    * **What `""` means here is not what it means on the edit form**, and the two
@@ -254,9 +402,47 @@ export function emptyDraft(): OrderDraft {
     paymentMethodTitle: "",
     customerNote: "",
     /*
-     * Empty, and there is nothing to seed it from — see the seam at the foot of
-     * this file. Step 2's rate lookup is what fills it; until then the honest
-     * default is the one that states nothing.
+     * No destination, and nothing to seed one from: a blank draft has no
+     * address to resolve. The pickers ask, the same way `CreateParcelDrawer`
+     * asks even though the order it is creating a parcel for already carries an
+     * address.
+     *
+     * **This comment ended `…and POST /orders would refuse the pair anyway`,
+     * which is no longer true** and is corrected rather than dropped, because
+     * the second clause was the reason the first one felt safe. The route takes
+     * the pair now; a blank draft still has nothing to put in it, and an
+     * unchosen pair still sends no key — `buildPayload` omits rather than
+     * sending `0`, which the API refuses.
+     */
+    wilayaId: "",
+    communeId: "",
+    /*
+     * **Empty here and seeded by the drawer**, which is the one field on this
+     * object whose default this module cannot state. The honest default is the
+     * registry's own — `providers.find(is_default)`, which is
+     * `CreateParcelDrawer`'s expression for the same choice — and the registry
+     * arrives from `GET /shipping/providers` at the top of the screen. This
+     * module imports nothing and knows no session, so it says `""` and
+     * `NewOrderDrawer` fills it when the drawer opens.
+     *
+     * `""` is therefore reachable in two ways that mean the same thing to the
+     * API and different things to a reader: nobody has opened the drawer yet,
+     * or the operator explicitly chose "not decided". Both send no key.
+     */
+    shippingProvider: "",
+    /*
+     * `home`, because that is the route's own default —
+     * `'default' => Destination::HOME` in `rateArgs()` — and because a
+     * back-office order taken by phone is a doorstep delivery unless somebody
+     * says otherwise. A default of `desk` would quote the cheaper journey to
+     * every operator who never looked at the control.
+     */
+    deliveryType: "home",
+    /*
+     * Empty, and there is nothing to seed it from at construction. Step 2's
+     * rate lookup is what fills it — see `quoteFill` below and the drawer's
+     * effect that calls it — and until a destination is chosen the honest
+     * default is still the one that states nothing.
      */
     shippingAmount: "",
   };
@@ -264,6 +450,201 @@ export function emptyDraft(): OrderDraft {
 
 export function isAddressEmpty(address: AddressDraft): boolean {
   return Object.values(address).every((value) => value.trim() === "");
+}
+
+/**
+ * What a chosen destination is allowed to write into an address block.
+ *
+ * ## The rule is `chooseCustomer`'s, borrowed rather than invented
+ *
+ * That handler copies a customer's billing block **only into a block nobody has
+ * typed in**, on the ground that overwriting a half-filled address is how a
+ * person loses the correction they were making. This is the same rule at field
+ * granularity: each of the two fields is filled only when it is blank, and
+ * neither is ever replaced. A destination changed three times leaves whatever
+ * the first choice put there, and anything the operator typed outranks both.
+ *
+ * ## Why a destination writes into the address at all
+ *
+ * Because the two controls would otherwise ask the same question twice and
+ * agree by luck. The address block already carries a wilaya picker bound to
+ * `state`; the destination block carries one bound to a geography id. They are
+ * genuinely different values — `AddressInput` does no wilaya validation at all
+ * (its own docblock says so: *"No wilaya or commune validation here"*), so
+ * `state` is free text the API stores as given, while `wilaya_id` is a row the
+ * rate resolver looks up — but they describe one place, and a form that made
+ * somebody name it twice would be a form whose two answers can disagree.
+ *
+ * So the flow is one-directional and only ever additive: **the destination is
+ * chosen from a validated list, and the address inherits what that choice
+ * knows.** Nothing reads back the other way, so there is no cycle to reason
+ * about and no effect synchronising two pieces of state.
+ *
+ * `city` takes the commune name for the reason the reference shop does the same
+ * — `EL/el-user-app/src/pages/CartCheckoutPage.jsx` populates `formData.city`
+ * from the commune list of the chosen wilaya, and `el-admin-app`'s
+ * `CreateOrderModal.jsx` labels that field *"La commune (ville)"*. In Algeria
+ * the commune **is** the city on an address, and WooCommerce has no third field
+ * to put it in.
+ *
+ * The name is passed in already localised rather than resolved here: which of
+ * `name` and `name_ar` an address should carry is a rendering decision the
+ * drawer makes with the locale in hand, and this module deliberately imports
+ * nothing.
+ */
+export function destinationSeed(
+  address: AddressDraft,
+  chosen: { wilayaCode?: string; communeName?: string },
+): Partial<AddressDraft> {
+  const seed: Partial<AddressDraft> = {};
+
+  const code = chosen.wilayaCode?.trim() ?? "";
+  if (code !== "" && address.state.trim() === "") seed.state = code;
+
+  const commune = chosen.communeName?.trim() ?? "";
+  if (commune !== "" && address.city.trim() === "") seed.city = commune;
+
+  return seed;
+}
+
+/**
+ * One row of `GET /shipping/rates`, in the four fields the picker reads.
+ *
+ * Structural rather than `import type { ShippingRate }`, and that is the same
+ * decision `DraftLine` makes about `LineDraft`: this module is the pure half of
+ * the form and every other export in it is a function of plain objects, so it
+ * takes the shape it needs and nothing else. `lib/api/schemas/shipping.ts`'s
+ * `shippingRate` is the boundary and is a `looseObject` with five more fields —
+ * `service`, `label`, `currency`, `estimated_days`, `free_shipping` — none of
+ * which any decision below turns on.
+ */
+export type QuoteRow = {
+  provider: string;
+  amount: string;
+  /** `home`, `desk`, or `null` for *the adapter did not say*. See below. */
+  delivery_type: string | null;
+  /** `rules` — the shop's tariff — or `provider`, a courier's own quote. */
+  source: string;
+};
+
+/**
+ * The price one courier will do one journey for, out of everything the rate
+ * route said.
+ *
+ * ## Why the client picks at all, when the panel's rule is that it must not
+ *
+ * `/shipping/rates` deliberately does not choose. `RateQuote`'s own docblock
+ * says so — *"`ShippingService::rates()` does not [need the journey]: a manager
+ * comparing 'he collects it' against 'we deliver it' wants all of them"* — and
+ * `ShippingService::rates()` accordingly emits **several rows per provider**:
+ * the shop's tariff row when a rule matches (`source: "rules"`), plus every row
+ * that courier's own `getShippingRates()` returned (`source: "provider"`).
+ * `YalidineProvider::getShippingRates()` returns all four of its services
+ * regardless of which journey was asked for, by name and on purpose. So the
+ * route hands back a menu and expects its caller to read it; picking here is
+ * answering the question the route asked, not re-deciding one it settled.
+ *
+ * The storefront's equivalent is `Shipping\ShopperRates::forProvider()`, and
+ * this is **not** a copy of it. That function encodes a checkout *policy* —
+ * a free tariff wins outright, then the courier's quote, then the tariff — and
+ * a checkout has to charge exactly one number to a shopper who cannot argue.
+ * This form has an editable box and an operator on the phone, so the useful
+ * answer is the plainer one: **the lowest price this courier will carry it
+ * for.** `source` is then shown beside the number rather than deciding it,
+ * which is what that field is for — it says who quoted, not which quote wins.
+ *
+ * ## The `delivery_type` filter, and why `null` passes
+ *
+ * `RateQuote::coversDeliveryType()` is the rule, reproduced exactly: a row
+ * naming a journey covers only that journey, and a row naming none covers
+ * whatever was asked. Its docblock argues the second half — `getShippingRates()`
+ * is handed a `Destination`, so an adapter that says nothing has answered about
+ * the journey it was given, and treating that as a mismatch would drop the
+ * quote of every adapter that returns one price. The tariff rows are exactly
+ * that case in reverse: `RateResolver::quote()` stamps them with the journey
+ * the caller resolved *for*, so they arrive already filtered and pass either
+ * way.
+ *
+ * Ties go to the row that comes first, which is the route's own order —
+ * tariff before courier, and the adapter's order within a courier. Nothing
+ * downstream can see the difference between two rows at one price except
+ * `source`, and preferring the tariff there is the reading that matches what
+ * the shop actually charges.
+ */
+export function quoteFor<Row extends QuoteRow>(
+  /* Generic in the row rather than typed to `QuoteRow`, so a caller holding the
+     boundary's own `ShippingRate` gets one back with `currency` and `label`
+     still on it. The four fields above are what this function *reads*; they are
+     not what it is willing to hand back. */
+  rows: readonly Row[],
+  provider: string,
+  deliveryType: string,
+): Row | null {
+  const name = provider.trim().toLowerCase();
+  if (name === "") return null;
+
+  let best: Row | null = null;
+
+  for (const row of rows) {
+    if (row.provider.trim().toLowerCase() !== name) continue;
+    if (row.delivery_type !== null && row.delivery_type !== deliveryType) continue;
+
+    /* Parsed only to compare, never to store or display: the amount that
+       reaches the field is the decimal string the API sent, because
+       `lib/format/money.ts` opens by refusing to let a price a shop typed
+       correctly be stored a millionth away from itself. */
+    if (best === null || Number.parseFloat(row.amount) < Number.parseFloat(best.amount)) {
+      best = row;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * What the delivery-fee box should hold once a quote arrives — or `null` for
+ * *leave it exactly as it is*.
+ *
+ * ## The rule the seam demanded, at the one granularity that makes it live
+ *
+ * `chooseCustomer` and `destinationSeed` both say **fill an empty field, never
+ * replace a filled one**, and a lookup that obeyed only that would be filled
+ * once by the first destination and then be wrong forever after — which is not
+ * a *live* shipping cost, it is a single guess. So the rule is sharpened by
+ * exactly one clause, and the clause is about provenance rather than emptiness:
+ *
+ * > a quote may replace an empty box, and it may replace **its own** previous
+ * > answer. It may never replace a number a person typed.
+ *
+ * `previous` is that provenance — the last amount this form wrote into the box,
+ * or `null` when it has never written one. If the box still holds it, nobody
+ * has touched it since, and the new quote supersedes the old one. If the box
+ * holds anything else, somebody typed there and the quote is discarded in
+ * silence: it is a suggestion, and a suggestion that argues is a bug.
+ *
+ * Clearing the box counts as empty and is therefore refillable, which is the
+ * right reading — an operator who empties the field is asking for the delivery
+ * to be free of charge *or* starting again, and the next destination change
+ * answering with a price is the behaviour of every other suggestion on this
+ * form. What they must do to keep a hand-typed zero is type `0`, which is a
+ * real statement the API stores as a zero shipping line and which this function
+ * will never overwrite.
+ *
+ * Returning `null` rather than the current value is deliberate: the caller sets
+ * state, and a caller handed back an identical string would either re-render
+ * for nothing or have to compare it itself.
+ */
+export function quoteFill(
+  current: string,
+  quoted: string,
+  previous: string | null,
+): string | null {
+  const typed = current.trim();
+
+  if (typed === "") return quoted;
+  if (previous !== null && typed === previous) return quoted === typed ? null : quoted;
+
+  return null;
 }
 
 /**
@@ -401,6 +782,94 @@ export function buildPayload(draft: OrderDraft): Record<string, unknown> {
   const shippingAmount = draft.shippingAmount.trim();
   if (shippingAmount !== "") payload.shipping_amount = shippingAmount;
 
+  /*
+   * The courier.
+   *
+   * Omitted when empty, on `shipping_amount`'s reasoning one block up:
+   * `OrderInput::normalize()` drops `null` and `""` before the payload is
+   * assembled, so an unnamed courier is a key the API would discard. Not
+   * lower-cased or trimmed beyond this — `OrderInput::provider()` does
+   * `strtolower(trim())` itself, deliberately matching `ProviderRegistry::has()`
+   * character for character, and a second normalisation here would be a second
+   * authority that can only ever drift from it.
+   */
+  const provider = draft.shippingProvider.trim();
+  if (provider !== "") payload.shipping_provider = provider;
+
+  /*
+   * ── the destination, which this block used to say could not be sent ──────
+   *
+   * **The old text was true when it was written and is now overturned.** It
+   * read: *"`wilayaId`, `communeId` and `deliveryType` are all on the draft and
+   * none is in `allowedFields()`"*, and `buildPayload` sent none of the three.
+   * `OrderInput::allowedFields()` now names all three on both verbs,
+   * `OrderRepository::applyProps()` writes them to the same three meta keys the
+   * checkout writes, and `OrderService::guardDestinationResolves()` refuses a
+   * commune that does not belong to the wilaya beside it. Read from source in
+   * the backend's `feat/carrier-choice` tree; `ShipmentSubscriber::destinationOf()`
+   * quotes its own retired paragraph the same way, and for the same reason —
+   * *"a reader who remembers it deserves to know it was overturned on purpose"*.
+   *
+   * **And it is not optional.** Without these keys a back-office order confirms
+   * with `order_destination_missing` and never creates a parcel — every time, by
+   * construction, because `destinationOf()` reads ids from meta and refuses to
+   * guess them out of a free-text address. That is precisely the manual step
+   * this whole item exists to remove, so a create drawer that collected a
+   * destination and then dropped it would have shipped the item's own failure
+   * mode as a feature.
+   *
+   * ## Both or neither, and the draft already guarantees it
+   *
+   * A `wilaya_id` with no `commune_id` is refused — *"Required when the order
+   * names a wilaya."* — and the reverse is refused with the mirror sentence.
+   * Nothing here has to enforce that: `DestinationFields` clears `communeId`
+   * whenever `wilayaId` moves and neither can be set without the other being
+   * offered, so a half pair is a form mid-edit and this condition simply waits
+   * for it. `draftProblems` does not pre-empt the refusal either, for the reason
+   * it gives about every other API rule.
+   *
+   * ## Integers, and an omitted key rather than a zero
+   *
+   * `OrderInput::destinationId()` is `is_numeric()` then a whole-number test
+   * then `< 1`, so `"16"` would in fact be accepted — but the presenter emits
+   * integers and a body that round-trips should send back what it read.
+   * `Number()` is exact on these: they are row ids the picker put into the
+   * option `value` itself.
+   *
+   * `0` is **refused** rather than dropped, which is where these part company
+   * with the fee above — `LineItemInput`'s split, restated by `OrderInput`: a
+   * charge has a meaningful zero and an id does not, *there is no commune 0*.
+   * So an unchosen picker omits its key and never sends `0`; `Number("")` is
+   * `0` and would have been exactly that mistake.
+   */
+  const wilayaId = Number(draft.wilayaId);
+  const communeId = Number(draft.communeId);
+
+  if (
+    draft.wilayaId !== "" &&
+    draft.communeId !== "" &&
+    Number.isInteger(wilayaId) &&
+    Number.isInteger(communeId)
+  ) {
+    payload.wilaya_id = wilayaId;
+    payload.commune_id = communeId;
+  }
+
+  /*
+   * The journey, independently of the pair — which is the API's own shape:
+   * `guardDestinationResolves()` returns early unless one of the two *ids* is
+   * stated, and says why, *"it is a journey rather than a place, it needs no
+   * pair and no lookup"*. So an order that states only a desk collection has
+   * said something harmless and true about an address it may not have yet.
+   *
+   * Optional, and omitting it ships home — `destinationOf()` falls back to
+   * `Destination::HOME` and is the only place that default lives. The draft
+   * defaults to `home` because a form has to draw something, so this key is
+   * normally present; the guard on `""` is for a draft built by hand.
+   */
+  const deliveryType = draft.deliveryType.trim();
+  if (deliveryType !== "") payload.delivery_type = deliveryType;
+
   return payload;
 }
 
@@ -512,53 +981,148 @@ export function draftProblems(
 /** The status picker's options, in the API's own order. */
 export const CREATABLE = CREATABLE_STATUSES;
 
+
 /**
- * ── The seam step 2 lands in ─────────────────────────────────────────────────
+ * ── The seam, closed ─────────────────────────────────────────────────────────
  *
- * Item 1's sub-task 4 asks for the delivery fee to be "prefilled from the rate
- * lookup (item 2 below)". **Step 2 is not built**, and on this form it is
- * missing twice over.
+ * This block has said twice now that step 2 was missing from this form. It is
+ * not any more, and what follows is the record of what was decided rather than
+ * a list of what is left — because for the first time there is nothing left in
+ * *this* file's half of it.
  *
- * There is no rate lookup on this screen to call, and `GET /shipping/rates` —
- * which does exist and is already allowlisted for the shipping rules editor — is
- * not it: it answers a *tariff* question, `wilaya_id` and `commune_id` in and a
- * rate out. And this drawer collects neither. It has a free-text address block
- * whose `state` is a wilaya code at best; the wilaya and commune pickers are
- * step 2's own admin sub-task 2, and turning an address into those two ids is
- * the resolver step 2 is for. So the field is not merely unfilled — nothing on
- * screen yet says *where* the parcel is going.
+ * ## The route, and the argument for it
  *
- * The field is therefore built **editable and overwritable with no prefill**,
- * which is the honest state: `emptyDraft()` seeds it empty and nothing else
- * writes it. An empty box on a new order is not a gap in this form — it is the
- * true answer to "what did anybody state?", and the 201 says what the order
- * ended up charging.
+ * **`GET /shipping/rates`, not `GET /checkout/shipping-rates`**, and the two
+ * were genuinely both candidates. Read from source, in the backend's
+ * uncommitted `feat/carrier-choice` tree:
  *
- * **What step 2 has to do here, and nothing else:** once the wilaya and commune
- * pickers exist in this drawer, debounce a rate call on (wilaya, commune,
- * provider, delivery type) and write the answer into `OrderDraft.shippingAmount`.
- * Every other piece is already in place — the control is a real field, the
- * builder already tells a typed amount from an empty one, and a suggestion the
- * operator overwrites is just a value they typed. Two rules come with it, and
- * both are borrowed rather than invented:
+ *   /shipping/rates            `Shipping\ShippingController::rateArgs()` takes
+ *                              exactly `wilaya_id`, `commune_id`, `provider`,
+ *                              `delivery_type` and `subtotal`. Four of those
+ *                              five are this form's four debounce keys, by
+ *                              name. `ac_manage_shipping`.
  *
- *  - **It must not overwrite an amount somebody has already typed.**
- *    `CustomerPicker`'s rule on this same drawer — a chosen customer's address
- *    is copied only into a block nobody has touched — and `chooseCustomer` is
- *    the working example of it.
- *  - **It must not block the save.** `EL/el-user-app/src/pages/CartCheckoutPage.jsx`
- *    debounces at 600 ms and falls back to a fixed fee when the quote fails;
- *    a back-office order taken by phone must not be unsavable because a courier
- *    API is down.
+ *   /checkout/shipping-rates   `Cart\CheckoutController::destinationArgs()`
+ *                              plus `cart_token`, and `CheckoutService::
+ *                              shippingRates()` reads the **subtotal off the
+ *                              cart**, never off the request. Public —
+ *                              `permission_callback` is `__return_true`.
  *
- * `[id]/order-edit.ts` closes with the same seam for the edit form, and the two
- * differ in exactly one way worth knowing: there, a *stated* fee already exists
- * on some orders and must never be overwritten by a quote, which is why that
- * seam is conditioned on `order.shipping_amount === null`. Here there is no
- * stored value at all, so the only thing to protect is what the operator typed.
+ * The storefront route is the tempting one precisely because it needs no
+ * capability, and that is the trap: it prices *a cart*. A back-office order is
+ * not a cart and has no token, and the panel does not have a cart route on its
+ * allowlist to make one with. A form that opened a shopper's cart session in
+ * order to learn a delivery fee would be inventing a shopper.
  *
- * Nothing above is a rate call, and no docblock in this branch claims one was
- * made. `BLOCKED.md` is where measurements this environment cannot take are
- * recorded; this is not one of those — it is simply a step that has not been
- * written yet.
+ * The storefront route also answers a different question by design. It returns
+ * **one row per courier** — `ShopperRates::forProvider()` has already picked —
+ * while `/shipping/rates` returns every row and lets its caller choose, which
+ * is what the picker needs in order to say what each courier charges. See
+ * `quoteFor` above, which is that choice.
+ *
+ * So `/shipping/rates`, which was **already on the allowlist** before this
+ * branch, put there with the shipping rules editor's own resolver. Nothing was
+ * widened; `/checkout/*` remains absent and `tests/boundary.test.ts` now says so
+ * by name.
+ *
+ * ## The capability gap, which is real in kind and empty in practice
+ *
+ * `Shipping\ShippingController::registerRoutes()` builds **one** guard —
+ * `Permissions::callback(Capabilities::MANAGE_SHIPPING)` — and hangs every
+ * route on it, `/shipping/providers` and `/shipping/rates` included;
+ * `ShippingService::rates()` asserts the same capability again inside. This
+ * drawer's own route is `ac_manage_orders`. Two different capabilities, and the
+ * panel has three screens that already degrade across exactly this kind of gap.
+ *
+ * **No role reaches the gap today.** `Permissions\Capabilities::roles()` gives
+ * `ac_manage_shipping` to all four roles that hold `ac_manage_orders` — Super
+ * Admin, Admin, Manager and Order Manager — read from source. It is therefore
+ * `canPickCustomers`'s kind of fallback rather than `canPickProducts`'s: a
+ * guard rather than a live path. It is still built, because capabilities are
+ * resolved per *user* from `/auth/me` and not per role, and because it costs a
+ * text field: `OrderService::guardShippingProviderKnown()` refuses an unknown
+ * courier with `fields.shipping_provider` whose entire message is the legal set
+ * (`"Available: manual."`), so an operator who cannot read the picker's source
+ * can type a name and be told what the names are. `CarrierFields` carries it.
+ *
+ * ## Coverage — "only the couriers that serve the destination"
+ *
+ * The step asks the picker to offer only those, citing
+ * `EL/el-user-app/src/constants/orderEnums.js`'s `getAvailableProviders()`.
+ * That function turns out to be a **hard-coded list of four wilayas ZR Express
+ * does not serve**, compared by a normalised name — not an API answer at all.
+ * This API has no coverage route either: `ProviderRegistry::describe()` emits
+ * `{name, label, is_default}` and nothing about places, and
+ * `ShippingProviderInterface` declares no `serves()`. The backend's own answer,
+ * stated in `Cart\CheckoutService`, is that **a courier serves a destination if
+ * and only if it produced a row**.
+ *
+ * Filtering the picker on that would be wrong here, and the reason is the whole
+ * of `BLOCKED.md` item 2. `ManualProvider::getShippingRates()` returns `[]` by
+ * design and `manual` is the only registered provider on this install, so a
+ * destination with no tariff rule would empty the picker — and an unsynced
+ * Yalidine returns `[]` for *every* destination, which is the state this shop
+ * is in and will stay in until somebody runs `sync-destinations`. Hiding a
+ * courier the operator knows is collecting the parcel, because the shop has not
+ * finished configuring it, is the panel refusing something the API accepts.
+ *
+ * And the API does accept it: `guardShippingProviderKnown()` validates against
+ * *registration*, never the destination, and says why — a back-office order has
+ * no cart to quote against. So the picker offers every registered courier and
+ * **labels each with what it quoted**, or with the fact that it quoted nothing.
+ * The operator sees exactly what the step wanted them to see, and nothing is
+ * taken away from them. `CarrierFields` draws it.
+ *
+ * ## The three rules, all kept
+ *
+ *  - **It does not overwrite what the operator typed.** `quoteFill` above, and
+ *    it is `chooseCustomer`'s rule with one clause added so that a *live* cost
+ *    can move: a quote replaces an empty box or its own previous answer, and
+ *    nothing else.
+ *  - **It does not block the save.** The lookup is a `useQuery` beside the
+ *    mutation, never in front of it; nothing about its state reaches the submit
+ *    button's `disabled`, which is still `lines.length === 0` and nothing more.
+ *    A save fired mid-lookup sends what is in the box, and the answer that
+ *    arrives afterwards is discarded by the drawer's own guard rather than
+ *    written into a form that is already on the wire.
+ *  - **A destination is only as good as the pair it names.** Unchanged, and now
+ *    load-bearing: `communeId` is cleared whenever `wilayaId` moves, and
+ *    `/shipping/rates` declares both `required` with `minimum: 1`, so the query
+ *    is simply disabled until the pair is whole. Nothing is ever sent half.
+ *
+ * ## What is part of the order body, and this paragraph used to say the opposite
+ *
+ * It read: *"What still is not part of the order body: the destination and the
+ * delivery type. `allowedFields()` has no key for `wilaya_id`, `commune_id` or
+ * `delivery_type` and answers `'Unknown field.'` to each, so `buildPayload`
+ * sends none of the three."* **Overturned, deliberately, and quoted rather than
+ * deleted** — the same way `ShipmentSubscriber::destinationOf()` quotes its own
+ * retired paragraph, and for the reason it gives: a reader who remembers the old
+ * rule deserves to know it was reversed on purpose rather than forgotten.
+ *
+ * `allowedFields()` now names all three, on `POST /orders` and
+ * `PATCH /orders/{id}` alike, because `normalize()` is one function shared by
+ * `forCreate()` and `forUpdate()`. `buildPayload` sends the pair when it is
+ * whole and the journey when it is stated, so a fully filled draft now produces
+ * `["line_items","status","shipping_provider","wilaya_id","commune_id",
+ * "delivery_type"]` and `tests/new-order.test.ts` asserts that set.
+ *
+ * **The reason it had to change is the item's own point.** An order created
+ * without a destination confirms straight into `order_destination_missing` —
+ * `ShipmentSubscriber::destinationOf()` reads ids from meta and refuses to guess
+ * them out of an address — so no parcel is ever created for it and an operator
+ * has to make one by hand. That is the manual step this item exists to remove.
+ *
+ * `POST /orders/{id}/shipments` still asks for all three again, because — as
+ * `CreateParcelDrawer` measured — that route does not read a destination off the
+ * order, and it is now the fallback rather than the normal path. That is the
+ * same fact `[id]/order-edit.ts`'s seam records, and the *rate lookup* half of
+ * that seam is still open: the edit form has a stored fee to protect, which is
+ * why its version is conditioned on `order.shipping_amount === null` and why it
+ * is a different sub-task on a different screen.
+ *
+ * Nothing in this branch was measured over live HTTP; `BLOCKED.md` records the
+ * 401 that stops it. Every claim above is read from source in `ecom-temp` and
+ * says so by `file:symbol`, and the multi-courier shape the picker is built for
+ * exists only in `scripts/mock-api.mjs`, which says the same thing about itself.
  */

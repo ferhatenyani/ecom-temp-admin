@@ -104,6 +104,24 @@ function orderWith(overrides: Partial<Order> = {}): Order {
      */
     shipping_amount: null,
     shipping_total: "400.00",
+    /* The carrier branch's read shape. `rules` beside `manual` is the ordinary
+       reading on a shop with no courier credentials — §14's tariff priced the
+       journey and the shop carries it itself — and never a contradiction. */
+    shipping_source: "rules",
+    shipping_provider: "manual",
+    /* No failure. The one case where there *is* one is a `ParcelFailure`
+       question rather than a payload one, and `lib/shipping.ts` owns it. */
+    shipping_provider_error: null,
+    /*
+     * **Addressed**, and the fixture has to be: an order that carries no
+     * destination cannot demonstrate the rule that matters here — that a form
+     * seeded from an addressed order sends nothing until somebody moves a
+     * picker. `null` on all three is the *other* interesting fixture and is
+     * built per-case below.
+     */
+    wilaya_id: 16,
+    commune_id: 484,
+    delivery_type: "home",
     total_tax: "0.00",
     subtotal: "3000.00",
     total: "3400.00",
@@ -223,14 +241,22 @@ describe("line_items and shipping_amount reach the wire only when they were edit
   it("names every field the draft carries, including the two that are gated", () => {
     expect(Object.keys(draftOf(orderWith())).sort()).toEqual([
       "billing",
+      /* The destination joined on the carrier branch, and it is the case this
+         assertion was kept for: three keys added, and each one had to say out
+         loud when it reaches the wire. `wilayaId`/`communeId` go as a whole
+         changed pair and never half; `deliveryType` goes on its own, because
+         `guardDestinationResolves()` does not run for it. */
+      "communeId",
       "customerId",
       "customerNote",
+      "deliveryType",
       "lines",
       "paymentMethod",
       "paymentMethodTitle",
       "shipping",
       "shippingAmount",
       "shippingSameAsBilling",
+      "wilayaId",
     ]);
   });
 
@@ -648,5 +674,150 @@ describe("reading an order into a draft", () => {
     // `OrderInput::MAX_NOTE`. The counter counts the *trimmed* length, because
     // `normalize()` trims before it measures.
     expect(MAX_CUSTOMER_NOTE).toBe(5000);
+  });
+});
+
+/**
+ * The destination — the retry path, and the reason this drawer got a new
+ * section rather than the line editor getting one.
+ *
+ * `OrderInput::allowedFields()` names `wilaya_id`, `commune_id` and
+ * `delivery_type` on both verbs as of the carrier branch, and
+ * `OrderService::guardDestinationResolves()` carries **no `is_editable` gate**.
+ * That absence is load-bearing and its docblock says so: *"a gate here would
+ * make the retry unreachable … Both ways an order earns a
+ * `shipping_provider_error` — the missing destination and the commune a courier
+ * refused — are recorded at `processing`, which is not editable."* So the
+ * destination belongs to the form whose every field is writable in every status,
+ * which is this one; every case below is on a `completed` order for that reason.
+ *
+ * Read from source in `ecom-temp`'s `feat/carrier-choice` tree. Nothing here was
+ * measured over HTTP and nothing claims to have been.
+ */
+describe("the destination, which is writable at every status on purpose", () => {
+  it("seeds from the order, and sends nothing until somebody moves a picker", () => {
+    const order = orderWith();
+    const draft = draftOf(order);
+
+    expect(draft.wilayaId).toBe("16");
+    expect(draft.communeId).toBe("484");
+    expect(draft.deliveryType).toBe("home");
+    expect(buildEditPayload(draft, order)).toEqual({});
+  });
+
+  /**
+   * `null` is *the order does not say*, and it opens as an empty picker rather
+   * than as a guess.
+   *
+   * Seeding the wilaya from `billing.state` was considered and refused:
+   * that field is free text, `AddressInput` validates its shape and nothing
+   * more, and it is empty on ~92 % of orders — so it would fill the control on
+   * one order in twelve with a *routing* decision derived from an address, which
+   * `Shipping\Destination`'s docblock refuses by name.
+   */
+  it("opens empty on an order nobody has addressed, address or no address", () => {
+    const draft = draftOf(
+      orderWith({
+        wilaya_id: null,
+        commune_id: null,
+        delivery_type: null,
+        billing: addressWith({ state: "16", city: "Alger" }),
+      }),
+    );
+
+    expect(draft.wilayaId).toBe("");
+    expect(draft.communeId).toBe("");
+    expect(draft.deliveryType).toBe("");
+  });
+
+  it("sends both ids as integers when either one moves", () => {
+    const order = orderWith();
+
+    /* The commune alone changed, and the wilaya travels with it. The API would
+       take the commune on its own — the guard reads the order's stored half —
+       but a form must not rely on that: an operator mid-edit would send a lone
+       `wilaya_id`, the guard would pair it with the *old* commune, and the
+       refusal names a commune no longer on screen. */
+    expect(buildEditPayload(draftWith(order, { communeId: "483" }), order)).toEqual({
+      wilaya_id: 16,
+      commune_id: 483,
+    });
+
+    expect(
+      buildEditPayload(draftWith(order, { wilayaId: "31", communeId: "900" }), order),
+    ).toEqual({ wilaya_id: 31, commune_id: 900 });
+  });
+
+  /**
+   * Emptying the pickers states nothing, exactly as emptying the fee does.
+   *
+   * `OrderInput::normalize()` drops `null` and `''` for these two before the
+   * payload is assembled, so a body carrying them would be discarded — and sent
+   * alone it would be the 400 *"No supported fields were provided."* on a form
+   * the person had just edited. **There is no way to un-address an order over
+   * this route**, and `0` is not the escape hatch a zero fee is: `OrderInput`
+   * refuses it outright, *there is no commune 0*.
+   */
+  it("cannot clear a destination, and never sends a zero trying", () => {
+    const order = orderWith();
+
+    for (const half of [
+      { wilayaId: "", communeId: "" },
+      { wilayaId: "16", communeId: "" },
+      { wilayaId: "", communeId: "484" },
+    ]) {
+      const payload = buildEditPayload(draftWith(order, half), order);
+      expect(payload, JSON.stringify(half)).not.toHaveProperty("wilaya_id");
+      expect(payload, JSON.stringify(half)).not.toHaveProperty("commune_id");
+    }
+  });
+
+  /**
+   * The journey is diffed on its own, because the API treats it on its own:
+   * `guardDestinationResolves()` returns early unless one of the two *ids* is
+   * stated, saying that `delivery_type` *"is a journey rather than a place, it
+   * needs no pair and no lookup"*.
+   */
+  it("sends the journey without the pair, and the pair without the journey", () => {
+    const order = orderWith();
+
+    expect(buildEditPayload(draftWith(order, { deliveryType: "desk" }), order)).toEqual({
+      delivery_type: "desk",
+    });
+
+    expect(buildEditPayload(draftWith(order, { communeId: "483" }), order)).not.toHaveProperty(
+      "delivery_type",
+    );
+  });
+
+  it("says nothing about the journey when the order never did", () => {
+    /* An order with no stated type opens on `""` and stays silent, which is
+       right: it still has no opinion and `ShipmentSubscriber::destinationOf()`
+       still ships it home. `OrderInput` deliberately does not default this —
+       *"a second default here would give one fact two owners that can drift"*. */
+    const order = orderWith({ delivery_type: null });
+    const draft = draftOf(order);
+
+    expect(draft.deliveryType).toBe("");
+    expect(buildEditPayload(draft, order)).toEqual({});
+    expect(isEditDirty(draft, order)).toBe(false);
+  });
+
+  /**
+   * And none of it is gated on `is_editable`, which is the whole point.
+   *
+   * A `completed` order holding stock is the state every case above runs in —
+   * `orderWith()`'s default — so this asserts the negative directly: the two
+   * keys the route *does* gate stay out of the body while the destination goes
+   * in. If a future edit ever put the destination behind the lines' gate, this
+   * is what fails.
+   */
+  it("reaches the wire from a completed order while the gated keys do not", () => {
+    const order = orderWith({ status: "completed", is_editable: false, stock_reduced: true });
+    const payload = buildEditPayload(draftWith(order, { communeId: "483" }), order);
+
+    expect(payload).toEqual({ wilaya_id: 16, commune_id: 483 });
+    expect(payload).not.toHaveProperty("line_items");
+    expect(payload).not.toHaveProperty("shipping_amount");
   });
 });

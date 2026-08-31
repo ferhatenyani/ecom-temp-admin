@@ -356,10 +356,29 @@ export default async function OrderDetailPage({
                     orderId={order.id}
                     // Stripped on the server, before these become props.
                     shipments={stripLabelUrlsFrom(shipmentsResult ?? [])}
+                    /*
+                      Why the last confirmation created no parcel, straight off
+                      the order — `OrderPresenter::shippingProviderError()`.
+                      It comes from the *order* and the parcels come from
+                      `/orders/{id}/shipments`, which is two sources for one
+                      card and is deliberate on the API's side: the backend
+                      refuses to copy a tracking number or a label onto the
+                      order because a second copy can drift, and refuses the
+                      label specifically because `ShipmentResult`'s docblock
+                      forbids core code reading a key out of provider metadata.
+                      The failure is the mirror of that — it has no shipment row
+                      to live on, because a refused parcel is never written.
+                    */
+                    shippingProviderError={order.shipping_provider_error}
                     failed={shipmentsResult === null}
                     providers={providersResult ?? []}
                     wilayas={geography ?? []}
                     canWrite={canShip}
+                    /* The card is `ac_manage_shipping`; correcting a
+                       destination is `ac_manage_orders`, and the failure block
+                       offers both. No role holds one without the other today,
+                       but capabilities come per user from `/auth/me`. */
+                    canEditOrder={canManageOrders(me)}
                     locale={locale}
                   />
                 ) : null}

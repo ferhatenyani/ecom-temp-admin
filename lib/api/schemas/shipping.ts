@@ -68,6 +68,27 @@ export const shippingRules = z.array(shippingRule);
  * The shipment `label` that Part VI forbids caching lives at `metadata.label` on
  * a *shipment*, is a URL, and never appears on this object. The two fields share
  * a name and nothing else; see `stripLabelUrls` in `lib/shipping.ts`.
+ *
+ * ## `delivery_type` arrived with the carrier branch, and `null` is a value
+ *
+ * `RateQuote::toArray()` emits it — read from source in `ecom-temp`'s
+ * uncommitted `feat/carrier-choice` tree — and it is **`home`, `desk`, or
+ * `null`**, where `null` means *the adapter did not say which journey it
+ * priced*. `RateQuote::coversDeliveryType()` reads that null as "covers
+ * whatever was asked", on the ground that `getShippingRates()` is handed a
+ * `Destination` and an adapter that answers about something else has
+ * misunderstood the question. `quoteFor` in `orders/new-order.ts` reproduces
+ * that rule exactly rather than treating an unstated journey as a mismatch,
+ * which would discard the quote of every adapter that returns one price.
+ *
+ * It is required rather than optional because the route always sends it, and
+ * because this file's opening rule is that a *missing* field is the breaking
+ * change. **A row is not one quote per provider**: `ShippingService::rates()`
+ * emits the shop's tariff row *and* every row the courier's own
+ * `getShippingRates()` returned, and `YalidineProvider` returns all four of its
+ * services whatever journey was asked for. Reading `data[0]` is therefore only
+ * safe on a shop with one registered provider and no courier credentials, which
+ * is this one — `Resolver.tsx` does it and says so.
  */
 export const shippingRate = z.looseObject({
   provider: z.string(),
@@ -78,6 +99,7 @@ export const shippingRate = z.looseObject({
   estimated_days: z.number().nullable(),
   source: z.string(),
   free_shipping: z.boolean(),
+  delivery_type: z.string().nullable(),
 });
 export type ShippingRate = z.infer<typeof shippingRate>;
 export const shippingRates = z.array(shippingRate);

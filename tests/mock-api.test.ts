@@ -16,7 +16,7 @@
  */
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_PATH,
   HARNESS_CREDENTIAL,
@@ -337,6 +337,17 @@ function write(method: string, path: string, body?: unknown, query = ""): MockRe
  * happens at every process start and is what keeps a capture run byte-stable.
  */
 beforeEach(() => resetState());
+
+/**
+ * And no case may leak its *shop* into the next one.
+ *
+ * `MOCK_COURIERS` is read by `buildProviders()` at every `resetState()`, so a
+ * stub left standing by a case that failed halfway would silently register two
+ * couriers for every case after it — which is exactly the class of cross-test
+ * bleed the reset above exists to prevent, one level up. Unstubbing here rather
+ * than at the end of each case means an assertion that throws still cleans up.
+ */
+afterEach(() => vi.unstubAllEnvs());
 
 /** The panel's own boundary, applied to the mock's own output. */
 function parse<T>(schema: z.ZodType<T>, response: MockResponse) {
@@ -1152,6 +1163,167 @@ describe("POST /orders", () => {
     expect(write("POST", "/orders", { line_items: [LINE], status: "shipped" }).status).toBe(400);
   });
 
+  /**
+   * `shipping_provider` — the tenth writable field, and step 2's admin sub-task
+   * 1's one key on the wire.
+   *
+   * Read from source in `ecom-temp`'s uncommitted `feat/carrier-choice` tree:
+   * `OrderInput::allowedFields()` names it beside `shipping_amount`,
+   * `OrderInput::provider()` does shape, and
+   * `OrderService::guardShippingProviderKnown()` does membership against
+   * `ProviderRegistry::has()`. Nothing checks it against the destination, and
+   * the guard says why — a back-office order has no cart to quote against.
+   */
+  it("takes a courier, and records it without any fee at all", () => {
+    const { data } = parse(
+      order,
+      write("POST", "/orders", { line_items: [LINE], shipping_provider: "MANUAL " }),
+    );
+
+    /* Normalised by the API and not by the caller: `strtolower(trim())`, the
+       same transformation `ProviderRegistry::has()` looks up with, so the string
+       stored is the string the registry answers to. */
+    expect(data.shipping_provider).toBe("manual");
+
+    /* **Independent of the fee**, which `applyShippingLine()` proves by
+       branching: a payload naming only a courier takes
+       `assignShippingProvider()`, which creates a shipping line the order did
+       not have and gives it the order's current total. So the order says who
+       carries it and charges nothing. */
+    expect(data.shipping_amount).toBeNull();
+    expect(data.shipping_total).toBe("0.00");
+
+    /* **And `shipping_source` stays null.** It records where the *price* came
+       from, and no quote produced this one — `assignShippingProvider()` writes
+       no `_ac_rate_source` and says outright that it must not. The pair is two
+       questions, not one fact. */
+    expect(data.shipping_source).toBeNull();
+  });
+
+  it("refuses a courier this shop has not registered, and the message IS the legal set", () => {
+    const response = write("POST", "/orders", {
+      line_items: [LINE],
+      shipping_provider: "yalidine",
+    });
+    expect(response.status).toBe(400);
+
+    /*
+     * **A fourth shape for "you named something that does not exist" on one
+     * subject**, and the panel's carrier fallback depends on this one being
+     * exactly this. `guardShippingProviderKnown()` inlines the available list
+     * into the sentence and emits **no `available` sibling** — unlike
+     * `ProviderRegistry::get()`, which does the opposite on `/shipping/rates`
+     * and `/orders/{id}/shipments`. Without `ac_manage_shipping` the drawer
+     * cannot load the picker, so this sentence is the only way an operator
+     * learns the vocabulary.
+     */
+    expect(errorOf(response).details?.fields).toEqual({
+      shipping_provider: "Available: manual.",
+    });
+    expect(errorOf(response).details?.available).toBeUndefined();
+  });
+
+  it("refuses a courier of the wrong shape, and drops an empty one in silence", () => {
+    /* `is_scalar()` — and `null` is checked before it, because the documented
+       "empty says nothing" rule has to win for the one value most likely to
+       arrive from a client echoing an order back. */
+    expect(
+      errorOf(write("POST", "/orders", { line_items: [LINE], shipping_provider: {} })).details
+        ?.fields,
+    ).toEqual({ shipping_provider: "Must be a string." });
+
+    /* `MAX_PROVIDER = 40`, inherited from the `shipping_provider` pattern on
+       `POST /checkout` so the one field cannot accept a string on one route and
+       refuse it on the other. The sentence is `Is implausibly large.`'s sibling,
+       phrased to match the three money validators beside it. */
+    expect(
+      errorOf(write("POST", "/orders", { line_items: [LINE], shipping_provider: "m".repeat(41) }))
+        .details?.fields,
+    ).toEqual({ shipping_provider: "Is implausibly long." });
+
+    /* `null`, `""` and whitespace all say nothing and are dropped rather than
+       refused — `shipping_amount`'s rule, one `normalize()`. The emptiness test
+       is *inside* the normalisation here, which is why `"  "` lands with `""`. */
+    for (const stated of [null, "", "   "]) {
+      const { data } = parse(
+        order,
+        write("POST", "/orders", { line_items: [LINE], shipping_provider: stated }),
+      );
+      expect(data.shipping_provider, JSON.stringify(stated)).toBeNull();
+    }
+  });
+
+  it("is not gated by is_editable on the PATCH, unlike the fee beside it", () => {
+    /*
+     * The one place this field parts company with `shipping_amount`.
+     * `guardShippingProviderKnown()` is not wired into the editability guards
+     * and its docblock argues why: `calculate_totals()` sums shipping *line
+     * totals* and a `method_id` is not a term in that sum, so naming a courier
+     * cannot move a dinar — and gating it would make the courier unchangeable
+     * from the moment it starts to matter, since confirmation moves an order to
+     * `processing`, which is not editable. *"Yalidine refused this commune, send
+     * it with ZR Express"* has to be sayable on a `processing` order.
+     */
+    const shipped = parseList(orderList, get("/orders", "status=processing&per_page=1")).data[0];
+    expect(shipped.is_editable).toBe(false);
+
+    const patched = parse(
+      order,
+      write("PATCH", `/orders/${shipped.id}`, { shipping_provider: "manual" }),
+    );
+    expect(patched.data.shipping_provider).toBe("manual");
+    // The money did not move, so nor did who quoted it.
+    expect(patched.data.shipping_total).toBe(shipped.shipping_total);
+    expect(patched.data.shipping_source).toBe("rules");
+
+    // The fee is gated, on the same order, in the same status.
+    expect(
+      write("PATCH", `/orders/${shipped.id}`, { shipping_amount: "100.00" }).status,
+    ).toBe(409);
+  });
+
+  it("names one courier at a time, and a second write replaces the first", () => {
+    vi.stubEnv("MOCK_COURIERS", "on");
+    resetState();
+
+    const created = parse(
+      order,
+      write("POST", "/orders", { line_items: [LINE], shipping_provider: "yalidine" }),
+    ).data;
+    expect(created.shipping_provider).toBe("yalidine");
+
+    /* Replaced, never cleared. `OrderInput` drops `""` rather than storing it,
+       and its docblock names the cost out loud: a fee has `0` for "no charge"
+       and a courier has no such third value, so a named courier **cannot be
+       un-chosen** — only re-pointed. */
+    expect(
+      parse(order, write("PATCH", `/orders/${created.id}`, { shipping_provider: "zrexpress" }))
+        .data.shipping_provider,
+    ).toBe("zrexpress");
+    /* `""` alone is the empty-payload 400 rather than a clearing write, because
+       it is dropped before `$clean` is assembled — so there is nothing left in
+       the body and `OrderInput::isEmpty()` answers. The order is untouched. */
+    expect(write("PATCH", `/orders/${created.id}`, { shipping_provider: "" }).status).toBe(400);
+    expect(parse(order, get(`/orders/${created.id}`)).data.shipping_provider).toBe("zrexpress");
+  });
+
+  /*
+   * **One rule of `guardShippingProviderKnown()` is deliberately not asserted
+   * here**, and saying so is better than letting a reader assume it is covered.
+   *
+   * An order may always *restate* the courier it already names, even one the
+   * shop has since de-registered — the trap `shipping_source` avoids by being
+   * read-only, and which a writable field has to avoid another way, or a shop
+   * that switched `ENABLE_YALIDINE` off would 400 on every historical Yalidine
+   * order for a key the client echoed without meaning to. The mock implements
+   * it (`readShippingProvider`'s `name !== current` arm), read from source.
+   *
+   * It cannot be reached from this suite: the registry is rebuilt by
+   * `resetState()`, so de-registering the couriers destroys the order that would
+   * have named one. Reaching it would mean exporting a second reset that moved
+   * the registry without the rows, which is API surface invented for a test.
+   */
+
   it("puts the new order at the head of the list, and serves it by id", () => {
     const before = parseList(orderList, get("/orders", "per_page=1")).meta.total;
 
@@ -1322,23 +1494,37 @@ describe("the detail's reference lists", () => {
    * `lib/api/schemas` for it — so this asserts exactly the three keys those
    * components index into, and nothing more.
    */
-  it("serves communes four segments deep, bilingual and paginated", () => {
+  it("serves communes four segments deep, bilingual and unpaginated", () => {
     const commune = z.array(
       z.looseObject({ id: z.number(), name: z.string(), name_ar: z.string() }),
     );
-    const { data, meta } = parseList(
-      commune,
-      get("/locations/wilayas/16/communes", "per_page=100"),
-    );
+    const { data, meta } = parse(commune, get("/locations/wilayas/16/communes"));
     expect(data.length).toBeGreaterThan(0);
-    expect(meta.total).toBe(data.length);
+    expect(meta).toEqual({ total: data.length });
     expect(data.every((row) => row.name !== "" && row.name_ar !== "")).toBe(true);
 
-    // Genuinely paginated, unlike `/locations/wilayas` — the picker asks for 100.
-    expect(
-      parseList(commune, get("/locations/wilayas/16/communes", "per_page=2")).data,
-    ).toHaveLength(2);
-    // And a wilaya that does not exist is a 404 rather than an empty list.
+    /*
+     * **Unpaginated, exactly like `/locations/wilayas`, and this assertion is
+     * the reverse of what it used to be.** It read "genuinely paginated — the
+     * picker asks for 100", which was the harness inferring a contract from its
+     * own caller. Read from source:
+     * `Geography\LocationController::searchArgs()` declares `search` and
+     * `active_only` and nothing else, under a docblock headed *"No
+     * pagination"*, and `communes()` returns
+     * `Response::success($communes, 200, ['total' => count($communes)])` — the
+     * same call `wilayas()` makes, whose `{"total":69}` envelope is what
+     * `counted()` was measured against.
+     *
+     * So `per_page` is a parameter the route never registered, WordPress
+     * ignores it, and a request carrying it must come back identical to one
+     * that does not. That is the property worth asserting, because it is the
+     * one the old mock broke.
+     */
+    expect(get("/locations/wilayas/16/communes", "per_page=2").body).toEqual(
+      get("/locations/wilayas/16/communes").body,
+    );
+    // And a wilaya that does not exist is a 404 rather than an empty list —
+    // `GeoService::communesOf()` resolves the wilaya first for that reason.
     expect(get("/locations/wilayas/999/communes").status).toBe(404);
 
     /*
@@ -1773,9 +1959,19 @@ describe("GET /shipping/rates", () => {
       expect(data).toHaveLength(1);
       expect(data[0].amount).toBe(amount);
       expect(data[0].source).toBe("rules");
-      // The quote is attributed to the configured default provider, while the
-      // rule's own `provider` is the empty string.
+      /* The quote is attributed to **the courier being quoted** — `rates()`
+         builds each row as `['provider' => $name] + …` — which on a shop with
+         one registered provider is the same string as the rule's own. It stops
+         being the same string the moment a courier is registered, which is what
+         the `MOCK_COURIERS=on` block below is for. */
       expect(data[0].provider).toBe("manual");
+      /* `RateResolver::quote()`'s first argument is
+         `$rule->deliveryType === '' ? 'standard' : $rule->deliveryType`, and
+         the seeded rules all carry `home`. */
+      expect(data[0].service).toBe("home");
+      /* New on the row with the carrier branch, and on a tariff row it is the
+         journey the **caller** asked for rather than the rule's own. */
+      expect(data[0].delivery_type).toBe("home");
       // `label` here is a display string and is **not** the credential a
       // shipment's `metadata.label` is. The two share a name and nothing else.
       expect(data[0].label).toBe("Delivery");
@@ -1839,6 +2035,238 @@ describe("GET /shipping/rates", () => {
     expect(data).toEqual([]);
     expect(meta.total).toBe(0);
     expect(shippingRateSchema.safeParse(data[0]).success).toBe(false);
+  });
+
+  /**
+   * **A rule prices one journey unless it prices every journey.**
+   * `ShippingRule::matches()` ends on
+   * `$this->deliveryType === '' || $this->deliveryType === $destination->deliveryType`,
+   * and the seeded rules all carry `home`. This file's old filter tested neither
+   * the journey nor the provider, so a desk collection was quoted the doorstep
+   * tariff — which is the whole reason the create drawer draws a journey
+   * control.
+   */
+  it("does not price a desk collection with a home tariff", () => {
+    const home = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=home"),
+    ).data;
+    expect(home).toHaveLength(1);
+    expect(home[0].amount).toBe("350.00");
+
+    const desk = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=desk"),
+    ).data;
+    expect(desk).toEqual([]);
+
+    // A rule with no journey prices both, which is what `''` means.
+    write("PATCH", "/shipping/rules/164", { delivery_type: "" });
+    expect(
+      parseList(
+        shippingRatesSchema,
+        get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=desk"),
+      ).data[0].amount,
+    ).toBe("350.00");
+    // …and it is `'standard'` in `service`, never the empty string.
+    expect(
+      parseList(
+        shippingRatesSchema,
+        get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=desk"),
+      ).data[0].service,
+    ).toBe("standard");
+  });
+
+  it("refuses a journey outside the enum and a courier it has not registered", () => {
+    /* `'enum' => Destination::DELIVERY_TYPES` on the route, so this is
+       WordPress's own parameter refusal — the **object** shape of
+       `details.params`, unlike the missing-parameter array two tests up. */
+    const journey = refusedWith(
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=stopdesk"),
+      400,
+      "invalid_request",
+    );
+    expect(journey.params?.delivery_type).toBe("delivery_type is not one of home and desk.");
+
+    /* `provider` is a filter and an unregistered one is
+       `ProviderRegistry::get()`'s refusal — keyed `provider`, with the legal set
+       beside it rather than inside the sentence. That is a **third** shape for
+       "you named something that does not exist" on this one subject, and the
+       order route's is a fourth; the panel must not assume any of them. */
+    const courier = refusedWith(
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&provider=yalidine"),
+      400,
+      "invalid_request",
+    );
+    expect(courier.fields?.provider).toBe('Unknown provider "yalidine".');
+    expect(courier.details.available).toEqual(["manual"]);
+  });
+
+  it("applies a free-shipping threshold, inclusive at the boundary", () => {
+    /* `qualifiesForFreeShipping()` compares in whole minor units because
+       `4999.99 >= 5000.00` is a comparison of two floats that are not the
+       numbers they were written as. Rule 163 is the wilaya-16 rule at 500.00
+       with `free_over: "10000.00"`; commune 61 has no rule of its own. */
+    const at = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=61&subtotal=10000.00"),
+    ).data[0];
+    expect(at.amount).toBe("0.00");
+    expect(at.free_shipping).toBe(true);
+    expect(at.label).toBe("Free delivery");
+
+    const under = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=61&subtotal=9999.99"),
+    ).data[0];
+    expect(under.amount).toBe("500.00");
+    expect(under.free_shipping).toBe(false);
+
+    /* **No subtotal is a different question, not a subtotal of zero.** "What
+       does it cost to deliver here" and "what does it cost to deliver *this
+       basket* here" are two questions, and the create drawer asks the first
+       because it has no agreed goods total to state. */
+    expect(
+      parseList(shippingRatesSchema, get("/shipping/rates", "wilaya_id=16&commune_id=61")).data[0]
+        .free_shipping,
+    ).toBe(false);
+  });
+});
+
+/**
+ * The shop the create drawer's carrier picker was built for, and **the only
+ * place it can exist.**
+ *
+ * `BLOCKED.md` item 2: all eight courier variables are present and empty,
+ * `shipping-check` reports `manual` alone, and `sync-destinations` calls each
+ * courier's live API. So `MOCK_COURIERS=on` reproduces
+ * `Core\Plugin::shippingProviders()`'s gate rather than one side of it — and the
+ * default arm above stays byte-identical to the live install, which is why every
+ * assertion in this file about "exactly one provider" still holds.
+ */
+describe("MOCK_COURIERS=on — the multi-courier shape", () => {
+  beforeEach(() => {
+    vi.stubEnv("MOCK_COURIERS", "on");
+    resetState();
+  });
+
+  /* The env is unstubbed by the file-level `afterEach`, and the next case's
+     `beforeEach` rebuilds the registry from it — so nothing here has to. */
+
+  it("registers three providers and makes the first one the default", () => {
+    const { data } = parse(shippingProviders, get("/shipping/providers"));
+    expect(data.map((entry) => entry.name)).toEqual(["yalidine", "zrexpress", "manual"]);
+
+    /* **`manual` stops being the default**, which is the case
+       `NewOrderDrawer`'s `defaultProvider()` has to get right and which cannot
+       be reached on the default shop. `describe()` compares each name against
+       `array_key_first`, and `Plugin::shippingProviders()` appends
+       `ManualProvider` last and unconditionally. */
+    expect(data.filter((entry) => entry.is_default).map((entry) => entry.name)).toEqual([
+      "yalidine",
+    ]);
+
+    /* `zrexpress`, with no underscore. Two docblocks on the backend's own
+       carrier branch say `zr_express` and `ZRExpressProvider::NAME` does not;
+       the constant is what `ProviderRegistry::has()` answers to. */
+    expect(data.map((entry) => entry.name)).toContain("zrexpress");
+    expect(data.map((entry) => entry.name)).not.toContain("zr_express");
+  });
+
+  it("quotes every courier in one call, several rows each", () => {
+    const { data } = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=home"),
+    );
+
+    /* The shape the picker reads and the reason `data[0]` is not safe here:
+       Yalidine returns all four of its services whatever journey was asked
+       about, ZR returns the one it filtered to, and `manual` returns none. */
+    const byProvider = new Map<string, typeof data>();
+    for (const row of data) {
+      byProvider.set(row.provider, [...(byProvider.get(row.provider) ?? []), row]);
+    }
+    expect([...byProvider.keys()].sort()).toEqual(["manual", "yalidine", "zrexpress"]);
+    expect(byProvider.get("yalidine")).toHaveLength(4);
+    expect(byProvider.get("zrexpress")).toHaveLength(1);
+
+    /* **`manual` has exactly one row and it is the tariff.**
+       `ManualProvider::getShippingRates()` is `return [];` — the shop's own
+       driver has no rate API — so every price for in-house delivery comes from
+       §14. That is why the drawer's picker cannot filter on "produced a row". */
+    expect(byProvider.get("manual")).toHaveLength(1);
+    expect(byProvider.get("manual")?.[0].source).toBe("rules");
+    expect(byProvider.get("manual")?.[0].amount).toBe("350.00");
+
+    /* **The couriers get no tariff row**, because the seeded rules name
+       `manual` and `ShippingRule::matches()` refuses a provider that is neither
+       `''` nor the one being quoted. Both `source` values are present in one
+       answer, which is what the picker has to be able to say. */
+    expect(byProvider.get("yalidine")?.every((row) => row.source === "provider")).toBe(true);
+    expect(new Set(data.map((row) => row.source))).toEqual(new Set(["rules", "provider"]));
+
+    /* Yalidine states a journey per service and does **not** filter to the one
+       asked for; ZR filters and states it anyway. Both are read from source, and
+       together they are the input `quoteFor()` exists to reduce. */
+    expect(new Set(byProvider.get("yalidine")?.map((row) => row.delivery_type))).toEqual(
+      new Set(["home", "desk"]),
+    );
+    expect(byProvider.get("zrexpress")?.[0].delivery_type).toBe("home");
+    expect(byProvider.get("zrexpress")?.[0].service).toBe("home");
+
+    /* A courier's own spelling reaches `service` and nothing may read a journey
+       out of it — `ZRExpressParcel::PICKUP_POINT` is `pickup-point`. */
+    expect(
+      parseList(
+        shippingRatesSchema,
+        get("/shipping/rates", "wilaya_id=16&commune_id=484&delivery_type=desk"),
+      ).data.find((row) => row.provider === "zrexpress")?.service,
+    ).toBe("pickup-point");
+  });
+
+  it("leaves a courier out entirely where it has nothing mapped", () => {
+    /* Wilaya 1 stands in for the `$toWilaya === null` arm both adapters take
+       when `sync-destinations` has not run — which `BLOCKED.md` says is every
+       destination on this install. The national rule still prices `manual`, so
+       the answer is not empty; the two couriers are simply absent from it, and
+       that is the picker's "no price here" state. */
+    const { data } = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=1&commune_id=1"),
+    );
+    expect(data.map((row) => row.provider)).toEqual(["manual"]);
+    expect(data[0].amount).toBe("800.00");
+  });
+
+  it("filters to one courier when asked, and still answers its rows", () => {
+    const { data } = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&provider=zrexpress"),
+    );
+    expect(data.map((row) => row.provider)).toEqual(["zrexpress"]);
+  });
+
+  it("lets a tariff row name a courier once one is registered", () => {
+    /* The rules editor validates against the live registry —
+       `guardRuleProvider()` — so the legal set moves with the shop. It is the
+       same array `/shipping/providers` serves, which is why a refusal and the
+       picker on screen cannot disagree. */
+    const saved = parse(
+      shippingRuleSchema,
+      write("POST", "/shipping/rules", { amount: "990.00", provider: "yalidine" }),
+    ).data;
+    expect(saved.provider).toBe("yalidine");
+
+    const rate = parseList(
+      shippingRatesSchema,
+      get("/shipping/rates", "wilaya_id=16&commune_id=484&provider=yalidine"),
+    ).data.find((row) => row.source === "rules");
+    expect(rate?.amount).toBe("990.00");
+
+    expect(
+      apiError(write("POST", "/shipping/rules", { amount: "1.00", provider: "acfake" })).details
+        .available,
+    ).toEqual(["yalidine", "zrexpress", "manual"]);
   });
 });
 
@@ -3758,6 +4186,442 @@ describe("the shipment writes", () => {
  * `resetState()` in `beforeEach` rebuilds the whole thing from the seeds, which
  * is exactly what a second process does at load.
  */
+/**
+ * ── Confirmation creates the parcel ──────────────────────────────────────────
+ *
+ * Step 2's admin sub-task 6, third clause: *"the confirm-creates-a-parcel
+ * behaviour, or none of the above is testable here."* Everything the order
+ * detail's parcel section now draws — the tracking number, the label, the
+ * failure block, the two remedies and the demoted manual drawer — is a rendering
+ * of what this behaviour leaves behind, so until the harness did it none of that
+ * had a state to be driven into.
+ *
+ * The rules are `Shipping\ShipmentSubscriber`'s, read from source in
+ * `ecom-temp`'s `feat/carrier-choice` tree. Nothing here was measured over HTTP
+ * and nothing claims to have been; `BLOCKED.md` records the 401 that stops it,
+ * and item 2 records that no courier API has ever been reached from this
+ * environment at all.
+ */
+describe("confirmation creates the parcel", () => {
+  /** An addressed, courier-less order that has never been confirmed. */
+  const pendingOrder = () => {
+    const { data } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "pending",
+        wilaya_id: 16,
+        commune_id: 484,
+        shipping_provider: "manual",
+      }),
+    );
+    return data;
+  };
+
+  const parcelsOf = (id: number) =>
+    parseList(shipmentsSchema, get(`/orders/${id}/shipments`)).data;
+
+  it("creates a parcel on the transition into processing, and clears no status", () => {
+    const made = pendingOrder();
+    expect(parcelsOf(made.id)).toEqual([]);
+
+    const confirmed = parse(order, write("PATCH", `/orders/${made.id}`, { status: "processing" }))
+      .data;
+
+    // The status commits whatever the parcel did — `WC_Order::save()` writes the
+    // row before `status_transition()` fires the hook, so no failure inside it
+    // could roll the status back.
+    expect(confirmed.status).toBe("processing");
+    expect(confirmed.shipping_provider_error).toBeNull();
+
+    const parcels = parcelsOf(made.id);
+    expect(parcels).toHaveLength(1);
+    expect(parcels[0].is_live).toBe(true);
+    expect(parcels[0].provider).toBe("manual");
+    // Empty until the courier has it — `ManualProvider::createShipment()` has no
+    // tracking number to give, and the panel renders that state by name.
+    expect(parcels[0].tracking_number).toBe("");
+    expect(parcels[0].metadata.wilaya_id).toBe(16);
+    expect(parcels[0].metadata.commune_id).toBe(484);
+  });
+
+  it("creates one for an order born confirmed, which is the second of the five doors", () => {
+    /* `processing` is in `OrderStatus::CREATABLE`, so an order taken on the
+       telephone can be *born* confirmed — `ShipmentSubscriber`'s docblock names
+       this explicitly, and a mock that only confirmed on the PATCH would leave
+       the create drawer's own status picker producing orders that never get a
+       parcel. */
+    const { data } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "processing",
+        wilaya_id: 16,
+        commune_id: 484,
+        shipping_provider: "manual",
+      }),
+    );
+
+    expect(data.status).toBe("processing");
+    expect(data.shipping_provider_error).toBeNull();
+    expect(parcelsOf(data.id)).toHaveLength(1);
+  });
+
+  it("does not create a second on a re-transition, and does not on a re-save", () => {
+    const made = pendingOrder();
+    write("PATCH", `/orders/${made.id}`, { status: "processing" });
+    expect(parcelsOf(made.id)).toHaveLength(1);
+
+    /* Re-saving the same status fires nothing — WooCommerce's
+       `status_transition()` does nothing when the status has not moved, so this
+       is the API's own idempotence rather than a guard invented here. */
+    write("PATCH", `/orders/${made.id}`, { status: "processing" });
+    expect(parcelsOf(made.id)).toHaveLength(1);
+
+    /* And a genuine second transition finds the live parcel the first one made
+       and stops — `ShipmentRepository::liveForOrder()`, the existing
+       one-live-shipment rule reused rather than restated. */
+    write("PATCH", `/orders/${made.id}`, { status: "on-hold" });
+    write("PATCH", `/orders/${made.id}`, { status: "processing" });
+    expect(parcelsOf(made.id)).toHaveLength(1);
+  });
+
+  it("records order_destination_missing and still commits the status", () => {
+    const { data: made } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "pending",
+        shipping_provider: "manual",
+      }),
+    );
+
+    expect(made.wilaya_id).toBeNull();
+
+    const confirmed = parse(order, write("PATCH", `/orders/${made.id}`, { status: "processing" }))
+      .data;
+
+    expect(confirmed.status).toBe("processing");
+    expect(parcelsOf(made.id)).toEqual([]);
+
+    const failure = confirmed.shipping_provider_error;
+    expect(failure).not.toBeNull();
+    expect(failure?.code).toBe("order_destination_missing");
+    /* `null` and never `""` when the courier said nothing of its own —
+       `ShipmentFailure::toArray()`'s convention, so a client tests one thing. */
+    expect(failure?.provider_message).toBeNull();
+    expect(failure?.at).not.toBeNull();
+  });
+
+  it("records nothing at all when nobody named a courier", () => {
+    /* *"A real and expected state, not an error"* — an order taken by phone
+       before anyone decided who delivers it. Recording a failure here would put
+       a red flag on every order of a shop that assigns couriers at dispatch. */
+    const { data: made } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "pending",
+        wilaya_id: 16,
+        commune_id: 484,
+      }),
+    );
+
+    const confirmed = parse(order, write("PATCH", `/orders/${made.id}`, { status: "processing" }))
+      .data;
+
+    expect(confirmed.shipping_provider_error).toBeNull();
+    expect(parcelsOf(made.id)).toEqual([]);
+  });
+
+  it("clears last time's failure once a parcel exists", () => {
+    const { data: made } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "processing",
+        shipping_provider: "manual",
+      }),
+    );
+
+    expect(made.shipping_provider_error?.code).toBe("order_destination_missing");
+
+    /* The retry, end to end: the destination is writable at `processing`
+       because `guardDestinationResolves()` has no `is_editable` gate, and the
+       next confirmation finds no live shipment and tries again. */
+    write("PATCH", `/orders/${made.id}`, { wilaya_id: 16, commune_id: 484 });
+    write("PATCH", `/orders/${made.id}`, { status: "on-hold" });
+    const again = parse(order, write("PATCH", `/orders/${made.id}`, { status: "processing" })).data;
+
+    expect(again.shipping_provider_error).toBeNull();
+    expect(parcelsOf(made.id)).toHaveLength(1);
+  });
+
+  /**
+   * **A courier refusal leaves no shipment row at all**, which is the rule that
+   * makes the retry work and the easiest one to get wrong.
+   * `ShippingService::createClaimed()` calls the provider before it inserts
+   * anything, so a rejected commune produces no parcel, the order still has no
+   * live shipment, and the manual route or the next confirmation tries again. A
+   * harness that wrote a `failed` row here would make the panel's "no parcel and
+   * here is why" state unreachable.
+   *
+   * Wilaya 1 is this file's standing unmapped-destination fixture — the same one
+   * `courierRates()` returns nothing for — because a courier that cannot price a
+   * place cannot address a parcel to it either.
+   */
+  it("leaves no row when a courier refuses, so the next attempt can succeed", () => {
+    vi.stubEnv("MOCK_COURIERS", "on");
+    resetState();
+
+    const commune = 1;
+    const { data: made } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        status: "processing",
+        wilaya_id: 1,
+        commune_id: commune,
+        shipping_provider: "yalidine",
+      }),
+    );
+
+    expect(made.status).toBe("processing");
+    expect(parcelsOf(made.id)).toEqual([]);
+    expect(made.shipping_provider_error?.code).toBe("yalidine_destination_unmapped");
+    expect(made.shipping_provider_error?.provider).toBe("yalidine");
+
+    /* The address corrected, then confirmed again — the panel's "correct the
+       destination" remedy, driven through the harness. */
+    write("PATCH", `/orders/${made.id}`, { wilaya_id: 16, commune_id: 484 });
+    write("PATCH", `/orders/${made.id}`, { status: "on-hold" });
+    const fixed = parse(order, write("PATCH", `/orders/${made.id}`, { status: "processing" })).data;
+
+    expect(fixed.shipping_provider_error).toBeNull();
+    expect(parcelsOf(made.id)).toHaveLength(1);
+    expect(parcelsOf(made.id)[0].provider).toBe("yalidine");
+  });
+});
+
+/**
+ * ── The destination on the wire ──────────────────────────────────────────────
+ *
+ * `wilaya_id`, `commune_id` and `delivery_type`, writable on both verbs as of
+ * the backend's carrier branch. Two layers, kept apart here because they are
+ * kept apart there: `OrderInput::destinationId()` and `::deliveryType()` do
+ * shape, and `OrderService::guardDestinationResolves()` does the pair and the
+ * geography.
+ */
+describe("the destination is writable on an order", () => {
+  /** The refusal envelope's `error`, so a `details.fields` key can be named. */
+  const errorOf = (response: MockResponse) =>
+    (response.body as { error: { details?: Record<string, never> } }).error;
+
+  it("writes both ids and the journey, and reads them back", () => {
+    const { data } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        wilaya_id: 16,
+        commune_id: 484,
+        delivery_type: "desk",
+      }),
+    );
+
+    expect(data.wilaya_id).toBe(16);
+    expect(data.commune_id).toBe(484);
+    expect(data.delivery_type).toBe("desk");
+    expect(parse(order, get(`/orders/${data.id}`)).data.commune_id).toBe(484);
+  });
+
+  it("answers null rather than zero for an order nobody addressed", () => {
+    /* `OrderPresenter::destinationId()`: `OrderInput` refuses `0` outright, so
+       publishing one would emit a value this API's own write side rejects and
+       every whole-body PATCH of an unaddressed order would 400 on two keys the
+       client echoed without touching. */
+    const { data } = parse(
+      order,
+      write("POST", "/orders", { line_items: [{ product_id: 101, quantity: 1 }] }),
+    );
+
+    expect(data.wilaya_id).toBeNull();
+    expect(data.commune_id).toBeNull();
+    expect(data.delivery_type).toBeNull();
+  });
+
+  it("drops an empty id and refuses a zero, which is the split from the fee", () => {
+    /* `null` and `''` are dropped — the presenter emits `null` and a client
+       PATCHing back a body it just read must not be 400ed on keys it never
+       touched. `0` is refused, because a charge has a meaningful zero and an id
+       has none: there is no commune 0. */
+    const dropped = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        wilaya_id: null,
+        commune_id: "",
+      }),
+    );
+    expect(dropped.data.wilaya_id).toBeNull();
+
+    for (const bad of [0, -1, "16.5", "16abc", true, [16]]) {
+      const refusal = write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        wilaya_id: bad,
+        commune_id: 484,
+      });
+      expect(refusal.status, JSON.stringify(bad)).toBe(400);
+      expect(errorOf(refusal).details?.fields, JSON.stringify(bad)).toMatchObject({
+        wilaya_id: "Must be a positive id.",
+      });
+    }
+  });
+
+  it("refuses a half destination on a create, which has no stored half to complete it", () => {
+    const lone = write("POST", "/orders", {
+      line_items: [{ product_id: 101, quantity: 1 }],
+      commune_id: 484,
+    });
+
+    expect(lone.status).toBe(400);
+    expect(errorOf(lone).details?.fields).toEqual({
+      wilaya_id: "Required when the order names a commune.",
+    });
+  });
+
+  it("completes a half destination from the order on a PATCH", () => {
+    /* `guardDestinationResolves()` reads the order's stored half for whichever
+       key the payload did not state — a courtesy to a client sending a partial
+       body, and the reason `buildEditPayload` sends the pair whole anyway. */
+    const { data: made } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        wilaya_id: 16,
+        commune_id: 484,
+      }),
+    );
+
+    const moved = parse(order, write("PATCH", `/orders/${made.id}`, { commune_id: 483 })).data;
+    expect(moved.wilaya_id).toBe(16);
+    expect(moved.commune_id).toBe(483);
+  });
+
+  /**
+   * The commune in another wilaya, and **`commune_wilaya_id` beside the fields
+   * rather than inside the sentence** — `ShippingService::validatedDestination()`'s
+   * published shape, so a panel that knows which wilaya the commune does belong
+   * to can offer to move the selection instead of clearing it.
+   */
+  it("names the wilaya a mismatched commune does belong to", () => {
+    const refusal = write("POST", "/orders", {
+      line_items: [{ product_id: 101, quantity: 1 }],
+      wilaya_id: 31,
+      commune_id: 484,
+    });
+
+    expect(refusal.status).toBe(400);
+    const details = errorOf(refusal).details as unknown as {
+      fields: Record<string, string>;
+      commune_wilaya_id: number;
+    };
+    expect(details.fields).toEqual({
+      wilaya_id: "That commune belongs to a different wilaya.",
+    });
+    expect(details.commune_wilaya_id).toBe(16);
+  });
+
+  it("refuses a commune that does not exist", () => {
+    const refusal = write("POST", "/orders", {
+      line_items: [{ product_id: 101, quantity: 1 }],
+      wilaya_id: 16,
+      commune_id: 999999,
+    });
+
+    expect(refusal.status).toBe(400);
+    expect(errorOf(refusal).details?.fields).toEqual({
+      commune_id: "No commune with id 999999.",
+    });
+  });
+
+  it("refuses an unknown journey and normalises a known one", () => {
+    const refusal = write("POST", "/orders", {
+      line_items: [{ product_id: 101, quantity: 1 }],
+      delivery_type: "locker",
+    });
+    expect(refusal.status).toBe(400);
+    expect(errorOf(refusal).details?.fields).toEqual({
+      delivery_type: `Must be one of: ${DELIVERY_TYPES.join(", ")}.`,
+    });
+
+    /* `strtolower(trim())` before the value is judged, which is
+       `Destination::isKnownDeliveryType()`'s own normalisation — what lands in
+       the meta has to be what `destinationOf()` will match on. */
+    const { data } = parse(
+      order,
+      write("POST", "/orders", {
+        line_items: [{ product_id: 101, quantity: 1 }],
+        delivery_type: "  Desk ",
+      }),
+    );
+    expect(data.delivery_type).toBe("desk");
+  });
+
+  it("is not gated by is_editable, which is what makes the retry reachable", () => {
+    /* `guardDestinationResolves()` has no editability gate and its docblock says
+       why: both ways an order earns a `shipping_provider_error` are recorded at
+       `processing`, which is not editable, so gating this would freeze the field
+       at the exact moment it starts to matter. */
+    const shipped = parse(order, write("PATCH", "/orders/1023", { status: "processing" })).data;
+    expect(shipped.is_editable).toBe(false);
+    expect(shipped.wilaya_id).not.toBeNull();
+
+    /* A commune of the order's *own* wilaya, read off the geography route rather
+       than written as a literal: 1023's wilaya is a seeded draw, and a hard-coded
+       commune would be asserting the seed instead of the rule. */
+    const communes = (
+      get(`/locations/wilayas/${shipped.wilaya_id}/communes`).body as {
+        data: { id: number }[];
+      }
+    ).data;
+    const next = communes.find((row) => row.id !== shipped.commune_id);
+    expect(next).toBeDefined();
+
+    const moved = parse(order, write("PATCH", "/orders/1023", { commune_id: next!.id })).data;
+    expect(moved.commune_id).toBe(next!.id);
+    expect(moved.is_editable).toBe(false);
+  });
+
+  /**
+   * `shipping_provider_error` is **read-only**, and dropped in silence rather
+   * than refused — `OrderInput::READ_ONLY` strips it before the unknown-key
+   * sweep. A caller who could state it could claim a courier had refused an
+   * address that no courier was ever asked about, and a form must never echo it
+   * back expecting it to stick.
+   */
+  it("drops a stated shipping_provider_error without naming it", () => {
+    const alone = write("PATCH", "/orders/1023", {
+      shipping_provider_error: { code: "made_up", message: "nonsense" },
+    });
+
+    expect(alone.status).toBe(400);
+    expect((alone.body as { error: { message: string } }).error.message).toBe(
+      "No supported fields were provided.",
+    );
+
+    const withNote = parse(
+      order,
+      write("PATCH", "/orders/1023", {
+        shipping_provider_error: { code: "made_up", message: "nonsense" },
+        customer_note: "Sonner deux fois",
+      }),
+    ).data;
+
+    expect(withNote.customer_note).toBe("Sonner deux fois");
+    expect(withNote.shipping_provider_error?.code).not.toBe("made_up");
+  });
+});
+
 describe("the writes", () => {
   it("patches a status and reads it back, with the derived flags recomputed", () => {
     expect(parse(order, get("/orders/1023")).data.status).toBe("completed");

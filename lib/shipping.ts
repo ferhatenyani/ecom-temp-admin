@@ -1,3 +1,15 @@
+/**
+ * The one value import in this module, and it is deliberate.
+ *
+ * Everything else here is `import type` — erased, so the file stays importable
+ * from a client component without dragging Zod along. `lib/format/date.ts`
+ * imports nothing but `Intl`, and `readFailure` needs it for a reason no local
+ * comparison could satisfy: a shipment's `created_at` ends `+00:00`, a
+ * payment's ends `Z`, and an order note's carries no offset at all. That file
+ * owns the repair and is the only thing permitted to touch any of them.
+ */
+import { parseApiDate } from "@/lib/format/date";
+import type { Order } from "@/lib/api/schemas/order";
 import type { Shipment, ShippingProvider, ShippingRule } from "@/lib/api/schemas/shipping";
 
 /**
@@ -223,6 +235,232 @@ export function shipmentCodAmount(shipment: SafeShipment): string | null {
 export function providerStatus(shipment: SafeShipment): string | null {
   const raw = shipment.metadata.provider_status;
   return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
+/* ------------------------------------------- why no parcel appeared --- */
+
+/**
+ * The order's stored explanation for a confirmation that created no parcel.
+ *
+ * Derived from the schema rather than restated, so the shape has one owner. The
+ * schema's own docblock carries where it comes from and why it is on the order
+ * instead of on a response.
+ */
+export type ShipmentFailure = NonNullable<Order["shipping_provider_error"]>;
+
+/**
+ * The codes this system produces for itself, as opposed to a courier's own.
+ *
+ * `ShipmentFailure::NO_DESTINATION` and `::UNEXPECTED` are constants in
+ * `Shipping/ShipmentFailure.php`; the other three are `ApiException` codes that
+ * reach `fromApiException()` from inside `ShippingService::createOnConfirmation()`
+ * — `ShipmentInput`/`Destination` validation, `ProviderRegistry::get()` on a
+ * name the shop no longer registers, and `ShipmentRepository::claimOrder()`
+ * losing a race. Read from source.
+ *
+ * **A courier's code is anything else**, and the set is open by construction:
+ * each adapter mints its own (`yalidine_parcel_refused`,
+ * `zrexpress_destination_unmapped`, `zrexpress_no_pickup_point`, …), and a
+ * courier the shop configures next year will bring more. So the branch below
+ * tests *membership of this list* and treats the complement as a courier
+ * refusal, rather than listing courier codes — a list of those would be a
+ * panel-side copy of every adapter's vocabulary and would silently mis-handle
+ * the first code nobody thought of.
+ */
+export const OWN_FAILURE_CODES = [
+  "order_destination_missing",
+  "shipment_create_failed",
+  "invalid_request",
+  "no_shipping_provider",
+  "conflict",
+] as const;
+
+export type OwnFailureCode = (typeof OWN_FAILURE_CODES)[number];
+
+/**
+ * What the operator can actually *do* about a failure, in one word.
+ *
+ * Two remedies, and they are two because the API has two different fixes and
+ * gives them different codes on purpose — `ShipmentFailure`'s docblock says so
+ * in terms: *"a code is what a panel branches on. A message is prose and gets
+ * rewritten; `yalidine_parcel_refused` and `order_destination_missing` want
+ * different screens."*
+ *
+ *   `parcel`       hand the parcel to a courier from this screen —
+ *                  `POST /orders/{id}/shipments`, which takes the destination
+ *                  and the courier in its own body.
+ *   `destination`  correct where the order is going —
+ *                  `PATCH /orders/{id}` with `wilaya_id` and `commune_id`.
+ *
+ * ## Why the missing destination gets the *parcel* remedy and not the obvious one
+ *
+ * It reads backwards until you follow the retry. `order_destination_missing`
+ * means the order carries no wilaya and commune, and the two ids are now
+ * writable on `PATCH /orders/{id}` — so "add the destination" looks like the
+ * fix. It is the durable fix and it is **not the one that produces a parcel**:
+ * `ShipmentSubscriber` runs on a WooCommerce *transition* into `processing`, the
+ * order recording this failure is already in `processing`, and WooCommerce fires
+ * nothing when a status is re-saved as itself. Correcting the destination
+ * therefore changes nothing about *this* order until somebody walks it out of
+ * `processing` and back in.
+ *
+ * `ShippingService::create()`'s five reasons for keeping the manual route open
+ * with the first one, verbatim: *"Confirming again is one way back and it needs
+ * the order to leave `processing` first; this route is the way back that does
+ * not."* So the button offers the route that works now, and the screen says in
+ * one line that the destination is worth fixing too.
+ *
+ * ## Why a courier refusal gets the destination remedy
+ *
+ * Because that is the field the courier is complaining about. The archetype in
+ * the backend's own example is `provider_message: "commune introuvable: Ouled
+ * Fayet"` — a real commune the adapter has no mapping for, or the wrong one for
+ * the wilaya beside it. `OrderService::guardDestinationResolves()` deliberately
+ * carries **no `is_editable` gate**, and its docblock gives this exact reason:
+ * *"Both ways an order earns a `shipping_provider_error` … are recorded at
+ * `processing`, which is not editable. Gating the destination would freeze it at
+ * the exact moment it starts to matter."* The panel is the caller that argument
+ * was written for.
+ *
+ * And the retry then works without any further help: a refused parcel leaves
+ * **no shipment row at all** — `createClaimed()` calls the provider before it
+ * writes anything — so the order has no live shipment, and the manual route or
+ * the next genuine confirmation both go through.
+ *
+ * ## The three that get neither
+ *
+ * `shipment_create_failed` is `fromThrowable()`: a fixed sentence naming an
+ * exception class, with the real message deliberately kept in the log where a
+ * customer cannot read it. Nothing the operator retypes changes it, so the
+ * screen offers the parcel route — which gets the goods moving — and does not
+ * pretend a field is wrong.
+ *
+ * `no_shipping_provider` is a courier the shop has de-registered since the order
+ * named it. The order's own `shipping_provider` is writable, but this panel has
+ * no control that writes it on an existing order — the create drawer does, the
+ * edit drawer does not — and the manual drawer *does* ask for a provider from
+ * the live registry, so it is both the honest and the working answer.
+ *
+ * `conflict` is `claimOrder()`'s loser: two transitions at once, and the winner
+ * created the parcel. It needs no remedy at all and `answered` below is normally
+ * what a reader sees instead.
+ */
+export type FailureRemedy = "parcel" | "destination";
+
+export function failureRemedy(code: string): FailureRemedy {
+  return (OWN_FAILURE_CODES as readonly string[]).includes(code) ? "parcel" : "destination";
+}
+
+/**
+ * How a stored failure should be read **right now** — which is not the same
+ * question as what it says.
+ *
+ * ## The staleness the backend flagged, and the three things done about it
+ *
+ * `ShipmentSubscriber::clearFailure()` takes the value off the order only when
+ * a confirmation finds or creates a live shipment. Nothing else clears it. So
+ * the field is *last time's* answer, it survives indefinitely, and — the
+ * backend's own words — **the value persists, so an undated error reads as
+ * current when it is a week old.**
+ *
+ *  1. **`at` is never dropped.** Whatever the block renders, it renders when.
+ *     `formatWhen` gives a relative phrase under a day and the absolute date
+ *     after, so Tuesday's failure reads as Tuesday rather than as a sentence
+ *     with no time on it.
+ *  2. **An undated failure says so.** `at` is genuinely nullable —
+ *     `ShipmentFailure::iso()` answers null for a stored value it cannot parse,
+ *     and `fromMeta()` will build a failure out of anything carrying a `code`,
+ *     because order meta is a public store another plugin can write into. A
+ *     missing time rendered as a blank is precisely the *"reads as current"*
+ *     failure, so `dated: false` makes the screen say the time is not recorded
+ *     rather than say nothing.
+ *  3. **A parcel that postdates it answers it**, and this is the one that makes
+ *     `at` load-bearing rather than decorative. It is two tests, and the second
+ *     is the interesting one:
+ *
+ *       - **any live parcel.** There is a box in the air; whatever is stored on
+ *         the order is history, and a remedy button beside it is an invitation
+ *         to send a second one. This is also the only test available for an
+ *         undated failure.
+ *       - **any parcel, terminal included, created at or after `at`.** A
+ *         delivered parcel is still a parcel that went out *after* the courier
+ *         refused, so somebody already dealt with it. Without this arm, an order
+ *         refused on Monday, sent by hand on Tuesday and delivered on Thursday
+ *         reads on Friday as though nothing had been done — which is exactly the
+ *         staleness the backend flagged, wearing a different hat.
+ *
+ *     A parcel created **before** `at` proves nothing and is correctly ignored:
+ *     that is a *later* confirmation failing, which is the state the panel most
+ *     needs to show. The comparison runs on parsed dates rather than strings,
+ *     because the two fields do not agree on notation — a shipment's
+ *     `created_at` ends `+00:00`, a payment's ends `Z`, and only `parseApiDate`
+ *     may touch either.
+ *
+ * All of it is computed from the shipments the screen already has rather than
+ * from anything on the order, because the order carries no tracking number and
+ * must not: `OrderPresenter::shippingProviderError()`'s docblock refuses the
+ * second copy that could drift and points at `GET /orders/{id}/shipments` as the
+ * answer to *"where is this parcel"*.
+ *
+ * **This is a display rule and is deliberately wider than the backend's own.**
+ * `clearFailure()` erases the stored value only when a confirmation finds or
+ * creates a live shipment, so the API will keep serving a failure this function
+ * calls answered. That is not a disagreement about the facts — the panel can see
+ * both the failure and the parcels in one render and the subscriber can only see
+ * one at a time — and nothing here writes anything, so the two cannot drift.
+ */
+export type FailureReading =
+  | { state: "none" }
+  | { state: "answered"; failure: ShipmentFailure; dated: boolean }
+  | { state: "open"; failure: ShipmentFailure; dated: boolean; remedy: FailureRemedy };
+
+export function readFailure(
+  failure: ShipmentFailure | null | undefined,
+  shipments: readonly SafeShipment[],
+): FailureReading {
+  if (!failure) return { state: "none" };
+
+  const at = parseApiDate(failure.at);
+  const dated = at !== null;
+
+  /* The same `is_live` test `createShipmentGate` runs, and deliberately through
+     the same function: "is there a parcel in the air" has exactly one answer on
+     this screen, and a second expression for it is a second thing to get
+     wrong. */
+  const live = !createShipmentGate(shipments).allowed;
+
+  const sentSince =
+    at !== null &&
+    shipments.some((shipment) => {
+      const made = parseApiDate(shipment.created_at);
+      return made !== null && made.getTime() >= at.getTime();
+    });
+
+  if (live || sentSince) return { state: "answered", failure, dated };
+
+  return { state: "open", failure, dated, remedy: failureRemedy(failure.code) };
+}
+
+/**
+ * Whether the manual parcel route is worth offering at all — step 2's admin
+ * sub-task 5, in one expression.
+ *
+ * **The test is `is_live` on any row of `GET /orders/{id}/shipments`**, which is
+ * `createShipmentGate` and nothing new. It is restated as its own name here
+ * because the *meaning* changed on this branch even though the expression did
+ * not: the gate used to answer "may a parcel be created" for a screen where
+ * creating one by hand was the only way it ever happened, and it now answers
+ * "is the fallback needed" on a screen where confirmation does this by itself.
+ *
+ * History does not block and terminal parcels do not either — a cancelled,
+ * failed, delivered or returned parcel leaves the order free to be sent again,
+ * which `ShippingService`'s docblock calls out as what makes *"a re-send after a
+ * failed delivery work without deleting history"*. Only something still in the
+ * air blocks, `pending` included, because that is the case where trying again
+ * really would put two boxes on two vans.
+ */
+export function manualParcelOffered(shipments: readonly SafeShipment[]): boolean {
+  return createShipmentGate(shipments).allowed;
 }
 
 /* -------------------------------------------------------- the rules --- */

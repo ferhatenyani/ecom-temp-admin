@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { Icon } from "@/components/primitives/Icon";
 import { Isolate, Ltr } from "@/components/primitives/Ltr";
 import { Button } from "@/components/ui/Button";
-import { Listbox } from "@/components/ui/Listbox";
+import { Listbox, type ListboxOption } from "@/components/ui/Listbox";
 import { useHydrated } from "@/lib/use-hydrated";
 
 /**
@@ -1020,7 +1020,18 @@ export function Select<T extends string = string>({
   label: string;
   value: T;
   onChange: (next: T) => void;
-  options: readonly { value: T; label: string }[];
+  /**
+   * `ListboxOption`, not the `{value, label}` pair this used to name.
+   *
+   * The narrower type was a copy of the control's own option shape minus two of
+   * its fields, so the `secondary` line — the whole reason a drawn list can say
+   * what an `<option>` could not — was unreachable through this frame, and a
+   * caller wanting one had to concatenate two facts into `label` "and hope",
+   * which is the phrase `ListboxOption` uses about exactly that. `disabled` was
+   * unreachable for the same reason. Widened rather than duplicated so the two
+   * cannot drift again; `Listbox` already accepted both at runtime.
+   */
+  options: readonly ListboxOption<T>[];
   hint?: string;
   error?: string;
   validate?: (value: T) => string | undefined;

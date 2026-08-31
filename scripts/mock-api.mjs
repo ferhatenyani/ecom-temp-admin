@@ -3,6 +3,7 @@
  * honest about it.
  *
  *   node scripts/mock-api.mjs        # MOCK_PORT, default 8099, on 127.0.0.1
+ *   MOCK_COURIERS=on …               # the shop with its two couriers switched on
  *
  * The e2e suite needs live shop credentials nobody has in CI, and `next build`
  * passing is not evidence a screen renders — it once passed with a completely
@@ -526,6 +527,78 @@ const WILAYAS = WILAYA_NAMES.map(([name, nameAr], index) => ({
   name_ar: nameAr,
   is_active: true,
 }));
+
+/*
+ * ── Moved up from beside the analytics fixtures ──────────────────────────────
+ *
+ * It sat between `/analytics` and the write state, which was fine while the only
+ * thing that needed a commune was a request handler — those run long after every
+ * `const` in this file has been evaluated. `ORDERS` below is not a handler: it is
+ * a top-level `Array.from` that runs at load, and it now has to name the commune
+ * an order is going to, because the destination joined the order's read shape.
+ * A `const` cannot be read before its initialiser, so the fixture moved rather
+ * than the seed inventing a second id scheme that would drift from this one.
+ */
+/* --------------------------------------------------------------- communes --- */
+
+/**
+ * A commune list per wilaya, which `/locations/wilayas` alone cannot fill: the
+ * create-parcel form asks for both halves of a destination and the API validates
+ * them before anything else on the body.
+ *
+ * **There is no Zod schema for this route in the panel** — `CreateParcelDrawer`,
+ * `RulesScreen`, `Resolver`, `RuleForm` and `ParcelDrawer` all read it with an
+ * untyped `acRead<Commune[]>` and a local `{id, name, name_ar}` — so the shape
+ * here is those three keys plus the two a
+ * wilaya row carries for the same purpose. Ids run globally rather than per
+ * wilaya, the way the measured shipping rules use them (wilaya 16 / commune 484).
+ *
+ * The names are synthetic, and visibly so. Inventing 1 541 real commune names
+ * would be a fixture nobody could check against anything.
+ */
+const COMMUNE_PARTS = [
+  ["Centre", "الوسط"],
+  ["Est", "الشرق"],
+  ["Ouest", "الغرب"],
+  ["Nord", "الشمال"],
+  ["Sud", "الجنوب"],
+];
+
+const COMMUNES = new Map();
+{
+  let nextCommuneId = 1;
+  for (const wilaya of WILAYAS) {
+    const count = 3 + (wilaya.id % 3);
+    COMMUNES.set(
+      wilaya.id,
+      Array.from({ length: count }, (_, slot) => ({
+        id: nextCommuneId++,
+        wilaya_id: wilaya.id,
+        name: `${wilaya.name} ${COMMUNE_PARTS[slot][0]}`,
+        name_ar: `${wilaya.name_ar} ${COMMUNE_PARTS[slot][1]}`,
+        is_active: true,
+      })),
+    );
+  }
+
+  /*
+   * **483 and 484, by hand, because the resolver cannot be exercised without
+   * them.** The generator above hands out 231 ids for 58 wilayas while the real
+   * table runs to 1 541, so Alger's communes here stop around 64 — and the
+   * measured commune rule (164) is pinned to commune **484**, which no picker
+   * could ever select. The rules preview would then have had only the wilaya and
+   * national arms to resolve, and *commune beats wilaya* — the one thing the
+   * whole rules table exists to display — would have been unreachable in the
+   * harness while working perfectly in the shop.
+   *
+   * These are also the two ids the seeded parcels are sent to, so a shipment row
+   * can name its destination rather than showing an id that resolves to nothing.
+   */
+  COMMUNES.get(16).push(
+    { id: 483, wilaya_id: 16, name: "Alger Aïn Taya", name_ar: "الجزائر عين طاية", is_active: true },
+    { id: 484, wilaya_id: 16, name: "Alger Centre", name_ar: "الجزائر الوسط", is_active: true },
+  );
+}
 
 /* --------------------------------------------------------------- identity --- */
 
@@ -2217,12 +2290,142 @@ const ORDER_NAMES = [
  */
 const HOLDS_STOCK = ["processing", "completed", "on-hold"];
 
+/**
+ * ── Why some seeded orders carry no destination, and some carry a failure ────
+ *
+ * `wilaya_id`, `commune_id` and `delivery_type` joined the order's read shape on
+ * the carrier branch — `OrderPresenter::toArray()`, read from source — and the
+ * whole of step 2 turns on which orders have them. So the fixture has to contain
+ * both kinds, and neither can be a coincidence of a random draw.
+ *
+ * **Most orders are addressed**, because every seeded row here was placed by the
+ * checkout and `Cart\\CheckoutService::createOrder()` writes all three, saying in
+ * a comment that it does so "so a later shipment does not have to guess it back
+ * out of a free-text address".
+ *
+ * **One in thirteen is not**, and that is the honest remainder
+ * `ShipmentSubscriber::destinationOf()` names in its own docblock: *"an order
+ * nobody has addressed. A phone call taken before the customer's commune is
+ * known, an order written by wp-admin, an import."* Without those rows the
+ * `order_destination_missing` failure — and with it the whole "create the parcel
+ * by hand" remedy — is unreachable through the harness.
+ *
+ * `index % 13` rather than a random draw, for this file's standing rule: every
+ * fixture value is derived from the row's own index so that the same process
+ * produces the same shop and a screenshot stays byte-stable.
+ *
+ * **The address and the destination agree**, because they came from one choice
+ * at checkout. They are still different fields and the panel must never derive
+ * one from the other; an agreeing fixture is what the *shop* looks like, and the
+ * two orders below are where they are made to disagree on purpose.
+ */
+const addressedOrder = (index) => index % 13 !== 0;
+
+/**
+ * The two pinned failures, and what each is for.
+ *
+ * A stored `shipping_provider_error` is only ever cleared by a later
+ * confirmation that finds a parcel — `ShipmentSubscriber::clearFailure()` — so
+ * it is *last time's* answer and can outlive whatever went wrong. Both readings
+ * of that have to be reachable here or the panel's staleness handling is
+ * untested:
+ *
+ *   1014  a courier refusal recorded **before** the live parcel 7014 —
+ *         `created_at: iso(600)` — so `readFailure` reads it as **answered**:
+ *         Yalidine would not take it, somebody sent it in-house, and the record
+ *         of the refusal is history rather than a job to do.
+ *   1023  a courier refusal recorded **after** the delivered parcel 7023 —
+ *         `created_at: iso(2600)` — so it reads as **open**. That is a real
+ *         sequence rather than a contrived one: a delivered parcel is terminal,
+ *         `ShippingService`'s docblock says terminal parcels do not block a new
+ *         one, and 1023's own refusal table already documents
+ *         `PATCH {status:"processing"}` on it as the legal move. So: it went
+ *         out, it arrived, somebody confirmed it again, and the courier refused
+ *         the address the second time.
+ *
+ * 1023 is also the route `scripts/capture.mjs` photographs, which is why the
+ * *open* one is there — the block, its courier line, its dated line and its
+ * "correct the destination" remedy are all in the capture set.
+ *
+ * The shape is `ShipmentFailure::toArray()`'s exactly: `provider`, `code`,
+ * `message`, `provider_message` (**null**, never `""`, when the courier said
+ * nothing of its own) and `at` in ISO-8601. Both sentences are read from source
+ * — `YalidineProvider::createShipment()` at the `yalidine_parcel_refused`
+ * throw — and the `provider_message` is the courier's own words, which is the
+ * one thing an adapter is allowed to pass through and the only actionable half.
+ */
+const PINNED_ORDER_FAILURES = new Map([
+  [
+    1014,
+    {
+      provider: "yalidine",
+      code: "yalidine_parcel_refused",
+      message: "Yalidine would not create this parcel.",
+      provider_message: "commune introuvable: Ouled Fayet",
+      at: iso(900),
+    },
+  ],
+  [
+    1023,
+    {
+      provider: "yalidine",
+      code: "yalidine_parcel_refused",
+      message: "Yalidine would not create this parcel.",
+      provider_message: "wilaya et commune incompatibles",
+      at: iso(1800),
+    },
+  ],
+]);
+
+/**
+ * The failure a seeded row carries, or null.
+ *
+ * Beyond the two pinned above, an **unaddressed order that has been confirmed**
+ * carries `order_destination_missing` — which is not decoration, it is what the
+ * backend does every single time: `destinationOf()` reads ids from meta, refuses
+ * to guess them out of the address, and `recordFailure()` writes this against
+ * the order. An unaddressed `processing` or `completed` order with a clean
+ * record would be a state the shop cannot produce.
+ *
+ * `processing` and `completed` only. `on-hold` holds stock but fires no
+ * `woocommerce_order_status_processing`, and `pending`/`cancelled`/`failed`
+ * never confirmed at all — `refunded` did, but it is reached from `completed`
+ * and this fixture does not model a path. A failure on an order that never
+ * transitioned into `processing` would be a row the subscriber could not have
+ * written.
+ *
+ * The sentence is `ShipmentFailure::noDestination()`'s, word for word, route
+ * name included — it names `POST /orders/{id}/shipments` because that is the
+ * one route that takes both ids in its own body, and the panel prints the
+ * API's own English rather than a translated generic.
+ */
+function seededOrderFailure(id, status, addressed) {
+  const pinned = PINNED_ORDER_FAILURES.get(id);
+  if (pinned !== undefined) return pinned;
+
+  if (addressed) return null;
+  if (status !== "processing" && status !== "completed") return null;
+
+  return {
+    provider: "manual",
+    code: "order_destination_missing",
+    message:
+      "This order records no wilaya and commune, so no parcel could be addressed. " +
+      "Create it with POST /orders/{id}/shipments, which takes both.",
+    provider_message: null,
+    at: iso(id % 97 === 0 ? 40 : 4000 + (id % 900)),
+  };
+}
+
 const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
   const id = 1000 + index;
   const status = statusColumn[index];
   const [first, last] = ORDER_NAMES[index % ORDER_NAMES.length];
   const wilaya = WILAYAS[int(0, WILAYAS.length - 1)];
   const product = PRODUCTS[int(0, PRODUCTS.length - 1)];
+  const addressed = addressedOrder(index);
+  const communes = COMMUNES.get(wilaya.id);
+  const commune = communes[index % communes.length];
 
   const lineItems = emptyItemsColumn[index]
     ? []
@@ -2315,6 +2518,54 @@ const ORDERS = Array.from({ length: ORDER_COUNT }, (_, index) => {
      */
     shipping_amount: null,
     shipping_total: shippingTotal,
+    /*
+     * **The pair the carrier branch added to the read shape, and on a seeded row
+     * they are the ordinary reading rather than a contradiction.** Every order
+     * here was placed by the checkout, which writes `_ac_rate_source` from the
+     * quote it charged and `method_id` from the courier it chose —
+     * `CheckoutService::createOrder()`, read from source. §14's tariff priced
+     * them, so the source is `rules`; the shop carries them itself, so the
+     * courier is `manual`.
+     *
+     * `shipping_source` says **where the price came from** and is read-only —
+     * `OrderInput::READ_ONLY` names it, because a caller who could state it
+     * could claim a courier had answered when none was asked.
+     * `shipping_provider` says **who carries the box** and is writable. Reading
+     * the two as one fact is the misreading the backend's own docblock warns
+     * about, and a fixture where they always agreed would let a screen make it
+     * and still look right.
+     */
+    shipping_source: "rules",
+    shipping_provider: "manual",
+    /*
+     * Why the last confirmation created no parcel — `null` on most rows, which
+     * is the ordinary state. `seededOrderFailure()` above says which rows carry
+     * one and why each of them has to.
+     *
+     * **Read-only, and `ORDER_READ_ONLY_FIELDS` carries it**, for the reason
+     * `OrderInput::READ_ONLY`'s own comment gives: a caller who could state this
+     * could claim a courier had refused an address that no courier was ever
+     * asked about.
+     */
+    shipping_provider_error: seededOrderFailure(id, status, addressed),
+    /*
+     * The destination, in `Shipping\Destination::toArray()`'s order and at the
+     * end of the delivery cluster — the presenter's own arrangement.
+     *
+     * **`null` and never `0` for an order that does not say.**
+     * `OrderPresenter::destinationId()` is emphatic about it: `OrderInput`
+     * refuses `0` outright — *there is no commune 0* — so publishing one would
+     * emit a value this API's own write side rejects, and every whole-body PATCH
+     * of an unaddressed order would 400 on two keys the client echoed without
+     * touching.
+     *
+     * The journey rotates so both values are in the fixture; `null` goes with
+     * the missing pair, because `delivery_type` is meaningless on an order with
+     * nowhere to send anything and the presenter reports what the meta holds.
+     */
+    wilaya_id: addressed ? wilaya.id : null,
+    commune_id: addressed ? commune.id : null,
+    delivery_type: addressed ? (index % 5 === 0 ? "desk" : "home") : null,
     total_tax: "0.00",
     subtotal,
     total,
@@ -6163,6 +6414,81 @@ const SHIPPING_PROVIDERS = [
 ];
 
 /**
+ * The two couriers, and **the switch that decides whether they are registered.**
+ *
+ * ## Why there is a switch at all, rather than three providers or one
+ *
+ * The carrier branch needs a shop with more than one courier — a picker that
+ * offers a choice, and a rate route that answers with several rows from several
+ * providers — and **that shop cannot exist on this install**. `BLOCKED.md` item
+ * 2 measures why: all eight courier variables are present and empty,
+ * `wp algerian-commerce shipping-check` reports `manual` alone, and
+ * `sync-destinations` calls each courier's live API for its own destination
+ * ids. So the multi-courier shape has to be here or nowhere.
+ *
+ * It could not simply be added to the array above, because five screen
+ * decisions rest on that array holding exactly one row and each of them would
+ * quietly become wrong:
+ *
+ *   - `ParcelsList` ships **no provider filter** — the parameter works, and the
+ *     only allowlisted enumeration cannot offer `acfake`, which is 42 of the 129
+ *     parcels.
+ *   - `payments/query.ts` ships one **because** `/payments/methods` lists both
+ *     of its values and this route does not.
+ *   - the rules editor validates a tariff row's `provider` against this list;
+ *     registering couriers the live shop rejects would let a screen save a rule
+ *     the shop refuses.
+ *   - `POST /shipments/{id}/sync` can never succeed on this shop, and the test
+ *     that asserts it quotes this array's only `label`.
+ *   - `lib/api/schemas/shipping.ts` records the measurement by date.
+ *
+ * So the mock reproduces the **gate** rather than one side of it, which is what
+ * `Core\Plugin::shippingProviders()` actually is: Yalidine is registered only
+ * when `ENABLE_YALIDINE` is set *and* its three credentials are complete, ZR
+ * Express likewise, and `new ManualProvider()` is appended **unconditionally
+ * and last**. `MOCK_COURIERS=on` is those two environment flags, and the
+ * default is this shop.
+ *
+ * **The order matters and is copied, not chosen.** `ProviderRegistry::describe()`
+ * marks `array_key_first` as the default, so with the couriers on the default
+ * is **`yalidine`** and `manual` is not — which is exactly the case the create
+ * drawer's `defaultProvider()` has to get right and could not otherwise be
+ * exercised.
+ *
+ * The names and labels are read from source: `YalidineProvider::NAME` /
+ * `::label()` and `ZRExpressProvider::NAME` / `::label()`. **`zrexpress`, with
+ * no underscore** — two docblocks on the backend's own carrier branch say
+ * `zr_express` and the constant does not; the constant wins, and
+ * `ShippingProviderInterface::name()`'s docblock agrees with it.
+ */
+const COURIER_PROVIDERS = [
+  { name: "yalidine", label: "Yalidine" },
+  { name: "zrexpress", label: "ZR Express" },
+];
+
+/**
+ * The registry as this process is configured — rebuilt by `resetState()`, so a
+ * suite can stub the variable and reset rather than fork a process.
+ */
+function buildProviders() {
+  const registered =
+    (process.env.MOCK_COURIERS ?? "off") === "on"
+      ? [...COURIER_PROVIDERS, ...SHIPPING_PROVIDERS]
+      : SHIPPING_PROVIDERS;
+
+  /* `is_default` is not a property of a provider, it is a property of its
+     position: `describe()` compares each name against `defaultName()`, which is
+     `array_key_first`. Recomputed here for the same reason — the seeded row
+     above carries `true` and must not keep it once a courier is in front of
+     it. */
+  return registered.map((entry, index) => ({
+    name: entry.name,
+    label: entry.label,
+    is_default: index === 0,
+  }));
+}
+
+/**
  * Ten statuses in the order a parcel passes through them — and **that is the
  * order both refusals list them in.** Measured 2026-08-25:
  *
@@ -7892,67 +8218,6 @@ const ANALYTICS_REPORTS = {
   cod: analyticsCod,
 };
 
-/* --------------------------------------------------------------- communes --- */
-
-/**
- * A commune list per wilaya, which `/locations/wilayas` alone cannot fill: the
- * create-parcel form asks for both halves of a destination and the API validates
- * them before anything else on the body.
- *
- * **There is no Zod schema for this route in the panel** — `CreateParcelDrawer`,
- * `RulesScreen`, `Resolver`, `RuleForm` and `ParcelDrawer` all read it with an
- * untyped `acRead<Commune[]>` and a local `{id, name, name_ar}` — so the shape
- * here is those three keys plus the two a
- * wilaya row carries for the same purpose. Ids run globally rather than per
- * wilaya, the way the measured shipping rules use them (wilaya 16 / commune 484).
- *
- * The names are synthetic, and visibly so. Inventing 1 541 real commune names
- * would be a fixture nobody could check against anything.
- */
-const COMMUNE_PARTS = [
-  ["Centre", "الوسط"],
-  ["Est", "الشرق"],
-  ["Ouest", "الغرب"],
-  ["Nord", "الشمال"],
-  ["Sud", "الجنوب"],
-];
-
-const COMMUNES = new Map();
-{
-  let nextCommuneId = 1;
-  for (const wilaya of WILAYAS) {
-    const count = 3 + (wilaya.id % 3);
-    COMMUNES.set(
-      wilaya.id,
-      Array.from({ length: count }, (_, slot) => ({
-        id: nextCommuneId++,
-        wilaya_id: wilaya.id,
-        name: `${wilaya.name} ${COMMUNE_PARTS[slot][0]}`,
-        name_ar: `${wilaya.name_ar} ${COMMUNE_PARTS[slot][1]}`,
-        is_active: true,
-      })),
-    );
-  }
-
-  /*
-   * **483 and 484, by hand, because the resolver cannot be exercised without
-   * them.** The generator above hands out 231 ids for 58 wilayas while the real
-   * table runs to 1 541, so Alger's communes here stop around 64 — and the
-   * measured commune rule (164) is pinned to commune **484**, which no picker
-   * could ever select. The rules preview would then have had only the wilaya and
-   * national arms to resolve, and *commune beats wilaya* — the one thing the
-   * whole rules table exists to display — would have been unreachable in the
-   * harness while working perfectly in the shop.
-   *
-   * These are also the two ids the seeded parcels are sent to, so a shipment row
-   * can name its destination rather than showing an id that resolves to nothing.
-   */
-  COMMUNES.get(16).push(
-    { id: 483, wilaya_id: 16, name: "Alger Aïn Taya", name_ar: "الجزائر عين طاية", is_active: true },
-    { id: 484, wilaya_id: 16, name: "Alger Centre", name_ar: "الجزائر الوسط", is_active: true },
-  );
-}
-
 /* ------------------------------------------------------------ write state --- */
 
 /**
@@ -7972,6 +8237,16 @@ const COMMUNES = new Map();
  * The unit suite calls it between tests for the same reason.
  */
 const state = {
+  /**
+   * The registered shipping providers — `manual` alone, or the two couriers in
+   * front of it under `MOCK_COURIERS=on`. See `buildProviders()`.
+   *
+   * On `state` rather than a module const so `resetState()` rebuilds it, which
+   * is what lets a suite stub the variable between cases instead of forking a
+   * process per shop. Nothing writes it at request time; it is configuration
+   * that happens to be re-read.
+   */
+  providers: buildProviders(),
   /** Order id → status, and **empty until something PATCHes**. */
   statuses: new Map(),
   /**
@@ -8227,6 +8502,11 @@ const state = {
 };
 
 export function resetState() {
+  /* Re-read rather than kept, so `MOCK_COURIERS` can be stubbed between cases.
+     It is the first line because the rate route and the rules validator both
+     read the registry, and a reset that rebuilt them first would build them
+     against the previous shop. */
+  state.providers = buildProviders();
   state.statuses = new Map();
   state.orderProps = new Map();
   state.orders = new Map();
@@ -8641,7 +8921,255 @@ const ORDER_WRITABLE_FIELDS = [
   "shipping",
   "line_items",
   "shipping_amount",
+  /*
+   * The tenth, added on the carrier branch and **on both verbs**, because
+   * `allowedFields()` is one method and `normalize()` is one function shared by
+   * `forCreate()` and `forUpdate()`. It is the courier that carries the parcel —
+   * `manual`, `yalidine`, `zrexpress` — and it is written to the shipping line's
+   * `method_id`.
+   *
+   * **Not `shipping_source`, which is beside it in `READ_ONLY` and is a
+   * different question.** `shipping_source` is `rules | provider | null` and
+   * says where the *price* came from; this says who carries the *box*. The pair
+   * `{"shipping_source": "rules", "shipping_provider": "yalidine"}` is ordinary
+   * rather than contradictory, and is what every row in this file would read on
+   * a shop with couriers registered and no destination mapping.
+   */
+  "shipping_provider",
+  /*
+   * The eleventh, twelfth and thirteenth, added after the courier and again on
+   * both verbs — `allowedFields()` keeps them together and last, saying why:
+   * *"they are one statement in three keys and reading them apart is how a
+   * wilaya ends up beside another wilaya's commune."*
+   *
+   * **This is the key that makes a back-office order get a parcel at all.**
+   * `ShipmentSubscriber::destinationOf()` reads wilaya and commune from order
+   * meta and refuses to derive them from the address, so before these existed
+   * every order `POST /orders` created confirmed straight into
+   * `order_destination_missing` — the exact manual step step 2 exists to
+   * remove.
+   *
+   * They are validated in two layers and the layers are kept apart here because
+   * they are kept apart there: `OrderInput::destinationId()` does shape
+   * (`readDestinationId` below) and `OrderService::guardDestinationResolves()`
+   * does the pair and the geography lookup (`destinationConflict` below).
+   */
+  "wilaya_id",
+  "commune_id",
+  "delivery_type",
 ];
+
+/**
+ * `OrderInput::destinationId()` — one half of a destination, or `undefined`.
+ *
+ * **`null` and `''` are dropped rather than refused**, exactly as they are for
+ * `shipping_amount` and `shipping_provider`, and for the reason `OrderInput`'s
+ * docblock gives: the presenter emits `null` for an order with no destination,
+ * and a client PATCHing back a body it just read must not be 400ed on keys it
+ * never touched.
+ *
+ * **`0` is not empty and is refused**, which is where these part company with
+ * the fee. A charge has a meaningful zero — *no delivery charge* — and an id has
+ * none; there is no commune 0, and `ShipmentSubscriber::destinationOf()` reads
+ * anything below 1 as no destination at all.
+ *
+ * The shape test is the source's, in its order and with its reasoning:
+ * `is_numeric()` **before** the cast, because `(int)` would turn `[16]`, `true`
+ * and `"16abc"` into numbers and hand a routing decision to PHP's juggling
+ * rules; then the float check, because `16.5` is numeric and casts to a real
+ * commune id that the picker which produced it was not pointing at.
+ * `phpNumeric` is this file's existing rendering of the first, and
+ * `Number.isInteger` of the second.
+ */
+function readDestinationId(stated, key, fields) {
+  if (!(key in stated)) return undefined;
+
+  const raw = stated[key];
+  if (raw === null || raw === "") return undefined;
+
+  const value = Number(raw);
+  if (!phpNumeric(raw) || !Number.isInteger(value) || value < 1) {
+    fields[key] = "Must be a positive id.";
+    return undefined;
+  }
+
+  return value;
+}
+
+/**
+ * `OrderInput::deliveryType()` — `home`, `desk`, or `undefined`.
+ *
+ * Normalized `strtolower(trim())` before it is judged, which is
+ * `Destination::isKnownDeliveryType()`'s own normalisation and the discipline
+ * `provider()` applies for the registry's sake: what lands in
+ * `DELIVERY_TYPE_META` has to be what `destinationOf()` will match on.
+ *
+ * Empty says nothing, and **this class does not default it to `home`**.
+ * `OrderInput` argues that at length — `destinationOf()` already falls back to
+ * `Destination::HOME` and states why it is the one field safe to default, so *"a
+ * second default here would give one fact two owners that can drift, and would
+ * make a back-office order claim a journey nobody chose"*.
+ *
+ * The sentence is built from the same constant `ShipmentInput` and
+ * `ShippingRuleInput` build theirs from, so the three cannot list different
+ * journeys.
+ */
+function readDeliveryType(stated, fields) {
+  if (!("delivery_type" in stated)) return undefined;
+
+  const raw = stated.delivery_type;
+  if (raw === null || raw === "") return undefined;
+
+  // `is_scalar()` in PHP: an array or an object yields '' and is refused.
+  const value = typeof raw === "object" ? "" : String(raw).trim().toLowerCase();
+
+  if (!DELIVERY_TYPES.includes(value)) {
+    fields.delivery_type = `Must be one of: ${DELIVERY_TYPES.join(", ")}.`;
+    return undefined;
+  }
+
+  return value;
+}
+
+/**
+ * `OrderService::guardDestinationResolves()` — the pair, and the geography.
+ *
+ * Returns a refusal response or `null`. It is a *service* guard rather than an
+ * input rule and the split is the source's: `OrderInput` cannot see the order,
+ * so it cannot know that a lone `commune_id` completes a pair the order already
+ * half-holds, and it cannot look a commune up.
+ *
+ * The four refusals, in the order the source checks them:
+ *
+ *  1. **A half destination is refused even when it is what the order already
+ *     stores** — the completeness check runs ahead of the restatement exemption
+ *     on purpose, *"because this API never wrote that state and cannot address
+ *     it either"*.
+ *  2. Restating exactly what is stored is a no-op and skips the lookup.
+ *  3. A commune that does not exist.
+ *  4. A commune in another wilaya — keyed `wilaya_id` while naming the commune,
+ *     with **`commune_wilaya_id` beside the fields rather than inside the
+ *     sentence**, so a panel that knows which wilaya the commune does belong to
+ *     can offer to move the selection instead of clearing it. That is
+ *     `ShippingService::validatedDestination()`'s published shape, copied here
+ *     because the source copied it there.
+ *
+ * `delivery_type` is deliberately **not** a reason to run any of this: it is a
+ * journey rather than a place, it needs no pair and no lookup, and
+ * `destinationOf()` never reads it unless both ids are present.
+ */
+function destinationConflict(clean, row) {
+  if (clean.wilaya_id === undefined && clean.commune_id === undefined) return null;
+
+  /* `get_meta()` on a key never written is `''` and `(int) ''` is 0 — the same
+     reading `storedId()` gives and the same one `destinationOf()` gives. The
+     row publishes `null` for it, so the coercion happens here. */
+  const storedWilaya = row.wilaya_id ?? 0;
+  const storedCommune = row.commune_id ?? 0;
+
+  const wilayaId = clean.wilaya_id ?? storedWilaya;
+  const communeId = clean.commune_id ?? storedCommune;
+
+  if (wilayaId < 1) {
+    return invalidBody("The order data is invalid.", {
+      wilaya_id: "Required when the order names a commune.",
+    });
+  }
+
+  if (communeId < 1) {
+    return invalidBody("The order data is invalid.", {
+      commune_id: "Required when the order names a wilaya.",
+    });
+  }
+
+  if (wilayaId === storedWilaya && communeId === storedCommune) return null;
+
+  const commune = [...COMMUNES.values()].flat().find((row2) => row2.id === communeId);
+
+  if (commune === undefined) {
+    return invalidBody("The order data is invalid.", {
+      commune_id: `No commune with id ${communeId}.`,
+    });
+  }
+
+  if (commune.wilaya_id !== wilayaId) {
+    /* `fail` rather than `invalidBody`, because `details` carries a sibling of
+       `fields` and no other refusal on this route does. */
+    return fail(400, "invalid_request", "The order data is invalid.", {
+      fields: { wilaya_id: "That commune belongs to a different wilaya." },
+      commune_wilaya_id: commune.wilaya_id,
+    });
+  }
+
+  return null;
+}
+
+/**
+ * A stated courier — `OrderInput::provider()` then
+ * `OrderService::guardShippingProviderKnown()`, which are two refusals from two
+ * layers and are kept apart here because they are kept apart there.
+ *
+ * **Shape first, and it is deliberately thin.** `strtolower(trim())`, `Must be a
+ * string.` for a non-scalar and `Is implausibly long.` past 40 characters. There
+ * is no charset rule and the source says why: *"the registry is the authority on
+ * which names exist, and a pattern here would be a second and weaker authority
+ * that could only ever refuse names the registry also refuses — while standing
+ * ready to refuse a future adapter whose name contains a character nobody
+ * anticipated."*
+ *
+ * `null` and `""` are **dropped**, exactly as `shipping_amount` is, and the
+ * emptiness test is *inside* the normalisation rather than in front of it — so
+ * `"  "` and `" Yalidine "` are the same statements as `""` and `"yalidine"`.
+ * That is the one deliberate divergence from the amount's rule, because
+ * `is_numeric()` reads `" 450 "` for itself and this cannot.
+ *
+ * **Membership second, and it is not a shape rule.** The registry check lives in
+ * the service, and its refusal is unlike every other one on this route: the
+ * message *is* the legal set — `"Available: manual."` — with no `available`
+ * sibling. That is what makes the panel's `ac_manage_shipping` fallback usable,
+ * so it is reproduced to the character.
+ *
+ * The restate exemption is the second argument: **an order may always name the
+ * courier it already names**, even a de-registered one, because
+ * `OrderPresenter` emits the field and `OrderInput`'s docblock promises a whole
+ * fetched order PATCHes back. Without it, a shop that switched `ENABLE_YALIDINE`
+ * off would 400 on every historical Yalidine order for a key the client echoed
+ * without meaning to. `null` for a create, where there is nothing to restate.
+ */
+const MAX_PROVIDER_NAME = 40;
+
+function readShippingProvider(stated, fields, current) {
+  if (!("shipping_provider" in stated)) return undefined;
+
+  const value = stated.shipping_provider;
+  if (value === null) return undefined;
+
+  if (typeof value === "object") {
+    // `is_scalar()` is false for an array and for null; null is caught above,
+    // because the documented "empty says nothing" rule has to win for the one
+    // value most likely to arrive from a client echoing an order back.
+    fields.shipping_provider = "Must be a string.";
+    return undefined;
+  }
+
+  const name = String(value).trim().toLowerCase();
+  if (name === "") return undefined;
+
+  if (name.length > MAX_PROVIDER_NAME) {
+    fields.shipping_provider = "Is implausibly long.";
+    return undefined;
+  }
+
+  const registered = state.providers.some((entry) => entry.name === name);
+  if (!registered && name !== current) {
+    fields.shipping_provider = `Available: ${state.providers
+      .map((entry) => entry.name)
+      .join(", ")}.`;
+    return undefined;
+  }
+
+  return name;
+}
 
 /**
  * `OrderInput::READ_ONLY` — **stripped before the unknown-key sweep**, which is
@@ -8664,6 +9192,24 @@ const ORDER_READ_ONLY_FIELDS = [
   "version",
   "discount_total",
   "shipping_total",
+  /*
+   * The two statements about something that already happened, and they sit here
+   * together because `OrderInput::READ_ONLY` puts them together and says why.
+   *
+   * `shipping_source` records whether the *price* came from the tariff or from a
+   * courier's own quote; `shipping_provider_error` records why the last
+   * confirmation created no parcel. A caller who could state either could claim
+   * a courier had answered — or had refused an address — when no courier was
+   * ever asked.
+   *
+   * **Being here rather than absent is what makes them drop in silence.** The
+   * read-only strip runs before the unknown-key sweep, so a client that PATCHes
+   * back a whole order it just read gets neither an "Unknown field." nor a
+   * per-field refusal for these; the keys simply stop existing. A form must not
+   * echo `shipping_provider_error` expecting it to stick, and none does.
+   */
+  "shipping_source",
+  "shipping_provider_error",
   "total_tax",
   "total",
   "subtotal",
@@ -9055,6 +9601,22 @@ function patchOrder(order, body) {
     if (amount !== null) clean.shipping_amount = amount;
   }
 
+  /* The courier, beside the fee it is a pair with. `current` is what this order
+     already names, which is the restate exemption's whole input. */
+  const provider = readShippingProvider(stated, fields, row.shipping_provider ?? null);
+  if (provider !== undefined) clean.shipping_provider = provider;
+
+  /* Where the parcel goes. Shape only here — the pair and the geography are
+     `destinationConflict()`'s, after the 400 batch, because they are the
+     *service's* and this loop is `OrderInput`'s. */
+  for (const key of ["wilaya_id", "commune_id"]) {
+    const id = readDestinationId(stated, key, fields);
+    if (id !== undefined) clean[key] = id;
+  }
+
+  const deliveryType = readDeliveryType(stated, fields);
+  if (deliveryType !== undefined) clean.delivery_type = deliveryType;
+
   // 2. One 400 naming every bad field at once — a form binds them all in one pass.
   if (Object.keys(fields).length > 0) {
     return invalidBody("The order data is invalid.", fields);
@@ -9143,6 +9705,27 @@ function patchOrder(order, body) {
       editable_in: ORDER_EDITABLE_IN,
     });
   }
+
+  /*
+   * The destination, and **no `is_editable` gate above it** — the same place the
+   * courier parts company with the fee it sits next to, and for a stronger
+   * version of the same reason.
+   *
+   * `guardDestinationResolves()`'s docblock: *"a gate here would make the retry
+   * unreachable … Both ways an order earns a `shipping_provider_error` — the
+   * missing destination and the commune a courier refused — are recorded at
+   * `processing`, which is not editable. Gating the destination would freeze it
+   * at the exact moment it starts to matter."* The panel's *"correct the
+   * destination"* remedy is exactly that retry, and a mock that gated this would
+   * make the remedy 409 in the harness while working in the shop.
+   *
+   * The cost is named rather than hidden, there and here: on a `completed` order
+   * an operator can rewrite the destination of a parcel that has already been
+   * delivered. It re-routes nothing — the shipment row keeps the destination it
+   * was created with and is untouched by this write.
+   */
+  const destinationRefusal = destinationConflict(clean, row);
+  if (destinationRefusal !== null) return destinationRefusal;
 
   /*
    * 6. The repository. `OrderRepository::update()` resolves the lines **before**
@@ -9261,6 +9844,32 @@ function patchOrder(order, body) {
   }
 
   /*
+   * The courier, and **no `is_editable` gate above it**, which is the one place
+   * this field parts company with the fee it sits next to.
+   * `guardShippingProviderKnown()` is not wired into the editability guards and
+   * its docblock argues at length why: `calculate_totals()` sums shipping *line
+   * totals* and a `method_id` is not a term in that sum, so naming a courier
+   * cannot move a dinar — and gating it would make the courier unchangeable from
+   * the exact moment it starts to matter, since confirmation moves an order to
+   * `processing`, which is not editable. *"Yalidine refused this commune, send it
+   * with ZR Express"* has to be sayable on a `processing` order.
+   *
+   * `shipping_source` is untouched by this write, deliberately. The price did not
+   * move, so who quoted it did not change either.
+   */
+  if (clean.shipping_provider !== undefined) {
+    next.shipping_provider = clean.shipping_provider;
+  }
+
+  /* The destination, written key by key — a PATCH naming only the commune moves
+     only the commune, and `destinationConflict()` above has already established
+     that what it lands beside is the right wilaya. `applyProps()` writes each
+     stated key to its own meta and never the trio as a block. */
+  for (const key of ["wilaya_id", "commune_id", "delivery_type"]) {
+    if (clean[key] !== undefined) next[key] = clean[key];
+  }
+
+  /*
    * One `calculate_totals()`, seeing both halves.
    *
    * `rewriteLineItems()` writes the fee *before* it recomputes precisely so the
@@ -9290,7 +9899,245 @@ function patchOrder(order, body) {
   // must not be able to shadow. `orderRow` applies the props first for that.
   if (clean.status !== undefined) state.statuses.set(order.id, clean.status);
 
+  /*
+   * ── Confirmation creates the parcel ─────────────────────────────────────
+   *
+   * **After the write, unconditionally, and its outcome never reaches this
+   * response's status code.** `ShipmentSubscriber` hooks a WooCommerce status
+   * transition, and `WC_Order::save()` is `parent::save(); $this->status_transition();`
+   * — the row is already in the database when the hook fires, so no failure in
+   * it could roll the status back. The item's stated property, *"the status
+   * change still commits"*, is therefore free rather than defended, and this
+   * ordering is what reproduces it: `orderRow(order)` below is read **after**
+   * `confirmParcel`, so one 200 carries the new status, whatever parcel appeared
+   * and whatever failure was recorded.
+   *
+   * **On a transition, never on a re-save.** `clean.status !== undefined &&
+   * row.status !== "processing"` is the whole guard, and it is WooCommerce's own
+   * rule rather than an extra one: `woocommerce_order_status_processing` fires
+   * from `status_transition()`, which does nothing when the status has not
+   * moved. PATCHing `{"status":"processing"}` onto an order already there is a
+   * no-op transition here exactly as it is there — so a second parcel cannot be
+   * created by pressing the same button twice.
+   */
+  if (clean.status === "processing" && row.status !== "processing") {
+    confirmParcel(order.id);
+  }
+
   return ok(orderRow(order));
+}
+
+/**
+ * `Shipping\ShipmentSubscriber::confirm()` — admin sub-task 6's third half.
+ *
+ * The one behaviour of step 2 that could not be tested against this harness at
+ * all: the panel's whole parcel section, its failure block and its two remedies
+ * are built on what confirmation does, and until now confirmation here did
+ * nothing.
+ *
+ * ## The five rules, in the source's order
+ *
+ *  1. **No courier named — return, and record nothing.** *"A real and expected
+ *     state, not an error"*: an order taken by phone before anyone decided who
+ *     delivers it. Recording a failure would put a red flag on every order of a
+ *     shop that assigns couriers at dispatch time.
+ *  2. **A live parcel already — clear any failure and return.** The
+ *     `liveForOrder()` rule, reused rather than restated, and the clear is what
+ *     makes a stale reason beside a real tracking number impossible. Terminal
+ *     parcels do **not** block: a cancelled, failed, delivered or returned
+ *     parcel leaves the order free to be sent again, which `ShippingService`
+ *     calls out as what makes *"a re-send after a failed delivery work without
+ *     deleting history"*.
+ *  3. **No destination — record `order_destination_missing`.** Both ids, both
+ *     above zero, read from the order and never guessed out of the address.
+ *  4. **The courier refuses — record its own code, and write no shipment row.**
+ *     This is the rule that makes the retry work and it is the easiest one to
+ *     get wrong: `ShippingService::createClaimed()` calls the provider *before*
+ *     it inserts anything, so a rejected commune produces no parcel at all, the
+ *     order still has no live shipment, and the next confirmation — or the
+ *     manual route — tries again. A mock that wrote a `failed` row here would
+ *     make the panel's "no parcel and here is why" state unreachable.
+ *  5. **Otherwise the parcel exists, and last time's failure comes off.**
+ *
+ * ## Which couriers refuse, and why wilaya 1
+ *
+ * `manual` never refuses: `ManualProvider::createShipment()` is pure and cannot
+ * fail, which `ShippingService`'s docblock says outright while explaining that
+ * the in-house shop is *not* one of the five reasons the manual route survives.
+ *
+ * A courier refuses a destination it has no mapping for, and **wilaya 1 (Adrar)
+ * is this file's standing fixture for exactly that** — `courierRates()` already
+ * returns nothing there, standing in for the
+ * `$origin === null || $toWilaya === null || $toCommune === null` arm both
+ * adapters take when `sync-destinations` has not run. Reusing it means the
+ * unmapped destination is one fact in this file rather than two that can drift:
+ * a courier that cannot price a place cannot address a parcel to it either.
+ *
+ * The code and both sentences are read from source —
+ * `YalidineProvider::requireDestination()` and
+ * `ZRExpressProvider::requireDestination()` — and they carry **no
+ * `provider_message`**, because those throws pass `wilaya_id`/`commune_id` in
+ * `details` and no courier sentence. That is the case the panel's block must
+ * render with the second line absent, and it is only reachable if this fixture
+ * declines to invent one.
+ *
+ * Reachable only under `MOCK_COURIERS=on`, like everything else about a
+ * multi-courier shop — `BLOCKED.md` item 2. With the couriers off, `manual` is
+ * the only name an order can carry and every addressed confirmation succeeds.
+ */
+function confirmParcel(orderId) {
+  const row = findOrder(orderId);
+  if (row === undefined) return;
+
+  const provider = (row.shipping_provider ?? "").trim().toLowerCase();
+  if (provider === "") return;
+
+  if (shipmentsOf(orderId).some((shipment) => shipment.is_live)) {
+    clearOrderFailure(orderId);
+    return;
+  }
+
+  const wilayaId = row.wilaya_id ?? 0;
+  const communeId = row.commune_id ?? 0;
+
+  if (wilayaId < 1 || communeId < 1) {
+    recordOrderFailure(orderId, {
+      provider,
+      code: "order_destination_missing",
+      message:
+        "This order records no wilaya and commune, so no parcel could be addressed. " +
+        "Create it with POST /orders/{id}/shipments, which takes both.",
+      provider_message: null,
+      at: iso(0),
+    });
+    return;
+  }
+
+  const refusal = courierWouldRefuse(provider, wilayaId);
+  if (refusal !== null) {
+    recordOrderFailure(orderId, { ...refusal, at: iso(0) });
+    return;
+  }
+
+  const id = state.nextShipmentId++;
+  state.shipments.set(orderId, [
+    ...shipmentsOf(orderId),
+    {
+      id,
+      order_id: orderId,
+      provider,
+      provider_shipment_id: `${provider.slice(0, 3).toUpperCase()}-${id}`,
+      /*
+       * Empty, and that is the courier's own shape rather than a shortcut.
+       * `ManualProvider::createShipment()` returns a `ShipmentResult` with no
+       * tracking number — the shop's driver has none to give — and the panel
+       * already renders that state by name. A fixture that invented a tracking
+       * number here would hide the row the *"empty until the courier has the
+       * parcel"* branch was written for.
+       */
+      tracking_number: "",
+      status: "pending",
+      is_live: true,
+      metadata: {
+        wilaya_id: wilayaId,
+        commune_id: communeId,
+        /* `destinationOf()`'s fallback, and the only field it defaults: home
+           delivery is what a courier does when nobody asks for a desk, and
+           getting it wrong costs a customer a trip rather than a parcel a
+           different wilaya. */
+        delivery_type: row.delivery_type ?? "home",
+        cod_amount: row.total,
+      },
+      created_at: iso(0),
+      updated_at: iso(0),
+    },
+  ]);
+
+  clearOrderFailure(orderId);
+}
+
+/**
+ * Whether a courier would refuse this destination, as its adapter would.
+ *
+ * `null` for a courier that would take it, and for `manual` always — see
+ * `confirmParcel`'s docblock for why the in-house provider cannot fail and why
+ * wilaya 1 is the unmapped fixture.
+ */
+function courierWouldRefuse(provider, wilayaId) {
+  if (provider === "manual" || wilayaId !== 1) return null;
+
+  if (provider === "yalidine") {
+    return {
+      provider,
+      code: "yalidine_destination_unmapped",
+      message:
+        "Yalidine has no destination recorded for that place. " +
+        "Run: wp algerian-commerce sync-destinations --provider=yalidine",
+      provider_message: null,
+    };
+  }
+
+  if (provider === "zrexpress") {
+    return {
+      provider,
+      code: "zrexpress_destination_unmapped",
+      message:
+        "ZR Express has no territory recorded for that place. " +
+        "Run: wp algerian-commerce sync-destinations --provider=zrexpress",
+      provider_message: null,
+    };
+  }
+
+  /*
+   * A name the registry no longer has — `ProviderRegistry::get()` throws inside
+   * `createOnConfirmation()` and `fromApiException()` turns it into a recorded
+   * failure naming the courier. `ShipmentSubscriber::providerOf()` explains that
+   * this is the right outcome rather than an oversight: *"an order outlives the
+   * registration that made it"*, so a de-registered name is not checked on the
+   * way in and is discovered here.
+   */
+  if (!state.providers.some((entry) => entry.name === provider)) {
+    return {
+      provider,
+      code: "no_shipping_provider",
+      message: `Available: ${state.providers.map((entry) => entry.name).join(", ")}.`,
+      provider_message: null,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * `recordFailure()` / `clearFailure()`, on the props map.
+ *
+ * The clear **deletes rather than blanks**, because `OrderPresenter` reports the
+ * absence of the meta key as `null` and a client tests one thing. Here that
+ * means writing `null` over the seed, since `orderRow()` merges props over the
+ * seeded row and a deleted key would let the seed's value reappear — the same
+ * outcome by the only means this file's merge allows, and worth saying because
+ * the two are not the same operation.
+ *
+ * The audit row the source also writes is **not** reproduced. `AuditLogger` is
+ * append-only and keeps every attempt, which is what *"Yalidine has refused this
+ * address four times"* needs — but nothing in the panel reads it for this
+ * purpose yet, and a fixture that grew an audit row per confirmation would move
+ * the audit screen's counts on every write. Named rather than hidden.
+ */
+function recordOrderFailure(orderId, failure) {
+  const order = state.orders.get(orderId) ?? ORDERS.find((row) => row.id === orderId);
+  if (order === undefined) return;
+  state.orderProps.set(orderId, {
+    ...(state.orderProps.get(orderId) ?? {}),
+    shipping_provider_error: failure,
+  });
+}
+
+function clearOrderFailure(orderId) {
+  const props = state.orderProps.get(orderId);
+  const seeded = ORDERS.find((row) => row.id === orderId)?.shipping_provider_error ?? null;
+  if ((props?.shipping_provider_error ?? seeded) === null) return;
+  state.orderProps.set(orderId, { ...(props ?? {}), shipping_provider_error: null });
 }
 
 /**
@@ -9419,6 +10266,45 @@ function postOrder(body) {
     shippingAmount = statedAmount(stated.shipping_amount, "shipping_amount", fields);
   }
 
+  /*
+   * The courier — the carrier branch's one new key on this route, and the whole
+   * of what step 2's admin sub-task 1 puts on the wire. `null` for a create's
+   * `current`, because there is no order to restate: registration is the entire
+   * test here, and `guardShippingProviderKnown()` says so.
+   *
+   * **It does not depend on `shipping_amount` and must not be made to.** The two
+   * are independent statements — `OrderInput`'s docblock argues it, and
+   * `OrderRepository::applyShippingLine()` proves it by branching: a payload
+   * naming only a courier takes `assignShippingProvider()`, which *creates* a
+   * shipping line when the order has none, sets its `method_id`, and gives it
+   * the order's current shipping total. So an order can name Yalidine and charge
+   * nothing, which is exactly the phone order where the operator knows who is
+   * collecting it and has not been told the fee.
+   */
+  const shippingProvider = readShippingProvider(stated, fields, null) ?? null;
+
+  /*
+   * The destination — three more keys the carrier branch put on this route, and
+   * the ones without which the courier above is useless. An order created with
+   * a courier and no wilaya confirms into `order_destination_missing` every
+   * time: `ShipmentSubscriber::destinationOf()` reads ids from meta and refuses
+   * to derive them from the free-text address, on the argument that *"Ouled
+   * Fayet"* is spelled several ways and several communes of one name sit in
+   * different wilayas.
+   *
+   * Shape here, pair and geography below — the same two layers the PATCH keeps
+   * apart, because `OrderService::create()` calls the identical
+   * `guardDestinationResolves()` with a `null` order.
+   */
+  const destination = {};
+  for (const key of ["wilaya_id", "commune_id"]) {
+    const value = readDestinationId(stated, key, fields);
+    if (value !== undefined) destination[key] = value;
+  }
+
+  const deliveryType = readDeliveryType(stated, fields);
+  if (deliveryType !== undefined) destination.delivery_type = deliveryType;
+
   if (body?.customer_id !== undefined) {
     const customerId = Number(body.customer_id);
     if (!Number.isInteger(customerId) || customerId < 0) {
@@ -9451,6 +10337,19 @@ function postOrder(body) {
       allowed: CREATABLE_ORDER_STATUSES,
     });
   }
+
+  /*
+   * The destination pair and the geography, with **no order to read a stored
+   * half from** — `OrderService::create()` passes `null` where `update()` passes
+   * the order, and the guard is one method. So a create stating one id alone is
+   * refused outright rather than completed from anything, which is right: there
+   * is no earlier statement for it to complete.
+   */
+  const destinationRefusal = destinationConflict(destination, {
+    wilaya_id: null,
+    commune_id: null,
+  });
+  if (destinationRefusal !== null) return destinationRefusal;
 
   /*
    * The repository, and it runs **after** the whole field breakdown rather than
@@ -9567,6 +10466,35 @@ function postOrder(body) {
      */
     shipping_amount: shippingAmount === null ? null : shippingTotal,
     shipping_total: shippingTotal,
+    /*
+     * **`null`, and it is not the same `null` the seeded rows carry.**
+     * `OrderPresenter::shippingSource()` reads `_ac_rate_source` off the
+     * shipping line, and that meta is written by the *checkout* — nothing on
+     * `POST /orders` sets it, and `assignShippingProvider()`'s docblock says
+     * outright that it must not: *"no quote produced the number, which is
+     * exactly what that field's `null` means"*. So a back-office order records
+     * who carries the parcel and stays silent about who priced it, even when
+     * the panel filled the box from a quote — because the operator could have
+     * overwritten it, and the API did not watch them do it.
+     */
+    shipping_source: null,
+    shipping_provider: shippingProvider,
+    /*
+     * Nothing has confirmed this order yet — and if it is being *born*
+     * `processing`, the confirmation below is what fills this in. `null` here
+     * rather than a value the row is about to overwrite, because the failure is
+     * the subscriber's to record and never the create route's.
+     */
+    shipping_provider_error: null,
+    /*
+     * `null` for an unstated half, never `0`, matching
+     * `OrderPresenter::destinationId()`. The 201 is what the create drawer reads
+     * back, so a body that omitted the pair has to come back saying the order
+     * has none rather than saying it is going to commune zero.
+     */
+    wilaya_id: destination.wilaya_id ?? null,
+    commune_id: destination.commune_id ?? null,
+    delivery_type: destination.delivery_type ?? null,
     total_tax: "0.00",
     subtotal,
     /*
@@ -9592,7 +10520,23 @@ function postOrder(body) {
   state.createdOrders = [id, ...state.createdOrders];
   state.cod.set(id, seedCod(order));
 
-  return created(order);
+  /*
+   * **An order can be *born* confirmed, and that fires the hook too.**
+   * `processing` is in `OrderStatus::CREATABLE`, and `ShipmentSubscriber`'s
+   * docblock names this as the second of the five doors a status change comes
+   * through: *"an order taken on the telephone can be born confirmed"*. A mock
+   * that only confirmed on the PATCH would leave the create drawer's own
+   * status picker producing an order that never gets a parcel — which is the
+   * failure mode this whole item exists to remove, arriving through the harness
+   * instead of despite it.
+   *
+   * Read back through `orderRow` rather than returning the local `order`,
+   * because `confirmParcel` may have written a failure onto the props map and
+   * the 201 has to carry it. Nothing else about the row moves.
+   */
+  if (status === "processing") confirmParcel(id);
+
+  return created(orderRow(order));
 }
 
 /**
@@ -10180,7 +11124,7 @@ function syncShipment(id) {
   if (isTerminalShipment(shipment.status)) return ok(shipment);
 
   const label =
-    SHIPPING_PROVIDERS.find((entry) => entry.name === shipment.provider)?.label ??
+    state.providers.find((entry) => entry.name === shipment.provider)?.label ??
     shipment.provider;
   return fail(
     409,
@@ -10202,7 +11146,11 @@ const AMOUNT = /^\d+(\.\d+)?$/;
  * serves. One source, so a refusal naming `available` and the picker offering
  * the choices can never drift apart.
  */
-const RULE_PROVIDERS = SHIPPING_PROVIDERS.map((entry) => entry.name);
+/* A function rather than a const, because the registry is `state.providers`
+   now and can hold couriers — see `buildProviders()`. `ShippingService`'s own
+   rule validator reads the live registry too (`guardRuleProvider()`), so this
+   follows it rather than freezing the shop this process started as. */
+const ruleProviders = () => state.providers.map((entry) => entry.name);
 
 const readAmount = (value) => {
   const raw = typeof value === "number" ? String(value) : value;
@@ -10256,13 +11204,13 @@ const RULE_FIELDS = {
    * collection, and one that let rules through would let a screen save a tariff
    * the shop rejects.
    *
-   * `available` comes off `SHIPPING_PROVIDERS` — the same array
+   * `available` comes off `state.providers` — the same array
    * `GET /shipping/providers` serves — so the refusal and the picker cannot
    * disagree about what is registered.
    */
   provider: (value) => {
     if (typeof value !== "string") return { error: "Must be a string." };
-    if (value === "" || RULE_PROVIDERS.includes(value)) return { value };
+    if (value === "" || ruleProviders().includes(value)) return { value };
     return {
       error: unknownOf("provider", value),
       /*
@@ -10275,7 +11223,7 @@ const RULE_FIELDS = {
        * out here so a future screen has it and a future audit does not have to
        * rediscover that it was ever sent.
        */
-      details: { available: RULE_PROVIDERS },
+      details: { available: ruleProviders() },
     };
   },
   free_over: (value) => (value === null ? { value: null } : readAmount(value)),
@@ -10435,23 +11383,68 @@ function deleteRule(id) {
  * reader written for one renders the bare word `wilaya_id` at a person as though
  * it were an explanation. `lib/api/browser.ts:81-95` exists for exactly that.
  *
- * The resolution itself: **the narrowest active match wins and rules are never
- * added together.** One rate comes back, not three, even where all three rules
- * cover the destination — measured 350 / 500 / 800 across the three arms.
+ * ## This route answers a **menu**, and this file used to answer one row
  *
- * `provider` on the rate is the winning **rule's** provider, falling back to the
- * configured default for a rule that names none. Measured `"manual"`, which is
- * what rule 164 carries — the two were indistinguishable while this file wrongly
- * seeded `""`, and reading it off the rule is the arm that does not need a
- * coincidence. `label` is the display string `"Delivery"` and is **not** the
- * credential a shipment's `metadata.label` is. `free_shipping` is `false` and
- * can be nothing
- * else here — `free_over` is a threshold against an order total and this route
- * is never given one.
+ * The rewrite is the carrier branch's, and three of the four changes are
+ * corrections rather than additions. `Shipping\ShippingService::rates()`, read
+ * from source:
  *
- * With no matching rule it is a **200 with `[]`**, not an error — which is what
- * the whole shop answered before `seed-shipping-rules.mjs` ran, and is reachable
- * again here by deleting the national rule.
+ * ```php
+ * $names = $requested === '' ? $this->providers->names() : [$this->providers->get($requested)->name()];
+ * foreach ($names as $name) {
+ *     $rule = RateResolver::resolve($rules, $destination, $name);
+ *     if ($rule !== null) { $quotes[] = ['provider' => $name] + RateResolver::quote(…)->toArray(); }
+ *     foreach ($this->providers->get($name)->getShippingRates($destination) as $quote) {
+ *         $quotes[] = ['provider' => $name] + $quote->toArray();
+ *     }
+ * }
+ * ```
+ *
+ * So it is **one pass per registered courier, and up to two kinds of row each**
+ * — the shop's tariff and everything that courier's own rate API returned. Not
+ * one row. The four corrections:
+ *
+ *   `provider`       is **the courier being quoted**, not the winning rule's.
+ *                    The old line read it off the rule and fell back to the
+ *                    default; on a one-provider shop the two are the same string
+ *                    and the difference was invisible. It is not invisible with
+ *                    a courier registered, and it is the field the picker groups
+ *                    by.
+ *   `service`        is `'standard'` for a rule with no delivery type, not
+ *                    `'home'` — `RateResolver::quote()`'s first argument is
+ *                    `$rule->deliveryType === '' ? 'standard' : $rule->deliveryType`.
+ *   `delivery_type`  is new on the row. `RateQuote::toArray()` emits it, and on
+ *                    a tariff row it is **the journey the caller asked for**
+ *                    rather than the rule's own — `rates()` passes
+ *                    `$destination->deliveryType` into `quote()`.
+ *   the rule filter  now runs `ShippingRule::matches()` in full: a rule matches
+ *                    a courier when its own `provider` is `''` or that name, and
+ *                    a journey when its `delivery_type` is `''` or that journey.
+ *                    The old filter tested neither, so a desk tariff priced a
+ *                    home delivery.
+ *
+ * **Free shipping is real now too.** `subtotal` is a declared parameter and
+ * `RateResolver::qualifiesForFreeShipping()` compares it against `free_over` in
+ * whole minor units, at-the-threshold inclusive. The old comment said
+ * `free_shipping` "can be nothing else here" because the route "is never given"
+ * a subtotal; it is a declared argument and always was. No caller in the panel
+ * sends one — the create drawer says why — but the mock must not be the reason
+ * that stays untested.
+ *
+ * The resolution itself is unchanged and still the interesting part: **the
+ * narrowest active match wins and rules are never added together.** One tariff
+ * row per courier, not three, even where all three rules cover the destination —
+ * measured 350 / 500 / 800 across the three arms.
+ *
+ * `label` is the display string `"Delivery"` — or `"Free delivery"` — and is
+ * **not** the credential a shipment's `metadata.label` is.
+ *
+ * With nothing to say it is a **200 with `[]`**, not an error: no rule covers
+ * the place and no courier quoted it. That is what the whole shop answered
+ * before `seed-shipping-rules.mjs` ran, it is reachable again by deleting the
+ * national rule, and under `MOCK_COURIERS=on` it is also what an unmapped
+ * destination gives — which is the state `BLOCKED.md` item 2 says every
+ * destination is in until `sync-destinations` runs.
  */
 function shippingRates(params) {
   const missing = ["wilaya_id", "commune_id"].filter((name) => params.get(name) === null);
@@ -10471,33 +11464,217 @@ function shippingRates(params) {
     read[name] = Number.parseInt(raw, 10);
   }
 
-  const matches = [...state.rules.values()]
-    .filter(
-      (rule) =>
-        rule.is_active &&
-        (rule.commune_id === 0 || rule.commune_id === read.commune_id) &&
-        (rule.wilaya_id === 0 || rule.wilaya_id === read.wilaya_id),
-    )
-    .sort((a, b) => b.specificity - a.specificity || a.id - b.id);
+  /*
+   * `'default' => Destination::HOME` and `'enum' => Destination::DELIVERY_TYPES`
+   * in `rateArgs()`, so an absent value is `home` and a wrong one is WordPress's
+   * own `rest_invalid_param` — the *object* shape of `details.params`, the same
+   * one `?status=zzz` produces. Inferred from the args array rather than
+   * measured; nothing has sent a bad journey to this route.
+   */
+  const deliveryType = params.get("delivery_type") ?? "home";
+  if (!DELIVERY_TYPES.includes(deliveryType)) {
+    return invalidParam("delivery_type", notOneOf("delivery_type", DELIVERY_TYPES));
+  }
 
-  if (matches.length === 0) return list([]);
+  /*
+   * `provider` is a **filter**, and an omitted one means every registered
+   * courier — which is the arm the create drawer uses, because one request that
+   * prices every courier is what lets its picker label each option. A name that
+   * is not registered is `ProviderRegistry::get()`'s refusal, keyed `provider`
+   * with an `available` sibling, and it is the *shipment* vocabulary's sentence
+   * rather than the rules editor's because it comes from the same method.
+   */
+  const requested = (params.get("provider") ?? "").trim().toLowerCase();
+  const names = state.providers.map((entry) => entry.name);
 
-  const winner = matches[0];
-  return list([
-    {
-      provider:
-        winner.provider === ""
-          ? SHIPPING_PROVIDERS.find((entry) => entry.is_default).name
-          : winner.provider,
-      service: winner.delivery_type === "" ? "home" : winner.delivery_type,
-      label: "Delivery",
-      amount: winner.amount,
+  if (requested !== "" && !names.includes(requested)) {
+    return fail(400, "invalid_request", "The shipment data is invalid.", {
+      fields: { provider: unknownOf("provider", requested) },
+      available: names,
+    });
+  }
+
+  const quoted = requested === "" ? names : [requested];
+
+  /*
+   * The threshold parameter. `'pattern' => '^\d+(\.\d{1,4})?$'` on the route, so
+   * a malformed one is the pattern family's own sentence rather than a silent
+   * absence — `""` is a value and not an omission, exactly as `date_from=`
+   * measured on `/payments`.
+   */
+  const subtotal = params.get("subtotal");
+  if (subtotal !== null && !/^\d+(\.\d{1,4})?$/.test(subtotal)) {
+    return invalidParam("subtotal", notMatching("subtotal", "^\\d+(\\.\\d{1,4})?$"));
+  }
+
+  const rows = [];
+
+  for (const name of quoted) {
+    /*
+     * `RateResolver::resolve()` — `matches()` in full, then the highest
+     * `specificity`, with the id as the tie-break this file has always used.
+     * `specificity` is server-computed and stored on the row, so nothing here
+     * re-derives it.
+     */
+    const rule = [...state.rules.values()]
+      .filter(
+        (candidate) =>
+          candidate.is_active &&
+          (candidate.provider === "" || candidate.provider === name) &&
+          (candidate.commune_id === 0 || candidate.commune_id === read.commune_id) &&
+          (candidate.wilaya_id === 0 || candidate.wilaya_id === read.wilaya_id) &&
+          (candidate.delivery_type === "" || candidate.delivery_type === deliveryType),
+      )
+      .sort((a, b) => b.specificity - a.specificity || a.id - b.id)[0];
+
+    if (rule !== undefined) {
+      const free = qualifiesForFreeShipping(rule, subtotal);
+
+      rows.push({
+        provider: name,
+        service: rule.delivery_type === "" ? "standard" : rule.delivery_type,
+        label: free ? "Free delivery" : "Delivery",
+        amount: free ? "0.00" : Number.parseFloat(rule.amount).toFixed(2),
+        currency: "DZD",
+        estimated_days: rule.estimated_days,
+        source: "rules",
+        free_shipping: free,
+        // The journey the *caller* asked for, not the rule's own — `rates()`
+        // passes `$destination->deliveryType` and `quote()`'s docblock says why:
+        // a rule with an empty delivery type prices every journey and the quote
+        // it produces still priced exactly one of them.
+        delivery_type: deliveryType,
+      });
+    }
+
+    rows.push(...courierRates(name, read, deliveryType));
+  }
+
+  return list(rows);
+}
+
+/**
+ * `RateResolver::qualifiesForFreeShipping()` — and the minor-unit comparison is
+ * the whole of it.
+ *
+ * *"`4999.99 >= 5000.00` is a comparison of two floats that are not the numbers
+ * they were written as, and the customer who is one centime short of free
+ * delivery is exactly the one who will notice."* A basket **at** the threshold
+ * qualifies, which the source argues at length is the only reading a shop's
+ * banner supports.
+ */
+function qualifiesForFreeShipping(rule, subtotal) {
+  if (rule.free_over === null || subtotal === null || subtotal.trim() === "") return false;
+
+  const minor = (amount) => Math.round(Number.parseFloat(amount) * 100);
+  return minor(subtotal) >= minor(rule.free_over);
+}
+
+/**
+ * What one courier's own rate API says — `ShippingProviderInterface::getShippingRates()`,
+ * per adapter, read from source.
+ *
+ * **`manual` returns nothing, ever.** `ManualProvider::getShippingRates()` is
+ * `return [];` and that is not a stub: the shop's own driver has no rate API,
+ * so every price for in-house delivery comes from §14's tariff. It is the
+ * single most important row of this table, because it is why the create
+ * drawer's picker cannot filter on "produced a row" — on this install `manual`
+ * is the only registered provider and would be unofferable for any destination
+ * without a tariff rule.
+ *
+ * **Yalidine returns four rows and ignores the journey it was asked about.**
+ * `YalidineProvider::getShippingRates()` builds `express_home`, `express_desk`,
+ * `economic_home` and `economic_desk` from one `fees/` call and returns all of
+ * them, by name and on purpose — *"a manager choosing between 'he collects it'
+ * and 'we deliver it' is exactly the comparison this endpoint exists for"*. Each
+ * carries its own `delivery_type`, which is what lets a caller that must charge
+ * one number filter without matching `_desk` against a string the adapter owns.
+ * That is `quoteFor()` in `orders/new-order.ts`, and this fixture is the only
+ * place it can be exercised.
+ *
+ * **ZR Express returns one row and does filter.** `quotesFrom()` keeps only the
+ * `deliveryPrices` entry whose `deliveryType` matches, and stamps the row with
+ * the destination's journey even though it has already filtered to it.
+ *
+ * ## The prices, and what they are not
+ *
+ * They are **invented**, and they are invented from a formula rather than a
+ * table so that no reader mistakes them for measurements: nothing in this
+ * repository has ever seen a courier quote. `BLOCKED.md` item 2 is the entry —
+ * all eight courier variables are empty, and `sync-destinations` needs a live
+ * account. What the numbers *are* is a consistent shop: a desk collection is
+ * cheaper than a doorstep, economic is cheaper than express, and the two
+ * couriers disagree with each other and with the tariff, because a fixture where
+ * every source agrees cannot show a screen that has to say which one answered.
+ *
+ * ## The unmapped destination is reachable, and that is the point of `1`
+ *
+ * Wilaya 1 (Adrar) returns nothing from either courier, standing in for the
+ * `$origin === null || $toWilaya === null || $toCommune === null` arm both
+ * adapters take when `sync-destinations` has not mapped a place. Without a
+ * fixture for it the picker's "this courier has no price here" state could not
+ * be reached at all, and that state is the honest half of the answer to
+ * "which couriers serve this destination".
+ */
+function courierRates(provider, destination, deliveryType) {
+  if (provider === "manual") return [];
+
+  /* Adrar, deliberately unmapped — see the docblock. */
+  if (destination.wilaya_id === 1) return [];
+
+  /* A stable, destination-dependent figure rather than one constant, so a screen
+     that quotes two destinations shows two numbers. Derived from the ids alone,
+     so it is the same in every process — the rule every fixture in this file
+     follows, and what keeps a screenshot byte-stable. */
+  const base = 400 + (destination.wilaya_id % 12) * 50 + (destination.commune_id % 7) * 10;
+  const money = (value) => value.toFixed(2);
+
+  if (provider === "yalidine") {
+    return [
+      ["express_home", "Yalidine Express — home delivery", base + 150, "home"],
+      ["express_desk", "Yalidine Express — stop desk", base + 50, "desk"],
+      ["economic_home", "Yalidine Economic — home delivery", base + 60, "home"],
+      ["economic_desk", "Yalidine Economic — stop desk", base - 40, "desk"],
+    ].map(([service, label, amount, journey]) => ({
+      provider,
+      service,
+      label,
+      amount: money(amount),
       currency: "DZD",
-      estimated_days: winner.estimated_days,
-      source: "rules",
+      // Null everywhere, and it is the adapter's own silence rather than a gap
+      // in the fixture: `getShippingRates()` passes `null` for `estimatedDays`
+      // on all four services, because — `RateQuote`'s docblock — "half the
+      // couriers in this market quote a price without committing to a time, and
+      // inventing '3' so a column is never empty is how a storefront ends up
+      // promising something nobody agreed to".
+      estimated_days: null,
+      source: "provider",
       free_shipping: false,
+      /* Stated per service and **not** filtered to the journey asked for. This
+         is the row the client has to filter, and the reason `quoteFor()` exists. */
+      delivery_type: journey,
+    }));
+  }
+
+  const desk = deliveryType === "desk";
+
+  return [
+    {
+      provider,
+      /* ZR's own wire vocabulary — `ZRExpressParcel::PICKUP_POINT` and `::HOME`
+         — which the adapter passes through as the `service`. It is the one place
+         a courier's internal spelling reaches a response, and it is why nothing
+         may read a journey out of `service`. */
+      service: desk ? "pickup-point" : "home",
+      label: desk ? "ZR Express — pickup point" : "ZR Express — home delivery",
+      amount: money(desk ? base - 20 : base + 90),
+      currency: "DZD",
+      estimated_days: null,
+      source: "provider",
+      free_shipping: false,
+      delivery_type: deliveryType,
     },
-  ]);
+  ];
 }
 
 /**
@@ -19622,7 +20799,7 @@ export function respond(
      */
     case "shipping": {
       if (segments.length === 2) {
-        if (method === "GET" && second === "providers") return enumeration(SHIPPING_PROVIDERS);
+        if (method === "GET" && second === "providers") return enumeration(state.providers);
         if (method === "GET" && second === "rates") return shippingRates(searchParams);
         if (second === "rules") {
           if (method === "POST") return postRule(body);
@@ -19667,13 +20844,36 @@ export function respond(
        */
       if (segments.length === 2) return counted(WILAYAS);
 
-      // Four segments, and the reason the depth guard moved again. The commune
-      // list *is* paginated, because the panel asks it for `per_page=100`.
+      /*
+       * Four segments, and the reason the depth guard moved again.
+       *
+       * **`counted()`, not `paginate()`, and that is a correction.** This line
+       * used to read "the commune list *is* paginated, because the panel asks it
+       * for `per_page=100`", which is the mock inferring a contract from its own
+       * caller — and it was wrong. Read from source:
+       * `Geography\LocationController::searchArgs()` declares exactly `search`
+       * and `active_only` under a docblock headed *"No pagination"* ("an address
+       * form needs the whole list to populate a select"), and `communes()`
+       * answers `Response::success($communes, 200, ['total' => count($communes)])`
+       * — the identical call `wilayas()` makes, whose live envelope was the
+       * measurement that produced `counted()` in the first place: `{"total":69}`
+       * and nothing else.
+       *
+       * So `per_page` on this route is a parameter WordPress never registered
+       * and therefore silently ignores, and the harness was the *only* thing in
+       * the stack that honoured it. That is this file being more capable than
+       * the API in the quiet direction, which the envelope docblock above names
+       * as the failure this whole three-shape split exists to stop. The five
+       * callers that still send `per_page=100` are unaffected — they read
+       * `data` — and `DestinationFields.tsx` sends none.
+       */
       if (segments.length === 4 && segments[3] === "communes") {
         const rows = COMMUNES.get(numericId(segments[2]));
-        if (rows === undefined) return notFound();
-        const page = paginate(rows, searchParams);
-        return page.error ?? ok(page.rows, page.meta);
+        // A wilaya that does not exist is a 404 rather than an empty list:
+        // `GeoService::communesOf()` resolves the wilaya first, deliberately,
+        // because "no communes loaded" and "no such wilaya" are different
+        // answers and a client has to tell them apart.
+        return rows === undefined ? notFound() : counted(rows);
       }
       return notFound();
     }

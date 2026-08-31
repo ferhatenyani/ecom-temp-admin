@@ -6,11 +6,13 @@ import { useTranslations } from "next-intl";
 import { useMutation } from "@tanstack/react-query";
 import { BrowserApiError, acWrite } from "@/lib/api/browser";
 import type { Order, Wilaya } from "@/lib/api/schemas/order";
+import { DELIVERY_TYPES } from "@/lib/shipment-status";
 import { Drawer } from "@/components/ui/Overlay";
 import { Button } from "@/components/ui/Button";
 import {
   ErrorSummary,
   Section,
+  Select,
   Switch,
   TextArea,
   TextField,
@@ -19,6 +21,7 @@ import {
 import { useToast } from "@/components/primitives/Toast";
 import { ADDRESS_KEYS, AddressFields, addressFieldId } from "../AddressFields";
 import { CustomerPicker } from "../CustomerPicker";
+import { DestinationFields } from "../DestinationFields";
 import { bindRefusals, type AddressDraft } from "../new-order";
 import { useOrderScreen } from "./OrderScreen";
 import {
@@ -85,6 +88,23 @@ import {
  * values and the stored ones are the same values. `order-edit.ts` argues it, and
  * `tests/order-edit.test.ts` asserts it on a `completed` order for every edit
  * this drawer can make.
+ *
+ * ## The destination arrived here, and it belongs here for the same rule
+ *
+ * `wilaya_id`, `commune_id` and `delivery_type` became writable on both verbs on
+ * the carrier branch, and they landed in *this* drawer rather than in
+ * `OrderLinesDrawer` because of the split the paragraph above draws: every field
+ * this form writes is writable in every status, and the destination is now one
+ * of them. `OrderService::guardDestinationResolves()` carries **no `is_editable`
+ * gate** and its docblock says why in as many words — a gate *"would freeze it
+ * at the exact moment it starts to matter"*, since both ways an order earns a
+ * `shipping_provider_error` are recorded at `processing`, which is not editable.
+ * Putting the destination behind the lines' gate would have re-imposed by hand
+ * the exact restriction the API deliberately declined to impose.
+ *
+ * That also makes this drawer the second half of the parcels card's remedy for a
+ * courier refusal, which is why `OrderScreen` now owns the `open` boolean rather
+ * than this file.
  */
 export function OrderEditDrawer({
   order,
@@ -103,13 +123,25 @@ export function OrderEditDrawer({
 }) {
   const t = useTranslations("orders.edit");
   const tOrders = useTranslations("orders");
+  const tDelivery = useTranslations("deliveryType");
   const tUi = useTranslations("ui");
 
   const router = useRouter();
   const toast = useToast();
-  const { writesBlocked } = useOrderScreen();
+  /*
+   * The open state is `OrderScreen`'s and not this component's, which is the
+   * one thing about this drawer that changed on the carrier branch.
+   *
+   * The trigger below is still the ordinary way in. The second way is the
+   * parcels card's *"correct the destination"* remedy: when a courier refuses
+   * an order's commune, the fix is `wilaya_id`/`commune_id` on
+   * `PATCH /orders/{id}` — which `OrderService::guardDestinationResolves()`
+   * leaves writable at every status precisely so this can happen — and those
+   * two controls are in the section below. `OrderScreen`'s docblock carries the
+   * argument for why a boolean crosses the screen rather than the operator.
+   */
+  const { writesBlocked, editing: open, setEditing: setOpen } = useOrderScreen();
 
-  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<OrderEditDraft>(() => draftOf(order));
   /**
    * The API's refusals, keyed the way the API keys them, so a 400 naming
@@ -355,6 +387,83 @@ export function OrderEditDrawer({
             </div>
           </Section>
 
+          {/* ───────────────────────────────────────────────── destination ─── */}
+          {/*
+            Its own section, directly under the shipping address and
+            deliberately not inside it.
+
+            The two look alike and are not the same fact, which is the confusion
+            this section has to survive rather than create. `shipping.state` and
+            `shipping.city` above are **free text a shopper typed** — a wilaya
+            name and a commune name, validated for shape and nothing else
+            (`Commerce\AddressInput` says so in terms), and `state` is empty on
+            ~92 % of orders. These two are **rows of the geography tables** and
+            are the only thing a courier can be routed on: `OrderInput`'s
+            docblock gives the reader the tell — *`_id` means a row, and a row is
+            what gets routed* — and `Shipping\Destination`'s explains why one
+            cannot be derived from the other, *"Ouled Fayet" spelled six ways
+            across three couriers and two languages*, with several communes of
+            one name in different wilayas.
+
+            So: a separate heading, a description that says what it is for, and
+            no synchronisation in either direction. The create drawer seeds the
+            address *from* the destination on a blank form — additive, once,
+            never over a filled field — and this form does not, for
+            `CustomerPicker`'s reason one section up: an existing order already
+            has an address somebody wrote, and correcting where the parcel goes
+            is not a request to rewrite it.
+
+            This is the retry path. An order refused with *"commune introuvable"*
+            is corrected here and gets its parcel on the next confirmation — or
+            straight away through the parcels card's manual route, which is the
+            one that does not need the order to leave `processing` first.
+          */}
+          <Section title={t("destination.title")} description={t("destination.description")}>
+            <div className="flex flex-col gap-3">
+              <DestinationFields
+                idPrefix={ID_PREFIX}
+                wilayas={wilayas}
+                wilayaId={draft.wilayaId}
+                communeId={draft.communeId}
+                onChange={(next) =>
+                  patch({ wilayaId: next.wilayaId, communeId: next.communeId })
+                }
+                locale={locale}
+                /* No commune list is fetched for a drawer nobody has opened —
+                   the same gate `CustomerPicker` above takes. */
+                enabled={open}
+                disabled={save.isPending}
+              />
+              <Select
+                id={FIELD_IDS.delivery_type}
+                label={t("destination.deliveryType")}
+                value={draft.deliveryType}
+                onChange={(next) => patch({ deliveryType: next })}
+                error={fields.delivery_type}
+                disabled={save.isPending}
+                /*
+                  A third option for "the order does not say", because that is a
+                  real value the presenter emits and not a stand-in for `home`.
+                  `OrderInput` refuses to default this and argues why —
+                  `ShipmentSubscriber::destinationOf()` already falls back to
+                  `Destination::HOME` and a second default *"would make a
+                  back-office order claim a journey nobody chose"*. Choosing it
+                  back is not possible over this route (an empty value is
+                  dropped, like the two ids above), so the option is how an
+                  unstated order opens rather than a way to un-state one.
+                */
+                options={[
+                  { value: "", label: t("destination.deliveryTypeUnset") },
+                  ...DELIVERY_TYPES.map((type) => ({
+                    value: type,
+                    label: tDelivery(type),
+                  })),
+                ]}
+              />
+              <p className="text-ui-label text-ui-subtle">{t("destination.hint")}</p>
+            </div>
+          </Section>
+
           {/* ──────────────────────────────────────────────────── paiement ─── */}
           <Section title={t("payment.title")}>
             <div className="flex flex-col gap-3">
@@ -442,6 +551,12 @@ const FIELD_IDS: Record<string, string | undefined> = {
   customer_note: `${ID_PREFIX}-note`,
   payment_method: `${ID_PREFIX}-payment-method`,
   payment_method_title: `${ID_PREFIX}-payment-title`,
+  /* `DestinationFields` derives both of its ids off `idPrefix` — `-wilaya` and
+     `-commune`, character for character — and the create drawer maps them the
+     same way. `delivery_type` is this form's own select. */
+  wilaya_id: `${ID_PREFIX}-wilaya`,
+  commune_id: `${ID_PREFIX}-commune`,
+  delivery_type: `${ID_PREFIX}-delivery-type`,
   ...Object.fromEntries(
     (["billing", "shipping"] as const).flatMap((prefix) =>
       ADDRESS_KEYS.map((key) => [
