@@ -238,6 +238,29 @@ export function CampaignsList({
            stay empty, which is its rule and not the API's. */
         body_html: "",
         body_text: "",
+        /*
+         * **The empty form, and it is the line that decides which editor opens.**
+         *
+         * `body_fields` is `null` by default on the column, and `null` is a claim:
+         * *no answers were ever recorded* — a hand-written body, a template, or a
+         * campaign older than the composer — which the detail screen answers by
+         * opening the **HTML editor**, so it can never regenerate an empty message
+         * over somebody's work. `{}` is the other claim: *the form was used and
+         * every answer is blank*, which opens the **form**.
+         *
+         * A campaign this button creates is the second of those, so it says so.
+         * Without this line the panel's own new draft would read back `null` and
+         * land on the raw-HTML screen the branch exists to replace — the one case
+         * where the two-state design would get its own default wrong.
+         *
+         * It survives the round trip as an object rather than as `[]`:
+         * `Campaign::encodedFields()` substitutes `new stdClass()` for a wholly
+         * empty document before encoding, and `toArray()` casts the outermost level
+         * back. The shallow cast is deliberate, so a *nested* empty object would
+         * come back `[]` — which is why `body-fields.ts` writes an absent block as
+         * `null` and never as `{}`.
+         */
+        body_fields: {},
         /* The only audience needing no second field, so the draft is valid the
            moment it exists and the audience step opens on a choice rather than on
            a refusal. Absent would behave as `"segment"` and refuse. */

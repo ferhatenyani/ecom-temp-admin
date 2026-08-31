@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import type { CampaignPreview, Segment } from "@/lib/api/schemas/campaign";
@@ -10,10 +10,8 @@ import { BrowserApiError, acRead, acWrite } from "@/lib/api/browser";
 import {
   AUDIENCE_TYPES,
   MAX_CUSTOMER_IDS,
-  TOKENS,
   audienceProblem,
   consentGap,
-  tokenLiteral,
   unsubscribeNote,
   type AudienceType,
 } from "@/lib/campaigns";
@@ -21,11 +19,29 @@ import { Card, DataList, DataRow } from "@/components/ui/Card";
 import { FilterTabs } from "@/components/ui/FilterBar";
 import { Select, TextArea, TextField } from "@/components/ui/Form";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/Confirm";
 import { Notice } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Icon } from "@/components/primitives/Icon";
 import { Ltr, Isolate } from "@/components/primitives/Ltr";
 import { ChosenCustomers, CustomerPicker, useResolvedCustomers } from "./CustomerPicker";
+/*
+ * The token vocabulary comes from the **generator** rather than from
+ * `lib/campaigns.ts` directly, and that is the generator's own instruction: it
+ * re-exports `TOKENS` as `MERGE_TOKENS` beside `insertToken()` so the list a person
+ * can insert and the list the renderer substitutes cannot drift apart. A sixth name
+ * offered here would produce a token that renders *empty* and a warning nobody
+ * caused.
+ */
+import {
+  MERGE_TOKENS,
+  buildEmail,
+  insertToken,
+  tokenLiteral,
+  type EmailValues,
+} from "./email-body";
+import { handEdited, nextBodies } from "./body-fields";
+import { BODY_IDS, BodyForm } from "./BodyForm";
 
 /**
  * The composer's five steps, each a module-level component.
@@ -46,6 +62,16 @@ export type Draft = {
   subject: string;
   body_html: string;
   body_text: string;
+  /**
+   * The composer form's answers, or `null` for *this campaign has no answers*.
+   *
+   * The `body_fields` branch, carried in the draft rather than re-read from the
+   * campaign on every render: `null` opens the two text areas and anything else
+   * opens the form. `body-fields.ts` argues both states; the short version is that
+   * `null` means hand-written HTML the panel must never regenerate over, and `{}`
+   * means the form was used and every answer is blank.
+   */
+  body: EmailValues | null;
   audience: { type: string; segment_id: number; customer_ids: number[] };
 };
 
@@ -420,21 +446,131 @@ function AudienceIds({
 
 /* -------------------------------------------------------------- 2. content --- */
 
+/**
+ * The step the branch rebuilt: a form that writes the message, with the message
+ * still editable underneath it.
+ *
+ * ## Two shapes behind one step, chosen by `body_fields` and never by a preference
+ *
+ * `draft.body === null` is a campaign whose answers were never recorded — hand
+ * written HTML, a template, or a draft older than the column — and it gets the two
+ * text areas it always had. Anything else gets the form. The panel does not
+ * remember a "mode" and offers no switch back to HTML, because there is nothing to
+ * switch back *to*: the bodies are editable in both shapes, and in the form shape
+ * editing them is exactly what the hand-edit flag is for.
+ *
+ * The one crossing that *is* offered is the other direction — `composeWithForm`,
+ * on a campaign that has no answers — and it asks first, because it replaces a body
+ * somebody wrote with one generated from nothing.
+ *
+ * ## The caret, and why this component owns it
+ *
+ * Sub-task 6 wants merge tokens "offered as a list to insert rather than typed".
+ * Insertion needs a field and a caret, and both belong to controls scattered across
+ * two child components — so the step tracks them once, from the `focus` and `blur`
+ * events that bubble up through this wrapper, rather than every field taking an
+ * `onCaret` prop it has no other use for. `insertToken()` does the string work and
+ * says where the caret lands; `TOKEN_FIELDS` below says which ids are targets.
+ */
 export function StepContent({
   draft,
   onChange,
   disabled,
   fieldErrors,
+  seed,
 }: {
   draft: Draft;
   onChange: (next: Draft) => void;
   disabled: boolean;
   fieldErrors: Record<string, string>;
+  /**
+   * A blank body for this campaign: the locale's direction, and the shop's logo
+   * when `/settings` published one.
+   *
+   * Passed in rather than built here because both of its halves are the server's to
+   * know — `directionFor(locale)` and a `/settings` read that is Super Admin only —
+   * and because it is used twice, once by `Composer` when the answers are `{}` and
+   * once here when a campaign with no answers is composed for the first time.
+   */
+  seed: EmailValues;
 }) {
   const t = useTranslations("campaigns");
 
+  /**
+   * The last token-accepting field to hold focus, and where its caret was.
+   *
+   * **Remembered at `blur` rather than read at click**, which is what makes the
+   * keyboard path work: tabbing from a text area to a token button moves focus, so
+   * a control that read `document.activeElement` when pressed would find the button
+   * and have nowhere to insert. `blur` fires before `click` and carries the
+   * selection as it stood, so both the pointer and the keyboard land on the same
+   * two numbers.
+   */
+  const [caret, setCaret] = useState<Caret | null>(null);
+  /**
+   * Set by an insert, consumed by the effect below once React has painted.
+   *
+   * A **ref** rather than a second piece of state, and not for tidiness: writing
+   * state inside an effect to clear it is a cascading render, which the lint rule
+   * names outright. Nothing renders from this value — it is a message from the
+   * click handler to the paint that follows it — so a ref is what it actually is.
+   */
+  const restore = useRef<Caret | null>(null);
+
+  const remember = (target: EventTarget) => {
+    const element = target as HTMLInputElement | HTMLTextAreaElement;
+    if (typeof element.id !== "string" || !TOKEN_FIELDS.has(fieldKind(element.id))) return;
+    if (typeof element.selectionStart !== "number") return;
+
+    setCaret({
+      id: element.id,
+      start: element.selectionStart,
+      end: element.selectionEnd ?? element.selectionStart,
+    });
+  };
+
+  /*
+   * Focus and the caret are restored **after** React has painted the new value,
+   * because setting a selection on a control whose value is about to be replaced
+   * puts the caret back at the end. `restore` is cleared in the same pass so this
+   * cannot fight a person who has since clicked somewhere else.
+   */
+  useEffect(() => {
+    const target = restore.current;
+    if (target === null) return;
+    restore.current = null;
+
+    const element = document.getElementById(target.id);
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      element.focus();
+      element.setSelectionRange(target.start, target.end);
+    }
+  });
+
+  const insert = (token: string) => {
+    if (caret === null) return;
+
+    const target = tokenField(draft, caret.id);
+    if (target === null) return;
+
+    const { value, caret: at } = insertToken(target.value, caret.start, caret.end, token);
+    onChange(target.write(value));
+    setCaret({ id: caret.id, start: at, end: at });
+    restore.current = { id: caret.id, start: at, end: at };
+  };
+
   return (
-    <>
+    /*
+       `onFocus`/`onBlur` on a container, and they reach here because React maps
+       them to `focusin`/`focusout`, which bubble — the DOM's own `focus` and `blur`
+       do not. That is what lets one listener serve every field in two children
+       without threading a callback through both.
+    */
+    <div
+      className="contents"
+      onFocus={(event) => remember(event.target)}
+      onBlur={(event) => remember(event.target)}
+    >
       <Card title={t("section.content")}>
         <div className="flex flex-col gap-4">
           <TextField
@@ -451,9 +587,278 @@ export function StepContent({
             label={t("field.subject")}
             value={draft.subject}
             onChange={(subject) => onChange({ ...draft, subject })}
+            /*
+              **A merge token works here too**, and that is the API's behaviour
+              rather than a courtesy: `TemplateRenderer::render()` substitutes the
+              subject alongside both bodies, and the preview step already renders a
+              resolved one. It is the reason the token list is a step-level control
+              rather than a control of the body form.
+            */
+            hint={t("subjectHint")}
             error={fieldErrors.subject}
             disabled={disabled}
           />
+        </div>
+      </Card>
+
+      {draft.body === null ? (
+        <NoAnswers
+          draft={draft}
+          onChange={onChange}
+          disabled={disabled}
+          fieldErrors={fieldErrors}
+          seed={seed}
+        />
+      ) : (
+        <>
+          <BodyForm
+            values={draft.body}
+            onChange={(values) => onChange(withValues(draft, values))}
+            disabled={disabled}
+          />
+          <GeneratedBodies
+            draft={draft}
+            values={draft.body}
+            onChange={onChange}
+            disabled={disabled}
+            fieldErrors={fieldErrors}
+          />
+        </>
+      )}
+
+      {/*
+        The tokens. Still listed with their correct spellings — the failure mode is
+        a misspelling that renders *empty*, which is invisible in a body that has a
+        name in it from another token — and now with the button that makes typing
+        one unnecessary, which is what item 8 leans on when it folds the preview
+        away.
+      */}
+      <Card title={t("tokensTitle")} footnote={t("tokensNote")}>
+        <DataList>
+          {MERGE_TOKENS.map((token) => (
+            <DataRow key={token} label={t(`token.${token}`)}>
+              <span className="flex flex-wrap items-center justify-end gap-2">
+                <Ltr numeric={false} className="font-mono">
+                  {tokenLiteral(token)}
+                </Ltr>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon="plus"
+                  disabled={disabled || caret === null}
+                  /*
+                    §3.3: a disabled control says why. There is no honest default
+                    target — see `tokenField()` — so the reason names the fix.
+                  */
+                  title={caret === null ? t("tokenStep.noField") : undefined}
+                  onClick={() => insert(token)}
+                  data-testid={`insert-${token}`}
+                >
+                  {t("tokenStep.insert")}
+                </Button>
+              </span>
+            </DataRow>
+          ))}
+        </DataList>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------- the token caret --- */
+
+type Caret = { id: string; start: number; end: number };
+
+/**
+ * A field id reduced to the thing it names, so a paragraph's index falls out.
+ *
+ * `campaign-body-paragraph-3` is not a member of a fixed set and cannot be, because
+ * the list grows — so the membership test is on the stem and the index is read back
+ * out of the tail.
+ */
+function fieldKind(id: string): string {
+  return /^campaign-body-paragraph-\d+$/.test(id) ? "paragraph" : id;
+}
+
+/**
+ * Every field a merge token may be inserted into.
+ *
+ * The subject and both bodies, because `TemplateRenderer::render()` substitutes all
+ * three; the four body fields that carry prose; and `cta.href`, which is **not** an
+ * oversight — a button reading "Se désabonner" pointing at `{{unsubscribe_url}}` is
+ * a real campaign and `safeHref()` passes a token through untouched, because `{{` is
+ * not a protocol.
+ *
+ * Alt text is deliberately absent. It is read aloud to somebody who cannot see the
+ * picture, and a token that resolves empty there is a description that silently
+ * becomes nothing.
+ */
+const TOKEN_FIELDS = new Set([
+  FIELD_IDS.subject,
+  FIELD_IDS.body_html,
+  FIELD_IDS.body_text,
+  BODY_IDS.title,
+  "paragraph",
+  BODY_IDS.ctaLabel,
+  BODY_IDS.ctaHref,
+  BODY_IDS.footer,
+]);
+
+/**
+ * The field behind an id: what it holds now, and the draft that holds the next
+ * value.
+ *
+ * A lookup rather than a `ref` per control, because the values live in the draft and
+ * not in the DOM — the element is only ever consulted for its selection. It returns
+ * `null` for an id it does not recognise, which is how a stale caret from a control
+ * that has since unmounted (a removed paragraph) fails: nothing happens, rather than
+ * a token appearing in the wrong field.
+ */
+function tokenField(
+  draft: Draft,
+  id: string,
+): { value: string; write: (next: string) => Draft } | null {
+  if (id === FIELD_IDS.subject) {
+    return { value: draft.subject, write: (subject) => ({ ...draft, subject }) };
+  }
+  if (id === FIELD_IDS.body_html) {
+    return { value: draft.body_html, write: (body_html) => ({ ...draft, body_html }) };
+  }
+  if (id === FIELD_IDS.body_text) {
+    return { value: draft.body_text, write: (body_text) => ({ ...draft, body_text }) };
+  }
+
+  const values = draft.body;
+  if (values === null) return null;
+
+  const paragraph = /^campaign-body-paragraph-(\d+)$/.exec(id);
+  if (paragraph) {
+    const index = Number(paragraph[1]);
+    if (index >= values.paragraphs.length) return null;
+
+    return {
+      value: values.paragraphs[index] ?? "",
+      write: (next) =>
+        withValues(draft, {
+          ...values,
+          paragraphs: values.paragraphs.map((one, at) => (at === index ? next : one)),
+        }),
+    };
+  }
+
+  if (id === BODY_IDS.title) {
+    return { value: values.title, write: (title) => withValues(draft, { ...values, title }) };
+  }
+  if (id === BODY_IDS.footer) {
+    return { value: values.footer, write: (footer) => withValues(draft, { ...values, footer }) };
+  }
+  if (id === BODY_IDS.ctaLabel || id === BODY_IDS.ctaHref) {
+    const label = values.cta?.label ?? "";
+    const href = values.cta?.href ?? "";
+    const isLabel = id === BODY_IDS.ctaLabel;
+
+    return {
+      value: isLabel ? label : href,
+      write: (next) =>
+        withValues(draft, {
+          ...values,
+          cta: isLabel ? { label: next, href } : { label, href: next },
+        }),
+    };
+  }
+
+  return null;
+}
+
+/**
+ * A draft carrying new answers, with the two bodies regenerated **only while they
+ * still match the old ones**.
+ *
+ * The whole of "a field change must not do silently what Undo asks permission for",
+ * and it is one call because `nextBodies()` in `body-fields.ts` owns the rule and is
+ * tested there rather than through this component.
+ */
+function withValues(draft: Draft, values: EmailValues): Draft {
+  const bodies =
+    draft.body === null
+      ? { html: draft.body_html, text: draft.body_text }
+      : nextBodies(draft.body, values, draft.body_html, draft.body_text);
+
+  return { ...draft, body: values, body_html: bodies.html, body_text: bodies.text };
+}
+
+/* ----------------------------------------------------- the two bodies, twice --- */
+
+/**
+ * The generated bodies, still editable, with the flag and the Undo beside them.
+ *
+ * **Sub-task 5 in one card.** The bodies are not read-only and were never going to
+ * be: the generator covers the message this form can describe and not the one a
+ * shop occasionally needs, and a form that locked the output would make itself the
+ * ceiling. So they stay text areas, editing one is a supported act, and the only
+ * thing the panel owes is honesty about what that costs — which is that the answers
+ * above no longer describe what will be sent.
+ *
+ * `handEdited()` derives that by regenerating and comparing. It is sound because the
+ * generator's output survives `EmailHtml::sanitize()` **byte for byte** — fourteen
+ * fixtures, `npm run test:email-roundtrip` — so a difference is a person's doing and
+ * never the sanitiser's. Its docblock argues derived against stored at length.
+ */
+function GeneratedBodies({
+  draft,
+  values,
+  onChange,
+  disabled,
+  fieldErrors,
+}: {
+  draft: Draft;
+  values: EmailValues;
+  onChange: (next: Draft) => void;
+  disabled: boolean;
+  fieldErrors: Record<string, string>;
+}) {
+  const t = useTranslations("campaigns");
+  const [confirming, setConfirming] = useState(false);
+  const undoId = useId();
+
+  const edited = handEdited(values, draft.body_html, draft.body_text);
+
+  const regenerate = () => {
+    const built = buildEmail(values);
+    onChange({ ...draft, body_html: built.html, body_text: built.text });
+    setConfirming(false);
+  };
+
+  return (
+    <>
+      <Card
+        title={t("bodyForm.generated")}
+        footnote={t("bodyForm.generatedNote")}
+        actions={
+          <Button
+            id={undoId}
+            variant="secondary"
+            icon="refresh"
+            size="sm"
+            disabled={disabled || !edited}
+            /* Nothing to undo is a reason, not a mystery. */
+            title={edited ? undefined : t("bodyForm.undoClean")}
+            onClick={() => setConfirming(true)}
+            data-testid="undo-body"
+          >
+            {t("bodyForm.undo")}
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          {edited ? (
+            <div data-testid="hand-edited">
+              <Notice tone="warning" title={t("bodyForm.handEdited")}>
+                <p className="text-ui-label">{t("bodyForm.handEditedWhy")}</p>
+              </Notice>
+            </div>
+          ) : null}
+
           <TextArea
             id={FIELD_IDS.body_html}
             label={t("field.bodyHtml")}
@@ -472,10 +877,9 @@ export function StepContent({
             /*
               **Authored, never stripped from the HTML**, and that is §85's
               editorial rule rather than the API's: `POST /campaigns` accepts both
-              parts empty and answers 201. What the wizard is protecting is a
-              campaign advanced past this step with nothing in one half, which
-              previews as an empty mail and sends as one. `lib/campaigns.ts`
-              carries the correction.
+              parts empty and answers 201. It is generated from the same answers in
+              a second pass rather than derived from the HTML, for the three reasons
+              `email-body.ts` records.
             */
             hint={t("bodyTextHint")}
             error={fieldErrors.body_text}
@@ -485,22 +889,129 @@ export function StepContent({
       </Card>
 
       {/*
-        The tokens, listed where they are typed rather than in a help screen. They
-        are the only "code" in this editor and the failure mode is a misspelling
-        that renders empty — so the correct spellings sit beside the field, in a
-        monospace run wrapped `Ltr` because a token is an identifier.
+        **The warning sub-task 5 asks for, and it is a dialog rather than a
+        `title`.** Undo is not destructive in the trash sense — nothing leaves the
+        shop — but it is the one control on this step that discards work the person
+        cannot get back by pressing it again, and §3.1 puts that behind a
+        confirmation. `tone="primary"`: it is a regeneration, not a delete, and
+        dressing it in `danger` would spend the colour that a real delete needs two
+        cards away.
       */}
-      <Card title={t("tokensTitle")} footnote={t("tokensNote")}>
-        <DataList>
-          {TOKENS.map((token) => (
-            <DataRow key={token} label={t(`token.${token}`)}>
-              <Ltr numeric={false} className="font-mono">
-                {tokenLiteral(token)}
-              </Ltr>
-            </DataRow>
-          ))}
-        </DataList>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(next) => {
+          if (!next) setConfirming(false);
+        }}
+        title={t("bodyForm.undoConfirm")}
+        body={t("bodyForm.undoConfirmBody")}
+        confirmLabel={t("bodyForm.undo")}
+        tone="primary"
+        onConfirm={regenerate}
+        returnFocusTo={undoId}
+      />
+    </>
+  );
+}
+
+/**
+ * A campaign whose `body_fields` is `null`: the editor it always had, and the one
+ * door into the form.
+ *
+ * The door matters more than it looks. Without it the form would be reachable only
+ * by campaigns created after this branch, so every draft this shop already has —
+ * and every campaign built from a template — would be permanently on the old
+ * screen. With it, `null` stops meaning "you cannot have the form" and starts
+ * meaning what the column actually says: nobody has recorded answers for this
+ * campaign *yet*.
+ *
+ * It asks first, and the sentence is specific rather than generic: the body is
+ * replaced by one generated from an empty form, so what is on screen now is gone.
+ * That is the same act Undo performs and it gets the same guard.
+ */
+function NoAnswers({
+  draft,
+  onChange,
+  disabled,
+  fieldErrors,
+  seed,
+}: {
+  draft: Draft;
+  onChange: (next: Draft) => void;
+  disabled: boolean;
+  fieldErrors: Record<string, string>;
+  seed: EmailValues;
+}) {
+  const t = useTranslations("campaigns");
+  const [confirming, setConfirming] = useState(false);
+  const composeId = useId();
+
+  /* The blank body has nothing in it, so `buildEmail()` answers two empty strings
+     — which is what keeps `furthestStep()` meaningful, and why the person lands on
+     a form that has stopped them advancing rather than on a filled one. */
+  const compose = () => {
+    const built = buildEmail(seed);
+    onChange({ ...draft, body: seed, body_html: built.html, body_text: built.text });
+    setConfirming(false);
+  };
+
+  const empty = draft.body_html.trim() === "" && draft.body_text.trim() === "";
+
+  return (
+    <>
+      <Card
+        title={t("bodyForm.written")}
+        footnote={t("bodyForm.writtenNote")}
+        actions={
+          <Button
+            id={composeId}
+            variant="secondary"
+            icon="list"
+            size="sm"
+            disabled={disabled}
+            onClick={() => (empty ? compose() : setConfirming(true))}
+            data-testid="compose-with-form"
+          >
+            {t("bodyForm.compose")}
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <TextArea
+            id={FIELD_IDS.body_html}
+            label={t("field.bodyHtml")}
+            value={draft.body_html}
+            onChange={(body_html) => onChange({ ...draft, body_html })}
+            rows={7}
+            error={fieldErrors.body_html}
+            disabled={disabled}
+          />
+          <TextArea
+            id={FIELD_IDS.body_text}
+            label={t("field.bodyText")}
+            value={draft.body_text}
+            onChange={(body_text) => onChange({ ...draft, body_text })}
+            rows={5}
+            hint={t("bodyTextHint")}
+            error={fieldErrors.body_text}
+            disabled={disabled}
+          />
+        </div>
       </Card>
+
+      {/* Skipped entirely when both bodies are blank — a confirmation that guards
+          nothing is a dialog somebody learns to dismiss without reading. */}
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(next) => {
+          if (!next) setConfirming(false);
+        }}
+        title={t("bodyForm.composeConfirm")}
+        body={t("bodyForm.composeConfirmBody")}
+        confirmLabel={t("bodyForm.compose")}
+        tone="primary"
+        onConfirm={compose}
+        returnFocusTo={composeId}
+      />
     </>
   );
 }

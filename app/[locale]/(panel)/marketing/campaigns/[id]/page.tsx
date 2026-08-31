@@ -4,6 +4,8 @@ import { requireSession } from "@/lib/session/read";
 import { acFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { campaign as campaignSchema, segmentList } from "@/lib/api/schemas/campaign";
+import { settings as settingsSchema } from "@/lib/api/schemas/settings";
+import { shopLogo } from "./body-fields";
 import { canSendCampaigns, has } from "@/lib/capabilities";
 import { canEdit } from "@/lib/campaigns";
 import { ForbiddenState } from "@/components/ui/States";
@@ -58,10 +60,34 @@ export default async function CampaignPage({
    * `ac_marketing_manager` role exercises it, 200 here and 403 on send.
    */
   if (canEdit(campaign.data)) {
+    /*
+     * **The branding prefill, and the only fetch on this page that is allowed to
+     * fail without being noticed.**
+     *
+     * Sub-task 3: *"so a client's first campaign already looks like their shop with
+     * nothing configured"*. `GET /settings` is `ac_manage_settings` — Super Admin
+     * alone, measured, a Manager holding ten other management capabilities is 403 on
+     * both verbs — so this read is a 403 for anybody else and the composer simply
+     * opens without a logo. That is the same softening the segment list below already
+     * has and the same reasoning: a failed read costs one field, never the screen.
+     *
+     * Only for an editable campaign, because a sent one is a record and has nothing
+     * to prefill. And only the logo comes back: `SettingsInput::SCHEMA` publishes no
+     * brand colour under any spelling, so `shopLogo()` returns the one half that
+     * exists rather than a shape with an invented field in it.
+     */
+    const settings = await acFetch(settingsSchema, session, "/settings").catch(
+      (error: unknown) => {
+        if (error instanceof ApiError) return null;
+        throw error;
+      },
+    );
+
     return (
       <Composer
         locale={locale}
         initial={campaign.data}
+        shopLogo={shopLogo(settings?.data.store ?? null)}
         canSendCampaigns={canSendCampaigns(me)}
         /*
          * The second half of the compound rule, on its own, because the audience

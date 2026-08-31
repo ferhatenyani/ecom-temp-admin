@@ -328,7 +328,69 @@ cd "$(dirname "$0")/.." || exit 2
 # of adding a sixth copy.
 #
 # Raised by the same margin of 2 the history above keeps.
-FLOOR=339
+#
+# 343 at the campaign-composer branch, floor 341. Two files:
+#
+#   app/…/marketing/campaigns/[id]/email-body.ts   the pure body generator
+#   lib/email-palette.ts                           the six colours it emits
+#
+# The generator is a file rather than a function inside the composer on the test
+# the last eight entries all apply — **a block that is only markup stays in its
+# screen; a block that owns decisions gets a file so the decisions have somewhere
+# to be argued** — and this one owns most of a branch's worth. What survives
+# `EmailHtml::sanitize()` and in what byte-exact shape; that `dir` is stripped and
+# what that costs an Arabic campaign; that the text part is generated rather than
+# stripped, and the three reasons stripping is wrong; and what "fluid" means in a
+# layout that cannot carry a media query. It is also the half that is *testable*:
+# `tests/email-body.test.ts` asserts it against output the real backend sanitiser
+# handed back, which is not something a component could have been asked to prove.
+#
+# `lib/email-palette.ts` is the smallest file this list has ever recorded and is
+# the `lib/theme-color.ts` pattern exactly: a bounded exception to a
+# non-negotiable, in its own file, argued in the file, paired to the tokens it
+# mirrors by a unit test. See COLOUR_EXEMPT below.
+#
+# Raised by the same margin of 2 the history above keeps.
+#
+# **This branch also widens the colour rule, which is the first widening since
+# `lib/theme-color.ts`, and it is announced here rather than left in a diff.** See
+# COLOUR_EXEMPT below for the exemption and its argument; `email-body.ts` itself
+# takes no exemption and is scanned like everything else.
+#
+# 345 at the campaign-composer branch's second half, floor 343. Two files, both
+# under `marketing/campaigns/[id]/`:
+#
+#   BodyForm.tsx     the form the generator's values come out of
+#   body-fields.ts   the `body_fields` seam and the two questions around it
+#
+# The split is the same test the last ten entries apply — *a block that is only
+# markup stays in its screen; a block that owns decisions gets a file* — and this
+# pair lands on both sides of it deliberately. `BodyForm.tsx` is markup and would
+# have stayed in `Steps.tsx` on that rule alone, except that `Steps.tsx` is already
+# the five wizard steps and this is one card set inside one of them; splitting it
+# keeps the step readable and costs nothing, which is `CriterionField.tsx`'s
+# argument at the segment-pickers branch.
+#
+# `body-fields.ts` is the one that had to exist. It owns the branch's largest
+# decision — that the "edited by hand" flag is **derived** by regenerating and
+# comparing rather than stored beside the answers, which is sound only because the
+# generator round-trips the sanitiser byte for byte — and four smaller ones: that
+# `null` and `{}` on the column are different claims and which editor each opens;
+# that an absent block is written `null` so the nested-empty-object wrinkle cannot
+# reach this shape; that a field change regenerates only while the bodies still
+# match, so nothing silently does what Undo asks permission for; and that the shop
+# publishes a logo and **no** brand colour, read from source. None of those is
+# markup and none of them is testable through a component.
+#
+# **No new colour exemption**, and that is worth stating because a brand-colour
+# control is the obvious place to want one: a palette of preset swatches would be
+# a row of literals. There are none. The control is the hex the shopkeeper types,
+# its preview is filled from that value at run time, and the default shown as a
+# placeholder is imported from `lib/email-palette.ts` rather than written down a
+# second time. `COLOUR_EXEMPT` is unchanged at two files.
+#
+# Raised by the same margin of 2 the history above keeps.
+FLOOR=343
 failures=0
 checks=0
 
@@ -339,12 +401,40 @@ green() { printf '\033[32m%s\033[0m' "$1"; }
 # too, because a colour literal or a physical property is no more acceptable in a
 # formatter than in a component, and the wider net is what makes the floor honest.
 #
-# Two files are exempt from the colour rule, each by name with its reason:
-#   styles/tokens.css   — the definitions themselves have to live somewhere
-#   lib/theme-color.ts  — browser chrome, set through a TS metadata API that
-#                         cannot read a custom property; the file records why
+# Three files are exempt from the colour rule, each by name with its reason:
+#   styles/tokens.css    — the definitions themselves have to live somewhere
+#   lib/theme-color.ts   — browser chrome, set through a TS metadata API that
+#                          cannot read a custom property; the file records why
+#   lib/email-palette.ts — a campaign email's six fixed colours. Added at the
+#                          campaign-composer branch, and this is the widening
+#                          stated loudly rather than slipped in.
 # Anything else naming a colour is a failure.
-COLOUR_EXEMPT='lib/theme-color\.ts'
+#
+# ## Why the third one had to exist, and why it is this small
+#
+# The rule's premise is that a colour resolves through CSS, so a component can
+# name a token instead of a value. An email resolves through nothing, and that is
+# structural rather than a matter of effort — read against the backend's
+# `Campaigns\EmailHtml::ALLOWED`, measured through the real `wp_kses`:
+#
+#   * there is no <style> block (`style` is in FORBIDDEN_TAGS, and the tag is
+#     stripped while its *text* is kept, so a stylesheet is printed into the body
+#     of somebody's mail rather than ignored);
+#   * there is no `class` attribute, on any tag in the allow-list;
+#   * `var(--color-ui-fg)` survives the sanitiser and then resolves to nothing in
+#     an inbox, because the document that defined it is on another machine.
+#
+# So every colour in a campaign is a literal in the message. The exemption is
+# therefore about *where the six literals are written*, not about whether they
+# exist — and it is deliberately one file of named constants with the token each
+# mirrors beside it, paired to styles/tokens.css by a unit test in
+# tests/email-body.test.ts exactly as tests/boundary.test.ts pairs theme-color.
+#
+# The generator that emits them — app/…/campaigns/[id]/email-body.ts, four hundred
+# lines of inline-styled markup, which is where a stray colour would actually get
+# written — is **not** exempt and contains no literal at all. That is the property
+# that keeps this a bounded exception rather than a hole.
+COLOUR_EXEMPT='lib/theme-color\.ts|lib/email-palette\.ts'
 
 mapfile -t FILES < <(find app components lib i18n -type f \( -name '*.tsx' -o -name '*.ts' \) 2>/dev/null | sort)
 mapfile -t CSS < <(find styles -type f -name '*.css' 2>/dev/null | sort)
@@ -409,6 +499,7 @@ report "no colour literals in source" \
   "Every colour is a token. A component that wants one names it in tokens.css." \
   "$(scan '#[0-9a-fA-F]{3,8}\b|\brgb\(|\boklch\(|\bhsl\(' | grep -vE "$COLOUR_EXEMPT" || true)"
 printf '        (exempt by name: lib/theme-color.ts — browser chrome, see the file)\n'
+printf '        (exempt by name: lib/email-palette.ts — an email has no tokens to resolve)\n'
 
 report "no colour literals in css outside tokens.css" \
   "tokens.css is the only stylesheet permitted a literal." \

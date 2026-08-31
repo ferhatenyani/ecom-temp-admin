@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-08-27T12:51:42.999Z",
         "reason": "false positive: src is a runtime URL from the CMS API (banner.image.url), guarded by banner.image; alt is intentionally empty because the banner title is the row's accessible name"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "tests/email-body.test.ts"
+        ],
+        "createdAt": "2026-08-31T06:19:59.712Z",
+        "reason": "false positive: the '<img' occurrences are regex literals and assertion strings that inspect generated email markup in a test file, not markup this repo renders"
       }
     ]
   }

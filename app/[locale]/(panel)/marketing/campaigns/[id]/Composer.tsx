@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +42,8 @@ import {
   usePreview,
   type Draft,
 } from "./Steps";
+import { buildEmail, directionFor, type EmailImage, type EmailValues } from "./email-body";
+import { readValues, seededValues, writeValues } from "./body-fields";
 
 /**
  * The composer: audience → content → preview → test → send.
@@ -84,11 +86,26 @@ import {
 export function Composer({
   locale,
   initial,
+  shopLogo,
   canSendCampaigns,
   canManageCustomers,
 }: {
   locale: string;
   initial: Campaign;
+  /**
+   * The shop's logo, from `GET /settings`, or null.
+   *
+   * Fetched on the server and softened there, because `/settings` is
+   * `ac_manage_settings` — **Super Admin alone**, measured: a Manager holding ten
+   * other management capabilities is 403 on both verbs. So this is null for a
+   * reader who is not one, and the consequence is exactly that their first campaign
+   * starts without the shop's logo in it. Nothing else on the screen changes, which
+   * is `page.tsx`'s existing rule for the segment list one fetch below: a failed
+   * read costs one field, never the screen.
+   *
+   * There is no brand colour beside it and none was invented — see `shopLogo()`.
+   */
+  shopLogo: EmailImage | null;
   /**
    * `ac_manage_marketing` **and** `ac_manage_customers`. Measured: a Marketing
    * Manager is 200 on the campaign and the preview and 403 on send — so the
@@ -127,17 +144,71 @@ export function Composer({
   const campaign = data;
 
   const [step, setStep] = useState<ComposerStep>("audience");
-  const [draft, setDraft] = useState<Draft>(() => ({
-    name: initial.name,
-    subject: initial.subject,
-    body_html: initial.body_html,
-    body_text: initial.body_text,
-    audience: {
-      type: initial.audience.type,
-      segment_id: initial.audience.segment_id,
-      customer_ids: [...initial.audience.customer_ids],
-    },
-  }));
+
+  /**
+   * A blank body for this campaign, and the two things the panel can honestly put
+   * in one.
+   *
+   * `directionFor(locale)` is the direction the form *offers*; it becomes a stored
+   * decision the moment the answers are saved, so switching the panel to Arabic
+   * afterwards never reflows a body somebody already laid out. `shopLogo` is the
+   * other half of sub-task 3 and the only half that exists — the shop publishes no
+   * brand colour, so the colour stays empty and `brandColour("")` answers the
+   * panel's accent, with the form saying in words that it did.
+   *
+   * `useMemo` because it seeds `useState` below *and* is handed to `StepContent` for
+   * the campaign that composes a form for the first time; a fresh object per render
+   * would make the second one a new prop every time.
+   */
+  const seed = useMemo<EmailValues>(
+    () => seededValues(directionFor(locale), shopLogo),
+    [locale, shopLogo],
+  );
+
+  const [draft, setDraft] = useState<Draft>(() => {
+    /*
+     * **`null` and `{}` are different claims, and this is the branch.**
+     *
+     * `readValues()` answers `null` for a campaign whose `body_fields` is null —
+     * hand-written HTML, a template, a draft older than the column, or a column that
+     * would not parse — and the content step then renders the two text areas, so the
+     * panel can never regenerate an empty message over a body somebody wrote. A
+     * campaign whose answers are `{}` gets `emptyValues()`, which is the form, blank.
+     *
+     * The seed's branding is applied only to the *blank* case, and only when the
+     * campaign has no body yet. A saved campaign's answers are its answers: a logo
+     * cleared on purpose must not come back because the shop still has one.
+     */
+    const stored = readValues(initial.body_fields, directionFor(locale));
+    const blank =
+      stored !== null &&
+      initial.body_html.trim() === "" &&
+      initial.body_text.trim() === "";
+
+    /*
+     * The seeded body is **generated as well as seeded**, and skipping that is a
+     * bug rather than an optimisation: `handEdited()` compares the stored bodies
+     * against what the answers generate, so a seed carrying a logo beside two empty
+     * bodies would report a hand edit on a campaign nobody has touched. Generating
+     * here keeps the two sides equal from the first paint. With no shop logo the
+     * seed is `emptyValues()` and `buildEmail()` answers two empty strings, so this
+     * changes nothing and `furthestStep()` still holds the wizard at `content`.
+     */
+    const seeded = blank ? buildEmail(seed) : null;
+
+    return {
+      name: initial.name,
+      subject: initial.subject,
+      body_html: seeded?.html ?? initial.body_html,
+      body_text: seeded?.text ?? initial.body_text,
+      body: blank ? seed : stored,
+      audience: {
+        type: initial.audience.type,
+        segment_id: initial.audience.segment_id,
+        customer_ids: [...initial.audience.customer_ids],
+      },
+    };
+  });
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
@@ -228,6 +299,24 @@ export function Composer({
         subject: draft.subject,
         body_html: draft.body_html,
         body_text: draft.body_text,
+        /*
+         * **Only ever an object, never `null`.**
+         *
+         * `null` on this field means *clear the answers*, and the composer has no
+         * act that means that: a campaign that reaches the form keeps its answers
+         * for good, and one that never had any is left alone rather than written
+         * with an empty document it did not ask for. Omitting the key leaves the
+         * column untouched — `Campaign::with()` uses `array_key_exists` rather than
+         * `??` for exactly this, `Campaign.php:228` — so a hand-written campaign
+         * being edited on this screen keeps reading `null` and keeps opening the
+         * HTML editor on the next visit.
+         *
+         * Only write fields go on the wire. Campaigns have no silently-dropped
+         * read-only list the way products do; `CampaignInput::REFUSED` is fifteen
+         * keys that answer **400**, and everything unknown answers 400 too — so
+         * echoing the read body back would be a refusal rather than a no-op.
+         */
+        ...(draft.body === null ? {} : { body_fields: writeValues(draft.body) }),
         audience_type: draft.audience.type,
         ...(draft.audience.type === "segment" ? { segment_id: draft.audience.segment_id } : {}),
         ...(draft.audience.type === "ids" ? { customer_ids: draft.audience.customer_ids } : {}),
@@ -347,6 +436,16 @@ export function Composer({
     subject: { id: FIELD_IDS.subject, label: t("field.subject") },
     body_html: { id: FIELD_IDS.body_html, label: t("field.bodyHtml") },
     body_text: { id: FIELD_IDS.body_text, label: t("field.bodyText") },
+    /*
+      Four of the five refusals on this field are unreachable from a form that
+      emits eight fixed short keys nested three deep — see `body-fields.ts`. The
+      fifth is not: `paragraphs` is unbounded and the cap is 65_536 bytes of
+      encoded JSON, so the failure is a person pasting something very large. It
+      binds to the HTML body's control, which is the nearest thing on screen to
+      "the message is too big"; there is no single control the whole document
+      belongs to.
+    */
+    body_fields: { id: FIELD_IDS.body_html, label: t("field.bodyFields") },
     segment_id: { id: FIELD_IDS.segment_id, label: t("field.segment") },
     customer_ids: { id: FIELD_IDS.customer_ids, label: t("audience.ids") },
   };
@@ -426,6 +525,7 @@ export function Composer({
               onChange={setDraft}
               disabled={saving}
               fieldErrors={fieldErrors}
+              seed={seed}
             />
           ) : step === "preview" ? (
             <StepPreview preview={preview.data ?? null} loading={preview.isPending} />

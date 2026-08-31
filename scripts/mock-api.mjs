@@ -5040,6 +5040,7 @@ const campaignRow = ({
   updated,
   claimed = null,
   completed = null,
+  body_fields = null,
 }) => ({
   id,
   name,
@@ -5048,6 +5049,24 @@ const campaignRow = ({
   template_id: 0,
   body_html,
   body_text,
+  /**
+   * **`null` on every seeded campaign, and that is the measurement rather than a
+   * placeholder.**
+   *
+   * `migrations/014_add_campaign_body_fields.php` adds `body_fields mediumtext NULL
+   * DEFAULT NULL` and its docblock spends a section on why the default is not `{}`:
+   * *"Defaulting to `{}` would tell the panel that every campaign in the shop's
+   * history was composed with a form that did not exist when they were written."*
+   * Every campaign in this file predates the composer, so every one of them reads
+   * `null` — which is the state the panel answers by opening the HTML editor.
+   *
+   * The `{}` side is reached the way the panel reaches it: `POST /campaigns` with
+   * `body_fields: {}`, which is what the create button now sends. Seeding a
+   * composed campaign here would have been the easy way to photograph the form and
+   * the wrong fixture — it would have made the interesting branch the default and
+   * left the one every existing campaign is actually in untested.
+   */
+  body_fields,
   audience,
   status,
   is_editable,
@@ -6152,9 +6171,20 @@ const SETTINGS_DEFAULT = {
  * the field is *absent* rather than rendered, and a screen that hard-coded it
  * would look correct against the default forever.
  *
- * `logo_id` stays `0` and `logo` stays `null`. The resolved attachment's shape
- * was never captured — `lib/api/schemas/settings.ts` types it `z.unknown()`
- * because of that — and inventing one here is the thing the file header forbids.
+ * **`logo_id` and `logo` are populated here now, and the shape is read rather than
+ * invented.** The old note said the resolved attachment "was never captured" and
+ * that making one up is what the file header forbids. Both were true; the first no
+ * longer is. `Settings\SettingsService::image()` is eight lines and returns exactly
+ * three keys — `SettingsService.php:194-209` — `id`, `url` from
+ * `wp_get_attachment_url()` and therefore already absolute, and `alt` from
+ * `_wp_attachment_image_alt`. There is **no width**, which is what the campaign
+ * composer's logo prefill has to live with.
+ *
+ * The id and the URL are the media library's own first row, so the two fixtures
+ * agree with each other: a shop whose logo is an attachment that exists. The
+ * default variant keeps `logo_id: 0` and `logo: null`, which remains the measured
+ * state of this install — so the campaign composer's branding prefill has a fixture
+ * on both sides, `MOCK_SETTINGS=populated` being the one where it does anything.
  */
 const SETTINGS_POPULATED = {
   store: {
@@ -6165,8 +6195,18 @@ const SETTINGS_POPULATED = {
     currency: "DZD",
     currency_symbol: "د.ج",
     storefront_url: "https://boutique-artisanale-algerienne-tapis-poterie.example.dz/fr/boutique",
-    logo_id: 0,
-    logo: null,
+    /* The library's own first row, so the two fixtures agree: a shop whose logo is
+       an attachment that exists. `MEDIA_LIBRARY` rather than `MEDIA_SEED`, because
+       `MOCK_MEDIA=empty` empties the seed and a logo pointing at nothing is a third
+       state nobody asked for. */
+    logo_id: MEDIA_LIBRARY[0].id,
+    logo: {
+      id: MEDIA_LIBRARY[0].id,
+      url: MEDIA_LIBRARY[0].url,
+      /* A real alt, because the composer copies it into the message and an empty
+         one there is a deliberate silence rather than a missing value. */
+      alt: "Logo de la Boutique Artisanale Algérienne",
+    },
   },
   contact: {
     email: "contact@boutique-artisanale-algerienne-tapis-poterie.example.dz",
@@ -19537,6 +19577,12 @@ function createCampaign(body) {
     else if (segmentById(segmentId) === undefined) fields.segment_id = NO_SUCH_SEGMENT;
   }
 
+  /* Omitted leaves the column at its `NULL` default, which is *no answers were
+     ever recorded* — the state every campaign that predates the composer is in.
+     `{}` is the other claim and the panel's create button sends it. */
+  const answers = "body_fields" in input ? readBodyFields(input.body_fields) : { store: null };
+  if (answers.problem !== undefined) fields.body_fields = answers.problem;
+
   if (Object.keys(fields).length > 0) return invalidCampaign(fields);
 
   const id = state.nextCampaignId++;
@@ -19547,6 +19593,7 @@ function createCampaign(body) {
     template_id: 0,
     body_html: sanitizeCampaignHtml(readString(input.body_html) ?? ""),
     body_text: readString(input.body_text) ?? "",
+    body_fields: answers.store,
     audience: {
       type: audienceType,
       segment_id: audienceType === "segment" ? segmentId : 0,
@@ -19580,6 +19627,148 @@ function createCampaign(body) {
  */
 const sanitizeCampaignHtml = (html) =>
   html.replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, "$1").replace(/<\/?script[^>]*>/gi, "");
+
+/* ------------------------------------------------------- body_fields --- */
+
+/**
+ * The composer form's answers, added to `POST` and `PATCH` on this branch.
+ *
+ * Read from source in `../ecom-temp` rather than measured — the column is another
+ * agent's uncommitted work and there is no live shop with it. Every constant,
+ * sentence and branch below is cited to the file it was copied from, so a
+ * divergence is a diff rather than an argument.
+ *
+ *   `Campaigns/CampaignInput.php::bodyFields()`    the five refusals
+ *   `Campaigns/CampaignInput.php::inspectFields()` depth and key names
+ *   `Campaigns/EmailHtml.php::sanitizeDocument()`  the value rewrite
+ *   `Campaigns/Campaign.php::encodedFields()`      `{}` at the top, `[]` nested
+ */
+const MAX_FIELDS_BYTES = 65_536; // CampaignInput::MAX_FIELDS_BYTES
+const MAX_DOCUMENT_DEPTH = 10; // EmailHtml::MAX_DOCUMENT_DEPTH
+const MAX_FIELD_KEY = 64; // CampaignInput::MAX_FIELD_KEY
+
+/** `EmailHtml::looksLikeMarkup()` — `preg_match('/<[a-zA-Z\/!]/', $value)`. */
+const looksLikeMarkup = (value) => /<[a-zA-Z/!]/.test(value);
+
+/**
+ * `EmailHtml::sanitizeDocument()` — **values only, and only the ones that look
+ * like markup.**
+ *
+ * The key is copied verbatim; ints, floats, bools, nulls and ordinary prose are
+ * returned byte-identical, including a bare `<` in prose (`"Tout à < 500 DA"` has
+ * no letter after the `<`, so it does not match). A value that *does* look like
+ * markup goes through the same allowlist `body_html` does — which here is
+ * `sanitizeCampaignHtml()` above, and therefore only as complete as that: the
+ * `<script>` case is the one this file has watched go through, and it must not
+ * pretend to more.
+ */
+function sanitizeCampaignDocument(document) {
+  if (Array.isArray(document)) return document.map(sanitizeCampaignDocument);
+  if (document === null || typeof document !== "object") {
+    return typeof document === "string" && looksLikeMarkup(document)
+      ? sanitizeCampaignHtml(document)
+      : document;
+  }
+
+  const out = {};
+  for (const [key, value] of Object.entries(document)) out[key] = sanitizeCampaignDocument(value);
+  return out;
+}
+
+/**
+ * The assoc `json_decode`/`json_encode` round trip PHP performs, which is not
+ * lossless and is the one wrinkle a client has to know about.
+ *
+ * `WP_REST_Request::parse_json_params()` decodes associatively, so `{}` on the wire
+ * is already `[]` before a controller sees it. `Campaign::encodedFields()` then
+ * substitutes `new stdClass()` — but **only for a wholly empty top-level document**
+ * — and `Campaign::toArray()` casts only the outermost level back. `JSON_FORCE_OBJECT`
+ * is deliberately not used, because *"a repeater of blocks is a list on purpose"*
+ * (`Campaign.php:300-302`).
+ *
+ * Net: a top-level `{}` survives as `{}`, a **nested** `{}` comes back as `[]`.
+ * `docs/API.md:1232` states it. JavaScript keeps the two apart natively, so
+ * reproducing the loss takes this function — without it the mock would be *kinder*
+ * than the API, which is the direction a mock must never be wrong in.
+ */
+function storedDocument(value, top = true) {
+  if (Array.isArray(value)) return value.map((one) => storedDocument(one, false));
+  if (value === null || typeof value !== "object") return value;
+
+  const out = {};
+  for (const [key, inner] of Object.entries(value)) out[key] = storedDocument(inner, false);
+
+  return !top && Object.keys(out).length === 0 ? [] : out;
+}
+
+/** `CampaignInput::inspectFields()` — the first structural problem, or null. */
+function inspectFields(document, depth) {
+  if (depth > MAX_DOCUMENT_DEPTH) {
+    return `Nested deeper than ${MAX_DOCUMENT_DEPTH} levels. Refused rather than trimmed, so the answers that come back are the answers that were sent.`;
+  }
+
+  for (const [key, value] of Object.entries(document)) {
+    /* Integer keys are how a nested list arrives after decoding and are not names
+       at all — but `Object.entries` stringifies an array's indices, so the test is
+       on the container rather than on the key. */
+    if (!Array.isArray(document)) {
+      if (Buffer.byteLength(key, "utf8") > MAX_FIELD_KEY) {
+        return `A field name is at most ${MAX_FIELD_KEY} characters.`;
+      }
+      if (looksLikeMarkup(key)) return "A field name may not contain markup.";
+    }
+
+    if (value !== null && typeof value === "object") {
+      const problem = inspectFields(value, depth + 1);
+      if (problem !== null) return problem;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * `CampaignInput::bodyFields()` — the value to store, or a refusal sentence.
+ *
+ * `{ store: null }` is *clear it*, which is a real write rather than "no supported
+ * fields": `CampaignInput::isEmpty()` is `$this->fields === []`, so a PATCH naming
+ * only `body_fields: null` is accepted.
+ */
+function readBodyFields(value) {
+  if (value === null) return { store: null };
+
+  if (typeof value !== "object") {
+    return {
+      problem:
+        "Must be a JSON object of the composer form's answers, or null to clear it — not a string, a list or a JSON-encoded string.",
+    };
+  }
+
+  // `[]` and `{}` are the same value once PHP has decoded them, so an empty
+  // document is read as the empty object it almost certainly was. A *non-empty*
+  // list is unambiguous, and is refused.
+  if (Array.isArray(value) && value.length > 0) {
+    return {
+      problem:
+        "Must be a JSON object: a form's answers are named, so a top-level array has nowhere to put the names.",
+    };
+  }
+
+  const problem = inspectFields(value, 0);
+  if (problem !== null) return { problem };
+
+  // Measured against the bytes the column actually receives — the *pre-sanitised*
+  // document, which is what `CampaignInput` sees. `JSON_UNESCAPED_UNICODE` is why
+  // this is `Buffer.byteLength` of a plain stringify rather than of an escaped one.
+  const encoded = JSON.stringify(Array.isArray(value) ? {} : value);
+  if (Buffer.byteLength(encoded, "utf8") > MAX_FIELDS_BYTES) {
+    return {
+      problem: `At most ${MAX_FIELDS_BYTES} bytes of JSON. Refused rather than truncated, because half a document is not a shorter document — it is one that reads back as no answers at all.`,
+    };
+  }
+
+  return { store: storedDocument(sanitizeCampaignDocument(Array.isArray(value) ? {} : value)) };
+}
 
 /**
  * `PATCH /campaigns/{id}`.
@@ -19616,6 +19805,20 @@ function patchCampaign(row, body) {
   if (html !== null) writes.body_html = sanitizeCampaignHtml(html);
   const text = readString(input.body_text);
   if (text !== null) writes.body_text = text;
+
+  /*
+   * **`array_key_exists`, not `??`** — `Campaign::with()` at `Campaign.php:228`
+   * makes the same distinction and its docblock calls it the load-bearing detail.
+   * Omitted leaves the stored answers untouched; `null` clears them; an object
+   * replaces them. A PATCH naming only `body_fields: null` is a real write and not
+   * "no supported fields", because `CampaignInput::isEmpty()` tests the field list
+   * rather than the values in it.
+   */
+  if ("body_fields" in input) {
+    const answers = readBodyFields(input.body_fields);
+    if (answers.problem !== undefined) fields.body_fields = answers.problem;
+    else writes.body_fields = answers.store;
+  }
 
   const audienceType = readString(input.audience_type);
   const hasSegmentId = Number.isInteger(input.segment_id);
