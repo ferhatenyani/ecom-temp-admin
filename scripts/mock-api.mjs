@@ -10629,6 +10629,40 @@ function postOrder(body) {
   }
 
   /*
+   * WooCommerce's setter, and **the only refusal on this route carrying no
+   * `details`** — `patchOrder` has answered it since the order-edit branch and
+   * this route could not, which was a divergence rather than a difference.
+   *
+   * `OrderService::create()` wraps `$this->repository->create($input)` in the
+   * same `save()` that `update()` uses, so a `WC_Data_Exception` from
+   * `set_billing_email()` is re-thrown as
+   * `ApiException::invalidRequest($exception->getMessage())` with an empty
+   * details array on both verbs. Read from source; the shape is the one the
+   * backend suite measured in-process on the PATCH.
+   *
+   * **After the lines resolve and before anything is written**, which is
+   * `OrderRepository::create()`'s own order: `resolveLines()` is its first
+   * statement and `applyProps()` — where the setter lives — is its third. So a
+   * body carrying both a gone product and a bad billing email reports the
+   * product, exactly as it does on the PATCH.
+   *
+   * It exists so `NewOrderDrawer`'s binding for a `details`-less 400 has
+   * something to fire against. A mock where this route's every 400 carried
+   * `details.fields` would let that branch ship untested against the one shape
+   * it was written for.
+   *
+   * No `filter_var` test beside `wordPressWouldRefuseEmail`, which is
+   * `patchOrder`'s shape too: an address that fails *that* rule was already
+   * refused by `statedAddressFields` with `fields["billing.email"]`, and the
+   * field batch returns above. Only the addresses both validators disagree
+   * about can reach this line, which is the whole population it is about.
+   */
+  const billingEmail = billing.email;
+  if (billingEmail !== "" && wordPressWouldRefuseEmail(billingEmail)) {
+    return bareFail(400, "invalid_request", "Invalid billing email address");
+  }
+
+  /*
    * The lines, priced the way `add_product()` prices them: from the catalogue
    * unless the line stated an amount, which is `lineTotals()`'s `$args` present
    * or absent. The stored `price` is the **override** and stays `null` for a line

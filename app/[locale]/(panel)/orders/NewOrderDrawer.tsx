@@ -41,6 +41,7 @@ import {
   CREATABLE,
   bindRefusals,
   buildPayload,
+  unkeyedRefusalField,
   destinationSeed,
   draftProblems,
   emptyDraft,
@@ -354,7 +355,16 @@ export function NewOrderDrawer({
   });
 
   const create = useMutation({
-    mutationFn: () => acWrite<Order>("POST", "/orders", buildPayload(draft)),
+    /*
+     * **The body is the mutation's variable rather than a closure over the
+     * draft**, so `onError` below is handed the bytes that actually went on the
+     * wire. It could rebuild it — `buildPayload` is pure and the form is
+     * disabled while the request is in flight — but "what did we send" is a
+     * question with an exact answer and re-deriving it is how the answer starts
+     * drifting from the question. `unkeyedRefusalField` needs the real one:
+     * whether the body carried a billing email is the entire discriminator.
+     */
+    mutationFn: (body: Record<string, unknown>) => acWrite<Order>("POST", "/orders", body),
     onSuccess: (order) => {
       /*
        * **The total comes from the answer, never from the form** — sub-task 5.
@@ -376,7 +386,7 @@ export function NewOrderDrawer({
       onOpenChange(false);
       onCreated(order);
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, body: Record<string, unknown>) => {
       if (error instanceof BrowserApiError && error.fields) {
         /* Re-keyed before it is bound: "same as billing" sends one address
            twice, so one bad value comes back as two refusals and the second has
@@ -385,6 +395,33 @@ export function NewOrderDrawer({
         setRefusal(null);
         return;
       }
+
+      /*
+       * **The `details`-less 400, pointed at the control that caused it.**
+       *
+       * `OrderService::create()` wraps `$this->repository->create($input)` in
+       * the same `save()` that `update()` uses, so `WC_Order::set_billing_email()`
+       * throwing on an address `filter_var()` accepted and `is_email()` refuses
+       * — `a@b.c` — reaches this form too. Read from source; the measurement
+       * behind it is `PATCH`'s, in `BLOCKED.md`.
+       *
+       * `unkeyedRefusalField` carries the whole argument, including why the
+       * discriminator is the body rather than the message. What matters here is
+       * the shape: it produces a **`fields` entry and no `refusal`**, so the
+       * summary counts one failure, links it, and `AddressFields` reddens the
+       * email box. Setting both would print the sentence twice and say two
+       * fields refused — which is the exact defect `bindRefusals` above exists
+       * for, and it is not being re-introduced one branch below itself.
+       */
+      if (error instanceof BrowserApiError) {
+        const key = unkeyedRefusalField(error.status, body);
+        if (key !== null) {
+          setFields({ [key]: error.message });
+          setRefusal(null);
+          return;
+        }
+      }
+
       /*
        * A 409 is the status refusal, and on this route it is the **only** one:
        * `cancelled` and `refunded` are terminal and an order cannot begin in
@@ -474,7 +511,9 @@ export function NewOrderDrawer({
     }
 
     setFields({});
-    create.mutate();
+    /* Built here rather than in `mutationFn`, so the body the request carries
+       and the body `onError` reasons about are the same object. */
+    create.mutate(buildPayload(draft));
   }
 
   /**

@@ -22,7 +22,7 @@ import { useToast } from "@/components/primitives/Toast";
 import { ADDRESS_KEYS, AddressFields, addressFieldId } from "../AddressFields";
 import { CustomerPicker } from "../CustomerPicker";
 import { DestinationFields } from "../DestinationFields";
-import { bindRefusals, type AddressDraft } from "../new-order";
+import { bindRefusals, unkeyedRefusalField, type AddressDraft } from "../new-order";
 import { useOrderScreen } from "./OrderScreen";
 import {
   MAX_CUSTOMER_NOTE,
@@ -148,7 +148,12 @@ export function OrderEditDrawer({
    * `billing.country` binds to the control that produced it through one map.
    */
   const [fields, setFields] = useState<Record<string, string>>({});
-  /** A refusal with no field to bind to. See `onError` — it is reachable. */
+  /**
+   * A refusal with genuinely no field to bind to — and the set of those got
+   * smaller. The `details`-less billing-email 400 used to live here and is now a
+   * `fields` entry; what is left is the `is_editable` 409 and the empty-body
+   * 400. See `onError`, which argues the split.
+   */
   const [refusal, setRefusal] = useState<string | null>(null);
 
   /* The order is a Server Component's data, so a save is followed by
@@ -183,7 +188,16 @@ export function OrderEditDrawer({
     setDraft((current) => ({ ...current, [which]: { ...current[which], ...next } }));
 
   const save = useMutation({
-    mutationFn: () => acWrite<Order>("PATCH", `/orders/${order.id}`, buildEditPayload(draft, order)),
+    /*
+     * **The body is the variable rather than a closure over the draft.** It
+     * matters more here than on the create form: `buildEditPayload` is a *diff*,
+     * so "is there a billing email in this request" is not a question the draft
+     * can answer — an order whose stored email is already bad but which nobody
+     * touched sends no `billing` at all, and the refusal below cannot be about
+     * it. `onError` has to see what was sent, not what is on screen.
+     */
+    mutationFn: (body: Record<string, unknown>) =>
+      acWrite<Order>("PATCH", `/orders/${order.id}`, body),
     onSuccess: () => {
       toast.show(t("saved"));
       setOpen(false);
@@ -196,7 +210,7 @@ export function OrderEditDrawer({
        */
       startRefresh(() => router.refresh());
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, body: Record<string, unknown>) => {
       if (error instanceof BrowserApiError) {
         const refused = error.fields;
         if (refused !== null && Object.keys(refused).length > 0) {
@@ -209,33 +223,59 @@ export function OrderEditDrawer({
           setRefusal(null);
           return;
         }
+
+        /*
+         * **A 400 with no `details` at all is reachable, and it now points at a
+         * control instead of at nothing.**
+         *
+         * `billing.email` has a hole: `Commerce\AddressInput::validateEmail()`
+         * checks with `filter_var()` because that class must load without
+         * WordPress, WooCommerce then checks again with `is_email()`, and the
+         * two disagree — `a@b.c` and `a@[127.0.0.1]` pass the first and fail the
+         * second. Such an address clears validation,
+         * `WC_Order::set_billing_email()` throws a `WC_Data_Exception`, and
+         * `OrderService::save()` re-throws it as
+         * `ApiException::invalidRequest($exception->getMessage())` **with no
+         * details array**. The wire answer is `400 invalid_request "Invalid
+         * billing email address"` and `details: null`.
+         *
+         * **This block used to end here**, with `setFields({})` and the sentence
+         * as an orphan summary line, on the argument that §3.4 prefers plain
+         * text to a link that goes nowhere. That argument is sound and the
+         * premise was the mistake: the link does **not** go nowhere. There is a
+         * control on this screen holding the exact value the API refused, and
+         * `FIELD_IDS` has mapped `billing.email` to it since the drawer was
+         * built — nothing was missing except the key.
+         *
+         * So the refusal joins `fields` like any other 400 and the orphan branch
+         * below keeps only what genuinely has no control: the `is_editable` 409,
+         * and the empty-body 400 that `isEditDirty` is supposed to make
+         * unreachable. `unkeyedRefusalField` argues the discrimination between
+         * the two `details`-less refusals, and argues why the message string is
+         * never read.
+         *
+         * **One entry, not an entry and a line.** The failure count and the
+         * marked box are the same refusal, and `bindRefusals` is the measurement
+         * that says what happens when they are not: *"2 champs empêchent
+         * l'enregistrement"* for one bad value.
+         *
+         * Nothing is written when it happens — the whole PATCH rolls back, so a
+         * customer note in the same body does not move either — which is why
+         * pointing at the box is safe to do. The sentence itself stays the API's
+         * own English, which names the problem precisely where a translated
+         * generic would throw the only actionable part away.
+         */
+        const key = unkeyedRefusalField(error.status, body);
+        if (key !== null) {
+          setFields({ [key]: error.message });
+          setRefusal(null);
+          return;
+        }
       }
 
-      /*
-       * **A 400 with no `details` at all is reachable, and this is the fallback
-       * that renders it.**
-       *
-       * `billing.email` has a hole: `Commerce\AddressInput::validateEmail()`
-       * checks with `filter_var()` because that class must load without
-       * WordPress, WooCommerce then checks again with `is_email()`, and the two
-       * disagree — `a@b.c` and `a@[127.0.0.1]` pass the first and fail the
-       * second. Such an address clears validation, `WC_Order::set_billing_email()`
-       * throws a `WC_Data_Exception`, and `OrderService::save()` re-throws it as
-       * `ApiException::invalidRequest($exception->getMessage())` **with no
-       * details array**. The wire answer is `400 invalid_request "Invalid billing
-       * email address"` and `details: null`, so a form binding only on
-       * `fields["billing.email"]` shows the person *nothing at all* — the save
-       * fails, the drawer stays open and no control reddens.
-       *
-       * Nothing is written when it happens — the whole PATCH rolls back, so a
-       * customer note in the same body does not move either — which makes it a
-       * display gap rather than a data one, and makes an unbound line an honest
-       * thing to render. It goes to the summary as an orphan: §3.4's rule for a
-       * failure with no control on screen, and the same slot `NewOrderDrawer`
-       * gives its 409. The chrome around the sentence is localised; the sentence
-       * itself is the API's own English, which names the problem precisely where
-       * a translated generic would throw the only actionable part away.
-       */
+      /* Everything with nothing to bind: the `is_editable` 409, the empty-body
+         400, and any non-API failure. §3.4 renders a failure with no control on
+         screen as plain text rather than as a link that goes nowhere. */
       setFields({});
       setRefusal(error instanceof Error ? error.message : t("failed"));
     },
@@ -255,9 +295,16 @@ export function OrderEditDrawer({
    * Every refusal on screen, as `ErrorSummary` takes them.
    *
    * A field this form renders gets a link to its control; anything else — a key
-   * from a 400 this drawer has no control for, or the `details`-less refusal
-   * above — is listed as plain text. §3.4 is explicit that a link which goes
-   * nowhere is worse than a line that does not claim to.
+   * from a 400 this drawer has no control for, or a refusal about the *order*
+   * rather than about a value — is listed as plain text. §3.4 is explicit that a
+   * link which goes nowhere is worse than a line that does not claim to.
+   *
+   * **This block used to name the `details`-less refusal as an example of the
+   * second kind, and it is now an example of the first.** `onError` gives it the
+   * `billing.email` key, so it arrives here through `fields` and is linked like
+   * any other 400 — one entry, one line, one marked box. What is left in the
+   * `refusal` slot is the `is_editable` 409 and the empty-body 400, which really
+   * do name nothing on this screen.
    */
   const failures: FormFailure[] = [
     ...(refusal ? [{ message: t("refusedNoField", { message: refusal }) }] : []),
@@ -305,7 +352,10 @@ export function OrderEditDrawer({
               onClick={() => {
                 setRefusal(null);
                 setFields({});
-                save.mutate();
+                /* Built here rather than in `mutationFn`, so the body the
+                   request carries and the body `onError` reasons about are the
+                   same object. */
+                save.mutate(buildEditPayload(draft, order));
               }}
               loading={busy}
               disabled={!dirty}

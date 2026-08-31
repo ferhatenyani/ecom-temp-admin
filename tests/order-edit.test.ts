@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Address, LineItem, Order } from "@/lib/api/schemas/order";
-import { emptyAddress, type AddressDraft } from "@/app/[locale]/(panel)/orders/new-order";
+import {
+  emptyAddress,
+  unkeyedRefusalField,
+  type AddressDraft,
+} from "@/app/[locale]/(panel)/orders/new-order";
 import {
   MAX_AMOUNT,
   MAX_CUSTOMER_NOTE,
@@ -820,6 +824,72 @@ describe("the destination, which is writable at every status on purpose", () => 
     expect(payload).toEqual({ wilaya_id: 16, commune_id: 483 });
     expect(payload).not.toHaveProperty("line_items");
     expect(payload).not.toHaveProperty("shipping_amount");
+  });
+});
+
+/**
+ * The `details`-less 400, from this route's side of it.
+ *
+ * `unkeyedRefusalField` lives in `new-order.ts` and is argued there; what has to
+ * be asserted *here* is the property that made it take a payload rather than a
+ * draft, because it is a property of **this** builder and of no other.
+ */
+describe("binding a refusal that named no field", () => {
+  it("asks the body, not the form, whether an email was sent", () => {
+    /*
+     * `buildEditPayload` is a diff. An order whose stored billing email is
+     * already one WooCommerce refuses — `a@b.c` reaches the database through
+     * wp-admin or the storefront perfectly well — opens this form with that
+     * address in the box, and a PATCH that changes only the customer note
+     * carries no `billing` key at all. `applyProps()` calls only the setters the
+     * payload named, so `set_billing_email()` is not reached and the refusal
+     * that came back cannot be about it.
+     *
+     * A check that asked the draft would have seen an email on screen and
+     * reddened the box for something that was never sent. This is the assertion
+     * that keeps the payload in the loop.
+     */
+    const order = orderWith({ billing: addressWith({ email: "a@b.c" }) });
+
+    const noteOnly = buildEditPayload(draftWith(order, { customerNote: "Sonner" }), order);
+    expect(noteOnly).toEqual({ customer_note: "Sonner" });
+    expect(unkeyedRefusalField(400, noteOnly)).toBeNull();
+  });
+
+  it("names the email control when the diff does carry one", () => {
+    const order = orderWith();
+    const edited = buildEditPayload(billingOf(order, { email: "a@b.c" }), order);
+
+    /* Only the changed key — the measured merge is what makes that safe. */
+    expect(edited.billing).toEqual({ email: "a@b.c" });
+    expect(unkeyedRefusalField(400, edited)).toBe("billing.email");
+  });
+
+  it("says nothing about an address edit that did not touch the email", () => {
+    const order = orderWith();
+    const edited = buildEditPayload(billingOf(order, { city: "Alger" }), order);
+
+    expect(edited.billing).toEqual({ city: "Alger" });
+    expect(unkeyedRefusalField(400, edited)).toBeNull();
+  });
+
+  it("says nothing about the line editor's bodies, which carry no address", () => {
+    /*
+     * `OrderLinesDrawer` writes through this same builder and draws no address
+     * controls, so its draft's billing always equals the stored block and the
+     * diff is empty. It therefore cannot receive this refusal at all, which is
+     * why it is the one form that keeps the plain unbound fallback — and this is
+     * that claim asserted rather than reasoned about in a comment.
+     */
+    const order = orderWith({ status: "pending", is_editable: true });
+    const draft = draftOf(order);
+    const body = buildEditPayload(
+      { ...draft, lines: [{ ...draft.lines[0], quantity: "5" }] },
+      order,
+    );
+
+    expect(body).not.toHaveProperty("billing");
+    expect(unkeyedRefusalField(400, body)).toBeNull();
   });
 });
 
