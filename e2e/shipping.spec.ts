@@ -293,14 +293,23 @@ test.describe("the order detail's new sections", () => {
 
     /*
      * `allowed_outcomes` on a `pending` record is
-     * `["confirmed","rejected","unreachable"]`, and the sheet renders one button
+     * `["confirmed","rejected","unreachable"]`, and the sheet renders one control
      * per entry — never a table the panel carries. All three, and nothing else.
+     *
+     * **Radios, not buttons.** `CodSection` draws them with `ChoiceGroup`, which
+     * is a `role="radiogroup"` of real `<input type="radio">` — deliberately, so
+     * that nothing is preselected and a form cannot record whatever was on top
+     * when somebody pressed Enter. The assertion asked for buttons and found
+     * none, which read as the outcomes being missing.
      */
-    await expect(page.getByRole("button", { name: "Le client confirme" })).toBeVisible({
+    const outcomes = page.getByRole("radiogroup", { name: "Issue de l’appel" });
+    await expect(outcomes.getByRole("radio", { name: "Le client confirme" })).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.getByRole("button", { name: "Le client refuse" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Injoignable" })).toBeVisible();
+    await expect(outcomes.getByRole("radio", { name: "Le client refuse" })).toBeVisible();
+    await expect(outcomes.getByRole("radio", { name: "Injoignable" })).toBeVisible();
+    // Nothing else: exactly the three the server allows.
+    await expect(outcomes.getByRole("radio")).toHaveCount(3);
   });
 });
 

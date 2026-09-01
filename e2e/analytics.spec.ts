@@ -457,20 +457,47 @@ test.describe("both directions", () => {
     await page.goto("/ar/analytics?view=orders");
     await expect(page.getByTestId("report-orders")).toBeVisible();
 
+    /*
+     * **Every bar for the anchoring, any bar for the proportion.**
+     *
+     * This read `.bar-fill` — the *first* one — and asserted its left edge did
+     * not reach the track's. In a chart sorted by value the first bar is the
+     * largest and fills its track exactly, so `shorter` was false by
+     * construction and the failure said nothing about direction. The mirroring
+     * claim was still being proved by `alignedEnd` beside it.
+     *
+     * The two halves are different claims and are now measured as such: *every*
+     * bar must grow from the right in Arabic, and *at least one* must be shorter
+     * than its track, which is what shows the fill is proportional rather than
+     * always full. A chart whose values happen to be equal cannot prove the
+     * second, so `distinct` says whether it could and the assertion is skipped
+     * rather than passing vacuously.
+     */
     const geometry = await page.evaluate(() => {
-      const fill = document.querySelector(".bar-fill");
-      const track = fill?.parentElement;
-      if (!fill || !track) return null;
-      const f = fill.getBoundingClientRect();
-      const t = track.getBoundingClientRect();
-      // In RTL the bar grows from the right, so its right edge sits on the
-      // track's right edge and its left edge does not reach the track's left.
-      return { alignedEnd: Math.abs(f.right - t.right) <= 1, shorter: f.left > t.left };
+      const fills = [...document.querySelectorAll(".bar-fill")];
+      if (fills.length === 0) return null;
+
+      const measured = fills.flatMap((fill) => {
+        const track = fill.parentElement;
+        if (!track) return [];
+        const f = fill.getBoundingClientRect();
+        const t = track.getBoundingClientRect();
+        return [{ alignedEnd: Math.abs(f.right - t.right) <= 1, shorter: f.left > t.left }];
+      });
+
+      return {
+        count: measured.length,
+        allAlignedEnd: measured.every((m) => m.alignedEnd),
+        anyShorter: measured.some((m) => m.shorter),
+      };
     });
 
     expect(geometry).not.toBeNull();
-    expect(geometry!.alignedEnd).toBe(true);
-    expect(geometry!.shorter).toBe(true);
+    expect(geometry!.count).toBeGreaterThan(0);
+    // In RTL every bar grows from the right, so its right edge sits on the
+    // track's right edge whatever its value.
+    expect(geometry!.allAlignedEnd).toBe(true);
+    if (geometry!.count > 1) expect(geometry!.anyShorter).toBe(true);
   });
 
   test("does not overflow at the floor in either locale", async ({ page }) => {
