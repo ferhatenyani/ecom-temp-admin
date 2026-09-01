@@ -708,7 +708,19 @@ test.describe("the loading state", () => {
       await page.goto(`/${locale}/inventory/movements`, {
         waitUntil: "domcontentloaded",
       });
-      await page.waitForSelector('[role="status"][aria-busy="true"]');
+      /*
+       * **The visible one.** `DataTable` keeps both presentations mounted and
+       * hides one per breakpoint, and so do their placeholders — so this selector
+       * resolves to two `SkeletonRegion`s and `waitForSelector` waits on the
+       * first, which at a phone width is the table's and is `display: none`. It
+       * waited the whole budget for an element that was never going to be
+       * visible, while the record list's skeleton was on screen beside it.
+       *
+       * `shown()` is the helper this file already uses everywhere else for the
+       * same reason; the measurement two lines below was already going through
+       * it, which is what made the mismatch easy to miss.
+       */
+      await shown(page.locator('[role="status"][aria-busy="true"]')).waitFor();
       const skeleton = await shown(
         page.locator(
           '[role="status"][aria-busy="true"] .ui-row, [role="status"][aria-busy="true"] > .ui-card',

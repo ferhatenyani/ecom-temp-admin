@@ -46,6 +46,31 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
+  /**
+   * 60 s, not Playwright's 30 s, and the reason is the run mode this suite is
+   * required to use.
+   *
+   * `scripts/test.sh` refuses to run unless the panel answers at `PANEL_BASE`,
+   * and its message names `npm run dev` — so every run compiles routes on first
+   * visit. Measured on the first full execution: a page whose route had not been
+   * compiled yet took **12.3 s** to answer (`GET /fr/inventory/20 200 in 12.3s
+   * (next.js: 10.8s)`), and a test that visits three such routes spends most of
+   * its budget on the bundler rather than on the panel.
+   *
+   * That produced failures indistinguishable from defects. Nine tests across
+   * `inventory`, `analytics` and `products` timed out in a full run and **passed
+   * in isolation** — the same assertions, the same fixtures, a warm route. The
+   * honest reading is that the budget was wrong, not that the panel was slow:
+   * against a production build these finish in a fifth of the time.
+   *
+   * A production build is the better answer and is not available here — `npm run
+   * build` is OOM-killed on this machine, which has 2.2 GB free. So the budget is
+   * raised to cover the compile, and this note is what stops it being read as a
+   * flaky-test allowance. **It buys time for the bundler and nothing else**: no
+   * assertion waits longer for the panel, because each `expect` keeps its own
+   * (much shorter) timeout.
+   */
+  timeout: 60_000,
   // The suite provokes a refusal on purpose, and the failed-login bucket then
   // refuses correct credentials too. Cleared once before anything runs, and again
   // by the test that spends it. See e2e/rate-limit.ts.
