@@ -391,8 +391,18 @@ test.describe("Arabic and RTL", () => {
     await signIn(page, "ar");
     await openFirstOrder(page);
 
+    /*
+     * **A web-first assertion, because `expect(await …count())` does not retry.**
+     *
+     * `count()` resolves once, immediately, and this screen's content is
+     * client-fetched — so the assertion ran against the skeleton and read zero.
+     * The failure snapshot is the list still saying "جارٍ التحميل…", which is
+     * what a non-retrying assertion against a pending query looks like and reads
+     * exactly like a bidi defect. `toHaveCount` polls, so the wait is on content
+     * arriving rather than on a lucky moment.
+     */
     const isolated = page.locator('main span[dir="ltr"]');
-    expect(await isolated.count()).toBeGreaterThan(0);
+    await expect(isolated).not.toHaveCount(0, { timeout: 15000 });
     for (const element of await isolated.all()) {
       // Every identifier is isolated, or the bidi algorithm reorders it silently.
       await expect(element).toHaveAttribute("dir", "ltr");

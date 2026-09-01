@@ -357,7 +357,20 @@ test.describe("staff", () => {
     await expect(
       page.getByRole("heading", { name: "Le mot de passe, une seule fois" }),
     ).toBeVisible();
-    const secret = await page.getByText(/^[A-Za-z0-9]{16,}$/).first().innerText();
+    /*
+     * **Scoped to the dialog.** `getByText` matches an element's whole normalised
+     * text, and the panel's navigation is a run of labels with no spaces between
+     * them — "MarketingNotificationsContenu…" satisfies `^[A-Za-z0-9]{16,}$` and
+     * sits earlier in the document than the modal, so `.first()` captured the
+     * sidebar as the secret. Every assertion after it then compared the page
+     * against its own navigation, which is why this failed on
+     * `not.toContainText` rather than on anything about the password.
+     */
+    const secret = await page
+      .getByRole("dialog")
+      .getByText(/^[A-Za-z0-9]{16,}$/)
+      .first()
+      .innerText();
     expect(secret.length).toBeGreaterThan(16);
     await page.getByRole("button", { name: "J’ai copié le mot de passe" }).click();
 

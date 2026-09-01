@@ -425,7 +425,21 @@ test.describe("the product detail and its write path", () => {
     await expect(page.getByText(/SKU/i).first()).toBeVisible();
   });
 
-  test("a variable product lists its variations, read-only", async ({ page }) => {
+  /**
+   * **The section stopped being read-only, and this test had not noticed.**
+   *
+   * Step 4 replaced the list with the variations editor: each combination is a
+   * row of controls that saves itself, so a SKU is an `<input value=…>` rather
+   * than text on the page. `getByText` does not match an input's value, so the
+   * assertions below could not pass however long they waited — the snapshot
+   * showed all three SKUs present the whole time, inside textboxes.
+   *
+   * Renamed rather than left saying "read-only", which is the sort of stale
+   * sentence that survives because the test around it still runs.
+   */
+  test("a variable product lists its variations, each editable on its own row", async ({
+    page,
+  }) => {
     await signIn(page, "fr");
     await openBySku(page, "fr", "AC-BUR-010");
 
@@ -435,13 +449,20 @@ test.describe("the product detail and its write path", () => {
        strict mode rather than on the variations section being absent. */
     const section = page.getByRole("heading", { name: "Déclinaisons", exact: true });
     await expect(section).toBeVisible();
-    /* Three variations, each with its own SKU and stock — and given the same
-       15 s the rest of this suite gives API-backed content. The rows arrive from
-       `GET /products/{id}/variations` after the section heading renders, so the
-       default 5 s is a race the section wins and the rows lose; the failure
-       snapshot showed all three present, just late. */
-    await expect(page.getByText("AC-BUR-010-S")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText("AC-BUR-010-L")).toBeVisible({ timeout: 15000 });
+    /* Three variations, each with its own SKU. The rows arrive from
+       `GET /products/{id}/variations` after the heading renders, so the wait is
+       on the count first and the values are read once they are there. The
+       parent's own SKU box is excluded by asserting on the *set*: it holds
+       "AC-BUR-010", which is none of the three. */
+    const skus = page.getByRole("textbox", { name: "SKU" });
+    await expect(skus).toHaveCount(4, { timeout: 15000 });
+
+    const values = await skus.evaluateAll((els) =>
+      els.map((el) => (el as HTMLInputElement).value),
+    );
+    expect(values).toContain("AC-BUR-010-S");
+    expect(values).toContain("AC-BUR-010-M");
+    expect(values).toContain("AC-BUR-010-L");
   });
 
   /**
