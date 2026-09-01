@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The products list, its facets, and the detail's write path.
@@ -23,6 +24,25 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
@@ -34,7 +54,9 @@ async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
    * test after it navigated before the session cookie existed — eighteen
    * failures that all read as "the products list does not render".
    */
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 async function openProducts(page: Page, locale: string, query = "") {
@@ -291,8 +313,10 @@ test.describe("the products list", () => {
 
     // The control that matters: the next click returns to unsorted rather than
     // asking for the combination nobody measured.
-    await header.getByRole("button").click();
-    await expect(header).toHaveAttribute("aria-sort", "none");
+    /* Pressed until the header reports the new state — see `e2e/hydration.ts`. */
+    await pressUntil(header.getByRole("button"), () =>
+      expect(header).toHaveAttribute("aria-sort", "none", { timeout: 3000 }),
+    );
     await expect(page).not.toHaveURL(/sort=title-desc/);
   });
 });
@@ -404,15 +428,44 @@ test.describe("the product detail and its write path", () => {
     await expect(page.getByText(/SKU/i).first()).toBeVisible();
   });
 
-  test("a variable product lists its variations, read-only", async ({ page }) => {
+  /**
+   * **The section stopped being read-only, and this test had not noticed.**
+   *
+   * Step 4 replaced the list with the variations editor: each combination is a
+   * row of controls that saves itself, so a SKU is an `<input value=…>` rather
+   * than text on the page. `getByText` does not match an input's value, so the
+   * assertions below could not pass however long they waited — the snapshot
+   * showed all three SKUs present the whole time, inside textboxes.
+   *
+   * Renamed rather than left saying "read-only", which is the sort of stale
+   * sentence that survives because the test around it still runs.
+   */
+  test("a variable product lists its variations, each editable on its own row", async ({
+    page,
+  }) => {
     await signIn(page, "fr");
     await openBySku(page, "fr", "AC-BUR-010");
 
-    const section = page.getByRole("heading", { name: "Déclinaisons" });
+    /* `exact`, because the attributes section above this one is headed
+       "Caractéristiques et déclinaisons" and an accessible-name match is a
+       substring match — so the unscoped name resolved to both and failed on
+       strict mode rather than on the variations section being absent. */
+    const section = page.getByRole("heading", { name: "Déclinaisons", exact: true });
     await expect(section).toBeVisible();
-    // Three variations, each with its own SKU and stock.
-    await expect(page.getByText("AC-BUR-010-S")).toBeVisible();
-    await expect(page.getByText("AC-BUR-010-L")).toBeVisible();
+    /* Three variations, each with its own SKU. The rows arrive from
+       `GET /products/{id}/variations` after the heading renders, so the wait is
+       on the count first and the values are read once they are there. The
+       parent's own SKU box is excluded by asserting on the *set*: it holds
+       "AC-BUR-010", which is none of the three. */
+    const skus = page.getByRole("textbox", { name: "SKU" });
+    await expect(skus).toHaveCount(4, { timeout: 15000 });
+
+    const values = await skus.evaluateAll((els) =>
+      els.map((el) => (el as HTMLInputElement).value),
+    );
+    expect(values).toContain("AC-BUR-010-S");
+    expect(values).toContain("AC-BUR-010-M");
+    expect(values).toContain("AC-BUR-010-L");
   });
 
   /**
@@ -552,13 +605,26 @@ test.describe("the fifth state", () => {
     await signIn(page, "fr");
     await openProducts(page, "fr");
 
-    // The control: nothing claims staleness while the connection is up.
-    await expect(page.getByRole("status")).toHaveCount(0);
+    /*
+     * The control: nothing claims staleness while the connection is up.
+     *
+     * **Scoped to the banner's own text**, because a bare `getByRole("status")`
+     * can never be absent: `components/primitives/Toast.tsx` keeps an empty
+     * `role="status"` live region in the DOM at all times, on purpose — a live
+     * region announces only what appears *inside* an already-present container,
+     * so one mounted with the toast would announce nothing. Counting every
+     * status on the page therefore counted the toast viewport and could not have
+     * passed on any screen; it went unnoticed because this suite had never run.
+     */
+    await expect(page.getByRole("status").filter({ hasText: /hors ligne/i })).toHaveCount(0);
 
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event("offline")));
 
-    const banner = page.getByRole("status");
+    /* Same scoping as the control above: the toast's permanent live region is
+       also a `status`, so an unfiltered locator resolves to two and trips strict
+       mode rather than finding the banner. */
+    const banner = page.getByRole("status").filter({ hasText: /hors ligne/i });
     await expect(banner).toBeVisible();
     // The age of the data, not just the fact of being offline.
     await expect(banner).toContainText(/hors ligne/i);
@@ -580,7 +646,7 @@ test.describe("the fifth state", () => {
 
     await context.setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: /hors ligne/i })).toHaveCount(0);
   });
 });
 

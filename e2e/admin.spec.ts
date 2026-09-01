@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * Settings, staff, the trail and the transfers — deliberately small.
@@ -44,12 +45,33 @@ test.skip(
 /** The account `scripts/seed-staff.mjs` creates and suspends. */
 const SUSPENDED = "ac_panel_suspended";
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|dashboard)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 /**
@@ -85,6 +107,25 @@ function rows(page: Page): Locator {
 /** The row for one account, found by the login the fixture pins. */
 function rowFor(page: Page, login: string): Locator {
   return rows(page).filter({ hasText: login }).first();
+}
+
+/**
+ * Open one account's detail from the list.
+ *
+ * **Clicking the row, not a link inside it**, because only one of the two
+ * presentations has a link. `DataTable` renders a real `<table>` at `md` and up,
+ * where `columns.tsx` makes the name cell an anchor for the keyboard and the
+ * middle click; below that it renders a stacked record list whose `primary` is
+ * `userRecord()`'s plain `<span>`. Navigation there is `UsersList`'s
+ * `onRowClick`, so `getByRole("link")` resolves to nothing and the click times
+ * out — which is what three tests here did at all three phone widths.
+ *
+ * The row click is the one gesture that works in both, and it is also the one a
+ * person makes. The anchor keeps its own coverage through the keyboard path.
+ */
+async function openAccount(page: Page, row: Locator) {
+  /* Pressed until it navigates — see `e2e/hydration.ts`. */
+  await pressUntil(row, () => page.waitForURL(/\/users\/\d+/, { timeout: 3000 }));
 }
 
 test.describe("settings", () => {
@@ -189,7 +230,7 @@ test.describe("staff", () => {
     const row = rowFor(page, SUSPENDED);
     await expect(row).toBeVisible();
     await expect(row).toContainText("Suspendu");
-    await row.getByRole("link").first().click();
+    await openAccount(page, row);
 
     // Reactivate. The tone flips with the outcome, so this one is the primary.
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeEnabled();
@@ -200,8 +241,12 @@ test.describe("staff", () => {
     await expect(page.getByRole("button", { name: "Suspendre" })).toBeVisible();
 
     // And back, so the fixture survives a run that is not followed by the seed.
-    await page.getByRole("button", { name: "Suspendre" }).first().click();
-    await expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible();
+    /* Pressed until the confirm is up — see `e2e/hydration.ts`. */
+    await pressUntil(page.getByRole("button", { name: "Suspendre" }).first(), () =>
+      expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible({
+        timeout: 3000,
+      }),
+    );
     await page.getByRole("button", { name: "Suspendre" }).last().click();
     await expect(page.getByText("Compte suspendu.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeVisible();
@@ -242,7 +287,7 @@ test.describe("staff", () => {
 
     const mine = rows(page).filter({ hasText: "Vous" }).first();
     await expect(mine).toBeVisible();
-    await mine.getByRole("link").first().click();
+    await openAccount(page, mine);
 
     // The role picker is replaced by a value and a reason. Not disabled: absent.
     await expect(page.getByText(/Vous ne pouvez pas changer votre propre rôle/)).toBeVisible();
@@ -278,7 +323,7 @@ test.describe("staff", () => {
      * and the record list in the DOM at once, so that selector would also match
      * every row twice.
      */
-    await rowFor(page, SUSPENDED).getByRole("link").first().click();
+    await openAccount(page, rowFor(page, SUSPENDED));
 
     /*
      * A suspended account refuses a credential with its own 409 — the panel
@@ -316,7 +361,20 @@ test.describe("staff", () => {
     await expect(
       page.getByRole("heading", { name: "Le mot de passe, une seule fois" }),
     ).toBeVisible();
-    const secret = await page.getByText(/^[A-Za-z0-9]{16,}$/).first().innerText();
+    /*
+     * **Scoped to the dialog.** `getByText` matches an element's whole normalised
+     * text, and the panel's navigation is a run of labels with no spaces between
+     * them — "MarketingNotificationsContenu…" satisfies `^[A-Za-z0-9]{16,}$` and
+     * sits earlier in the document than the modal, so `.first()` captured the
+     * sidebar as the secret. Every assertion after it then compared the page
+     * against its own navigation, which is why this failed on
+     * `not.toContainText` rather than on anything about the password.
+     */
+    const secret = await page
+      .getByRole("dialog")
+      .getByText(/^[A-Za-z0-9]{16,}$/)
+      .first()
+      .innerText();
     expect(secret.length).toBeGreaterThan(16);
     await page.getByRole("button", { name: "J’ai copié le mot de passe" }).click();
 

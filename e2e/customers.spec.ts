@@ -27,12 +27,33 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 async function openCustomers(page: Page, locale: string, query = "") {
@@ -90,8 +111,26 @@ test.describe("the customer list", () => {
     await signIn(page, "fr");
     await openCustomers(page, "fr");
 
-    await expect(page.getByTestId("customers-count")).toContainText("16");
-    await expect(page.locator('a[href*="/customers/"]')).toHaveCount(16);
+    /*
+     * **Derived, not a literal.** This asserted 16 twice, and the shop has 18 —
+     * other suites' seeds create customers (`ac_probe_buyer`, `ac_ord_probe_buyer`
+     * arrived that way), so a hard-coded total is a test that fails on a number
+     * nobody changed on purpose. What the screen actually promises is that the
+     * header's count and the rows agree, and that is what is checked.
+     */
+    const counted = await page.getByTestId("customers-count").innerText();
+    const total = Number(counted.replace(/\D/g, ""));
+    expect(total).toBeGreaterThan(0);
+
+    const rendered = page.locator('a[href*="/customers/"]');
+    const next = page.getByRole("button", { name: /Page suivante|التالية/ });
+    /* One page or several: the count is the shop's total either way, so the rows
+       equal it only while everything fits. Both arms are real assertions. */
+    if (await next.isDisabled()) {
+      await expect(rendered).toHaveCount(total);
+    } else {
+      expect(await rendered.count()).toBeLessThan(total);
+    }
   });
 
   /**
@@ -188,7 +227,19 @@ test.describe("the customer detail", () => {
    */
   test("tells never-asked apart from declined", async ({ page }) => {
     await signIn(page, "fr");
-    await openByEmail(page, "fr", "ac_cus_shopper@example.test");
+    /*
+     * **`ac_cus_other`, not `ac_cus_shopper`.** Never-asked is the absence of a
+     * decision — `Consent::set()` deletes the flag either way and keeps the date
+     * and source, so what separates "never asked" from "declined" is
+     * `marketing_consent_at` being null, not the boolean.
+     *
+     * This pointed at `ac_cus_shopper`, which `scripts/seed-campaigns.mjs` lists
+     * in `CONSENTING` and grants consent to on every run — so the two fixtures
+     * were fighting over one account and whichever seed ran last won. Measured:
+     * 24 is now consenting with a date and a source, and 25 has neither. 25 is in
+     * no seed's consent list, so it stays the control.
+     */
+    await openByEmail(page, "fr", "ac_cus_other@example.test");
 
     await expect(page.locator("body")).toContainText("Jamais demandé");
     await expect(page.locator("body")).toContainText("L’absence de réponse vaut refus");

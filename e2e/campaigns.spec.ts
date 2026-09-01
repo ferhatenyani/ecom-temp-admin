@@ -1,4 +1,6 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { choose } from "./listbox";
+import { pressUntil } from "./hydration";
 
 /**
  * Marketing: the composer, segments and templates — deliberately small.
@@ -108,12 +110,33 @@ const MARKETING_PASS = process.env.AC_MARKETING_PASS;
 
 test.skip(!USER || !PASS, "Set AC_STAFF_USER and AC_STAFF_PASS.");
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|dashboard)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 /**
@@ -133,13 +156,20 @@ const DRAFT_NAME = "Soldes d'août — brouillon";
 /**
  * Put the composer's audience step on `ids` without saving anything.
  *
- * The `Select` is a real `<select>` and its `onChange` moves the *draft* only —
- * nothing is PATCHed until "Continuer" — so a test can reach the control the
- * picker lives on and leave the campaign exactly as it found it. That property is
- * why these three tests can run against the shop's own drafts at all.
+ * Its `onChange` moves the *draft* only — nothing is PATCHed until "Continuer" —
+ * so a test can reach the control the picker lives on and leave the campaign
+ * exactly as it found it. That property is why these three tests can run against
+ * the shop's own drafts at all.
+ *
+ * **It is no longer "a real `<select>`", which is what this comment used to say
+ * and what `selectOption` here depended on.** `Form.tsx`'s `Select` wraps
+ * `Listbox`, the drawn control, so the option is a portalled `role="option"` and
+ * not an `<option>`; `e2e/listbox.ts` argues the difference. The label on the
+ * wire is still `ids`, but the label on screen is the translated one, which is
+ * what a person clicks.
  */
 async function chooseIdsAudience(page: Page) {
-  await page.getByLabel("Audience", { exact: true }).selectOption("ids");
+  await choose(page, page.getByLabel("Audience", { exact: true }), /Des clients choisis|عملاء محدَّدون/);
 }
 
 /** A `FilterTabs` chip is a real `<button>`; the retired `Segmented` was not. */
@@ -160,7 +190,33 @@ async function openCampaigns(page: Page, locale: string) {
  * asserts the flag reached the screen on the way past.
  */
 async function openCampaign(page: Page, name: string, action: string) {
-  await rows(page).filter({ hasText: name }).first().click();
+  const row = rows(page).filter({ hasText: name }).first();
+
+  /*
+   * **The click is retried until the peek actually opens, because a row can be
+   * pressed before React is listening.**
+   *
+   * The list is server-rendered and the peek is a client component, so between
+   * paint and hydration the row is a real button that does nothing. Playwright
+   * clicks as soon as it is visible and the press is swallowed — the failure
+   * snapshot shows the row `[active]`, focused, with no dialog anywhere, and
+   * then sixty seconds of waiting for a link inside a drawer that was never
+   * going to open.
+   *
+   * It only bites under load, which is why every one of these passes when run
+   * alone and five of them failed in the full suite: `openCampaigns()` waits for
+   * `campaigns-count`, which is in the server-rendered HTML and says nothing
+   * about hydration. `inventory.spec.ts`'s "the hydration hazard" test pins the
+   * same race from the other side, and `products.spec.ts` records WebKit losing
+   * a keystroke to it.
+   *
+   * `toPass` rather than a fixed wait: the retry costs nothing once hydration
+   * has happened, and there is no arbitrary number to pick.
+   */
+  await pressUntil(row, () =>
+    expect(page.getByRole("dialog")).toBeVisible({ timeout: 3000 }),
+  );
+
   await page.getByRole("link", { name: action }).click();
 }
 
@@ -235,8 +291,24 @@ test.describe("the composer", () => {
     await expect(page.getByTestId("preview-frame")).toBeVisible();
     await expect(page.getByTestId("preview-stale")).toHaveCount(0);
 
+    /*
+     * **Unique per run, because this test saves what it types.**
+     *
+     * It filled a fixed string, pressed `refresh-preview` — which PATCHes — and
+     * asserted the stale marker on the way. That works exactly once: the second
+     * run opens a campaign whose stored subject is already that string, so the
+     * fill changes nothing, `contentChanged` stays false and the marker never
+     * appears. It read as the staleness feature being broken, on a shop where
+     * the feature was working and the fixture had simply caught up with the
+     * test. A suite that mutates the shop has to leave it in a state it can run
+     * against again.
+     *
+     * The stamp goes inside the sentence rather than replacing it, so the
+     * resolved-token assertion below still has its literal to match on.
+     */
+    const stamp = Date.now().toString().slice(-6);
     const subject = page.getByLabel("Objet");
-    await subject.fill("{{shop_name}} — test du composeur, {{first_name}}");
+    await subject.fill(`{{shop_name}} — test du composeur ${stamp}, {{first_name}}`);
 
     // The frame is now a render of something else, and says so.
     await expect(page.getByTestId("preview-stale")).toBeVisible();

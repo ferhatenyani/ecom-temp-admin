@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The dashboard and the six reports.
@@ -36,12 +37,33 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|shipping)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 /* ------------------------------------------------------------ the dashboard --- */
@@ -120,8 +142,12 @@ test.describe("the reporting range", () => {
     const applied = page.getByTestId("range-applied");
     await expect(applied).toContainText("30 jours");
 
-    await page.getByRole("button", { name: "7 jours" }).click();
-    await page.waitForURL("**/fr/analytics?view=orders&range=7d");
+    /* Pressed until it navigates — see `e2e/hydration.ts`. A preset chip is a
+       client control on a server-rendered page, so a cold route swallows the
+       first press and the URL never moves. */
+    await pressUntil(page.getByRole("button", { name: "7 jours" }), () =>
+      page.waitForURL("**/fr/analytics?view=orders&range=7d", { timeout: 3000 }),
+    );
     // Seven days, off `data.range`, which is the only thing this line may show.
     await expect(applied).toContainText("7 jours");
   });
@@ -171,11 +197,14 @@ test.describe("the reporting range", () => {
     await signIn(page, "fr");
     await page.goto("/fr/analytics?view=orders");
 
-    await page.getByRole("button", { name: "Personnalisée" }).click();
-
     const from = page.getByLabel("Du", { exact: true });
     const to = page.getByLabel("Au", { exact: true });
-    await expect(from).toBeEnabled();
+    /* Pressed until the dialog is actually up: the fields below are disabled
+       until `useHydrated()` flips, so a swallowed press left this waiting on a
+       control that does not exist yet. */
+    await pressUntil(page.getByRole("button", { name: "Personnalisée" }), () =>
+      expect(from).toBeEnabled({ timeout: 3000 }),
+    );
 
     // Reversed: the API answers 400 `details.fields.date_from`, and the panel
     // says so while the operator is still typing.
@@ -436,20 +465,47 @@ test.describe("both directions", () => {
     await page.goto("/ar/analytics?view=orders");
     await expect(page.getByTestId("report-orders")).toBeVisible();
 
+    /*
+     * **Every bar for the anchoring, any bar for the proportion.**
+     *
+     * This read `.bar-fill` — the *first* one — and asserted its left edge did
+     * not reach the track's. In a chart sorted by value the first bar is the
+     * largest and fills its track exactly, so `shorter` was false by
+     * construction and the failure said nothing about direction. The mirroring
+     * claim was still being proved by `alignedEnd` beside it.
+     *
+     * The two halves are different claims and are now measured as such: *every*
+     * bar must grow from the right in Arabic, and *at least one* must be shorter
+     * than its track, which is what shows the fill is proportional rather than
+     * always full. A chart whose values happen to be equal cannot prove the
+     * second, so `distinct` says whether it could and the assertion is skipped
+     * rather than passing vacuously.
+     */
     const geometry = await page.evaluate(() => {
-      const fill = document.querySelector(".bar-fill");
-      const track = fill?.parentElement;
-      if (!fill || !track) return null;
-      const f = fill.getBoundingClientRect();
-      const t = track.getBoundingClientRect();
-      // In RTL the bar grows from the right, so its right edge sits on the
-      // track's right edge and its left edge does not reach the track's left.
-      return { alignedEnd: Math.abs(f.right - t.right) <= 1, shorter: f.left > t.left };
+      const fills = [...document.querySelectorAll(".bar-fill")];
+      if (fills.length === 0) return null;
+
+      const measured = fills.flatMap((fill) => {
+        const track = fill.parentElement;
+        if (!track) return [];
+        const f = fill.getBoundingClientRect();
+        const t = track.getBoundingClientRect();
+        return [{ alignedEnd: Math.abs(f.right - t.right) <= 1, shorter: f.left > t.left }];
+      });
+
+      return {
+        count: measured.length,
+        allAlignedEnd: measured.every((m) => m.alignedEnd),
+        anyShorter: measured.some((m) => m.shorter),
+      };
     });
 
     expect(geometry).not.toBeNull();
-    expect(geometry!.alignedEnd).toBe(true);
-    expect(geometry!.shorter).toBe(true);
+    expect(geometry!.count).toBeGreaterThan(0);
+    // In RTL every bar grows from the right, so its right edge sits on the
+    // track's right edge whatever its value.
+    expect(geometry!.allAlignedEnd).toBe(true);
+    if (geometry!.count > 1) expect(geometry!.anyShorter).toBe(true);
   });
 
   test("does not overflow at the floor in either locale", async ({ page }) => {

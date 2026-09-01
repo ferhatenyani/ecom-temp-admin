@@ -117,10 +117,20 @@ test.describe("the credential boundary", () => {
     await page.fill("#username", USER!);
     await page.fill("#password", "definitely not the right password");
     await page.click('button[type="submit"]');
-    /* Scoped to `main`: Next mounts its own route announcer as a second
-       `role="alert"` on every page, so an unscoped `getByRole("alert")` is a
-       strict-mode violation rather than the form's refusal. */
-    const alert = page.locator("main").getByRole("alert");
+    /*
+     * Next mounts its own route announcer as a second `role="alert"` on every
+     * page, so an unscoped `getByRole("alert")` is a strict-mode violation
+     * rather than the form's refusal. This scoped to `main` to avoid it — and
+     * **the login screen has no `main`**: it is the one route outside the panel
+     * shell, three nested `div`s in `(auth)/login/page.tsx`, so the locator
+     * matched nothing and the refusal it was waiting for was on screen the whole
+     * time.
+     *
+     * Excluding the announcer by name instead. It is the thing being avoided, so
+     * saying so is both narrower and more honest than picking a landmark that
+     * happens to contain one of the two.
+     */
+    const alert = page.locator('[role="alert"]:not(#__next-route-announcer__)');
     await expect(alert).toBeVisible();
     const wrongPassword = await alert.innerText();
 
@@ -381,8 +391,18 @@ test.describe("Arabic and RTL", () => {
     await signIn(page, "ar");
     await openFirstOrder(page);
 
+    /*
+     * **A web-first assertion, because `expect(await …count())` does not retry.**
+     *
+     * `count()` resolves once, immediately, and this screen's content is
+     * client-fetched — so the assertion ran against the skeleton and read zero.
+     * The failure snapshot is the list still saying "جارٍ التحميل…", which is
+     * what a non-retrying assertion against a pending query looks like and reads
+     * exactly like a bidi defect. `toHaveCount` polls, so the wait is on content
+     * arriving rather than on a lucky moment.
+     */
     const isolated = page.locator('main span[dir="ltr"]');
-    expect(await isolated.count()).toBeGreaterThan(0);
+    await expect(isolated).not.toHaveCount(0, { timeout: 15000 });
     for (const element of await isolated.all()) {
       // Every identifier is isolated, or the bidi algorithm reorders it silently.
       await expect(element).toHaveAttribute("dir", "ltr");
@@ -425,7 +445,16 @@ test.describe("the forbidden state", () => {
     await page.fill("#username", limitedUser!);
     await page.fill("#password", limitedPass!);
     await page.click('button[type="submit"]');
-    await page.waitForURL("**/fr/orders");
+    /*
+     * Signed in lands wherever `landingPath()` sends this reader, which for a
+     * role without `ac_manage_orders` is deliberately **not** `/orders` — that
+     * is the defect `components/ui/nav-tree.ts` was written to remove, and
+     * waiting for `/fr/orders` here asserted it. The 403 this test is about is
+     * reached by asking for the screen, which is what a person typing the URL or
+     * following a stale link does.
+     */
+    await page.waitForURL((url) => !url.pathname.endsWith("/login"));
+    await page.goto("/fr/orders");
 
     // The forbidden state names the capability, and the session survives.
     await expect(page.getByText(/Cette section demande la permission/)).toBeVisible();

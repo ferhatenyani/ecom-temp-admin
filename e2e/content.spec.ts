@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The CMS: pages, the homepage document, banners, FAQs, menus, and media.
@@ -23,12 +24,33 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|dashboard)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 /**
@@ -192,8 +214,10 @@ test.describe("the pages index", () => {
     await signIn(page, "fr");
     await openPages(page, "fr");
 
-    await row(page, /Conditions générales de vente/).click();
-    await page.waitForURL(/\/content\/pages\/legal\/conditions-generales$/);
+    /* Pressed until it navigates — see `e2e/hydration.ts`. */
+    await pressUntil(row(page, /Conditions générales de vente/), () =>
+      page.waitForURL(/\/content\/pages\/legal\/conditions-generales$/, { timeout: 3000 }),
+    );
     await expect(
       page.getByRole("textbox", { name: "Titre", exact: true }),
     ).toHaveValue(/Conditions générales/);
@@ -326,7 +350,11 @@ test.describe("the homepage document", () => {
     await bar.getByRole("button", { name: "Enregistrer", exact: true }).click();
 
     await expect(
-      page.getByText(/Enregistrer et supprimer les sections illisibles/),
+      /* The heading, not the text. `ConfirmDialog` gives Radix an accessible
+         description carrying the same sentence in an `sr-only` paragraph, so a
+         bare text match resolves to two and fails on strict mode rather than on
+         the dialog being absent. */
+      page.getByRole("heading", { name: /Enregistrer et supprimer les sections illisibles/ }),
     ).toBeVisible();
 
     /*
@@ -387,7 +415,10 @@ test.describe("banners and FAQs", () => {
     await expect(
       page.getByRole("button", { name: /^Quel est le délai de livraison/ }),
     ).toBeVisible();
-    await expect(page.getByText("livraison").first()).toBeVisible();
+    /* Filtered to what is on screen: `DataTable` keeps both presentations in the
+       DOM and hides one per breakpoint, so `.first()` alone picks the table's
+       copy at a phone width and asserts a hidden element is visible. */
+    await expect(page.getByText("livraison").filter({ visible: true }).first()).toBeVisible();
   });
 });
 

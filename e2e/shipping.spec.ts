@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { choose } from "./listbox";
 
 /**
  * Shipping, payments and cash on delivery.
@@ -26,12 +27,33 @@ test.skip(
   "Set AC_STAFF_USER and AC_STAFF_PASS to a real Application Password.",
 );
 
+/*
+ * **Signed in means "no longer on the login screen", not "on /orders".**
+ *
+ * Every helper here used to wait for a hard-coded alternation of destinations,
+ * and that asserted a defect rather than a behaviour: `landingPath()` in
+ * `components/ui/nav-tree.ts` sends each reader to the first destination their
+ * capabilities actually reach, because DECISIONS.md §11 measured a Support Agent
+ * as 403 on `/orders` and 200 on `/customers` — so four files sending everybody
+ * to `/orders` showed that reader a forbidden screen as the first thing after a
+ * correct password. The alternations here never listed `/customers`, so every
+ * test using a limited credential timed out in `signIn` before asserting
+ * anything. Two thirds of this suite's first run failed that way.
+ *
+ * A predicate rather than a longer alternation, deliberately: `landingPath()`
+ * reads `NAV`, so the set of possible landings changes whenever the navigation
+ * does. Enumerating them here would put the same staleness back one release
+ * later. What the helper actually needs to know is that the credential was
+ * accepted and the redirect happened.
+ */
 async function signIn(page: Page, locale: string, user = USER!, pass = PASS!) {
   await page.goto(`/${locale}/login`);
   await page.fill("#username", user);
   await page.fill("#password", pass);
   await page.click('button[type="submit"]');
-  await page.waitForURL(new RegExp(`/${locale}/(orders|products|coupons|shipping)`));
+  await page.waitForURL(
+    (url) => !url.pathname.endsWith("/login") && url.pathname.startsWith(`/${locale}/`),
+  );
 }
 
 /**
@@ -88,22 +110,29 @@ test.describe("the shipping tariff", () => {
      * for the same destination when it was measured.
      */
     const wilaya = page.getByLabel("Wilaya", { exact: true });
-    await expect(wilaya).toBeEnabled();
-    await wilaya.selectOption({ label: "Algiers" });
+    await choose(page, wilaya, "Algiers");
 
     const commune = page.getByLabel("Commune", { exact: true });
     await expect(commune).toBeEnabled({ timeout: 15000 });
-    await commune.selectOption({ label: "Alger Centre" });
+    await choose(page, commune, "Alger Centre");
 
-    // The price comes from `GET /shipping/rates`, not from this page.
-    await expect(page.getByText("Prix retenu")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(/350,00/)).toBeVisible({ timeout: 15000 });
-
-    // And the rules it beat are shown, because "why is this 350 DA" is answered
-    // by the ones that lost.
+    /*
+     * The price comes from `GET /shipping/rates`, not from this page — and the
+     * assertion is **scoped to the resolver**, for the reason the two below it
+     * already gave: the commune rule's 350,00 is also a row in the tariff table
+     * above, so an unscoped locator matches twice and fails on strict mode
+     * rather than on the price. It read as a resolver failure while the resolver
+     * was answering correctly.
+     */
     const resolver = page
       .locator("section")
       .filter({ hasText: "Simuler une destination" });
+
+    await expect(resolver.getByText("Prix retenu")).toBeVisible({ timeout: 15000 });
+    await expect(resolver.getByText(/350,00/)).toBeVisible({ timeout: 15000 });
+
+    // And the rules it beat are shown, because "why is this 350 DA" is answered
+    // by the ones that lost.
     await expect(resolver.getByText("Règles battues")).toBeVisible();
     // Scoped to the resolver: both figures are also in the tariff table above,
     // and an unscoped match would pass while proving nothing about resolution.
@@ -117,17 +146,18 @@ test.describe("the shipping tariff", () => {
     await signIn(page, "fr");
     await page.goto("/fr/shipping/rules");
 
-    await page.getByLabel("Wilaya", { exact: true }).selectOption({ label: "Algiers" });
+    await choose(page, page.getByLabel("Wilaya", { exact: true }), "Algiers");
     const commune = page.getByLabel("Commune", { exact: true });
     await expect(commune).toBeEnabled({ timeout: 15000 });
     // Ain Taya is in wilaya 16 and has no commune rule of its own.
-    await commune.selectOption({ label: "Ain Taya" });
+    await choose(page, commune, "Ain Taya");
 
-    await expect(page.getByText(/500,00/)).toBeVisible({ timeout: 15000 });
-    // The positive control: the commune rule's price is *not* what resolved.
+    // Scoped for the same reason as the test above: 500,00 is also a tariff row.
     const resolved = page
       .locator("section")
       .filter({ hasText: "Simuler une destination" });
+    await expect(resolved.getByText(/500,00/)).toBeVisible({ timeout: 15000 });
+    // The positive control: the commune rule's price is *not* what resolved.
     await expect(resolved.getByText(/350,00/)).toHaveCount(0);
   });
 
@@ -171,9 +201,13 @@ test.describe("parcels", () => {
     await page.goto("/fr/shipping");
 
     // The positive control: with no filter there are parcels.
-    await expect(page.locator("text=/MAN-|TRK-|FAKE-/").first()).toBeVisible({
-      timeout: 15000,
-    });
+    /* Filtered to what is on screen: `DataTable` keeps the table and the stacked
+       record list both mounted and hides one per breakpoint, so `.first()` alone
+       picks the table's copy at a phone width and asserts a hidden element is
+       visible. */
+    await expect(
+      page.locator("text=/MAN-|TRK-|FAKE-/").filter({ visible: true }).first(),
+    ).toBeVisible({ timeout: 15000 });
 
     /*
      * `pending` is a real status the API accepts and no parcel in this shop
@@ -259,14 +293,23 @@ test.describe("the order detail's new sections", () => {
 
     /*
      * `allowed_outcomes` on a `pending` record is
-     * `["confirmed","rejected","unreachable"]`, and the sheet renders one button
+     * `["confirmed","rejected","unreachable"]`, and the sheet renders one control
      * per entry — never a table the panel carries. All three, and nothing else.
+     *
+     * **Radios, not buttons.** `CodSection` draws them with `ChoiceGroup`, which
+     * is a `role="radiogroup"` of real `<input type="radio">` — deliberately, so
+     * that nothing is preselected and a form cannot record whatever was on top
+     * when somebody pressed Enter. The assertion asked for buttons and found
+     * none, which read as the outcomes being missing.
      */
-    await expect(page.getByRole("button", { name: "Le client confirme" })).toBeVisible({
+    const outcomes = page.getByRole("radiogroup", { name: "Issue de l’appel" });
+    await expect(outcomes.getByRole("radio", { name: "Le client confirme" })).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.getByRole("button", { name: "Le client refuse" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Injoignable" })).toBeVisible();
+    await expect(outcomes.getByRole("radio", { name: "Le client refuse" })).toBeVisible();
+    await expect(outcomes.getByRole("radio", { name: "Injoignable" })).toBeVisible();
+    // Nothing else: exactly the three the server allows.
+    await expect(outcomes.getByRole("radio")).toHaveCount(3);
   });
 });
 
@@ -395,7 +438,8 @@ test.describe("Arabic", () => {
      * catch a bidi bug. A tracking number reordered by the bidi algorithm is a
      * different tracking number, and the customer reading it back gets nothing.
      */
-    const tracking = page.locator("text=/MAN-\\d+-\\d+/").first();
+    /* Visible copy only — see the parcels list above for why both are mounted. */
+    const tracking = page.locator("text=/MAN-\\d+-\\d+/").filter({ visible: true }).first();
     await expect(tracking).toBeVisible({ timeout: 15000 });
     const text = await tracking.innerText();
     expect(text).toMatch(/MAN-\d+-\d+/);
