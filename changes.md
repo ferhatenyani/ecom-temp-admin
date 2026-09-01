@@ -1397,3 +1397,81 @@ These are individual and are **not** explained by the two causes above. Listed s
   compilation rather than defect.
 - **The dev database carries the panel's own e2e fixtures afterwards**, which is what makes the
   backend's `cart` and `shipping-rules` suites fail. Reset between the two.
+
+## Item 13, second pass — the suite fixed, and what was left alone
+
+The report above was written from the suite's first execution. It has since been
+fixed and re-run: **733 passed, 22 failed** against the first run's 604/151, and
+the remaining 22 are 15 distinct tests reproducing in one or two of the four
+projects. Then the largest remaining group was fixed too.
+
+**Every failure traced in this round was a stale test, a fixture problem or a
+race in the suite. None was a defect in the panel.** That is worth stating
+plainly, because a suite that has never run is usually assumed to be finding
+bugs, and this one was mostly finding its own age.
+
+### What was fixed
+
+- **The sign-in helpers asserted the pre-`landingPath()` behaviour** — about
+  fifty rows, described above. Replaced with a predicate that waits for the
+  redirect rather than for a hard-coded destination list.
+- **`selectOption` against the drawn `Listbox`** — `e2e/listbox.ts` drives the
+  Radix combobox the panel actually renders.
+- **`.first()` picking the hidden half of `DataTable`'s two presentations**, in
+  shipping, content and products. Filtered to what is on screen.
+- **Assertions pinned to something incidental**: the bad-password test scoped to
+  a `main` the login screen does not have; a customer count hard-coded at 16 on a
+  shop that has grown to 18; the offline test counting every `role="status"` when
+  `Toast` keeps one mounted at all times; a "secret" locator that matched the
+  navigation, because the sidebar's labels concatenate into a 16-character
+  alphanumeric run.
+- **Two seeds fighting over one customer.** The never-asked consent control
+  pointed at `ac_cus_shopper`, which `seed-campaigns.mjs` grants consent to on
+  every run, so whichever ran last decided the result.
+- **A composer test that saved the subject it typed**, and so could only pass
+  once. It now stamps the subject per run.
+- **The variations section stopped being read-only in step 4** — a SKU is an
+  `<input value=…>` now, which `getByText` cannot match. Renamed, and asserted on
+  the values.
+- **A Playwright budget that never allowed for `next dev` compilation.** A cold
+  route was measured at 12.3 s (`next.js: 10.8s`), and nine tests timed out in a
+  full run that passed in isolation. Raised to 60 s with the reason recorded —
+  it buys time for the bundler and nothing else, since each `expect` keeps its
+  own short timeout.
+- **The pre-hydration click**, which was the largest group left. Every list is
+  server-rendered and every control on it is a client component, so between paint
+  and hydration a press is swallowed and the test waits out its budget for
+  something that was never going to happen. `e2e/hydration.ts`'s `pressUntil()`
+  retries until the effect is observable; it cannot hide a real defect, because a
+  control that does nothing still fails.
+
+### What was left alone, deliberately
+
+- **The notification fixture is consumed by the suite that depends on it.**
+  `seed-notifications.mjs` creates three `failed` rows; the retry test sets one
+  back to `pending` and runs once per project, so by the fourth project there are
+  none — measured after the run, `statuses: {pending: 96, sent: 3}` and **zero
+  failed**. Three tests read that as a defect. The fix is not in those tests: the
+  seed runs once per `scripts/test.sh` invocation while the suite runs four
+  projects, so either the seed becomes per-project or the retry test restores what
+  it spends. Both are changes to the fixture lifecycle rather than to a test, and
+  the same seed is **not idempotent** in a second way worth fixing at the same
+  time — the queue has gone 39 → 94 → 99 rows across runs, which is what pushed
+  the `sent` and `failed` rows off the first page to begin with.
+- **Timeouts that pass in isolation and have no other signature.** Where a
+  failure was only ever "this took too long on a cold route", the budget was
+  raised once, globally, and the individual tests were left alone rather than
+  each growing a bespoke wait.
+
+### The environment, which is now part of the result
+
+- **`npm run build` cannot run on this machine** — OOM-killed with 2.2 GB free.
+  A production build is the better host for this suite by a wide margin (no
+  per-route compilation), and it is unavailable here, which is why the timeout
+  was raised instead.
+- **The WordPress container fell over** between runs and had to be restarted;
+  only `db` was left running. Worth checking before blaming the suite for a wall
+  of failures.
+- **The dev database carries the panel's e2e fixtures afterwards**, which is what
+  makes the backend's `cart` and `shipping-rules` suites fail. Reset between the
+  two, in either order.
