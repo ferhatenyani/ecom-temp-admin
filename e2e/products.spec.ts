@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The products list, its facets, and the detail's write path.
@@ -312,8 +313,10 @@ test.describe("the products list", () => {
 
     // The control that matters: the next click returns to unsorted rather than
     // asking for the combination nobody measured.
-    await header.getByRole("button").click();
-    await expect(header).toHaveAttribute("aria-sort", "none");
+    /* Pressed until the header reports the new state — see `e2e/hydration.ts`. */
+    await pressUntil(header.getByRole("button"), () =>
+      expect(header).toHaveAttribute("aria-sort", "none", { timeout: 3000 }),
+    );
     await expect(page).not.toHaveURL(/sort=title-desc/);
   });
 });

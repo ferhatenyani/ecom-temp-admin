@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The dashboard and the six reports.
@@ -141,8 +142,12 @@ test.describe("the reporting range", () => {
     const applied = page.getByTestId("range-applied");
     await expect(applied).toContainText("30 jours");
 
-    await page.getByRole("button", { name: "7 jours" }).click();
-    await page.waitForURL("**/fr/analytics?view=orders&range=7d");
+    /* Pressed until it navigates — see `e2e/hydration.ts`. A preset chip is a
+       client control on a server-rendered page, so a cold route swallows the
+       first press and the URL never moves. */
+    await pressUntil(page.getByRole("button", { name: "7 jours" }), () =>
+      page.waitForURL("**/fr/analytics?view=orders&range=7d", { timeout: 3000 }),
+    );
     // Seven days, off `data.range`, which is the only thing this line may show.
     await expect(applied).toContainText("7 jours");
   });
@@ -192,11 +197,14 @@ test.describe("the reporting range", () => {
     await signIn(page, "fr");
     await page.goto("/fr/analytics?view=orders");
 
-    await page.getByRole("button", { name: "Personnalisée" }).click();
-
     const from = page.getByLabel("Du", { exact: true });
     const to = page.getByLabel("Au", { exact: true });
-    await expect(from).toBeEnabled();
+    /* Pressed until the dialog is actually up: the fields below are disabled
+       until `useHydrated()` flips, so a swallowed press left this waiting on a
+       control that does not exist yet. */
+    await pressUntil(page.getByRole("button", { name: "Personnalisée" }), () =>
+      expect(from).toBeEnabled({ timeout: 3000 }),
+    );
 
     // Reversed: the API answers 400 `details.fields.date_from`, and the panel
     // says so while the operator is still typing.

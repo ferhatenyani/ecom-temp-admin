@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * The CMS: pages, the homepage document, banners, FAQs, menus, and media.
@@ -213,8 +214,10 @@ test.describe("the pages index", () => {
     await signIn(page, "fr");
     await openPages(page, "fr");
 
-    await row(page, /Conditions générales de vente/).click();
-    await page.waitForURL(/\/content\/pages\/legal\/conditions-generales$/);
+    /* Pressed until it navigates — see `e2e/hydration.ts`. */
+    await pressUntil(row(page, /Conditions générales de vente/), () =>
+      page.waitForURL(/\/content\/pages\/legal\/conditions-generales$/, { timeout: 3000 }),
+    );
     await expect(
       page.getByRole("textbox", { name: "Titre", exact: true }),
     ).toHaveValue(/Conditions générales/);

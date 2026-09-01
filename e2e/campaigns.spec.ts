@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { choose } from "./listbox";
+import { pressUntil } from "./hydration";
 
 /**
  * Marketing: the composer, segments and templates — deliberately small.
@@ -189,7 +190,33 @@ async function openCampaigns(page: Page, locale: string) {
  * asserts the flag reached the screen on the way past.
  */
 async function openCampaign(page: Page, name: string, action: string) {
-  await rows(page).filter({ hasText: name }).first().click();
+  const row = rows(page).filter({ hasText: name }).first();
+
+  /*
+   * **The click is retried until the peek actually opens, because a row can be
+   * pressed before React is listening.**
+   *
+   * The list is server-rendered and the peek is a client component, so between
+   * paint and hydration the row is a real button that does nothing. Playwright
+   * clicks as soon as it is visible and the press is swallowed — the failure
+   * snapshot shows the row `[active]`, focused, with no dialog anywhere, and
+   * then sixty seconds of waiting for a link inside a drawer that was never
+   * going to open.
+   *
+   * It only bites under load, which is why every one of these passes when run
+   * alone and five of them failed in the full suite: `openCampaigns()` waits for
+   * `campaigns-count`, which is in the server-rendered HTML and says nothing
+   * about hydration. `inventory.spec.ts`'s "the hydration hazard" test pins the
+   * same race from the other side, and `products.spec.ts` records WebKit losing
+   * a keystroke to it.
+   *
+   * `toPass` rather than a fixed wait: the retry costs nothing once hydration
+   * has happened, and there is no arbitrary number to pick.
+   */
+  await pressUntil(row, () =>
+    expect(page.getByRole("dialog")).toBeVisible({ timeout: 3000 }),
+  );
+
   await page.getByRole("link", { name: action }).click();
 }
 

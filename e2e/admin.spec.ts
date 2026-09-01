@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { pressUntil } from "./hydration";
 
 /**
  * Settings, staff, the trail and the transfers — deliberately small.
@@ -123,9 +124,8 @@ function rowFor(page: Page, login: string): Locator {
  * person makes. The anchor keeps its own coverage through the keyboard path.
  */
 async function openAccount(page: Page, row: Locator) {
-  await expect(row).toBeVisible();
-  await row.click();
-  await page.waitForURL(/\/users\/\d+/);
+  /* Pressed until it navigates — see `e2e/hydration.ts`. */
+  await pressUntil(row, () => page.waitForURL(/\/users\/\d+/, { timeout: 3000 }));
 }
 
 test.describe("settings", () => {
@@ -241,8 +241,12 @@ test.describe("staff", () => {
     await expect(page.getByRole("button", { name: "Suspendre" })).toBeVisible();
 
     // And back, so the fixture survives a run that is not followed by the seed.
-    await page.getByRole("button", { name: "Suspendre" }).first().click();
-    await expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible();
+    /* Pressed until the confirm is up — see `e2e/hydration.ts`. */
+    await pressUntil(page.getByRole("button", { name: "Suspendre" }).first(), () =>
+      expect(page.getByRole("heading", { name: "Suspendre ce compte ?" })).toBeVisible({
+        timeout: 3000,
+      }),
+    );
     await page.getByRole("button", { name: "Suspendre" }).last().click();
     await expect(page.getByText("Compte suspendu.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Réactiver" })).toBeVisible();
