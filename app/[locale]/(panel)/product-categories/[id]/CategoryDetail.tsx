@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ProductCategory } from "@/lib/api/schemas/product";
 import { BrowserApiError, acWriteWithMeta } from "@/lib/api/browser";
 import { decodeEntities } from "@/lib/format/html";
@@ -41,6 +41,7 @@ export function CategoryDetail({
   const tStates = useTranslations("states");
   const toast = useToast();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const confirm = useConfirm<DeleteKind>();
 
   const [current, setCurrent] = useState<ProductCategory>(initial);
@@ -89,6 +90,9 @@ export function CategoryDetail({
       setNameError(undefined);
       setSlugError(undefined);
       setFormError(null);
+      // The list on the previous route caches by `["product-categories"]`;
+      // bust it so an edited name/slug is up to date if the user goes back.
+      void queryClient.invalidateQueries({ queryKey: ["product-categories"] });
       toast.show(t("saved"));
     },
     onError: (caught: unknown) => {
@@ -119,6 +123,11 @@ export function CategoryDetail({
     onSuccess: () => {
       confirm.close();
       toast.show(t("deleted"));
+      // Bust the list's react-query cache so the row is gone by the
+      // time the redirect renders. `router.refresh()` re-runs the RSC,
+      // but useQuery keeps its cached data across that render unless
+      // we invalidate here.
+      void queryClient.invalidateQueries({ queryKey: ["product-categories"] });
       router.push(`/${locale}/product-categories`);
       router.refresh();
     },
