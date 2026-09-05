@@ -36,18 +36,18 @@ async function openProductWithManagedStock(page: Page, sku: string) {
   await peek.getByRole("link", { name: /Ouvrir|فتح/ }).click();
   await page.waitForURL(/\/products\/\d+/);
   // Ensure managed stock so the quantity field is present.
-  const manage = page.getByLabel(/Gérer le stock/i);
+  const manage = page.getByLabel(/Suivre le stock/i);
   if (!(await manage.isChecked())) await manage.click();
-  await expect(page.getByLabel(/Quantité en stock/i)).toBeVisible();
+  await expect(page.getByLabel(/Quantité/i)).toBeVisible();
 }
 
 test.describe("product stock status", () => {
   test("switching to 'rupture' zeros the quantity in the form", async ({ page }) => {
     await signIn(page, "fr");
     // Use a real seeded SKU on the shop.
-    await openProductWithManagedStock(page, "AC-SEO-TAPIS");
+    await openProductWithManagedStock(page, "AC-PROBE-GADGET");
 
-    const qty = page.getByLabel(/Quantité en stock/i);
+    const qty = page.getByLabel(/Quantité/i);
     await qty.fill("7");
     await expect(qty).toHaveValue("7");
 
@@ -60,9 +60,9 @@ test.describe("product stock status", () => {
 
   test("switching to 'réappro' also zeros the quantity", async ({ page }) => {
     await signIn(page, "fr");
-    await openProductWithManagedStock(page, "AC-SEO-TAPIS");
+    await openProductWithManagedStock(page, "AC-PROBE-GADGET");
 
-    const qty = page.getByLabel(/Quantité en stock/i);
+    const qty = page.getByLabel(/Quantité/i);
     await qty.fill("5");
     await expect(qty).toHaveValue("5");
 
@@ -76,14 +76,14 @@ test.describe("product stock status", () => {
     // The operator's call — the form does not fabricate a positive
     // quantity on the way back.
     await signIn(page, "fr");
-    await openProductWithManagedStock(page, "AC-SEO-TAPIS");
+    await openProductWithManagedStock(page, "AC-PROBE-GADGET");
 
     await page.getByLabel(/État du stock/i).click();
     await page.getByRole("option", { name: /Rupture/i }).click();
-    await expect(page.getByLabel(/Quantité en stock/i)).toHaveValue("0");
+    await expect(page.getByLabel(/Quantité/i)).toHaveValue("0");
 
     await page.getByLabel(/État du stock/i).click();
     await page.getByRole("option", { name: /En stock/i }).click();
-    await expect(page.getByLabel(/Quantité en stock/i)).toHaveValue("0");
+    await expect(page.getByLabel(/Quantité/i)).toHaveValue("0");
   });
 });
