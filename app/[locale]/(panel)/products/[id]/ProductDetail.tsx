@@ -785,7 +785,22 @@ export function ProductDetail({
                   id={fieldId("stock_status")}
                   label={tDetail("stockStatus")}
                   value={draft.stock_status}
-                  onChange={(v) => set("stock_status", v)}
+                  onChange={(v) => {
+                    set("stock_status", v);
+                    /*
+                     * Selecting "rupture" (outofstock) or "réappro"
+                     * (onbackorder) means the shop cannot currently ship,
+                     * and leaving a positive quantity behind creates a
+                     * silent lie: the header says out of stock while
+                     * inventory reports N in the warehouse. Zero the
+                     * count on the way over. The reverse direction ("en
+                     * stock" → typed quantity) is the operator's choice
+                     * and the field is left alone.
+                     */
+                    if (draft.manage_stock && (v === "outofstock" || v === "onbackorder")) {
+                      set("stock_quantity", "0");
+                    }
+                  }}
                   options={STOCK_STATUSES.map((s) => ({ value: s, label: tStock(s) }))}
                   error={errors.stock_status}
                 />

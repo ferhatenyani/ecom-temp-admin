@@ -45,6 +45,19 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "products", href: "/products", icon: "products", capability: "ac_manage_products" },
       /*
+       * Product categories follow the same argument that put attributes in this
+       * group: the vocabulary is set up **before** the product that uses it. A
+       * shop's first session is "Tapis" the category, then a tapis the product.
+       * Same capability as products above — the CategoryController guards every
+       * write with `ac_manage_products`.
+       */
+      {
+        key: "categories",
+        href: "/product-categories",
+        icon: "list",
+        capability: "ac_manage_products",
+      },
+      /*
        * **Attributes get a nav entry and FAQ categories do not, and the two are
        * the same shape.** `content/faqs/categories/page.tsx` states the rule this
        * is an exception to — *"no nav entry for a screen you go **to** from

@@ -100,7 +100,8 @@ const RULES: readonly Rule[] = [
    */
   rule("/products", "GET", "POST"),
   rule("/products/\\d+", "GET", "PATCH", "DELETE"),
-  rule("/product-categories", "GET"),
+  rule("/product-categories", "GET", "POST"),
+  rule("/product-categories/\\d+", "GET", "PATCH", "DELETE"),
 
   /*
    * ── The variable product: variations, and the copy ──────────────────────
